@@ -4,17 +4,37 @@ from __future__ import annotations
 
 from typing import Any
 
-from market_desk.config import MAINLINE_ETF_RULES
+from market_desk.config import MAINLINE_ETF_RULES, MAINLINE_STICKY_MARGIN
 
 
-def pick_mainline(hot: list[dict[str, Any]] | None) -> dict[str, Any] | None:
-    """Choose the live mainline from hot industry cards, then concepts."""
+def pick_mainline(
+    hot: list[dict[str, Any]] | None,
+    sticky_name: str | None = None,
+    margin: float | None = None,
+) -> dict[str, Any] | None:
+    """Choose the live mainline from hot industry cards, then concepts.
+
+    When ``sticky_name`` is still in the pool, keep it unless the raw leader's
+    score beats it by ``margin`` (hysteresis against board-score flicker).
+    """
     boards = list(hot or [])
     industries = [b for b in boards if b.get("kind") == "industry"]
     pool = industries or boards
     if not pool:
         return None
-    return max(pool, key=_mainline_score)
+    leader = max(pool, key=mainline_score)
+    sticky = (sticky_name or "").strip()
+    if not sticky:
+        return leader
+    incumbent = next((b for b in pool if (b.get("name") or "") == sticky), None)
+    if not incumbent:
+        return leader
+    if (leader.get("name") or "") == sticky:
+        return leader
+    need = MAINLINE_STICKY_MARGIN if margin is None else float(margin)
+    if mainline_score(leader) >= mainline_score(incumbent) + need:
+        return leader
+    return incumbent
 
 
 def match_mainline_etf(
@@ -41,7 +61,8 @@ def etf_spec_for_name(board_name: str) -> tuple[str, str, str] | None:
     return None
 
 
-def _mainline_score(board: dict[str, Any]) -> float:
+def mainline_score(board: dict[str, Any]) -> float:
+    """Score a hot board for mainline ranking."""
     status = board.get("status") or ""
     rank = {
         "确认中": 50.0,

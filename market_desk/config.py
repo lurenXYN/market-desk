@@ -12,6 +12,10 @@ PORT = 8765
 # Hit East Money / Tencent only in session; idle loop just waits for the next open.
 SESSION_REFRESH_SECONDS = 20
 IDLE_CHECK_SECONDS = 60
+# Sticky mainline: challenger must beat incumbent by this score margin.
+MAINLINE_STICKY_MARGIN = 8.0
+# Persist a switch only after this gap; flip-flops inside the window are dropped.
+MAINLINE_SWITCH_MIN_SECONDS = 180
 # Windows bottom-right toasts for buy / sell / phase / mainline changes.
 TOAST_ENABLED = True
 TOAST_COOLDOWN_SECONDS = 180

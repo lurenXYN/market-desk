@@ -1069,7 +1069,7 @@
             return `<li><span class="t">${t || "—"}</span>${sw.from_name || "未明"} → <b>${sw.to_name || "—"}</b>
               <span class="meta"> · ${sw.action || ""} · ${sw.phase || ""}</span></li>`;
           }).join("")
-        : `<li class="meta">今日尚无主线切换。主线名字变化时会记在这里。</li>`;
+        : `<li class="meta">今日尚无确认切换。两板块分差不大时会粘住，短时来回抖不记。</li>`;
       document.getElementById("filter").textContent = d.filter || "";
       document.getElementById("stamp").textContent =
         (d.live ? "盘中 " : "停源 ") + (d.updated_at || "") +

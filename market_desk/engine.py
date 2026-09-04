@@ -22,13 +22,13 @@ from market_desk.config import (
     HOT_BOARD_COUNT,
     ICE_BOARD_COUNT,
     IDLE_CHECK_SECONDS,
+    MAINLINE_SWITCH_MIN_SECONDS,
     PIN_INDUSTRY_ALIASES,
     SESSION_REFRESH_SECONDS,
     TOAST_COOLDOWN_SECONDS,
     TOAST_ENABLED,
 )
 from market_desk.db import (
-    add_mainline_switch,
     init_db,
     load_auction,
     load_board_hist_map,
@@ -41,6 +41,7 @@ from market_desk.db import (
     save_auction,
     save_board_daily,
     save_daily,
+    try_add_mainline_switch,
     upsert_session_segment,
 )
 from market_desk.lifecycle import build_mainline_lifecycle
@@ -329,7 +330,7 @@ class DeskEngine:
             or ""
         ).strip()
         if cur_name and prev_name and cur_name != prev_name:
-            add_mainline_switch(
+            try_add_mainline_switch(
                 {
                     "trade_date": trade_date,
                     "switched_at": updated_at,
@@ -338,7 +339,8 @@ class DeskEngine:
                     "action": verdict.get("action"),
                     "phase": phase,
                     "temperature": temperature,
-                }
+                },
+                min_seconds=MAINLINE_SWITCH_MIN_SECONDS,
             )
 
     async def build_review(self, limit: int = 60) -> dict[str, Any]:

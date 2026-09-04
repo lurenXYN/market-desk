@@ -640,6 +640,82 @@ def add_mainline_switch(row: dict[str, Any]) -> None:
         conn.commit()
 
 
+def delete_mainline_switch(switch_id: int) -> None:
+    """Remove one mainline switch row (used to drop flip-flop noise)."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM mainline_switch WHERE id = ?", (int(switch_id),))
+        conn.commit()
+
+
+def try_add_mainline_switch(row: dict[str, Any], min_seconds: int = 180) -> bool:
+    """Append a switch unless it is rapid noise or an immediate flip-flop.
+
+    Returns True when a row was inserted. Flip-flops inside ``min_seconds``
+    remove the prior noisy switch instead of recording the rebound.
+    """
+    trade_date = row.get("trade_date")
+    from_name = (row.get("from_name") or "").strip()
+    to_name = (row.get("to_name") or "").strip()
+    switched_at = row.get("switched_at") or ""
+    if not trade_date or not from_name or not to_name or from_name == to_name:
+        return False
+    with _connect() as conn:
+        last = conn.execute(
+            """
+            SELECT id, switched_at, from_name, to_name
+            FROM mainline_switch
+            WHERE trade_date = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (trade_date,),
+        ).fetchone()
+        if last:
+            age = _switch_age_seconds(last["switched_at"], switched_at)
+            flip = (
+                (last["from_name"] or "") == to_name
+                and (last["to_name"] or "") == from_name
+            )
+            if age is not None and age < int(min_seconds):
+                if flip:
+                    conn.execute(
+                        "DELETE FROM mainline_switch WHERE id = ?",
+                        (int(last["id"]),),
+                    )
+                    conn.commit()
+                return False
+        conn.execute(
+            """
+            INSERT INTO mainline_switch(
+                trade_date, switched_at, from_name, to_name, action, phase, temperature
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade_date,
+                switched_at,
+                from_name,
+                to_name,
+                row.get("action"),
+                row.get("phase"),
+                row.get("temperature"),
+            ),
+        )
+        conn.commit()
+    return True
+
+
+def _switch_age_seconds(prev_at: str | None, cur_at: str | None) -> float | None:
+    """Return seconds between two ``YYYY-MM-DD HH:MM:SS`` timestamps."""
+    if not prev_at or not cur_at:
+        return None
+    try:
+        prev = datetime.strptime(str(prev_at)[:19], "%Y-%m-%d %H:%M:%S")
+        cur = datetime.strptime(str(cur_at)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return (cur - prev).total_seconds()
+
+
 def load_mainline_switches(trade_date: str, limit: int = 40) -> list[dict[str, Any]]:
     """Return today's mainline switches, newest first."""
     with _connect() as conn:

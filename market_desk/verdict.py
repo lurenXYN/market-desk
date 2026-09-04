@@ -22,7 +22,8 @@ def build_verdict(
     zt: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Announce the live mainline and a matching vehicle, without a fixed ticker."""
-    main = pick_mainline(hot) or {}
+    sticky = (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name")
+    main = pick_mainline(hot, sticky_name=sticky) or {}
     board_name = main.get("name") or ""
     etf = match_mainline_etf(board_name, etfs) if board_name else None
     vehicle = etf or {}
