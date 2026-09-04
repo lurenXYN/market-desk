@@ -25,6 +25,8 @@ DEFAULTS: dict[str, Any] = {
     "equal_weight_target": True,
     "batch_plan": True,
     "auto_backup": True,
+    "account_equity": 50000.0,
+    "risk_pct_per_trade": 1.0,
 }
 
 
@@ -85,4 +87,6 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["equal_weight_target"] = bool(out["equal_weight_target"])
     out["batch_plan"] = bool(out["batch_plan"])
     out["auto_backup"] = bool(out["auto_backup"])
+    out["account_equity"] = max(1000.0, min(5_000_000.0, float(out["account_equity"])))
+    out["risk_pct_per_trade"] = max(0.2, min(5.0, float(out["risk_pct_per_trade"])))
     return out

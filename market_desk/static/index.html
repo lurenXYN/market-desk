@@ -39,8 +39,8 @@
     .banner {
       border: 1px solid var(--line);
       background: #151a12;
-      border-radius: 8px;
-      padding: 16px 18px 14px;
+      border-radius: 10px;
+      padding: 14px 16px 12px;
       margin-bottom: 12px;
     }
     .banner.cash { background: #1a1410; border-color: #5a3d2a; }
@@ -49,6 +49,62 @@
     .banner-top {
       display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
     }
+    .verdict-hero { flex: 1; min-width: 0; }
+    .action-row {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
+      margin: 0 0 8px;
+    }
+    .action-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px; border-radius: 999px;
+      font-size: 18px; font-weight: 800; letter-spacing: 0.04em;
+      border: 1px solid var(--line); background: #0c1210;
+    }
+    .banner.buy .action-pill { color: #86efac; border-color: #2f5a3a; background: #102018; }
+    .banner.watch .action-pill { color: #fde68a; border-color: #5a5420; background: #1a1810; }
+    .banner.cash .action-pill { color: #fdba74; border-color: #5a3d2a; background: #1a1410; }
+    .mainline-title {
+      font-size: 28px; line-height: 1.15; font-weight: 750; margin: 0;
+      letter-spacing: 0.02em;
+    }
+    .mainline-title .meta { font-size: 14px; font-weight: 500; margin-left: 8px; }
+    .verdict-one {
+      font-size: 15px; color: var(--text); margin: 0 0 10px; line-height: 1.4;
+      max-width: 52rem;
+    }
+    .playbook {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px; margin: 0 0 10px;
+    }
+    .playbook .pb {
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0c1218; padding: 10px 12px; min-height: 78px;
+    }
+    .playbook .pb .lab {
+      font-size: 11px; color: var(--muted); letter-spacing: 0.1em; margin-bottom: 4px;
+    }
+    .playbook .pb .txt { font-size: 13px; line-height: 1.4; font-weight: 600; }
+    .playbook .pb.do { border-color: #2f5a3a; }
+    .playbook .pb.dont { border-color: #8b3a3a; }
+    .playbook .pb.size { border-color: #3b5a8b; }
+    .desk-more {
+      margin: 0 0 8px; border: 1px dashed #2a3544; border-radius: 8px;
+      background: #0a1016;
+    }
+    .desk-more > summary {
+      cursor: pointer; list-style: none; padding: 8px 12px;
+      color: var(--muted); font-size: 12px; letter-spacing: 0.06em;
+      user-select: none;
+    }
+    .desk-more > summary::-webkit-details-marker { display: none; }
+    .desk-more[open] > summary { border-bottom: 1px solid var(--line); color: var(--text); }
+    .desk-more .body { padding: 10px 12px 12px; }
+    .desk-more .reason { font-size: 14px; margin: 0 0 6px; }
+    .desk-more .narrative {
+      color: var(--ice); font-size: 13px; margin: 0 0 6px;
+      line-height: 1.45; border-left: 3px solid #164e63; padding-left: 10px;
+    }
+    .desk-more .detail { color: var(--muted); font-size: 13px; margin: 0 0 6px; }
     .headline {
       font-size: 42px;
       line-height: 1.1;
@@ -60,6 +116,29 @@
     .narrative {
       color: var(--ice); font-size: 14px; margin: 0 0 8px;
       line-height: 1.45; border-left: 3px solid #164e63; padding-left: 10px;
+    }
+    .desk-secondary {
+      margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px;
+    }
+    .desk-secondary > summary {
+      cursor: pointer; color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
+      list-style: none; user-select: none; margin-bottom: 8px;
+    }
+    .desk-secondary > summary::-webkit-details-marker { display: none; }
+    .rec-risk {
+      margin-top: 6px; font-size: 12px; color: #93c5fd; line-height: 1.4;
+      font-weight: 600;
+    }
+    .sellbox .pos-btn.sell-go {
+      border-color: #5a6a80; color: var(--muted); background: transparent;
+    }
+    .sellbox .rec-card.sell-now .pos-btn.sell-go {
+      border-color: #8b3a3a; color: #fecaca;
+    }
+    @media (max-width: 960px) {
+      .playbook { grid-template-columns: 1fr; }
+      .desk-pair { grid-template-columns: 1fr; }
+      .mainline-title { font-size: 22px; }
     }
     .rev-hist {
       margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line);
@@ -764,6 +843,8 @@
         <label>单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
         <label>连亏降温只数<input id="setCoolN" type="number" min="1" max="10" /></label>
         <label>目标总成本<input id="setTargetCost" type="number" min="1000" step="1000" /></label>
+        <label>账户资金<input id="setEquity" type="number" min="1000" step="1000" /></label>
+        <label>单笔风险%<input id="setRiskPct" type="number" min="0.2" max="5" step="0.1" /></label>
         <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
           <input id="setToastOn" type="checkbox" /> 开启通知
         </label>
@@ -786,13 +867,28 @@
     <section class="tab-panel" id="panel-desk">
     <div class="banner cash" id="banner">
       <div class="banner-top">
-        <div>
-          <p class="headline" id="headline">等待数据</p>
-          <p class="meaning" id="meaning"></p>
-          <p class="reason" id="reason"></p>
-          <p class="narrative" id="narrative"></p>
-          <p class="detail" id="detail"></p>
-          <div class="bans" id="bans"></div>
+        <div class="verdict-hero">
+          <div class="action-row">
+            <span class="action-pill" id="actionPill">观望</span>
+            <span class="meta" id="segPill"></span>
+            <span class="meta" id="phasePill"></span>
+          </div>
+          <h1 class="mainline-title" id="headline">等待数据</h1>
+          <p class="verdict-one" id="meaning"></p>
+          <div class="playbook" id="playbook">
+            <div class="pb do"><div class="lab">能做 <button type="button" class="q" data-term="Playbook">?</button></div><div class="txt" id="pbDo">—</div></div>
+            <div class="pb dont"><div class="lab">不做</div><div class="txt" id="pbDont">—</div></div>
+            <div class="pb size"><div class="lab">仓位</div><div class="txt" id="pbSize">—</div></div>
+          </div>
+          <details class="desk-more" id="deskMore">
+            <summary>展开原因 / 算法细节</summary>
+            <div class="body">
+              <p class="reason" id="reason"></p>
+              <p class="narrative" id="narrative"></p>
+              <p class="detail" id="detail"></p>
+              <div class="bans" id="bans"></div>
+            </div>
+          </details>
           <div class="desk-pair">
             <div class="buybox off" id="buybox">
               <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button></div>
@@ -816,15 +912,18 @@
         </div>
       </div>
       <div class="deltas" id="deltas"></div>
-      <div class="sec-title meta" style="margin-top:12px">
-        <span>盘中分段结论<button type="button" class="q" data-term="盘中分段">?</button></span>
-        <span id="segNote"></span>
-      </div>
-      <div class="seg-strip" id="segStrip"></div>
-      <div class="sec-title meta" style="margin-top:12px">
-        <span>主线切换时间线<button type="button" class="q" data-term="主线切换">?</button></span>
-      </div>
-      <ul class="switch-list" id="switchList"></ul>
+      <details class="desk-secondary" id="deskSecondary">
+        <summary>盘中分段 · 主线切换（次要信息，点击展开）</summary>
+        <div class="sec-title meta">
+          <span>盘中分段结论<button type="button" class="q" data-term="盘中分段">?</button></span>
+          <span id="segNote"></span>
+        </div>
+        <div class="seg-strip" id="segStrip"></div>
+        <div class="sec-title meta" style="margin-top:12px">
+          <span>主线切换时间线<button type="button" class="q" data-term="主线切换">?</button></span>
+        </div>
+        <ul class="switch-list" id="switchList"></ul>
+      </details>
     </div>
     </section>
 
@@ -1116,6 +1215,17 @@
         trendHtml = `<div class="trend-ok">日线 · ${it.trend_manual === "up" ? "自判上升趋势" : "上升趋势"}（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>
           ${it.trend_manual === "up" ? `<div class="trend-judge"><button type="button" class="down-btn js-trend" data-code="${it.code || ""}" data-verdict="down">改判非上升</button><span></span></div>` : ""}`;
       }
+      const batch = (it.batch_plan || []).map((b) =>
+        `${b.lot}·${b.label}${b.qty}股${b.approx_cost != null ? "≈" + b.approx_cost : ""}`
+      ).join(" → ");
+      const batchHtml = batch
+        ? `<div class="rec-batch"><button type="button" class="q" data-term="分批计划">?</button> 分批 ${batch}</div>`
+        : "";
+      const rp = it.risk_plan || {};
+      const riskHtml = rp.qty != null
+        ? `<div class="rec-risk"><button type="button" class="q" data-term="风险股数">?</button> 建议 ${rp.qty} 股（${rp.lots || 0}手）· 约 ${rp.approx_cost ?? "—"} · ${rp.note || ""}</div>`
+        : "";
+      const qtyForBook = (rp.qty && rp.qty > 0) ? rp.qty : (it.qty || 100);
       const pinBtn = `<button type="button" class="pos-btn rec-pin"
             data-code="${it.code || ""}"
             data-name="${it.name || ""}"
@@ -1128,15 +1238,10 @@
             <button type="button" class="pos-btn rec-pos"
               data-code="${it.code || ""}"
               data-name="${it.name || ""}"
-              data-price="${buy ?? ""}">按建议价记账</button>
+              data-price="${buy ?? ""}"
+              data-qty="${qtyForBook}">按建议价记账</button>
             ${pinBtn}
           </div>`;
-      const batch = (it.batch_plan || []).map((b) =>
-        `${b.lot}·${b.label}${b.qty}股${b.approx_cost != null ? "≈" + b.approx_cost : ""}`
-      ).join(" → ");
-      const batchHtml = batch
-        ? `<div class="rec-batch"><button type="button" class="q" data-term="分批计划">?</button> 分批 ${batch}</div>`
-        : "";
       const cardCls = [
         "rec-card",
         wait ? "wait" : "",
@@ -1155,6 +1260,7 @@
           <div class="chase"><div class="lab">不追</div><div class="val">${fmtPx(it.chase_price, kind)}</div></div>
         </div>
         <div class="rec-why">${it.reason || ""}</div>
+        ${riskHtml}
         ${batchHtml}
         ${actionHtml}
       </article>`;
@@ -1247,21 +1353,46 @@
       const seg = v.segment || {};
       document.getElementById("banner").className = "banner " + bannerClass(v.action);
       const ml = (v.mainline && v.mainline.name) || "未明";
+      const act = v.action || "观望";
+      document.getElementById("actionPill").textContent = act;
+      document.getElementById("segPill").textContent = seg.label ? ("时段 " + seg.label) : "";
+      document.getElementById("phasePill").innerHTML = phase && phase !== "—"
+        ? (`相位 ${termHtml(phase)}`) : "";
       document.getElementById("headline").innerHTML =
-        `${termHtml("实时主线")} · ${ml}　${termHtml(v.action || "观望")}`
-        + (seg.label ? `<span class="meta"> · ${seg.label}</span>` : "");
-      document.getElementById("meaning").textContent = v.meaning || "";
+        `${termHtml("实时主线")} · ${ml}`
+        + ((v.mainline && v.mainline.etf_mapped === false)
+          ? `<span class="meta">无ETF映射</span>` : "");
+      // One-line summary only; long algo text stays folded.
+      const one = (v.meaning || v.reason || "").split("（")[0].trim();
+      document.getElementById("meaning").textContent = one || "";
+      const pb = v.playbook || {};
+      document.getElementById("pbDo").textContent = pb.do || (pb.lines && pb.lines[0]) || "—";
+      document.getElementById("pbDont").textContent = pb.dont || (pb.lines && pb.lines[1]) || "—";
+      document.getElementById("pbSize").textContent = pb.size || (pb.lines && pb.lines[2]) || "—";
       document.getElementById("reason").textContent = v.reason || "";
       document.getElementById("narrative").textContent = v.narrative || "";
       document.getElementById("detail").textContent = v.detail || "";
       document.getElementById("bans").innerHTML = (v.bans && v.bans.length)
         ? (termHtml("禁追") + " " + v.bans.join(" / ")) : "";
+      const more = document.getElementById("deskMore");
+      if (more && !(v.reason || v.narrative || v.detail || (v.bans && v.bans.length))) {
+        more.hidden = true;
+      } else if (more) {
+        more.hidden = false;
+      }
       const rec = v.recommend || {};
       const box = document.getElementById("buybox");
       box.className = "buybox " + (rec.buy ? "on" : "off");
       document.getElementById("buyline").textContent = rec.text || rec.title || "暂不买入";
+      const riskMeta = rec.risk_meta || {};
       document.getElementById("buymeta").textContent = rec.size_note || "";
-      document.getElementById("buystop").textContent = rec.stop || "";
+      if (riskMeta.account_equity) {
+        document.getElementById("buystop").textContent =
+          (rec.stop || "")
+          + ((rec.stop ? " · " : "") + `账户 ${fmtMoney(riskMeta.account_equity)} · 单笔风险 ${riskMeta.risk_pct_per_trade ?? "—"}%`);
+      } else {
+        document.getElementById("buystop").textContent = rec.stop || "";
+      }
       document.getElementById("buyavoid").textContent = rec.avoid || "";
       document.getElementById("recItems").innerHTML = (rec.items || []).map(recCard).join("");
       const sell = d.sell_advice || {};
@@ -1302,16 +1433,17 @@
       const warnEl = document.getElementById("dataBanner");
       const health = d.health || {};
       const warns = [];
-      if (health.score != null) warns.push(`健康度 ${health.score}`);
-      (health.tips || []).forEach((t) => warns.push(t));
-      if (d.warnings && d.warnings.length && !(health.tips || []).length) {
+      const tips = (health.tips || []).filter(Boolean);
+      if (health.score != null && Number(health.score) < 95) warns.push(`健康度 ${health.score}`);
+      tips.forEach((t) => warns.push(t));
+      if (d.warnings && d.warnings.length && !tips.length) {
         warns.push("行情源异常：" + d.warnings.join("、"));
       }
       if (!d.ok && d.error) warns.push(String(d.error));
-      if (d.live && Array.isArray(d.etfs) && d.etfs.length === 0 && !(health.tips || []).some((t) => t.includes("ETF"))) {
+      if (d.live && Array.isArray(d.etfs) && d.etfs.length === 0 && !tips.some((t) => t.includes("ETF"))) {
         warns.push("ETF 报价为空，可能腾讯源异常");
       }
-      if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0 && !(health.tips || []).some((t) => t.includes("热点"))) {
+      if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0 && !tips.some((t) => t.includes("热点"))) {
         warns.push("热点板块为空，东财板块源可能失败");
       }
       if (warns.length) {
@@ -2078,7 +2210,7 @@
         form.code.value = btn.dataset.code || "";
         form.name.value = btn.dataset.name || "";
         form.buy_price.value = btn.dataset.price || "";
-        if (!form.qty.value) form.qty.value = "100";
+        form.qty.value = btn.dataset.qty || form.qty.value || "100";
         applyMain("pos");
         form.qty.focus();
         return;
@@ -2292,6 +2424,8 @@
         document.getElementById("setLossCap").value = s.daily_loss_cap_pct ?? -3;
         document.getElementById("setCoolN").value = s.cool_after_losses ?? 3;
         document.getElementById("setTargetCost").value = s.target_total_cost ?? 50000;
+        document.getElementById("setEquity").value = s.account_equity ?? s.target_total_cost ?? 50000;
+        document.getElementById("setRiskPct").value = s.risk_pct_per_trade ?? 1;
         document.getElementById("setEqualW").checked = s.equal_weight_target !== false;
         document.getElementById("setBatch").checked = s.batch_plan !== false;
         document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
@@ -2317,6 +2451,8 @@
         daily_loss_cap_pct: Number(document.getElementById("setLossCap").value),
         cool_after_losses: Number(document.getElementById("setCoolN").value),
         target_total_cost: Number(document.getElementById("setTargetCost").value),
+        account_equity: Number(document.getElementById("setEquity").value),
+        risk_pct_per_trade: Number(document.getElementById("setRiskPct").value),
         equal_weight_target: !!document.getElementById("setEqualW").checked,
         batch_plan: !!document.getElementById("setBatch").checked,
         auto_backup: !!document.getElementById("setAutoBackup").checked,

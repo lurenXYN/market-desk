@@ -88,6 +88,8 @@ class SettingsIn(BaseModel):
     equal_weight_target: bool | None = None
     batch_plan: bool | None = None
     auto_backup: bool | None = None
+    account_equity: float | None = None
+    risk_pct_per_trade: float | None = None
 
 
 class TrendOverrideIn(BaseModel):

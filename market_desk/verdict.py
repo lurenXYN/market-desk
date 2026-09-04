@@ -9,6 +9,7 @@ from market_desk.config import CHINEXT_STAR_ETFS
 from market_desk.filters import is_limit_up, is_main_board, is_st, normalize_code
 from market_desk.lifecycle import classify_lifecycle
 from market_desk.mainline import etf_spec_for_name, match_mainline_etf, pick_mainline
+from market_desk.playbook import build_playbook, suggest_risk_qty
 from market_desk.session import apply_segment_bias, session_segment
 from market_desk.trend import classify_daily_trend
 
@@ -158,6 +159,8 @@ def build_verdict(
         recommend["size_note"] = f"{size_hint}；{recommend['size_note']}"
     elif size_hint:
         recommend["size_note"] = size_hint
+    playbook = build_playbook(phase, action=action, size_hint=size_hint)
+    recommend = _attach_risk_sizing(recommend, playbook=playbook)
     prev_name = (
         (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name") or ""
     ).strip()
@@ -185,6 +188,7 @@ def build_verdict(
         "detail": detail,
         "narrative": narrative,
         "recommend": recommend,
+        "playbook": playbook,
         "algo_notes": algo_notes,
         "mainline": {
             "name": board_name,
@@ -869,6 +873,49 @@ def _recommend_item(
     }
     item["batch_plan"] = _batch_plan_lots(item.get("buy_price") or item.get("last"), etf=etf)
     return item
+
+
+def _attach_risk_sizing(
+    recommend: dict[str, Any],
+    *,
+    playbook: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach risk-based share counts onto recommendation cards."""
+    from market_desk.settings import setting
+
+    rec = dict(recommend or {})
+    equity = float(setting("account_equity", 50000))
+    risk_pct = float(setting("risk_pct_per_trade", 1.0))
+    # Soft scale risk% by playbook size cap (e.g. panic uses smaller risk).
+    cap = float((playbook or {}).get("size_cap_pct") or 100)
+    if cap < 40:
+        risk_pct = min(risk_pct, 0.6)
+    elif cap < 55:
+        risk_pct = min(risk_pct, 1.0)
+    items = []
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        buy = item.get("buy_price") or item.get("last")
+        stop = item.get("stop_price")
+        plan = suggest_risk_qty(
+            buy=buy,
+            stop=stop,
+            account_equity=equity,
+            risk_pct=risk_pct,
+            kind=str(item.get("kind") or "stock"),
+        )
+        if plan:
+            item["risk_plan"] = plan
+            if plan.get("qty"):
+                item["qty"] = int(plan["qty"])
+        items.append(item)
+    rec["items"] = items
+    rec["risk_meta"] = {
+        "account_equity": equity,
+        "risk_pct_per_trade": risk_pct,
+        "size_cap_pct": cap,
+    }
+    return rec
 
 
 def _batch_plan_lots(buy: float | None, *, etf: bool) -> list[dict[str, Any]] | None:
