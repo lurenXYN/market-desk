@@ -1429,7 +1429,7 @@
       return ` <span class="live-arrow ${dir}" title="${tip}">${arrow}</span>${vsHtml}`;
     }
     const REV_COL_CATALOG = [
-      { id: "date", label: "日期" },
+      { id: "date", label: "信号时间" },
       { id: "type", label: "类型" },
       { id: "name", label: "名称" },
       { id: "code", label: "代码" },
@@ -1493,8 +1493,17 @@
         </li>`).join("");
     }
 
+    function revSignalTime(r) {
+      const raw = String(r.signaled_at || r.trade_date || "").trim();
+      if (!raw) return "—";
+      const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?/);
+      if (m) {
+        return `<span title="${raw}">${m[1]}<div class="meta">${m[2]}</div></span>`;
+      }
+      return raw;
+    }
     function revCellHtml(col, r, ctx) {
-      if (col === "date") return r.trade_date || "";
+      if (col === "date") return revSignalTime(r);
       if (col === "type") {
         return ctx.typ === "卖"
           ? `<span class="rev-type-sell">卖</span>`
@@ -1943,7 +1952,7 @@
       const cols = visibleRevCols().filter((id) => id !== "ops");
       const header = cols.map(revColLabel);
       const lines = [header.join(",")].concat(rows.map((r) => cols.map((id) => {
-        if (id === "date") return r.trade_date;
+        if (id === "date") return r.signaled_at || r.trade_date;
         if (id === "type") return r.signal_type;
         if (id === "name") return r.name;
         if (id === "code") return r.code;
