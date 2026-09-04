@@ -568,6 +568,21 @@
     .dev-up { color: var(--up); font-weight: 700; }
     .dev-down { color: var(--down); font-weight: 700; }
     .mark-miss { color: var(--warn); font-weight: 700; }
+    tr.rev-sell td {
+      background: rgba(232, 93, 117, 0.08);
+    }
+    tr.rev-sell {
+      outline: 2px solid var(--up);
+      outline-offset: -2px;
+    }
+    tr.rev-sell td:first-child {
+      box-shadow: inset 4px 0 0 var(--up);
+    }
+    .rev-type-sell {
+      color: var(--up);
+      font-weight: 800;
+      letter-spacing: 0.06em;
+    }
     .rev-toolbar {
       display: flex; flex-wrap: wrap; gap: 8px; align-items: end;
       margin: 0 0 10px; position: relative;
@@ -1522,7 +1537,11 @@
         const devHtml = dev == null
           ? ""
           : `<div class="${dev >= 0 ? "dev-up" : "dev-down"}">偏离 ${(dev > 0 ? "+" : "") + Number(dev).toFixed(2)}%</div>`;
-        const ctx = { typ, skipped, traded, label, pend, markHtml, cautionHtml, liveHtml, devHtml };
+        const chaseDev = r.chase_dev_pct;
+        const chaseDevHtml = chaseDev == null
+          ? ""
+          : `<div class="${chaseDev >= 0 ? "dev-up" : "dev-down"}">偏离 ${(chaseDev > 0 ? "+" : "") + Number(chaseDev).toFixed(2)}%</div>`;
+        const ctx = { typ, skipped, traded, label, pend, markHtml, cautionHtml, liveHtml, devHtml, chaseDevHtml };
         const tds = cols.map((id) => {
           const html = revCellHtml(id, r, ctx);
           if (id === "day1" || id === "day3") return html;
