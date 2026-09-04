@@ -88,6 +88,9 @@ def live_price_slope(code: str, last: float | None) -> dict[str, Any]:
         "live_vs_pct": round(vs, 2),
         "live_vs_sec": age,
     }
+
+
+def record_session_signals(snapshot: dict[str, Any]) -> int:
     """Persist buy/sell recommendations for the current session. Return insert/update count."""
     trade_date = snapshot.get("trade_date") or ""
     if not trade_date:
