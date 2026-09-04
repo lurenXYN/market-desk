@@ -532,6 +532,12 @@
     .rev-missed .hd { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
     .rev-missed li { margin: 2px 0; }
     .risk-tips { margin-top: 6px; color: var(--warn); font-size: 12px; line-height: 1.45; }
+    .similar-box {
+      margin-top: 8px; font-size: 13px; line-height: 1.45;
+      border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #0e141c;
+    }
+    .similar-box .bias { color: var(--warn); margin-top: 4px; }
+    .similar-box ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
     .seg-strip {
       display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px; margin-top: 12px;
@@ -872,6 +878,13 @@
         </thead>
         <tbody id="hist"></tbody>
       </table>
+    </section>
+    <section class="card mid">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        相似日对照<button type="button" class="q" data-term="相似日">?</button>
+      </h2>
+      <p class="meta" id="similarNote">近端同相位日对照次日冷热</p>
+      <div class="similar-box" id="similarBox"></div>
     </section>
     <section class="card mid">
       <h2 style="text-transform:none;letter-spacing:0.04em">
@@ -1351,6 +1364,19 @@
       }).join("") || `<div class="meta">指数待刷新</div>`;
       const life = d.mainline_lifecycle || {};
       document.getElementById("lifeNote").textContent = life.note || "按近几日热点持续度划分启动 / 进行 / 退潮";
+      const sim = d.similar_days || {};
+      document.getElementById("similarNote").textContent = sim.note || "近端同相位日对照次日冷热";
+      const peers = sim.peers || [];
+      document.getElementById("similarBox").innerHTML =
+        (sim.bias ? `<div class="bias">${sim.bias}</div>` : `<div class="meta">暂无明确倾向</div>`)
+        + (peers.length
+          ? `<ul>` + peers.slice(0, 5).map((p) =>
+              `<li>${p.date || "—"} 温度${p.temperature ?? "—"} 涨停${p.zt ?? "—"}`
+              + (p.next_date
+                ? ` → ${p.next_date} ${p.next_phase || ""} 温${p.next_temperature ?? "—"} 涨停${p.next_zt ?? "—"}`
+                : " → 次日待记")
+              + `</li>`).join("") + `</ul>`
+          : `<div class="meta">样本不足时先积累日级快照</div>`);
       const lifeCard = (b) => {
         const spark = (b.spark || []).map(h => `<i style="height:${Math.max(8, h)}%"></i>`).join("");
         return `<article class="life-item">

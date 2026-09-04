@@ -51,6 +51,7 @@ from market_desk.review import (
     note_quote_ticks,
     record_session_signals,
 )
+from market_desk.similar import build_similar_days
 from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_segment
 
 from market_desk.eastmoney import (
@@ -277,9 +278,23 @@ class DeskEngine:
             )
             history = load_daily(14)
             cycle = _cycle_view(history, trade_date_dash)
+            similar = build_similar_days(
+                phase=phase,
+                temperature=temperature,
+                metrics=metrics,
+                history=history_prev,
+            )
             prev = self.snapshot if self.snapshot.get("ok") else None
             verdict = build_verdict(
-                now, phase, metrics, etfs, hot_cards, prev, zt, auction=auction
+                now,
+                phase,
+                metrics,
+                etfs,
+                hot_cards,
+                prev,
+                zt,
+                auction=auction,
+                similar=similar,
             )
             await self._apply_recommend_trends(client, verdict, trade_date_dash)
             updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -324,6 +339,7 @@ class DeskEngine:
                 "contagion": contagion,
                 "history": history,
                 "cycle": cycle,
+                "similar_days": similar,
                 "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
                 "watch": _watch_pool(zt, zb, quotes),
                 "filter": "个股只做主板 · 创业板/科创走 ETF",

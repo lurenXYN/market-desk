@@ -7,7 +7,8 @@ from typing import Any
 
 from market_desk.config import CHINEXT_STAR_ETFS
 from market_desk.filters import is_limit_up, is_main_board, is_st, normalize_code
-from market_desk.mainline import match_mainline_etf, pick_mainline
+from market_desk.lifecycle import classify_lifecycle
+from market_desk.mainline import etf_spec_for_name, match_mainline_etf, pick_mainline
 from market_desk.session import apply_segment_bias, session_segment
 from market_desk.trend import classify_daily_trend
 
@@ -21,11 +22,13 @@ def build_verdict(
     prev: dict[str, Any] | None,
     zt: list[dict[str, Any]] | None = None,
     auction: dict[str, Any] | None = None,
+    similar: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Announce the live mainline and a matching vehicle, without a fixed ticker."""
     sticky = (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name")
     main = pick_mainline(hot, sticky_name=sticky) or {}
     board_name = main.get("name") or ""
+    etf_mapped = bool(etf_spec_for_name(board_name)) if board_name else False
     etf = match_mainline_etf(board_name, etfs) if board_name else None
     vehicle = etf or {}
     price = vehicle.get("price")
@@ -37,6 +40,7 @@ def build_verdict(
     prev_px = (((prev or {}).get("verdict") or {}).get("carrier") or {}).get("price")
     falling = price is not None and prev_px is not None and price < prev_px - 1e-6
     status = main.get("status") or ""
+    life_stage = classify_lifecycle(main) if board_name else None
     seg = session_segment(now)
     auction_only = seg.get("key") == "auction"
     algo_notes: list[str] = []
@@ -50,6 +54,10 @@ def build_verdict(
     elif status == "退潮":
         action = "观望"
         reason = f"{board_name} 已转弱，主线身份不稳"
+    elif life_stage == "ending":
+        action = "观察回踩"
+        reason = f"{board_name} 生命周期偏退潮（涨停衰减/走弱），先不追"
+        algo_notes.append("主线生命周期=快结束")
     elif status == "尖峰禁追":
         action = "观察回踩"
         reason = f"{board_name} 是当前主线，但已到尖峰，先等回踩再下手"
@@ -68,6 +76,12 @@ def build_verdict(
     else:
         action = "观察回踩"
         reason = f"实时主线倾向 {board_name}，结构未完全确认"
+
+    # No mapped ETF: do not treat as a priced buy vehicle; observe only.
+    if board_name and not etf_mapped and action == "可买入":
+        action = "观察回踩"
+        reason = f"{board_name} 暂无映射 ETF，只观察不按载体定价：{reason}"
+        algo_notes.append("无ETF映射")
 
     action, reason, size_hint = apply_segment_bias(
         action,
@@ -90,6 +104,10 @@ def build_verdict(
         action, reason, size_hint, phase=phase
     )
     algo_notes.extend(review_notes)
+    if similar and similar.get("bias"):
+        size_hint = _join_hint(size_hint, str(similar.get("bias")))
+        if similar.get("n"):
+            algo_notes.append(f"相似日n={similar.get('n')}")
 
     headline = f"实时主线 · {board_name or '未明'}"
     meaning = {
@@ -99,6 +117,8 @@ def build_verdict(
     }.get(action, "")
     if size_hint:
         meaning = f"{meaning}（{size_hint}）"
+    if not etf_mapped and board_name:
+        meaning = f"{meaning} 当前主线无ETF映射，默认只观察。"
     if vehicle.get("code"):
         detail = (
             f"[{seg.get('label')}] {board_name} · {vehicle.get('name')} {vehicle.get('code')} "
@@ -113,11 +133,26 @@ def build_verdict(
         )
     bans = [b["name"] for b in (hot or []) if b.get("status") == "尖峰禁追"][:4]
     stocks: list[dict[str, Any]] = []
-    if not stock_block and not _blocks_chi_star_stocks(board_name):
+    # Without ETF mapping, still allow主板回踩观察票, but never as ready buys.
+    allow_stocks = not stock_block and not _blocks_chi_star_stocks(board_name)
+    if allow_stocks:
         stocks = _stock_candidates(main, zt or [])
     elif stock_block and action in ("可买入", "观察回踩"):
         algo_notes.append("复盘命中偏低，本轮禁个股只留 ETF")
     recommend = _build_recommend(action, main, vehicle, bounce, stocks, bans)
+    if not etf_mapped and board_name:
+        for item in recommend.get("items") or []:
+            if item.get("kind") == "stock":
+                item["ready"] = False
+                if item.get("wait_price") is not None:
+                    item["buy_price"] = item.get("wait_price")
+                item["role_label"] = "个股盯回踩"
+        recommend["buy"] = False
+        recommend["title"] = "暂无映射ETF，只观察"
+        recommend["size_note"] = _join_hint(
+            str(recommend.get("size_note") or ""),
+            "主线无ETF映射，不按载体买入定价",
+        )
     recommend = _apply_ready_confirmations(recommend, vehicle, metrics)
     if size_hint and recommend.get("size_note"):
         recommend["size_note"] = f"{size_hint}；{recommend['size_note']}"
@@ -138,6 +173,8 @@ def build_verdict(
         segment_label=str(seg.get("label") or ""),
         size_hint=size_hint,
     )
+    if life_stage:
+        narrative = narrative.rstrip("。") + f"；生命周期{ {'starting':'启动','ongoing':'进行中','ending':'退潮'}.get(life_stage, life_stage) }。"
     if algo_notes:
         narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:4]) + "。"
     return {
@@ -159,6 +196,8 @@ def build_verdict(
             "leader_name": main.get("leader_name"),
             "leader_code": main.get("leader_code"),
             "leader_boards": main.get("leader_boards"),
+            "lifecycle": life_stage,
+            "etf_mapped": etf_mapped,
         },
         "carrier": {
             "code": vehicle.get("code"),
@@ -169,6 +208,7 @@ def build_verdict(
             "high": vehicle.get("high"),
             "bounce": None if bounce is None else round(bounce, 2),
             "falling": falling,
+            "mapped": etf_mapped,
         },
         "bans": bans,
         "auction_only": auction_only,
@@ -177,6 +217,7 @@ def build_verdict(
         "phase": phase,
         "temperature": metrics.get("zt"),
         "stock_block": stock_block,
+        "similar": similar or {},
     }
 
 
