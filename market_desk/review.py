@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Any
 
@@ -13,8 +14,80 @@ from market_desk.db import (
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
 
+# In-memory last-price ticks for short-horizon ↑/↓ on the review panel.
+_PRICE_TICKS: dict[str, list[tuple[float, float]]] = {}
+_LIVE_LOOKBACK_SEC = 60.0
+_LIVE_KEEP_SEC = 240.0
+_LIVE_FLAT_PCT = 0.08  # treat |Δ| below this as flat
 
-def record_session_signals(snapshot: dict[str, Any]) -> int:
+
+def note_quote_ticks(quotes: dict[str, Any] | list[Any] | None) -> None:
+    """Record latest prices so review can compare against ~1 minute ago."""
+    if not quotes:
+        return
+    now = time.time()
+    items: list[tuple[str, float]] = []
+    if isinstance(quotes, dict):
+        for code, row in quotes.items():
+            if not isinstance(row, dict):
+                continue
+            px = num(row.get("price") or row.get("last"))
+            c = normalize_code(code or row.get("code"))
+            if c and px is not None:
+                items.append((c, float(px)))
+    else:
+        for row in quotes:
+            if not isinstance(row, dict):
+                continue
+            px = num(row.get("price") or row.get("last"))
+            c = normalize_code(row.get("code"))
+            if c and px is not None:
+                items.append((c, float(px)))
+    for code, px in items:
+        series = _PRICE_TICKS.setdefault(code, [])
+        if series and abs(series[-1][1] - px) < 1e-9 and now - series[-1][0] < 5:
+            series[-1] = (now, px)
+        else:
+            series.append((now, px))
+        cutoff = now - _LIVE_KEEP_SEC
+        _PRICE_TICKS[code] = [t for t in series if t[0] >= cutoff]
+
+
+def live_price_slope(code: str, last: float | None) -> dict[str, Any]:
+    """Compare ``last`` with the price about one minute earlier.
+
+    Returns arrow / vs-pct / lookback seconds for the review UI.
+    """
+    c = normalize_code(code)
+    empty = {"live_arrow": None, "live_vs_pct": None, "live_vs_sec": None}
+    if not c or last is None:
+        return empty
+    note_quote_ticks({c: {"price": last}})
+    series = _PRICE_TICKS.get(c) or []
+    if len(series) < 2:
+        return empty
+    now = time.time()
+    target = now - _LIVE_LOOKBACK_SEC
+    # Prefer a tick near the lookback window; fall back to the oldest kept tick.
+    candidates = [t for t in series[:-1] if now - t[0] >= 25]
+    if not candidates:
+        return empty
+    ref_ts, ref_px = min(candidates, key=lambda t: abs(t[0] - target))
+    if ref_px <= 0:
+        return empty
+    vs = (float(last) / float(ref_px) - 1.0) * 100.0
+    age = int(max(1, round(now - ref_ts)))
+    if abs(vs) < _LIVE_FLAT_PCT:
+        arrow = "flat"
+    elif vs > 0:
+        arrow = "up"
+    else:
+        arrow = "down"
+    return {
+        "live_arrow": arrow,
+        "live_vs_pct": round(vs, 2),
+        "live_vs_sec": age,
+    }
     """Persist buy/sell recommendations for the current session. Return insert/update count."""
     trade_date = snapshot.get("trade_date") or ""
     if not trade_date:
@@ -287,6 +360,7 @@ def enrich_signals_with_live_marks(
             labels.append("建议价附近")
         item["live_last"] = last
         item["live_pct"] = num(q.get("pct"))
+        item.update(live_price_slope(code, last))
         if last is not None and sig_px is not None and sig_px > 0:
             item["dev_pct"] = round((float(last) / float(sig_px) - 1.0) * 100.0, 2)
         else:

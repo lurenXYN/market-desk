@@ -568,6 +568,14 @@
     .dev-up { color: var(--up); font-weight: 700; }
     .dev-down { color: var(--down); font-weight: 700; }
     .mark-miss { color: var(--warn); font-weight: 700; }
+    .live-arrow {
+      display: inline-block; margin: 0 2px; font-weight: 800;
+      font-size: 13px; line-height: 1; vertical-align: baseline;
+    }
+    .live-arrow.up { color: var(--up); }
+    .live-arrow.down { color: var(--down); }
+    .live-arrow.flat { color: var(--muted); }
+    .live-vs { font-size: 11px; margin-left: 2px; }
     tr.rev-sell td {
       background: rgba(232, 93, 117, 0.08);
     }
@@ -1387,6 +1395,20 @@
     }
 
     const REV_COL_STORAGE = "md_rev_cols_v1";
+    function liveArrowHtml(r) {
+      const dir = r.live_arrow;
+      if (!dir) return "";
+      const arrow = dir === "up" ? "↑" : (dir === "down" ? "↓" : "→");
+      const sec = Number(r.live_vs_sec || 0);
+      const tip = sec > 0
+        ? `较约${sec >= 60 ? Math.round(sec / 60) + "分钟" : sec + "秒"}前`
+        : "短时方向";
+      const vs = r.live_vs_pct;
+      const vsHtml = vs == null
+        ? ""
+        : `<span class="live-vs ${dir === "flat" ? "" : (vs >= 0 ? "up" : "down")}">${(vs > 0 ? "+" : "") + Number(vs).toFixed(2)}%</span>`;
+      return ` <span class="live-arrow ${dir}" title="${tip}">${arrow}</span>${vsHtml}`;
+    }
     const REV_COL_CATALOG = [
       { id: "date", label: "日期" },
       { id: "type", label: "类型" },
@@ -1454,7 +1476,11 @@
 
     function revCellHtml(col, r, ctx) {
       if (col === "date") return r.trade_date || "";
-      if (col === "type") return ctx.typ;
+      if (col === "type") {
+        return ctx.typ === "卖"
+          ? `<span class="rev-type-sell">卖</span>`
+          : ctx.typ;
+      }
       if (col === "name") return `${tickerHtml(r.name, r.code)}${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
       if (col === "code") return r.code || "";
       if (col === "price") return `${r.price ?? "—"}${ctx.devHtml}`;
@@ -1531,7 +1557,7 @@
           ? `<div class="meta ${markCls}">${r.buy_caution}</div>`
           : "";
         const liveHtml = r.live_last != null
-          ? `<div class="meta">现价 ${r.live_last}${r.live_pct == null ? "" : " " + ((r.live_pct > 0 ? "+" : "") + Number(r.live_pct).toFixed(2) + "%")}</div>`
+          ? `<div class="meta">现价 ${r.live_last}${liveArrowHtml(r)}${r.live_pct == null ? "" : " " + ((r.live_pct > 0 ? "+" : "") + Number(r.live_pct).toFixed(2) + "%")}</div>`
           : "";
         const dev = r.dev_pct;
         const devHtml = dev == null
@@ -1547,7 +1573,7 @@
           if (id === "day1" || id === "day3") return html;
           return `<td>${html}</td>`;
         }).join("");
-        return `<tr>${tds}</tr>`;
+        return `<tr class="${r.signal_type === "sell" ? "rev-sell" : ""}">${tds}</tr>`;
       }).join("") || `<tr><td colspan="${colspan}" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
     }
 

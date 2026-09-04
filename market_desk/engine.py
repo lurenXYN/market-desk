@@ -48,6 +48,7 @@ from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
     build_review_payload,
+    note_quote_ticks,
     record_session_signals,
 )
 from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_segment
@@ -207,6 +208,9 @@ class DeskEngine:
                     errors=errors,
                     label="pos",
                 )
+            note_quote_ticks(quotes)
+            note_quote_ticks(etfs)
+            note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
             contagion = _contagion(ice_cards)
             save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards)
             if not isinstance(pos_quote_map, dict):
@@ -358,6 +362,7 @@ class DeskEngine:
                 recent = build_review_payload(limit=limit).get("signals") or []
                 live_codes = [str(r.get("code") or "") for r in recent]
                 quotes = await fetch_quotes(client, live_codes)
+                note_quote_ticks(quotes)
         except Exception:
             log.exception("signal scoring / live marks failed")
         return build_review_payload(limit=limit, quotes=quotes)
