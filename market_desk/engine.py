@@ -36,6 +36,7 @@ from market_desk.db import (
     load_mainline_switches,
     load_positions,
     load_session_segments,
+    load_trend_overrides,
     load_unscored_signals,
     save_auction,
     save_board_daily,
@@ -235,7 +236,7 @@ class DeskEngine:
             verdict = build_verdict(
                 now, phase, metrics, etfs, hot_cards, prev, zt
             )
-            await self._apply_recommend_trends(client, verdict)
+            await self._apply_recommend_trends(client, verdict, trade_date_dash)
             updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
             try:
                 self._persist_session_context(
@@ -373,6 +374,7 @@ class DeskEngine:
         self,
         client: httpx.AsyncClient,
         verdict: dict[str, Any],
+        trade_date: str,
     ) -> None:
         """Fetch daily closes for recommended stocks and mark non-uptrends."""
         rec = verdict.get("recommend") or {}
@@ -401,9 +403,47 @@ class DeskEngine:
                 self._kline_cache[code] = (now_ts, closes)
                 closes_by_code[code] = closes
                 fetch_ok_by_code[code] = bool(closes)
+        overrides = load_trend_overrides(trade_date)
         verdict["recommend"] = apply_stock_daily_trends(
-            rec, closes_by_code, fetch_ok_by_code
+            rec, closes_by_code, fetch_ok_by_code, overrides
         )
+
+    def apply_trend_override(self, code: str, verdict_flag: str) -> dict[str, Any]:
+        """Persist a manual trend judgment and refresh recommend cards in-memory."""
+        from market_desk.db import upsert_trend_override
+        from market_desk.filters import normalize_code
+
+        trade_date = self.snapshot.get("trade_date") or datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        c = normalize_code(code)
+        row = upsert_trend_override(trade_date, c, verdict_flag)
+        rec = ((self.snapshot.get("verdict") or {}).get("recommend")) or {}
+        items = list(rec.get("items") or [])
+        if items:
+            overrides = load_trend_overrides(trade_date)
+            # Re-apply using cached closes when available.
+            closes_by_code: dict[str, list[float]] = {}
+            fetch_ok_by_code: dict[str, bool] = {}
+            for item in items:
+                if item.get("kind") != "stock":
+                    continue
+                code_i = normalize_code(item.get("code"))
+                hit = self._kline_cache.get(code_i)
+                if hit:
+                    closes_by_code[code_i] = hit[1]
+                    fetch_ok_by_code[code_i] = bool(hit[1])
+                else:
+                    closes_by_code[code_i] = []
+                    fetch_ok_by_code[code_i] = False
+            new_rec = apply_stock_daily_trends(
+                rec, closes_by_code, fetch_ok_by_code, overrides
+            )
+            if self.snapshot.get("verdict"):
+                self.snapshot["verdict"]["recommend"] = new_rec
+            try:
+                record_session_signals(self.snapshot)
+            except Exception:
+                log.exception("signal record after trend override failed")
+        return {"ok": True, "override": row, "recommend": ((self.snapshot.get("verdict") or {}).get("recommend"))}
 
     async def _yesterday(
         self,

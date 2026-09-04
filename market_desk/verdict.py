@@ -142,16 +142,19 @@ def apply_stock_daily_trends(
     recommend: dict[str, Any] | None,
     closes_by_code: dict[str, list[float]],
     fetch_ok_by_code: dict[str, bool] | None = None,
+    overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Attach daily-trend flags to stock cards; keep non-uptrends visible with warnings."""
+    """Attach daily-trend flags; pending fetch failures wait for manual judgment."""
     rec = dict(recommend or {})
     items = list(rec.get("items") or [])
     if not items:
         return rec
     fetch_ok_by_code = fetch_ok_by_code or {}
+    overrides = overrides or {}
 
     etf_items: list[dict[str, Any]] = []
     up_stocks: list[dict[str, Any]] = []
+    pending_stocks: list[dict[str, Any]] = []
     bad_stocks: list[dict[str, Any]] = []
     for item in items:
         if item.get("kind") != "stock":
@@ -159,7 +162,6 @@ def apply_stock_daily_trends(
             continue
         code = normalize_code(item.get("code"))
         closes = closes_by_code.get(code)
-        # Missing key or explicit False → treat as fetch failure.
         if code not in closes_by_code:
             fetch_ok = False
             closes = []
@@ -173,9 +175,40 @@ def apply_stock_daily_trends(
         marked["trend_down"] = bool(trend.get("down"))
         marked["trend_warn"] = trend.get("warn")
         marked["trend_quality"] = trend.get("quality")
+        marked["trend_pending"] = False
+        marked["trend_manual"] = None
         marked["ma5"] = trend.get("ma5")
         marked["ma10"] = trend.get("ma10")
         marked["ma20"] = trend.get("ma20")
+
+        manual = overrides.get(code)
+        quality = trend.get("quality")
+        if manual == "up":
+            marked["trend_ok"] = True
+            marked["trend_down"] = False
+            marked["trend_warn"] = None
+            marked["trend_pending"] = False
+            marked["trend_manual"] = "up"
+            marked["trend"] = "自判上升趋势"
+            marked["reason"] = "【自判上升趋势】" + str(marked.get("reason") or "")
+            marked["role_label"] = "个股·自判上升"
+            up_stocks.append(marked)
+            continue
+        if manual == "down":
+            marked["trend_ok"] = False
+            marked["ready"] = False
+            marked["trend_warn"] = "不是上升趋势"
+            marked["trend_pending"] = False
+            marked["trend_manual"] = "down"
+            marked["trend"] = "自判非上升"
+            marked["role"] = "watch"
+            marked["role_label"] = "个股·自判非上升 · 不建议买"
+            marked["reason"] = "【自判非上升】" + str(marked.get("reason") or "")
+            if marked.get("wait_price") is not None:
+                marked["buy_price"] = marked.get("wait_price")
+            bad_stocks.append(marked)
+            continue
+
         if trend.get("up"):
             marked["reason"] = (
                 f"日线上升趋势（MA5 {trend.get('ma5')} / MA20 {trend.get('ma20')}）；"
@@ -183,6 +216,21 @@ def apply_stock_daily_trends(
             )
             up_stocks.append(marked)
             continue
+
+        # Fetch failed / thin sample: keep visible and let the user judge.
+        if quality in ("fetch_fail", "thin"):
+            marked["trend_pending"] = True
+            marked["trend_warn"] = "待自判趋势"
+            marked["ready"] = False
+            marked["role"] = "watch"
+            marked["role_label"] = "个股·行情待自判"
+            marked["reason"] = (
+                f"【待自判·{trend.get('label') or '行情未取到'}】"
+                + str(marked.get("reason") or "")
+            )
+            pending_stocks.append(marked)
+            continue
+
         marked["ready"] = False
         marked["trend_warn"] = marked.get("trend_warn") or "不是上升趋势"
         if marked.get("wait_price") is not None:
@@ -195,17 +243,29 @@ def apply_stock_daily_trends(
         )
         bad_stocks.append(marked)
 
-    # Always show non-uptrend names with a loud badge; never silently drop them.
-    merged = etf_items + up_stocks + bad_stocks
+    merged = etf_items + up_stocks + pending_stocks + bad_stocks
 
     for idx, item in enumerate(merged):
         if item.get("kind") == "stock" and item.get("trend_ok"):
             has_etf = any(x.get("kind") == "etf" for x in merged)
             item["role"] = "alt" if has_etf or idx > 0 else "primary"
+            if item.get("ready") or item.get("trend_manual") == "up":
+                # Manual-up restores buy readiness when session action allows.
+                pass
             if item.get("ready"):
                 item["role_label"] = (
                     "个股 主推" if item.get("role") == "primary" else "个股 备选"
                 )
+
+    # Manual-up always unlocks the book button; the trader already judged the chart.
+    for item in merged:
+        if item.get("kind") != "stock":
+            continue
+        if item.get("trend_manual") == "up":
+            item["ready"] = True
+            item["role_label"] = item.get("role_label") or "个股·自判上升"
+            if rec.get("buy") is False and (up_stocks or pending_stocks):
+                rec["buy"] = True
 
     rec["items"] = merged
     primary = next(
@@ -223,12 +283,15 @@ def apply_stock_daily_trends(
         rec["code"] = primary.get("code")
         rec["name"] = primary.get("name")
         rec["price"] = primary.get("buy_price") or primary.get("last")
+    notes: list[str] = []
+    if pending_stocks:
+        notes.append(f"含 {len(pending_stocks)} 只行情待自判（可点按钮判定）")
     if bad_stocks:
-        note = rec.get("size_note") or ""
-        rec["size_note"] = (
-            (note + "；") if note else ""
-        ) + f"含 {len(bad_stocks)} 只非上升趋势个股（已红标，不建议买）"
-    if bad_stocks and not up_stocks and not etf_items:
+        notes.append(f"含 {len(bad_stocks)} 只非上升趋势个股（已红标，不建议买）")
+    if notes:
+        base = rec.get("size_note") or ""
+        rec["size_note"] = ((base + "；") if base else "") + "；".join(notes)
+    if bad_stocks and not up_stocks and not etf_items and not pending_stocks:
         rec["buy"] = False
         rec["title"] = "个股非上升趋势"
         rec["text"] = "日线不是上升趋势，个股暂不建议买"
@@ -241,7 +304,9 @@ def apply_stock_daily_trends(
         ]
         if not tradable and rec.get("buy"):
             if not any(x.get("kind") == "etf" and x.get("ready") for x in merged):
-                rec["buy"] = False
+                # Keep buy true if only pending stocks remain — user may judge up.
+                if not pending_stocks:
+                    rec["buy"] = False
     return rec
 
 

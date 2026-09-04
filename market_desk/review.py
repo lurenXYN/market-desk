@@ -27,16 +27,23 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     n = 0
 
     rec = verdict.get("recommend") or {}
-    if action in ("可买入", "可小仓") or rec.get("buy"):
+    # Record buyable names, plus pending/manual stock cards for user review.
+    record_items = bool(action in ("可买入", "可小仓", "观察回踩") or rec.get("buy") or rec.get("items"))
+    if record_items:
         for item in rec.get("items") or []:
             code = normalize_code(item.get("code"))
             if not code:
                 continue
             kind = item.get("kind") or "stock"
-            if kind == "stock" and not item.get("trend_ok"):
-                continue
-            if not item.get("ready") and not rec.get("buy"):
-                continue
+            pending = bool(item.get("trend_pending"))
+            manual_up = item.get("trend_manual") == "up"
+            if kind == "stock" and not item.get("trend_ok") and not pending and not manual_up:
+                # Confirmed non-uptrend: still log for review when action is buy-ish.
+                if action not in ("可买入", "可小仓", "观察回踩") and not rec.get("buy"):
+                    continue
+            if kind == "etf" and not item.get("ready") and not rec.get("buy"):
+                if action not in ("可买入", "可小仓", "观察回踩"):
+                    continue
             price = num(item.get("buy_price"))
             if price is None:
                 price = num(item.get("last"))
@@ -62,6 +69,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "chase_price": item.get("chase_price"),
                         "pct": item.get("pct"),
                         "trend": item.get("trend"),
+                        "trend_quality": item.get("trend_quality"),
+                        "trend_pending": pending,
+                        "trend_manual": item.get("trend_manual"),
+                        "trend_ok": bool(item.get("trend_ok")),
                     },
                 }
             )

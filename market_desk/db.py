@@ -138,6 +138,17 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trend_override (
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (trade_date, code)
+            )
+            """
+        )
         conn.commit()
 
 
@@ -621,3 +632,53 @@ def load_mainline_switches(trade_date: str, limit: int = 40) -> list[dict[str, A
             (trade_date, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def upsert_trend_override(trade_date: str, code: str, verdict: str) -> dict[str, Any]:
+    """Save a manual up/down trend judgment for one ticker on a trade date."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    code = str(code or "").zfill(6)
+    verdict = "up" if verdict == "up" else "down"
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO trend_override(trade_date, code, verdict, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(trade_date, code) DO UPDATE SET
+                verdict = excluded.verdict,
+                updated_at = excluded.updated_at
+            """,
+            (trade_date, code, verdict, now),
+        )
+        conn.commit()
+    return {"trade_date": trade_date, "code": code, "verdict": verdict, "updated_at": now}
+
+
+def load_trend_overrides(trade_date: str) -> dict[str, str]:
+    """Return manual trend judgments keyed by code for a trade date."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT code, verdict FROM trend_override WHERE trade_date = ?",
+            (trade_date,),
+        ).fetchall()
+    return {str(r["code"]).zfill(6): str(r["verdict"]) for r in rows}
+
+
+def delete_trend_override(trade_date: str, code: str) -> bool:
+    """Remove a manual trend judgment."""
+    code = str(code or "").zfill(6)
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM trend_override WHERE trade_date = ? AND code = ?",
+            (trade_date, code),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def delete_signal(signal_id: int) -> bool:
+    """Hard-delete one review signal row."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM signals WHERE id = ?", (signal_id,))
+        conn.commit()
+        return cur.rowcount > 0

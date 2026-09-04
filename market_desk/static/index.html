@@ -140,6 +140,10 @@
       border: 2px solid #ff5c5c;
       background: #2a1010;
     }
+    .rec-card.trend-pending {
+      border: 2px solid #fbbf24;
+      background: #241c0c;
+    }
     .trend-bad {
       margin-top: 8px;
       padding: 10px 12px;
@@ -152,6 +156,30 @@
       text-align: center;
       border-radius: 4px;
       animation: trendPulse 1.1s ease-in-out infinite alternate;
+    }
+    .trend-pending-box {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: #3a2e12;
+      border: 2px solid #fbbf24;
+      color: #ffe6a8;
+      font-size: 14px;
+      font-weight: 750;
+      text-align: center;
+      border-radius: 4px;
+    }
+    .trend-judge {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;
+    }
+    .trend-judge button {
+      appearance: none; cursor: pointer; border-radius: 4px;
+      padding: 8px 10px; font-size: 13px; font-weight: 700;
+    }
+    .trend-judge .up-btn {
+      background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;
+    }
+    .trend-judge .down-btn {
+      background: #3a1a1a; color: var(--up); border: 1px solid #8b3a3a;
     }
     .trend-bad-sub {
       margin-top: 8px;
@@ -787,33 +815,55 @@
     const recCard = (it) => {
       const kind = it.kind || "stock";
       const wait = !it.ready;
-      const trendBad = kind === "stock" && !!it.trend_warn;
+      const pending = kind === "stock" && !!it.trend_pending;
+      const trendBad = kind === "stock" && !!it.trend_warn && !pending;
       const buy = it.buy_price != null ? it.buy_price : it.last;
-      const trendHtml = trendBad
-        ? `<div class="trend-bad">⚠ 不是上升趋势 · ${it.trend || "日线偏弱"}</div>
+      let trendHtml = "";
+      if (pending) {
+        trendHtml = `<div class="trend-pending-box">⚠ 行情待自判 · ${it.trend || "未取到日线"}
+          <div style="font-size:12px;font-weight:600;margin-top:6px;opacity:.9">点开雪球看图后，自己判定是否上升趋势</div></div>
+          <div class="trend-judge">
+            <button type="button" class="up-btn js-trend" data-code="${it.code || ""}" data-verdict="up">判为上升趋势</button>
+            <button type="button" class="down-btn js-trend" data-code="${it.code || ""}" data-verdict="down">判为非上升</button>
+          </div>`;
+      } else if (trendBad) {
+        trendHtml = `<div class="trend-bad">⚠ 不是上升趋势 · ${it.trend || "日线偏弱"}</div>
            <div class="trend-bad-sub">${
-             it.trend_quality === "fetch_fail"
-               ? "日线行情未取到，暂不判定为上升趋势"
-               : (it.trend_quality === "thin"
-                 ? "上市交易日不足约20根，样本不够算MA20"
-                 : "下降/震荡不做推荐买入")
-           }</div>`
-        : (it.trend_ok
-          ? `<div class="trend-ok">日线 · 上升趋势（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>`
-          : "");
-      const actionHtml = trendBad
+             it.trend_manual === "down"
+               ? "你已自判为非上升，不建议买"
+               : (it.trend_quality === "fetch_fail"
+                 ? "日线行情未取到，暂不判定为上升趋势"
+                 : (it.trend_quality === "thin"
+                   ? "上市交易日不足约20根，样本不够算MA20"
+                   : "下降/震荡不做推荐买入"))
+           }</div>
+           <div class="trend-judge">
+             <button type="button" class="up-btn js-trend" data-code="${it.code || ""}" data-verdict="up">改判上升趋势</button>
+             <button type="button" class="down-btn js-trend" data-code="${it.code || ""}" data-verdict="down">确认非上升</button>
+           </div>`;
+      } else if (it.trend_ok) {
+        trendHtml = `<div class="trend-ok">日线 · ${it.trend_manual === "up" ? "自判上升趋势" : "上升趋势"}（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>
+          ${it.trend_manual === "up" ? `<div class="trend-judge"><button type="button" class="down-btn js-trend" data-code="${it.code || ""}" data-verdict="down">改判非上升</button><span></span></div>` : ""}`;
+      }
+      const actionHtml = (trendBad || pending)
         ? ""
         : `<button type="button" class="pos-btn rec-pos"
             data-code="${it.code || ""}"
             data-name="${it.name || ""}"
             data-price="${buy ?? ""}">按建议价记账</button>`;
-      return `<article class="rec-card${wait ? " wait" : ""}${trendBad ? " trend-down" : ""}">
+      const cardCls = [
+        "rec-card",
+        wait ? "wait" : "",
+        trendBad ? "trend-down" : "",
+        pending ? "trend-pending" : "",
+      ].filter(Boolean).join(" ");
+      return `<article class="${cardCls}">
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${trendHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
-          <div class="buy"><div class="lab">建议买</div><div class="val">${trendBad ? "不推荐" : fmtPx(buy, kind)}</div></div>
+          <div class="buy"><div class="lab">建议买</div><div class="val">${(trendBad || pending) ? (pending ? "待自判" : "不推荐") : fmtPx(buy, kind)}</div></div>
           <div><div class="lab">回踩</div><div class="val">${fmtPx(it.wait_price, kind)}</div></div>
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div class="chase"><div class="lab">不追</div><div class="val">${fmtPx(it.chase_price, kind)}</div></div>
@@ -1214,6 +1264,7 @@
         const d3 = r.outcome_day3_pct;
         const skipped = !!Number(r.skipped || 0);
         const label = skipped ? "未交易" : (r.outcome_label || "待隔日");
+        const pend = r.payload && r.payload.trend_pending ? " · 待自判" : "";
         return `<tr>
           <td>${r.trade_date || ""}</td>
           <td>${typ}</td>
@@ -1224,11 +1275,12 @@
           <td>${r.phase || "—"}</td>
           <td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>
           <td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>
-          <td>${label}</td>
+          <td>${label}${pend}</td>
           <td>
             <button type="button" class="pos-del rev-skip" data-id="${r.id}" data-skipped="${skipped ? 0 : 1}">
               ${skipped ? "恢复计入" : "未交易"}
             </button>
+            <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
           </td>
         </tr>`;
       }).join("") || `<tr><td colspan="11" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
@@ -1370,7 +1422,28 @@
       paintTimeline(lastData);
       paintCycleEvents(lastData);
     });
-    document.getElementById("buybox").addEventListener("click", (ev) => {
+    document.getElementById("buybox").addEventListener("click", async (ev) => {
+      const trendBtn = ev.target.closest(".js-trend");
+      if (trendBtn) {
+        const code = trendBtn.dataset.code;
+        const verdict = trendBtn.dataset.verdict;
+        if (!code || !verdict) return;
+        try {
+          const r = await fetch("/api/trend-override", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, verdict }),
+          });
+          if (!r.ok) {
+            alert("判定失败");
+            return;
+          }
+          await tick();
+        } catch (e) {
+          alert("判定失败");
+        }
+        return;
+      }
       const btn = ev.target.closest(".rec-pos");
       if (!btn) return;
       const form = document.getElementById("posForm");
@@ -1487,6 +1560,16 @@
       URL.revokeObjectURL(a.href);
     });
     document.getElementById("revBody").addEventListener("click", async (ev) => {
+      const del = ev.target.closest(".rev-del");
+      if (del) {
+        const id = del.getAttribute("data-id");
+        if (!id) return;
+        if (!confirm("删除这条复盘信号？")) return;
+        await fetch("/api/review/" + id, { method: "DELETE" });
+        reviewLoadedAt = 0;
+        await loadReview(true);
+        return;
+      }
       const btn = ev.target.closest(".rev-skip");
       if (!btn) return;
       const id = btn.getAttribute("data-id");

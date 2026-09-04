@@ -13,7 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from market_desk.config import STATIC_DIR
-from market_desk.db import add_position, delete_position, trim_position, update_signal_meta
+from market_desk.db import (
+    add_position,
+    delete_position,
+    delete_signal,
+    trim_position,
+    update_signal_meta,
+)
 from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
@@ -41,6 +47,13 @@ class SignalMetaIn(BaseModel):
 
     skipped: bool | None = None
     note: str | None = None
+
+
+class TrendOverrideIn(BaseModel):
+    """Manual daily-trend judgment for one recommended stock."""
+
+    code: str
+    verdict: str = Field(description="up or down")
 
 
 @asynccontextmanager
@@ -190,3 +203,23 @@ def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
     if not ok:
         raise HTTPException(404, "signal not found")
     return {"ok": True, "id": sid}
+
+
+@app.delete("/api/review/{sid}")
+def remove_signal(sid: int) -> dict:
+    """Delete one review signal permanently."""
+    if not delete_signal(sid):
+        raise HTTPException(404, "signal not found")
+    return {"ok": True, "id": sid}
+
+
+@app.post("/api/trend-override")
+def trend_override(body: TrendOverrideIn) -> dict:
+    """Accept a manual up/down trend judgment on the battle desk."""
+    code = normalize_code(body.code)
+    if len(code) != 6 or not code.isdigit():
+        raise HTTPException(400, "code must be a 6-digit ticker")
+    flag = (body.verdict or "").strip().lower()
+    if flag not in ("up", "down"):
+        raise HTTPException(400, "verdict must be up or down")
+    return engine.apply_trend_override(code, flag)
