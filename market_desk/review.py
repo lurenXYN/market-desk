@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from market_desk.db import (
+    load_mainline_switches,
     load_signals,
     mark_signal_outcome,
     upsert_signal,
@@ -300,6 +301,163 @@ def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_today_digest(
+    rows: list[dict[str, Any]],
+    *,
+    trade_date: str,
+    phase: str | None = None,
+    switch_count: int | None = None,
+) -> dict[str, Any]:
+    """Build a same-day review digest for the summary strip."""
+    today_rows = [r for r in rows if str(r.get("trade_date") or "") == trade_date]
+    buys = [r for r in today_rows if r.get("signal_type") == "buy"]
+    sells = [r for r in today_rows if r.get("signal_type") == "sell"]
+    miss = sum(
+        1
+        for r in buys
+        if "miss_pullback" in (r.get("price_flags") or [])
+        or "未回踩" in str(r.get("price_mark") or "")
+    )
+    in_band = sum(1 for r in buys if "in_band" in (r.get("price_flags") or []) or "near_wait" in (r.get("price_flags") or []))
+    switches = switch_count
+    if switches is None:
+        try:
+            switches = len(load_mainline_switches(trade_date, limit=40))
+        except Exception:
+            switches = 0
+    return {
+        "date": trade_date,
+        "buy_n": len(buys),
+        "sell_n": len(sells),
+        "miss_pullback_n": miss,
+        "in_band_n": in_band,
+        "traded_n": sum(1 for r in today_rows if int(r.get("traded") or 0)),
+        "skipped_n": sum(1 for r in today_rows if int(r.get("skipped") or 0)),
+        "switch_n": int(switches or 0),
+        "phase": phase or "",
+    }
+
+
+def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
+    """Collect last prices from the live snapshot for band checks."""
+    out: dict[str, float] = {}
+    if not snapshot:
+        return out
+
+    def _put(code: Any, price: Any) -> None:
+        c = normalize_code(code)
+        px = num(price)
+        if c and px is not None:
+            out[c] = float(px)
+
+    for row in snapshot.get("etfs") or []:
+        if isinstance(row, dict):
+            _put(row.get("code"), row.get("price"))
+    for row in snapshot.get("positions") or []:
+        if isinstance(row, dict):
+            _put(row.get("code"), row.get("last") or row.get("price"))
+    for row in snapshot.get("watch") or []:
+        if isinstance(row, dict):
+            _put(row.get("code"), row.get("price") or row.get("last"))
+    rec = ((snapshot.get("verdict") or {}).get("recommend") or {}).get("items") or []
+    for row in rec:
+        if isinstance(row, dict):
+            _put(row.get("code"), row.get("last") or row.get("price"))
+    return out
+
+
+def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+    """Emit toasts when live price hits stop / chase / buy-band on today's plans."""
+    if not snapshot or not snapshot.get("ok"):
+        return []
+    trade_date = str(snapshot.get("trade_date") or "")
+    if not trade_date:
+        return []
+    quotes = snapshot_quote_map(snapshot)
+    # Prefer live recommend plans; fall back to today's logged buy signals.
+    plans: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in ((snapshot.get("verdict") or {}).get("recommend") or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        code = normalize_code(item.get("code"))
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        plans.append(
+            {
+                "code": code,
+                "name": item.get("name") or code,
+                "last": num(item.get("last")) or quotes.get(code),
+                "buy": num(item.get("buy_price")),
+                "wait": num(item.get("wait_price")),
+                "stop": num(item.get("stop_price")),
+                "chase": num(item.get("chase_price")),
+            }
+        )
+    for row in load_signals(limit=80):
+        if str(row.get("trade_date") or "") != trade_date:
+            continue
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        code = normalize_code(row.get("code"))
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        plans.append(
+            {
+                "code": code,
+                "name": row.get("name") or code,
+                "last": quotes.get(code) or num(row.get("last")),
+                "buy": num(row.get("price")),
+                "wait": num(payload.get("wait_price")),
+                "stop": num(payload.get("stop_price")),
+                "chase": num(payload.get("chase_price")),
+            }
+        )
+
+    alerts: list[tuple[str, str, str]] = []
+    for p in plans:
+        code = p["code"]
+        last = p.get("last")
+        if last is None:
+            continue
+        name = p.get("name") or code
+        stop = p.get("stop")
+        chase = p.get("chase")
+        wait = p.get("wait")
+        buy = p.get("buy")
+        low = wait if wait is not None else buy
+        if stop is not None and last <= stop:
+            alerts.append(
+                (
+                    f"band:stop:{code}",
+                    "触及止损",
+                    f"{name} {code} 现价 {last} ≤ 止损 {stop}",
+                )
+            )
+        elif chase is not None and last >= chase:
+            alerts.append(
+                (
+                    f"band:chase:{code}",
+                    "触及不追",
+                    f"{name} {code} 现价 {last} ≥ 不追 {chase}，不宜追高",
+                )
+            )
+        elif low is not None and chase is not None and low <= last < chase:
+            alerts.append(
+                (
+                    f"band:entry:{code}",
+                    "进入可买带",
+                    f"{name} {code} 现价 {last} · 建议/回踩 {low} · 不追 {chase}",
+                )
+            )
+    return alerts
+
+
 def enrich_signals_with_live_marks(
     rows: list[dict[str, Any]],
     quotes: dict[str, dict[str, Any]],
@@ -395,15 +553,21 @@ def enrich_signals_with_live_marks(
 def build_review_payload(
     limit: int = 60,
     quotes: dict[str, dict[str, Any]] | None = None,
+    *,
+    trade_date: str | None = None,
+    phase: str | None = None,
 ) -> dict[str, Any]:
     """Load recent signals and summary; optionally attach live price marks."""
     rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
     if quotes:
         rows = enrich_signals_with_live_marks(rows, quotes)
+    day = trade_date or datetime.now().strftime("%Y-%m-%d")
+    summary = summarize_signals(rows)
+    summary["today"] = build_today_digest(rows, trade_date=day, phase=phase)
     return {
         "ok": True,
         "signals": rows,
-        "summary": summarize_signals(rows),
+        "summary": summary,
     }
 
 

@@ -576,6 +576,24 @@
     .live-arrow.down { color: var(--down); }
     .live-arrow.flat { color: var(--muted); }
     .live-vs { font-size: 11px; margin-left: 2px; }
+    .rev-today {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin: 10px 0 12px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0e141c;
+    }
+    .rev-today .lab { color: var(--muted); font-size: 11px; }
+    .rev-today .val { font-size: 16px; font-weight: 700; margin-top: 2px; }
+    .rev-today .hd {
+      grid-column: 1 / -1;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
     tr.rev-sell td {
       background: rgba(232, 93, 117, 0.08);
     }
@@ -647,11 +665,11 @@
       border-radius: 4px; padding: 2px 8px; cursor: pointer;
     }
     @media (max-width: 1200px) {
-      .grid-top, .boards, .pin-row, .rev-sum, .life-grid, .idx-strip { grid-template-columns: 1fr 1fr; }
+      .grid-top, .boards, .pin-row, .rev-sum, .life-grid, .idx-strip, .rev-today { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 700px) {
       .rec-prices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .rev-sum, .grid-top, .boards, .pin-row, .life-grid, .idx-strip { grid-template-columns: 1fr; }
+      .rev-sum, .grid-top, .boards, .pin-row, .life-grid, .idx-strip, .rev-today { grid-template-columns: 1fr; }
       .pos-form { grid-template-columns: 1fr 1fr; }
     }
   </style>
@@ -837,7 +855,8 @@
     <section class="tab-panel" id="panel-review" hidden>
       <section class="card">
         <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button></h2>
-        <p class="rev-note">当日「可买入 / 建议卖」会自动落库；隔日后按收盘价打分。建议价=理想回踩，不追=可接受上限。点「列设置」可拖动排序/勾选显隐。</p>
+        <p class="rev-note">当日信号自动落库。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。进入可买带或触及止损/不追会弹系统通知。</p>
+        <div class="rev-today" id="revToday"></div>
         <div class="rev-sum" id="revSum"></div>
         <div class="rev-toolbar">
           <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto; margin:0; flex:1;">
@@ -1503,7 +1522,7 @@
       if (col === "ops") {
         return `<div class="rev-actions">
           <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}">确认上升</button>
-          <button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}">已交易</button>
+          <button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${r.live_last != null ? r.live_last : (r.price ?? "")}">已交易</button>
           <button type="button" class="rev-skip${ctx.skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
           <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
         </div>`;
@@ -1514,8 +1533,20 @@
     function paintReview(payload) {
       lastReview = payload || { signals: [], summary: {} };
       const sum = lastReview.summary || {};
+      const today = sum.today || {};
       const cell = (lab, val, cls) =>
         `<div class="rev-card"><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
+      const tcell = (lab, val, cls) =>
+        `<div><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
+      document.getElementById("revToday").innerHTML = [
+        `<div class="hd">今日摘要 · ${today.date || "—"} · 相位 ${today.phase || "—"}</div>`,
+        tcell("买入", today.buy_n ?? 0),
+        tcell("卖出", today.sell_n ?? 0),
+        tcell("未回踩上行", today.miss_pullback_n ?? 0, "mark-miss"),
+        tcell("价带内", today.in_band_n ?? 0, "up"),
+        tcell("已交易/未交易", `${today.traded_n ?? 0} / ${today.skipped_n ?? 0}`),
+        tcell("主线切换", today.switch_n ?? 0),
+      ].join("");
       document.getElementById("revSum").innerHTML = [
         cell("买入信号", sum.buy_total ?? 0),
         cell("买入命中率", sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
@@ -1967,13 +1998,43 @@
       if (trade) {
         const id = trade.getAttribute("data-id");
         if (!id) return;
-        await fetch("/api/review/" + id, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ traded: true, skipped: false }),
-        });
+        const typ = trade.getAttribute("data-type") || "buy";
+        const code = trade.getAttribute("data-code") || "";
+        const name = trade.getAttribute("data-name") || code;
+        const px = trade.getAttribute("data-price") || "";
+        let book = true;
+        if (typ === "sell") {
+          book = confirm(`${name} ${code}\n标记已交易，并按本地仓位减仓一半？\n取消=只标记，不改仓位`);
+        } else {
+          book = confirm(`${name} ${code}\n标记已交易，并按${px || "建议价"}记账 100 股/份？\n取消=只标记，不改仓位`);
+        }
+        // If user cancels confirm on sell/buy book intent — still allow mark-only via second path
+        // confirm returns false on Cancel → book=false (mark only). OK → book=true.
+        try {
+          const r = await fetch("/api/review/" + id + "/trade", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              book,
+              qty: typ === "buy" ? 100 : undefined,
+              price: typ === "buy" && px ? Number(px) : undefined,
+            }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            alert(d.detail || "记账失败，已尽量标记交易状态");
+            await fetch("/api/review/" + id, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ traded: true, skipped: false }),
+            });
+          }
+        } catch (e) {
+          alert("操作失败");
+        }
         reviewLoadedAt = 0;
         await loadReview(true);
+        await tick();
         return;
       }
       const skip = ev.target.closest(".rev-skip");

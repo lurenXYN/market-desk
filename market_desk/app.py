@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -17,6 +18,8 @@ from market_desk.db import (
     add_position,
     delete_position,
     delete_signal,
+    load_positions,
+    load_signal,
     trim_position,
     update_signal_meta,
 )
@@ -47,6 +50,15 @@ class SignalMetaIn(BaseModel):
 
     skipped: bool | None = None
     traded: bool | None = None
+    note: str | None = None
+
+
+class SignalTradeIn(BaseModel):
+    """Mark a signal traded and optionally mirror it into the position book."""
+
+    book: bool = True
+    qty: int | None = Field(default=None, gt=0)
+    price: float | None = Field(default=None, gt=0)
     note: str | None = None
 
 
@@ -205,6 +217,49 @@ def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
     if not ok:
         raise HTTPException(404, "signal not found")
     return {"ok": True, "id": sid}
+
+
+@app.post("/api/review/{sid}/trade")
+def trade_signal(sid: int, body: SignalTradeIn) -> dict:
+    """Mark traded; optionally book a buy or trim a sell into local positions."""
+    row = load_signal(sid)
+    if not row:
+        raise HTTPException(404, "signal not found")
+    code = normalize_code(row.get("code"))
+    name = str(row.get("name") or code)
+    sig_type = str(row.get("signal_type") or "buy")
+    note = (body.note if body.note is not None else "复盘已交易").strip()
+    update_signal_meta(sid, traded=1, skipped=0, note=note or None)
+
+    booked: dict[str, Any] | None = None
+    if body.book and code:
+        if sig_type == "buy":
+            px = float(body.price) if body.price is not None else float(row.get("price") or row.get("last") or 0)
+            if px <= 0:
+                raise HTTPException(400, "missing buy price")
+            qty = int(body.qty or 100)
+            booked = add_position(code, name, px, qty, note)
+        else:
+            positions = [p for p in load_positions() if normalize_code(p.get("code")) == code]
+            if not positions:
+                raise HTTPException(400, "no local position to trim for this sell signal")
+            pos = positions[0]
+            hold = int(pos.get("qty") or 0)
+            qty = int(body.qty or max(hold // 2, 100 if hold >= 100 else hold))
+            qty = min(qty, hold)
+            if qty <= 0:
+                raise HTTPException(400, "position qty is zero")
+            booked = trim_position(int(pos["id"]), qty)
+
+    rows = engine.sync_positions()
+    return {
+        "ok": True,
+        "id": sid,
+        "signal_type": sig_type,
+        "booked": booked,
+        "positions": rows,
+        "summary": engine.snapshot.get("position_summary"),
+    }
 
 
 @app.delete("/api/review/{sid}")

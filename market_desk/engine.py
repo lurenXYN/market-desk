@@ -47,6 +47,7 @@ from market_desk.db import (
 from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
+    build_price_touch_alerts,
     build_review_payload,
     note_quote_ticks,
     record_session_signals,
@@ -365,7 +366,12 @@ class DeskEngine:
                 note_quote_ticks(quotes)
         except Exception:
             log.exception("signal scoring / live marks failed")
-        return build_review_payload(limit=limit, quotes=quotes)
+        return build_review_payload(
+            limit=limit,
+            quotes=quotes,
+            trade_date=today,
+            phase=(self.snapshot.get("phase") if self.snapshot else None),
+        )
 
     def _emit_toasts(
         self,
@@ -379,7 +385,12 @@ class DeskEngine:
             self._toast_armed = True
             return
         now_ts = datetime.now(CN_TZ).timestamp()
-        for key, title, body in build_toast_alerts(previous, current):
+        alerts = list(build_toast_alerts(previous, current))
+        try:
+            alerts.extend(build_price_touch_alerts(current))
+        except Exception:
+            log.exception("price-touch alerts failed")
+        for key, title, body in alerts:
             last = self._toast_sent.get(key)
             if last is not None and now_ts - last < TOAST_COOLDOWN_SECONDS:
                 continue

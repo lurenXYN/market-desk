@@ -440,6 +440,36 @@ def upsert_signal(row: dict[str, Any]) -> None:
         conn.commit()
 
 
+def load_signal(signal_id: int) -> dict[str, Any] | None:
+    """Return one signal row by id, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
+                   code, name, kind, price, last, ready, payload,
+                   outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+                   outcome_label, outcome_checked_at, note, skipped, traded
+            FROM signals
+            WHERE id = ?
+            """,
+            (int(signal_id),),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    raw = item.get("payload")
+    if isinstance(raw, str) and raw:
+        try:
+            item["payload"] = json.loads(raw)
+        except json.JSONDecodeError:
+            item["payload"] = {}
+    else:
+        item["payload"] = {}
+    item["skipped"] = int(item.get("skipped") or 0)
+    item["traded"] = int(item.get("traded") or 0)
+    return item
+
+
 def load_signals(limit: int = 60) -> list[dict[str, Any]]:
     """Return recent signals, newest first."""
     with _connect() as conn:
