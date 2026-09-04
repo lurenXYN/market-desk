@@ -567,6 +567,34 @@
     }
     .dev-up { color: var(--up); font-weight: 700; }
     .dev-down { color: var(--down); font-weight: 700; }
+    .mark-miss { color: var(--warn); font-weight: 700; }
+    .rev-toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: end;
+      margin: 0 0 10px; position: relative;
+    }
+    .rev-col-btn {
+      background: #151c28; color: var(--muted); border: 1px solid var(--line);
+      padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
+    }
+    .rev-col-panel {
+      position: absolute; right: 0; top: 100%; z-index: 30; margin-top: 6px;
+      width: min(320px, 92vw); background: #121826; border: 1px solid var(--line);
+      border-radius: 8px; padding: 10px; box-shadow: 0 12px 28px rgba(0,0,0,.45);
+    }
+    .rev-col-panel .hd {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 8px; font-size: 12px; color: var(--muted);
+    }
+    .rev-col-panel ul { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; }
+    .rev-col-panel li {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px;
+      background: #0e141c; cursor: grab; user-select: none; font-size: 13px;
+    }
+    .rev-col-panel li.dragging { opacity: 0.45; }
+    .rev-col-panel li .grip { color: var(--muted); letter-spacing: -1px; }
+    .rev-col-panel li label { flex: 1; display: flex; gap: 8px; align-items: center; cursor: pointer; }
+    .rev-col-panel .ft { display: flex; gap: 8px; margin-top: 8px; }
     .pos-form {
       display: grid;
       grid-template-columns: 90px 140px 90px 90px 1fr auto;
@@ -786,34 +814,40 @@
     <section class="tab-panel" id="panel-review" hidden>
       <section class="card">
         <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button></h2>
-        <p class="rev-note">当日「可买入 / 建议卖」会自动落库；隔日后按收盘价打分。点名称可看图/跳雪球。标记「未交易」后不计入命中率。</p>
+        <p class="rev-note">当日「可买入 / 建议卖」会自动落库；隔日后按收盘价打分。建议价=理想回踩，不追=可接受上限。点「列设置」可拖动排序/勾选显隐。</p>
         <div class="rev-sum" id="revSum"></div>
-        <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto;">
-          <label>类型
-            <select id="revType">
-              <option value="">全部</option>
-              <option value="buy">买入</option>
-              <option value="sell">卖出</option>
-            </select>
-          </label>
-          <label>品种
-            <select id="revKind">
-              <option value="">全部</option>
-              <option value="etf">ETF</option>
-              <option value="stock">个股</option>
-            </select>
-          </label>
-          <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
-          <button type="button" id="revApply">筛选</button>
-          <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
+        <div class="rev-toolbar">
+          <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto; margin:0; flex:1;">
+            <label>类型
+              <select id="revType">
+                <option value="">全部</option>
+                <option value="buy">买入</option>
+                <option value="sell">卖出</option>
+              </select>
+            </label>
+            <label>品种
+              <select id="revKind">
+                <option value="">全部</option>
+                <option value="etf">ETF</option>
+                <option value="stock">个股</option>
+              </select>
+            </label>
+            <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
+            <button type="button" id="revApply">筛选</button>
+            <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
+          </div>
+          <button type="button" class="rev-col-btn" id="revColsBtn">列设置</button>
+          <div class="rev-col-panel" id="revColPanel" hidden>
+            <div class="hd"><span>拖动排序 · 勾选显示</span><button type="button" class="pos-del" id="revColClose">关闭</button></div>
+            <ul id="revColList"></ul>
+            <div class="ft">
+              <button type="button" class="rev-col-btn" id="revColReset">恢复默认</button>
+            </div>
+          </div>
         </div>
         <table>
           <thead>
-            <tr>
-              <th>日期</th><th>类型</th><th>名称</th><th>代码</th>
-              <th>建议价</th><th>主线</th><th>相位</th>
-              <th>次日%</th><th>三日%</th><th>结果</th><th>操作</th>
-            </tr>
+            <tr id="revHead"></tr>
           </thead>
           <tbody id="revBody"></tbody>
         </table>
@@ -1337,6 +1371,105 @@
       document.getElementById("chartMask").hidden = true;
     }
 
+    const REV_COL_STORAGE = "md_rev_cols_v1";
+    const REV_COL_CATALOG = [
+      { id: "date", label: "日期" },
+      { id: "type", label: "类型" },
+      { id: "name", label: "名称" },
+      { id: "code", label: "代码" },
+      { id: "price", label: "建议价" },
+      { id: "chase", label: "不追" },
+      { id: "mainline", label: "主线" },
+      { id: "phase", label: "相位" },
+      { id: "day1", label: "次日%" },
+      { id: "day3", label: "三日%" },
+      { id: "result", label: "结果" },
+      { id: "ops", label: "操作" },
+    ];
+    const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({ id: c.id, on: true }));
+
+    function loadRevColState() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(REV_COL_STORAGE) || "null");
+        if (!raw || !Array.isArray(raw) || !raw.length) return REV_COL_DEFAULT.map((x) => ({ ...x }));
+        const known = new Set(REV_COL_CATALOG.map((c) => c.id));
+        const seen = new Set();
+        const out = [];
+        for (const row of raw) {
+          const id = row && row.id;
+          if (!known.has(id) || seen.has(id)) continue;
+          seen.add(id);
+          out.push({ id, on: row.on !== false });
+        }
+        for (const c of REV_COL_CATALOG) {
+          if (!seen.has(c.id)) out.push({ id: c.id, on: true });
+        }
+        if (!out.some((x) => x.on)) out[0].on = true;
+        return out;
+      } catch (e) {
+        return REV_COL_DEFAULT.map((x) => ({ ...x }));
+      }
+    }
+
+    function saveRevColState(state) {
+      localStorage.setItem(REV_COL_STORAGE, JSON.stringify(state));
+    }
+
+    let revColState = loadRevColState();
+
+    function revColLabel(id) {
+      return (REV_COL_CATALOG.find((c) => c.id === id) || {}).label || id;
+    }
+
+    function visibleRevCols() {
+      return revColState.filter((c) => c.on).map((c) => c.id);
+    }
+
+    function renderRevColPanel() {
+      const list = document.getElementById("revColList");
+      list.innerHTML = revColState.map((c, i) => `
+        <li draggable="true" data-idx="${i}">
+          <span class="grip">⋮⋮</span>
+          <label>
+            <input type="checkbox" data-id="${c.id}" ${c.on ? "checked" : ""} />
+            ${revColLabel(c.id)}
+          </label>
+        </li>`).join("");
+    }
+
+    function revCellHtml(col, r, ctx) {
+      if (col === "date") return r.trade_date || "";
+      if (col === "type") return ctx.typ;
+      if (col === "name") return `${tickerHtml(r.name, r.code)}${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
+      if (col === "code") return r.code || "";
+      if (col === "price") return `${r.price ?? "—"}${ctx.devHtml}`;
+      if (col === "chase") {
+        const chase = r.chase_price != null ? r.chase_price
+          : (r.payload && r.payload.chase_price != null ? r.payload.chase_price : null);
+        return chase == null ? "—" : chase;
+      }
+      if (col === "mainline") return r.mainline || "—";
+      if (col === "phase") return r.phase || "—";
+      if (col === "day1") {
+        const d1 = r.outcome_day1_pct;
+        return `<td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>`;
+      }
+      if (col === "day3") {
+        const d3 = r.outcome_day3_pct;
+        return `<td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>`;
+      }
+      if (col === "result") return `${ctx.label}${ctx.pend}`;
+      if (col === "ops") {
+        return `<div class="rev-actions">
+          <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}">确认上升</button>
+          <button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}">已交易</button>
+          <button type="button" class="rev-skip${ctx.skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
+          <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
+        </div>`;
+      }
+      return "";
+    }
+
     function paintReview(payload) {
       lastReview = payload || { signals: [], summary: {} };
       const sum = lastReview.summary || {};
@@ -1357,10 +1490,11 @@
         if (main && !(String(r.mainline || "").includes(main))) return false;
         return true;
       });
+      const cols = visibleRevCols();
+      document.getElementById("revHead").innerHTML = cols.map((id) => `<th>${revColLabel(id)}</th>`).join("");
+      const colspan = Math.max(cols.length, 1);
       document.getElementById("revBody").innerHTML = rows.map((r) => {
         const typ = r.signal_type === "sell" ? "卖" : "买";
-        const d1 = r.outcome_day1_pct;
-        const d3 = r.outcome_day3_pct;
         const skipped = !!Number(r.skipped || 0);
         const traded = !!Number(r.traded || 0);
         const confirmed = (r.note || "").includes("确认上升") || (r.payload && r.payload.trend_manual === "up");
@@ -1373,6 +1507,7 @@
         let markCls = "";
         if (flags.includes("stop_hit")) markCls = "mark-stop";
         else if (flags.includes("chase_hit")) markCls = "mark-chase";
+        else if (flags.includes("miss_pullback")) markCls = "mark-miss";
         else if (r.price_mark) markCls = "mark-ok";
         const markHtml = r.price_mark
           ? `<div class="${markCls}">${r.price_mark}</div>`
@@ -1387,27 +1522,14 @@
         const devHtml = dev == null
           ? ""
           : `<div class="${dev >= 0 ? "dev-up" : "dev-down"}">偏离 ${(dev > 0 ? "+" : "") + Number(dev).toFixed(2)}%</div>`;
-        return `<tr>
-          <td>${r.trade_date || ""}</td>
-          <td>${typ}</td>
-          <td>${tickerHtml(r.name, r.code)}${liveHtml}${markHtml}${cautionHtml}</td>
-          <td>${r.code || ""}</td>
-          <td>${r.price ?? "—"}${devHtml}</td>
-          <td>${r.mainline || "—"}</td>
-          <td>${r.phase || "—"}</td>
-          <td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>
-          <td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>
-          <td>${label}${pend}</td>
-          <td>
-            <div class="rev-actions">
-              <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}">确认上升</button>
-              <button type="button" class="rev-trade${traded ? " on" : ""}" data-id="${r.id}">已交易</button>
-              <button type="button" class="rev-skip${skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
-              <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
-            </div>
-          </td>
-        </tr>`;
-      }).join("") || `<tr><td colspan="11" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
+        const ctx = { typ, skipped, traded, label, pend, markHtml, cautionHtml, liveHtml, devHtml };
+        const tds = cols.map((id) => {
+          const html = revCellHtml(id, r, ctx);
+          if (id === "day1" || id === "day3") return html;
+          return `<td>${html}</td>`;
+        }).join("");
+        return `<tr>${tds}</tr>`;
+      }).join("") || `<tr><td colspan="${colspan}" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
     }
 
     let lastReview = { signals: [], summary: {} };
@@ -1421,8 +1543,9 @@
         paintReview(d);
         reviewLoadedAt = now;
       } catch (e) {
+        const n = Math.max(visibleRevCols().length, 1);
         document.getElementById("revBody").innerHTML =
-          `<tr><td colspan="11" class="meta">复盘加载失败</td></tr>`;
+          `<tr><td colspan="${n}" class="meta">复盘加载失败</td></tr>`;
       }
     }
 
@@ -1669,13 +1792,94 @@
       if (chartCode) openChart(chartCode);
     });
     document.getElementById("revApply").addEventListener("click", () => paintReview(lastReview));
+    document.getElementById("revColsBtn").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const panel = document.getElementById("revColPanel");
+      const open = panel.hidden;
+      panel.hidden = !open;
+      if (open) renderRevColPanel();
+    });
+    document.getElementById("revColClose").addEventListener("click", () => {
+      document.getElementById("revColPanel").hidden = true;
+    });
+    document.getElementById("revColReset").addEventListener("click", () => {
+      revColState = REV_COL_DEFAULT.map((x) => ({ ...x }));
+      saveRevColState(revColState);
+      renderRevColPanel();
+      paintReview(lastReview);
+    });
+    document.getElementById("revColList").addEventListener("change", (ev) => {
+      const box = ev.target.closest("input[type=checkbox][data-id]");
+      if (!box) return;
+      const id = box.getAttribute("data-id");
+      const row = revColState.find((c) => c.id === id);
+      if (!row) return;
+      row.on = !!box.checked;
+      if (!revColState.some((c) => c.on)) {
+        row.on = true;
+        box.checked = true;
+      }
+      saveRevColState(revColState);
+      paintReview(lastReview);
+    });
+    (() => {
+      const list = document.getElementById("revColList");
+      let dragIdx = null;
+      list.addEventListener("dragstart", (ev) => {
+        const li = ev.target.closest("li[data-idx]");
+        if (!li) return;
+        dragIdx = Number(li.dataset.idx);
+        li.classList.add("dragging");
+        ev.dataTransfer.effectAllowed = "move";
+        try { ev.dataTransfer.setData("text/plain", String(dragIdx)); } catch (e) {}
+      });
+      list.addEventListener("dragend", (ev) => {
+        const li = ev.target.closest("li");
+        if (li) li.classList.remove("dragging");
+        dragIdx = null;
+      });
+      list.addEventListener("dragover", (ev) => {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      });
+      list.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        const li = ev.target.closest("li[data-idx]");
+        if (!li || dragIdx == null) return;
+        const to = Number(li.dataset.idx);
+        if (to === dragIdx) return;
+        const moved = revColState.splice(dragIdx, 1)[0];
+        revColState.splice(to, 0, moved);
+        saveRevColState(revColState);
+        renderRevColPanel();
+        paintReview(lastReview);
+        dragIdx = null;
+      });
+    })();
+    document.addEventListener("click", (ev) => {
+      const panel = document.getElementById("revColPanel");
+      if (panel.hidden) return;
+      if (ev.target.closest("#revColPanel") || ev.target.closest("#revColsBtn")) return;
+      panel.hidden = true;
+    });
     document.getElementById("revExport").addEventListener("click", () => {
       const rows = lastReview.signals || [];
-      const header = ["date","type","name","code","price","mainline","phase","day1","day3","label","skipped"];
-      const lines = [header.join(",")].concat(rows.map((r) => [
-        r.trade_date, r.signal_type, r.name, r.code, r.price, r.mainline, r.phase,
-        r.outcome_day1_pct, r.outcome_day3_pct, r.outcome_label, r.skipped || 0,
-      ].map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")));
+      const cols = visibleRevCols().filter((id) => id !== "ops");
+      const header = cols.map(revColLabel);
+      const lines = [header.join(",")].concat(rows.map((r) => cols.map((id) => {
+        if (id === "date") return r.trade_date;
+        if (id === "type") return r.signal_type;
+        if (id === "name") return r.name;
+        if (id === "code") return r.code;
+        if (id === "price") return r.price;
+        if (id === "chase") return r.chase_price ?? (r.payload && r.payload.chase_price);
+        if (id === "mainline") return r.mainline;
+        if (id === "phase") return r.phase;
+        if (id === "day1") return r.outcome_day1_pct;
+        if (id === "day3") return r.outcome_day3_pct;
+        if (id === "result") return r.outcome_label;
+        return "";
+      }).map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")));
       const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);

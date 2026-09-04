@@ -236,9 +236,14 @@ def enrich_signals_with_live_marks(
         code = normalize_code(item.get("code"))
         q = quotes.get(code) or {}
         last = num(q.get("price"))
+        day_low = num(q.get("low"))
         stop = num(payload.get("stop_price"))
         chase = num(payload.get("chase_price"))
         wait = num(payload.get("wait_price"))
+        sig_px = num(item.get("price"))
+        item["chase_price"] = chase
+        item["wait_price"] = wait
+        item["stop_price"] = stop
         flags: list[str] = []
         labels: list[str] = []
         if last is not None and stop is not None and last <= stop:
@@ -257,7 +262,20 @@ def enrich_signals_with_live_marks(
         ):
             flags.append("near_wait")
             labels.append("回踩区间")
-        if (
+        # Ideal entry never touched today, yet price already ran higher.
+        miss_pullback = (
+            str(item.get("signal_type") or "") == "buy"
+            and last is not None
+            and sig_px is not None
+            and day_low is not None
+            and day_low > sig_px
+            and last > sig_px
+            and "stop_hit" not in flags
+        )
+        if miss_pullback:
+            flags.append("miss_pullback")
+            labels.append("未回踩·已上行")
+        elif (
             last is not None
             and wait is not None
             and chase is not None
@@ -269,7 +287,6 @@ def enrich_signals_with_live_marks(
             labels.append("建议价附近")
         item["live_last"] = last
         item["live_pct"] = num(q.get("pct"))
-        sig_px = num(item.get("price"))
         if last is not None and sig_px is not None and sig_px > 0:
             item["dev_pct"] = round((float(last) / float(sig_px) - 1.0) * 100.0, 2)
         else:
@@ -282,6 +299,8 @@ def enrich_signals_with_live_marks(
                 item["buy_caution"] = "现价已到止损带，当日不宜再按原计划买"
             elif "chase_hit" in flags:
                 item["buy_caution"] = "现价已过不追价，当日不宜追高"
+            elif "miss_pullback" in flags:
+                item["buy_caution"] = "未回踩建议价已上行，勿死等；可对照不追价决定是否放弃"
             elif "near_wait" in flags:
                 item["buy_caution"] = "现价在回踩带，可观察是否站稳"
             else:
@@ -297,7 +316,7 @@ def build_review_payload(
     quotes: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Load recent signals and summary; optionally attach live price marks."""
-    rows = load_signals(limit=limit)
+    rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
     if quotes:
         rows = enrich_signals_with_live_marks(rows, quotes)
     return {
@@ -305,6 +324,19 @@ def build_review_payload(
         "signals": rows,
         "summary": summarize_signals(rows),
     }
+
+
+def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
+    """Copy plan prices from payload onto the top-level signal row."""
+    item = dict(row)
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    if item.get("chase_price") is None:
+        item["chase_price"] = num(payload.get("chase_price"))
+    if item.get("wait_price") is None:
+        item["wait_price"] = num(payload.get("wait_price"))
+    if item.get("stop_price") is None:
+        item["stop_price"] = num(payload.get("stop_price"))
+    return item
 
 
 def apply_outcomes(
