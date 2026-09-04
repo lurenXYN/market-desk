@@ -6,15 +6,18 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from market_desk.config import STATIC_DIR
-from market_desk.db import add_position, delete_position
+from market_desk.db import add_position, delete_position, trim_position, update_signal_meta
+from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
-from market_desk.filters import normalize_code
+from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
+from market_desk.trend import classify_daily_trend
 
 
 class PositionIn(BaseModel):
@@ -25,6 +28,19 @@ class PositionIn(BaseModel):
     buy_price: float = Field(gt=0)
     qty: int = Field(gt=0)
     note: str = ""
+
+
+class TrimIn(BaseModel):
+    """Payload for reducing share count on an existing position."""
+
+    qty: int = Field(gt=0)
+
+
+class SignalMetaIn(BaseModel):
+    """User annotation for a logged buy/sell signal."""
+
+    skipped: bool | None = None
+    note: str | None = None
 
 
 @asynccontextmanager
@@ -67,6 +83,47 @@ async def review() -> dict:
     return await engine.build_review()
 
 
+@app.get("/api/chart/{code}")
+async def chart(code: str) -> dict:
+    """Return intraday + daily series and a Xueqiu deep-link for one ticker."""
+    c = normalize_code(code)
+    if len(c) != 6 or not c.isdigit():
+        raise HTTPException(400, "code must be a 6-digit ticker")
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
+        bars, minutes = await asyncio.gather(
+            fetch_daily_bars(client, c, limit=60),
+            fetch_minute_trends(client, c),
+        )
+    closes = [float(b["close"]) for b in bars]
+    trend = classify_daily_trend(closes, fetch_ok=bool(closes))
+    name = ""
+    for row in engine.snapshot.get("positions") or []:
+        if normalize_code(row.get("code")) == c:
+            name = str(row.get("name") or "")
+            break
+    if not name:
+        rec = ((engine.snapshot.get("verdict") or {}).get("recommend") or {}).get("items") or []
+        for item in rec:
+            if normalize_code(item.get("code")) == c:
+                name = str(item.get("name") or "")
+                break
+    if not name:
+        for w in engine.snapshot.get("watch") or []:
+            if normalize_code(w.get("code")) == c:
+                name = str(w.get("name") or "")
+                break
+    return {
+        "ok": True,
+        "code": c,
+        "name": name or c,
+        "symbol": xueqiu_symbol(c),
+        "xueqiu_url": xueqiu_url(c),
+        "trend": trend,
+        "daily": bars,
+        "minute": minutes,
+    }
+
+
 @app.get("/api/positions")
 def list_positions() -> dict:
     """Return recorded positions with the last known marks."""
@@ -105,3 +162,31 @@ def remove_position(pid: int) -> dict:
         "positions": rows,
         "summary": engine.snapshot.get("position_summary"),
     }
+
+
+@app.post("/api/positions/{pid}/trim")
+def trim_position_api(pid: int, body: TrimIn) -> dict:
+    """Sell/reduce shares on a recorded position (local book only)."""
+    row = trim_position(pid, int(body.qty))
+    if row is None:
+        raise HTTPException(404, "position not found")
+    rows = engine.sync_positions()
+    return {
+        "ok": True,
+        "trimmed": row,
+        "positions": rows,
+        "summary": engine.snapshot.get("position_summary"),
+    }
+
+
+@app.post("/api/review/{sid}")
+def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
+    """Mark a signal as skipped (not traded) or attach a note."""
+    ok = update_signal_meta(
+        sid,
+        skipped=None if body.skipped is None else (1 if body.skipped else 0),
+        note=body.note,
+    )
+    if not ok:
+        raise HTTPException(404, "signal not found")
+    return {"ok": True, "id": sid}

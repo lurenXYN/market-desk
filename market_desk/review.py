@@ -174,8 +174,9 @@ def score_signal_with_closes(
 
 def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate hit-rate style stats for the review panel."""
-    buys = [r for r in rows if r.get("signal_type") == "buy"]
-    sells = [r for r in rows if r.get("signal_type") == "sell"]
+    active = [r for r in rows if not int(r.get("skipped") or 0)]
+    buys = [r for r in active if r.get("signal_type") == "buy"]
+    sells = [r for r in active if r.get("signal_type") == "sell"]
     scored_buys = [r for r in buys if r.get("outcome_label")]
     scored_sells = [r for r in sells if r.get("outcome_label")]
 
@@ -192,6 +193,10 @@ def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round(sum(vals) / len(vals), 2)
 
+    # Simple paper P&L: assume buy at signal price, mark day3 close move.
+    paper = [r for r in scored_buys if num(r.get("outcome_day3_pct")) is not None]
+    paper_pnl = _avg(paper, "outcome_day3_pct")
+
     return {
         "buy_total": len(buys),
         "buy_scored": len(scored_buys),
@@ -201,7 +206,9 @@ def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "sell_hit_rate": _rate(scored_sells, {"卖后回落"}),
         "buy_avg_day1": _avg(scored_buys, "outcome_day1_pct"),
         "buy_avg_day3": _avg(scored_buys, "outcome_day3_pct"),
-        "pending": sum(1 for r in rows if not r.get("outcome_label")),
+        "paper_avg_day3": paper_pnl,
+        "skipped": sum(1 for r in rows if int(r.get("skipped") or 0)),
+        "pending": sum(1 for r in active if not r.get("outcome_label")),
     }
 
 

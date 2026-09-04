@@ -92,10 +92,21 @@ def init_db() -> None:
                 outcome_mae_pct REAL,
                 outcome_label TEXT,
                 outcome_checked_at TEXT,
+                note TEXT,
+                skipped INTEGER DEFAULT 0,
                 UNIQUE(trade_date, code, signal_type)
             )
             """
         )
+        # Lightweight migrations for older local DBs.
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(signals)").fetchall()
+        }
+        if "note" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN note TEXT")
+        if "skipped" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN skipped INTEGER DEFAULT 0")
         conn.commit()
 
 
@@ -229,9 +240,51 @@ def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[
 
 
 def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "") -> dict[str, Any]:
-    """Insert a local position row and return it."""
+    """Insert a position, or average into an existing same-code row."""
+    code = str(code or "").zfill(6)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id, name, buy_price, qty, note FROM positions WHERE code = ? ORDER BY id DESC LIMIT 1",
+            (code,),
+        ).fetchone()
+        if existing:
+            old_qty = int(existing["qty"] or 0)
+            old_px = float(existing["buy_price"] or 0)
+            new_qty = old_qty + int(qty)
+            if new_qty <= 0:
+                conn.execute("DELETE FROM positions WHERE id = ?", (int(existing["id"]),))
+                conn.commit()
+                return {"id": int(existing["id"]), "deleted": True, "code": code}
+            avg = (old_px * old_qty + float(buy_price) * int(qty)) / float(new_qty)
+            merged_note = (existing["note"] or "") or note
+            if note and existing["note"] and note not in str(existing["note"]):
+                merged_note = f"{existing['note']}；{note}"
+            conn.execute(
+                """
+                UPDATE positions
+                SET name = ?, buy_price = ?, qty = ?, note = ?
+                WHERE id = ?
+                """,
+                (
+                    name or existing["name"] or code,
+                    round(avg, 4),
+                    new_qty,
+                    merged_note,
+                    int(existing["id"]),
+                ),
+            )
+            conn.commit()
+            return {
+                "id": int(existing["id"]),
+                "code": code,
+                "name": name or existing["name"] or code,
+                "buy_price": round(avg, 4),
+                "qty": new_qty,
+                "note": merged_note,
+                "created_at": now,
+                "averaged": True,
+            }
         cur = conn.execute(
             """
             INSERT INTO positions(code, name, buy_price, qty, note, created_at)
@@ -250,6 +303,34 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
         "note": note,
         "created_at": now,
     }
+
+
+def trim_position(pid: int, qty: int) -> dict[str, Any] | None:
+    """Reduce share count on a position; delete the row when qty reaches zero."""
+    sell = int(qty)
+    if sell <= 0:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, code, name, buy_price, qty, note, created_at FROM positions WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        if not row:
+            return None
+        left = int(row["qty"] or 0) - sell
+        if left <= 0:
+            conn.execute("DELETE FROM positions WHERE id = ?", (pid,))
+            conn.commit()
+            item = dict(row)
+            item["qty"] = 0
+            item["deleted"] = True
+            return item
+        conn.execute("UPDATE positions SET qty = ? WHERE id = ?", (left, pid))
+        conn.commit()
+        item = dict(row)
+        item["qty"] = left
+        item["trimmed"] = sell
+        return item
 
 
 def delete_position(pid: int) -> bool:
@@ -322,7 +403,7 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at
+                   outcome_label, outcome_checked_at, note, skipped
             FROM signals
             ORDER BY trade_date DESC, id DESC
             LIMIT ?
@@ -340,6 +421,7 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
                 item["payload"] = {}
         else:
             item["payload"] = {}
+        item["skipped"] = int(item.get("skipped") or 0)
         out.append(item)
     return out
 
@@ -352,9 +434,11 @@ def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, A
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at
+                   outcome_label, outcome_checked_at, note, skipped
             FROM signals
-            WHERE trade_date < ? AND (outcome_label IS NULL OR outcome_label = '')
+            WHERE trade_date < ?
+              AND (outcome_label IS NULL OR outcome_label = '')
+              AND IFNULL(skipped, 0) = 0
             ORDER BY trade_date ASC, id ASC
             LIMIT ?
             """,
@@ -371,6 +455,7 @@ def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, A
                 item["payload"] = {}
         else:
             item["payload"] = {}
+        item["skipped"] = int(item.get("skipped") or 0)
         out.append(item)
     return out
 
@@ -398,6 +483,22 @@ def mark_signal_outcome(signal_id: int, outcome: dict[str, Any]) -> bool:
                 outcome.get("outcome_checked_at"),
                 signal_id,
             ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def update_signal_meta(signal_id: int, *, skipped: int | None = None, note: str | None = None) -> bool:
+    """Update user review flags on a signal row."""
+    with _connect() as conn:
+        row = conn.execute("SELECT id, note, skipped FROM signals WHERE id = ?", (signal_id,)).fetchone()
+        if not row:
+            return False
+        new_skipped = int(row["skipped"] or 0) if skipped is None else int(skipped)
+        new_note = row["note"] if note is None else note
+        cur = conn.execute(
+            "UPDATE signals SET skipped = ?, note = ? WHERE id = ?",
+            (new_skipped, new_note, signal_id),
         )
         conn.commit()
         return cur.rowcount > 0

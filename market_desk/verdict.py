@@ -657,6 +657,7 @@ def _sell_item(
     ready = False
     role_label = "继续持有"
     sell_price = target
+    sell_pct = 0
     reason_parts: list[str] = []
 
     if last is None:
@@ -667,6 +668,7 @@ def _sell_item(
         ready = True
         role_label = "止损卖出"
         sell_price = float(last)
+        sell_pct = 100
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，触及止损带")
     elif (
         pnl_pct is not None
@@ -678,22 +680,26 @@ def _sell_item(
         ready = True
         role_label = "冲高回落止盈"
         sell_price = float(last)
+        sell_pct = 50
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%")
     elif pnl_pct is not None and pnl_pct >= (5.0 if etf else 8.0):
         urgency = "take"
         ready = True
         role_label = "落袋为安"
         sell_price = float(last)
+        sell_pct = 70
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，建议减仓或了结")
     elif soft_exit and pnl_pct is not None and pnl_pct > 0.5:
         urgency = "trim"
         ready = True
         role_label = "建议减仓"
         sell_price = float(last)
+        sell_pct = 30
         reason_parts.append(f"主线转弱/相位偏热，浮盈 {_fmt_pct(pnl_pct)} 先减")
     else:
         role_label = "继续持有"
         sell_price = target
+        sell_pct = 0
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，未到卖点，盯目标价")
         if pullback is not None:
             reason_parts.append(f"高点回撤 {pullback:.1f}%")
@@ -713,6 +719,7 @@ def _sell_item(
         "pnl_pct": None if pnl_pct is None else round(float(pnl_pct), 2),
         "buy_price": _px(buy, digits),
         "sell_price": _px(sell_price, digits),
+        "sell_pct": sell_pct,
         "stop_price": _px(stop, digits),
         "target_price": _px(target, digits),
         "reason": "，".join(reason_parts),
@@ -751,11 +758,29 @@ def decorate_positions(
 
 def position_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate cost / market value / P&L for the position tab."""
+    from market_desk.config import (
+        POSITION_MAX_NAMES,
+        POSITION_MAX_SINGLE_PCT,
+        POSITION_MAX_TOTAL_COST,
+    )
+
     cost = sum(float(r.get("cost") or 0) for r in rows)
     marked = [r for r in rows if r.get("market") is not None]
     market = sum(float(r.get("market") or 0) for r in marked)
     pnl = round(market - cost, 2) if marked else None
     pnl_pct = round((market / cost - 1.0) * 100.0, 2) if marked and cost else None
+    notes: list[str] = []
+    if len(rows) > POSITION_MAX_NAMES:
+        notes.append(f"持仓只数 {len(rows)} 超过软上限 {POSITION_MAX_NAMES}")
+    if cost > POSITION_MAX_TOTAL_COST:
+        notes.append(f"总成本 {cost:.0f} 超过软上限 {POSITION_MAX_TOTAL_COST:.0f}")
+    if market > 0:
+        for r in marked:
+            share = float(r.get("market") or 0) / market * 100.0
+            if share >= POSITION_MAX_SINGLE_PCT:
+                notes.append(
+                    f"{r.get('name') or r.get('code')} 占比 {share:.0f}% ≥ {POSITION_MAX_SINGLE_PCT:.0f}%"
+                )
     return {
         "count": len(rows),
         "cost": round(cost, 2),
@@ -763,6 +788,7 @@ def position_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "pnl": pnl,
         "pnl_pct": pnl_pct,
         "priced": len(marked),
+        "risk_note": "；".join(notes) if notes else "",
     }
 
 

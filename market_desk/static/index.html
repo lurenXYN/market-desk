@@ -407,12 +407,69 @@
       margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5;
       white-space: pre-wrap; font-family: Consolas, "Sarasa Mono SC", monospace;
     }
+    .ticker {
+      color: var(--text); text-decoration: none; border-bottom: 1px dashed #3d4d63;
+      cursor: pointer;
+    }
+    .ticker:hover { color: var(--ice); border-bottom-color: var(--ice); }
+    .xq-link {
+      display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 650;
+      color: var(--ice); text-decoration: none; border: 1px solid #164e63;
+      padding: 1px 7px; border-radius: 4px; background: #082028;
+    }
+    .xq-link:hover { background: #0c3040; }
+    .chart-mask {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(0,0,0,.55);
+      display: flex; justify-content: flex-end;
+    }
+    .chart-drawer {
+      width: min(460px, 100%); height: 100%;
+      background: #0e141c; border-left: 1px solid var(--line);
+      padding: 14px 16px 24px; overflow-y: auto;
+      box-shadow: -12px 0 40px rgba(0,0,0,.45);
+    }
+    .chart-hd {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+      margin-bottom: 10px;
+    }
+    .chart-hd h3 { margin: 0; font-size: 18px; }
+    .chart-hd .meta { margin-top: 4px; }
+    .chart-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+    .chart-actions a, .chart-actions button {
+      appearance: none; text-decoration: none; cursor: pointer;
+      border: 1px solid #2f5a3a; background: #1a3a28; color: var(--ferm);
+      padding: 7px 12px; border-radius: 4px; font-size: 13px;
+    }
+    .chart-actions .ghost {
+      border-color: var(--line); background: #151c28; color: var(--muted);
+    }
+    .chart-box {
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0a1018; padding: 8px; margin-bottom: 10px;
+    }
+    .chart-box h4 {
+      margin: 0 0 6px; font-size: 12px; color: var(--muted);
+      letter-spacing: 0.08em; font-weight: 600;
+    }
+    .chart-box svg { width: 100%; height: 160px; display: block; }
+    .chart-empty { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
+    .data-banner {
+      display: none; margin-bottom: 10px; padding: 10px 12px;
+      border: 1px solid #8b3a3a; border-radius: 8px;
+      background: #2a1010; color: #ffb4b4; font-size: 13px;
+    }
+    .data-banner.on { display: block; }
     .pos-form {
       display: grid;
       grid-template-columns: 90px 140px 90px 90px 1fr auto;
       gap: 8px;
       align-items: end;
       margin: 10px 0 12px;
+    }
+    .pos-form select {
+      background: #0e141c; border: 1px solid var(--line); color: var(--text);
+      padding: 6px 8px; border-radius: 4px; font-size: 13px; width: 100%;
     }
     .pos-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 11px; }
     .pos-form label.wide { grid-column: auto; }
@@ -451,6 +508,7 @@
         <span id="pageClock" style="margin-left:10px"></span>
       </div>
     </div>
+    <div class="data-banner" id="dataBanner"></div>
 
     <nav class="nav-tabs" id="navTabs" aria-label="主页签">
       <button type="button" class="on" data-main="desk">作战<span class="hint">买卖</span></button>
@@ -601,14 +659,33 @@
     <section class="tab-panel" id="panel-review" hidden>
       <section class="card">
         <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button></h2>
-        <p class="rev-note">当日「可买入 / 建议卖」会自动落库；隔日后按收盘价打分。今日信号显示「待隔日」。</p>
+        <p class="rev-note">当日「可买入 / 建议卖」会自动落库；隔日后按收盘价打分。点名称可看图/跳雪球。标记「未交易」后不计入命中率。</p>
         <div class="rev-sum" id="revSum"></div>
+        <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto;">
+          <label>类型
+            <select id="revType">
+              <option value="">全部</option>
+              <option value="buy">买入</option>
+              <option value="sell">卖出</option>
+            </select>
+          </label>
+          <label>品种
+            <select id="revKind">
+              <option value="">全部</option>
+              <option value="etf">ETF</option>
+              <option value="stock">个股</option>
+            </select>
+          </label>
+          <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
+          <button type="button" id="revApply">筛选</button>
+          <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
+        </div>
         <table>
           <thead>
             <tr>
               <th>日期</th><th>类型</th><th>名称</th><th>代码</th>
               <th>建议价</th><th>主线</th><th>相位</th>
-              <th>次日%</th><th>三日%</th><th>结果</th>
+              <th>次日%</th><th>三日%</th><th>结果</th><th></th>
             </tr>
           </thead>
           <tbody id="revBody"></tbody>
@@ -618,6 +695,29 @@
   </div>
 
   <div id="termPop" class="term-pop" hidden></div>
+  <div class="chart-mask" id="chartMask" hidden>
+    <aside class="chart-drawer" id="chartDrawer">
+      <div class="chart-hd">
+        <div>
+          <h3 id="chartTitle">—</h3>
+          <div class="meta" id="chartMeta"></div>
+        </div>
+        <button type="button" class="pos-del" id="chartClose">关闭</button>
+      </div>
+      <div class="chart-actions">
+        <a id="chartXq" href="#" target="_blank" rel="noopener noreferrer">雪球看盘</a>
+        <button type="button" class="ghost" id="chartRefresh">刷新图</button>
+      </div>
+      <div class="chart-box">
+        <h4>分时</h4>
+        <div id="chartMinute"></div>
+      </div>
+      <div class="chart-box">
+        <h4>日线 · MA5 / MA20</h4>
+        <div id="chartDaily"></div>
+      </div>
+    </aside>
+  </div>
 
   <script>
     let GLOSSARY = {};
@@ -635,6 +735,21 @@
     const fmtPx = (v, kind) => {
       if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
       return Number(v).toFixed(kind === "etf" ? 3 : 2);
+    };
+    const xueqiuUrl = (code) => {
+      const c = String(code || "").replace(/\D/g, "").padStart(6, "0");
+      if (c.length !== 6) return "";
+      const prefix = /^[569]/.test(c) ? "SH" : "SZ";
+      return `https://xueqiu.com/S/${prefix}${c}`;
+    };
+    const tickerHtml = (name, code, extra) => {
+      const c = String(code || "").replace(/\D/g, "");
+      const label = name || c || "—";
+      if (!c) return label;
+      const xq = xueqiuUrl(c);
+      return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}" title="点开看图，可跳雪球">${label}</a>`
+        + `<span class="meta"> ${c}${extra || ""}</span>`
+        + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
     };
     const recCard = (it) => {
       const kind = it.kind || "stock";
@@ -661,7 +776,7 @@
             data-price="${buy ?? ""}">按建议价记账</button>`;
       return `<article class="rec-card${wait ? " wait" : ""}${trendBad ? " trend-down" : ""}">
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${fmtPct(it.pct)}</div>
-        <div class="nm">${it.name || "—"}<span>${it.code || ""}</span></div>
+        <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${trendHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
@@ -680,9 +795,10 @@
       const sell = it.sell_price != null ? it.sell_price : it.last;
       const pnl = it.pnl_pct;
       const pnlHtml = pnl == null ? "—" : `<span class="${pnl >= 0 ? "up" : "down"}">${(pnl > 0 ? "+" : "") + Number(pnl).toFixed(2)}%</span>`;
+      const sellPct = it.sell_pct != null ? ` · 建议卖 ${it.sell_pct}%` : "";
       return `<article class="rec-card${sellNow ? " sell-now" : " wait"}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
-        <div class="nm">${it.name || "—"}<span>${it.code || ""} · ${it.qty || 0}股</span></div>
+        <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
           <div class="sell"><div class="lab">建议卖</div><div class="val">${fmtPx(sell, kind)}</div></div>
@@ -690,7 +806,7 @@
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div><div class="lab">浮盈</div><div class="val">${pnlHtml}</div></div>
         </div>
-        <div class="rec-why">${it.reason || ""}</div>
+        <div class="rec-why">${it.reason || ""}${it.sell_pct != null ? `；建议卖出约 ${it.sell_pct}% 仓位` : ""}</div>
         <button type="button" class="pos-btn sell-go">去仓位页核对</button>
       </article>`;
     };
@@ -790,6 +906,19 @@
         (d.live ? (" · " + (d.refresh_seconds || 20) + "秒一刷") : " · 午休/收盘不打行情") +
         (d.warnings && d.warnings.length ? " · 部分源失败" : "");
       document.getElementById("liveDot").className = "dot" + (d.live ? " on" : "");
+      const warnEl = document.getElementById("dataBanner");
+      const warns = [];
+      if (d.warnings && d.warnings.length) warns.push("行情源异常：" + d.warnings.join("、"));
+      if (!d.ok && d.error) warns.push(String(d.error));
+      if (d.live && Array.isArray(d.etfs) && d.etfs.length === 0) warns.push("ETF 报价为空，可能腾讯源异常");
+      if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0) warns.push("热点板块为空，东财板块源可能失败");
+      if (warns.length) {
+        warnEl.className = "data-banner on";
+        warnEl.textContent = "⚠ " + warns.join(" · ");
+      } else {
+        warnEl.className = "data-banner";
+        warnEl.textContent = "";
+      }
       document.getElementById("phaseName").innerHTML = termHtml(phase);
       document.getElementById("temp").textContent = (d.temperature ?? "—") + "/100";
       const phaseHelp = document.getElementById("phaseHelp");
@@ -875,7 +1004,7 @@
       document.getElementById("boards").innerHTML = (d.hot_boards || []).map(b => cardHtml(b, false)).join("") || "<div class='meta'>热点待刷新</div>";
       const watchRows = (d.watch || []).map(w => `
         <li>
-          <span>${w.name || ""}</span>
+          <span>${tickerHtml(w.name, w.code)}</span>
           <span>${w.code || ""}</span>
           <span>${fmtPct(w.pct)}</span>
           <span class="tag ${tagClass(w.tag)}">${termHtml(w.tag || "观察")}</span>
@@ -886,14 +1015,16 @@
         (watchRows || `<li><span class="meta">暂无异动</span></li>`);
       const sum = d.position_summary || {};
       const pnlCls = (sum.pnl || 0) >= 0 ? "up" : "down";
+      const riskNote = sum.risk_note ? `<span class="bans">${sum.risk_note}</span>` : "";
       document.getElementById("posSum").innerHTML =
         `<span>笔数 <b>${sum.count ?? 0}</b></span>` +
         `<span>成本 <b>${fmtMoney(sum.cost)}</b></span>` +
         `<span>市值 <b>${fmtMoney(sum.market)}</b></span>` +
-        `<span>浮盈 <b class="${pnlCls}">${fmtMoney(sum.pnl)} ${sum.pnl_pct == null ? "" : "(" + (sum.pnl_pct > 0 ? "+" : "") + sum.pnl_pct + "%)"}</b></span>`;
+        `<span>浮盈 <b class="${pnlCls}">${fmtMoney(sum.pnl)} ${sum.pnl_pct == null ? "" : "(" + (sum.pnl_pct > 0 ? "+" : "") + sum.pnl_pct + "%)"}</b></span>` +
+        riskNote;
       document.getElementById("posBody").innerHTML = (d.positions || []).map(p => `
         <tr>
-          <td>${p.name || ""}</td>
+          <td>${tickerHtml(p.name, p.code)}</td>
           <td>${p.code || ""}</td>
           <td>${p.buy_price ?? ""}</td>
           <td>${p.qty ?? ""}</td>
@@ -903,7 +1034,11 @@
           <td class="${(p.pnl || 0) >= 0 ? "up" : "down"}">${fmtMoney(p.pnl)}</td>
           <td class="${(p.pnl_pct || 0) >= 0 ? "up" : "down"}">${p.pnl_pct == null ? "—" : ((p.pnl_pct > 0 ? "+" : "") + p.pnl_pct + "%")}</td>
           <td>${fmtPct(p.last_pct)}</td>
-          <td><button type="button" class="pos-del" data-id="${p.id}">删除</button></td>
+          <td>
+            <button type="button" class="pos-del pos-add" data-id="${p.id}" data-code="${p.code}" data-name="${p.name || ""}">加仓</button>
+            <button type="button" class="pos-del pos-trim" data-id="${p.id}" data-qty="${p.qty}">减仓</button>
+            <button type="button" class="pos-del" data-id="${p.id}">删除</button>
+          </td>
         </tr>`).join("") || `<tr><td colspan="11" class="meta">暂无仓位，先记账</td></tr>`;
     }
 
@@ -911,28 +1046,124 @@
     let currentMain = "desk";
     let cycleSel = null;
     let reviewLoadedAt = 0;
+    let chartCode = "";
+
+    function sparkSvg(values, opts) {
+      const pts = (values || []).map(Number).filter((v) => !Number.isNaN(v));
+      if (pts.length < 2) return `<div class="chart-empty">${(opts && opts.empty) || "暂无数据"}</div>`;
+      const w = 420, h = 160, pad = 12;
+      const overlays = (opts && opts.overlays) || [];
+      const all = pts.concat(overlays.flatMap((o) => o.values || []));
+      const min = Math.min(...all);
+      const max = Math.max(...all);
+      const span = max - min || 1;
+      const xAt = (i, n) => pad + (i / Math.max(1, n - 1)) * (w - pad * 2);
+      const yAt = (v) => pad + (1 - (v - min) / span) * (h - pad * 2);
+      const line = (arr, color, width) => {
+        const d = arr.map((v, i) => `${i ? "L" : "M"}${xAt(i, arr.length).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
+        return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width || 1.6}"/>`;
+      };
+      let html = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`;
+      html += line(pts, opts && opts.color || "#60a5fa", 1.8);
+      overlays.forEach((o) => { html += line(o.values, o.color || "#34d399", o.width || 1.2); });
+      html += `</svg>`;
+      return html;
+    }
+
+    function paintChart(payload) {
+      const trend = (payload && payload.trend) || {};
+      document.getElementById("chartTitle").textContent =
+        `${payload.name || "—"} · ${payload.symbol || payload.code || ""}`;
+      document.getElementById("chartMeta").textContent =
+        `日线 ${trend.label || "—"}` +
+        (trend.ma5 != null ? ` · MA5 ${trend.ma5}` : "") +
+        (trend.ma20 != null ? ` · MA20 ${trend.ma20}` : "");
+      const xq = payload.xueqiu_url || xueqiuUrl(payload.code);
+      const a = document.getElementById("chartXq");
+      a.href = xq || "#";
+      a.textContent = xq ? `雪球看盘 · ${payload.symbol || ""}` : "雪球看盘";
+      const minutes = (payload.minute || []).map((x) => x.price);
+      document.getElementById("chartMinute").innerHTML = sparkSvg(minutes, {
+        color: "#34d399", empty: "分时暂无数据（休市或源失败）",
+      });
+      const closes = (payload.daily || []).map((x) => x.close);
+      const ma = (n) => closes.map((_, i) => {
+        if (i + 1 < n) return null;
+        const slice = closes.slice(i + 1 - n, i + 1);
+        return slice.reduce((s, v) => s + v, 0) / n;
+      });
+      const ma5 = ma(5).map((v, i) => v == null ? closes[i] : v);
+      const ma20 = ma(20).map((v, i) => v == null ? closes[i] : v);
+      document.getElementById("chartDaily").innerHTML = sparkSvg(closes, {
+        color: "#60a5fa",
+        empty: "日线暂无数据",
+        overlays: [
+          { values: ma5, color: "#fbbf24", width: 1.1 },
+          { values: ma20, color: "#fb923c", width: 1.1 },
+        ],
+      });
+    }
+
+    async function openChart(code, name) {
+      const c = String(code || "").replace(/\D/g, "");
+      if (!c) return;
+      chartCode = c;
+      const mask = document.getElementById("chartMask");
+      mask.hidden = false;
+      document.getElementById("chartTitle").textContent = `${name || c} · ${c}`;
+      document.getElementById("chartMeta").textContent = "加载中…";
+      document.getElementById("chartMinute").innerHTML = `<div class="chart-empty">加载分时…</div>`;
+      document.getElementById("chartDaily").innerHTML = `<div class="chart-empty">加载日线…</div>`;
+      const xq = xueqiuUrl(c);
+      const a = document.getElementById("chartXq");
+      a.href = xq;
+      a.textContent = `雪球看盘 · ${xq.split("/").pop()}`;
+      try {
+        const r = await fetch("/api/chart/" + c);
+        const d = await r.json();
+        if (!d.ok) throw new Error("bad");
+        if (name && !d.name) d.name = name;
+        paintChart(d);
+      } catch (e) {
+        document.getElementById("chartMeta").textContent = "拉取失败，仍可点雪球看盘";
+      }
+    }
+
+    function closeChart() {
+      document.getElementById("chartMask").hidden = true;
+    }
 
     function paintReview(payload) {
-      const sum = (payload && payload.summary) || {};
+      lastReview = payload || { signals: [], summary: {} };
+      const sum = lastReview.summary || {};
       const cell = (lab, val, cls) =>
         `<div class="rev-card"><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
       document.getElementById("revSum").innerHTML = [
         cell("买入信号", sum.buy_total ?? 0),
         cell("买入命中率", sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
-        cell("买入次日均涨", sum.buy_avg_day1 == null ? "—" : ((sum.buy_avg_day1 > 0 ? "+" : "") + sum.buy_avg_day1 + "%"),
-          (sum.buy_avg_day1 || 0) >= 0 ? "up" : "down"),
-        cell("待隔日打分", sum.pending ?? 0),
+        cell("模拟三日均涨", sum.paper_avg_day3 == null ? "—" : ((sum.paper_avg_day3 > 0 ? "+" : "") + sum.paper_avg_day3 + "%"),
+          (sum.paper_avg_day3 || 0) >= 0 ? "up" : "down"),
+        cell("待隔日 / 未交易", `${sum.pending ?? 0} / ${sum.skipped ?? 0}`),
       ].join("");
-      const rows = (payload && payload.signals) || [];
+      const type = (document.getElementById("revType") || {}).value || "";
+      const kind = (document.getElementById("revKind") || {}).value || "";
+      const main = ((document.getElementById("revMain") || {}).value || "").trim();
+      const rows = (lastReview.signals || []).filter((r) => {
+        if (type && r.signal_type !== type) return false;
+        if (kind && (r.kind || "") !== kind) return false;
+        if (main && !(String(r.mainline || "").includes(main))) return false;
+        return true;
+      });
       document.getElementById("revBody").innerHTML = rows.map((r) => {
         const typ = r.signal_type === "sell" ? "卖" : "买";
         const d1 = r.outcome_day1_pct;
         const d3 = r.outcome_day3_pct;
-        const label = r.outcome_label || "待隔日";
+        const skipped = !!Number(r.skipped || 0);
+        const label = skipped ? "未交易" : (r.outcome_label || "待隔日");
         return `<tr>
           <td>${r.trade_date || ""}</td>
           <td>${typ}</td>
-          <td>${r.name || ""}</td>
+          <td>${tickerHtml(r.name, r.code)}</td>
           <td>${r.code || ""}</td>
           <td>${r.price ?? "—"}</td>
           <td>${r.mainline || "—"}</td>
@@ -940,9 +1171,16 @@
           <td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>
           <td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>
           <td>${label}</td>
+          <td>
+            <button type="button" class="pos-del rev-skip" data-id="${r.id}" data-skipped="${skipped ? 0 : 1}">
+              ${skipped ? "恢复计入" : "未交易"}
+            </button>
+          </td>
         </tr>`;
-      }).join("") || `<tr><td colspan="10" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
+      }).join("") || `<tr><td colspan="11" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
     }
+
+    let lastReview = { signals: [], summary: {} };
 
     async function loadReview(force) {
       const now = Date.now();
@@ -954,7 +1192,7 @@
         reviewLoadedAt = now;
       } catch (e) {
         document.getElementById("revBody").innerHTML =
-          `<tr><td colspan="10" class="meta">复盘加载失败</td></tr>`;
+          `<tr><td colspan="11" class="meta">复盘加载失败</td></tr>`;
       }
     }
 
@@ -1122,13 +1360,87 @@
       }
     });
     document.getElementById("posBody").addEventListener("click", async (ev) => {
+      const addBtn = ev.target.closest(".pos-add");
+      if (addBtn) {
+        const form = document.getElementById("posForm");
+        form.code.value = addBtn.dataset.code || "";
+        form.name.value = addBtn.dataset.name || "";
+        form.buy_price.focus();
+        return;
+      }
+      const trimBtn = ev.target.closest(".pos-trim");
+      if (trimBtn) {
+        const id = trimBtn.getAttribute("data-id");
+        const qty = Number(trimBtn.getAttribute("data-qty") || 0);
+        if (!id || !qty) return;
+        const raw = prompt(`减仓股数（当前 ${qty}，输入要卖掉的股数）`, String(Math.min(qty, 100)));
+        if (raw == null) return;
+        const sellQty = Number(raw);
+        if (!sellQty || sellQty <= 0) return;
+        const r = await fetch("/api/positions/" + id + "/trim", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ qty: sellQty }),
+        });
+        if (!r.ok) {
+          alert("减仓失败");
+          return;
+        }
+        await tick();
+        applyMain("pos");
+        return;
+      }
       const btn = ev.target.closest(".pos-del");
-      if (!btn) return;
+      if (!btn || btn.classList.contains("pos-add") || btn.classList.contains("pos-trim")) return;
       const id = btn.getAttribute("data-id");
       if (!id) return;
       await fetch("/api/positions/" + id, { method: "DELETE" });
       await tick();
       applyMain("pos");
+    });
+
+    document.addEventListener("click", (ev) => {
+      const xqOnly = ev.target.closest("a.xq-link");
+      if (xqOnly) return; // let browser open Xueqiu
+      const hit = ev.target.closest("a.js-chart");
+      if (!hit) return;
+      ev.preventDefault();
+      openChart(hit.dataset.code, hit.dataset.name);
+    });
+    document.getElementById("chartClose").addEventListener("click", closeChart);
+    document.getElementById("chartMask").addEventListener("click", (ev) => {
+      if (ev.target.id === "chartMask") closeChart();
+    });
+    document.getElementById("chartRefresh").addEventListener("click", () => {
+      if (chartCode) openChart(chartCode);
+    });
+    document.getElementById("revApply").addEventListener("click", () => paintReview(lastReview));
+    document.getElementById("revExport").addEventListener("click", () => {
+      const rows = lastReview.signals || [];
+      const header = ["date","type","name","code","price","mainline","phase","day1","day3","label","skipped"];
+      const lines = [header.join(",")].concat(rows.map((r) => [
+        r.trade_date, r.signal_type, r.name, r.code, r.price, r.mainline, r.phase,
+        r.outcome_day1_pct, r.outcome_day3_pct, r.outcome_label, r.skipped || 0,
+      ].map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")));
+      const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "market-desk-signals.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+    document.getElementById("revBody").addEventListener("click", async (ev) => {
+      const btn = ev.target.closest(".rev-skip");
+      if (!btn) return;
+      const id = btn.getAttribute("data-id");
+      const skipped = btn.getAttribute("data-skipped") === "1";
+      await fetch("/api/review/" + id, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skipped }),
+      });
+      reviewLoadedAt = 0;
+      await loadReview(true);
     });
 
     const pop = document.getElementById("termPop");

@@ -308,15 +308,15 @@ def _secid(code: str) -> str:
     return f"0.{c}"
 
 
-async def fetch_daily_klines(
+async def fetch_daily_bars(
     client: httpx.AsyncClient,
     code: str,
     limit: int = 60,
-) -> tuple[list[str], list[float]]:
-    """Fetch adjusted daily dates and closes (oldest → newest)."""
+) -> list[dict[str, Any]]:
+    """Fetch adjusted daily OHLCV bars (oldest → newest)."""
     c = normalize_code(code)
     if not c:
-        return [], []
+        return []
     url = (
         "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
@@ -327,20 +327,69 @@ async def fetch_daily_klines(
     try:
         payload = await _get_json(client, url)
     except Exception:
-        return [], []
+        return []
     rows = ((payload.get("data") or {}).get("klines")) or []
-    dates: list[str] = []
-    closes: list[float] = []
+    out: list[dict[str, Any]] = []
     for row in rows:
         parts = str(row).split(",")
-        if len(parts) < 3:
+        if len(parts) < 6:
             continue
-        px = num(parts[2])
+        o, h, lo, cl = num(parts[1]), num(parts[3]), num(parts[4]), num(parts[2])
+        if cl is None:
+            continue
+        out.append(
+            {
+                "date": str(parts[0]),
+                "open": o,
+                "close": float(cl),
+                "high": h,
+                "low": lo,
+                "volume": num(parts[5]),
+            }
+        )
+    return out
+
+
+async def fetch_daily_klines(
+    client: httpx.AsyncClient,
+    code: str,
+    limit: int = 60,
+) -> tuple[list[str], list[float]]:
+    """Fetch adjusted daily dates and closes (oldest → newest)."""
+    bars = await fetch_daily_bars(client, code, limit=limit)
+    return [b["date"] for b in bars], [float(b["close"]) for b in bars]
+
+
+async def fetch_minute_trends(
+    client: httpx.AsyncClient,
+    code: str,
+) -> list[dict[str, Any]]:
+    """Fetch today's minute trend points for an intraday sparkline."""
+    c = normalize_code(code)
+    if not c:
+        return []
+    url = (
+        "https://push2.eastmoney.com/api/qt/stock/trends2/get"
+        f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
+        "&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"
+        "&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+        "&ndays=1&iscr=0&iscca=0"
+    )
+    try:
+        payload = await _get_json(client, url)
+    except Exception:
+        return []
+    rows = ((payload.get("data") or {}).get("trends")) or []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        parts = str(row).split(",")
+        if len(parts) < 2:
+            continue
+        px = num(parts[1])
         if px is None:
             continue
-        dates.append(str(parts[0]))
-        closes.append(float(px))
-    return dates, closes
+        out.append({"time": str(parts[0]), "price": float(px)})
+    return out
 
 
 async def fetch_daily_closes(
