@@ -12,6 +12,9 @@ PORT = 8765
 # Hit East Money / Tencent only in session; idle loop just waits for the next open.
 SESSION_REFRESH_SECONDS = 20
 IDLE_CHECK_SECONDS = 60
+# Windows bottom-right toasts for buy / sell / phase / mainline changes.
+TOAST_ENABLED = True
+TOAST_COOLDOWN_SECONDS = 180
 
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
 ZT_UT = "7eea3edcaed734bea9cbfc24409ed989"

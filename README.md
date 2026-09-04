@@ -176,5 +176,6 @@ market-desk/
 ## 说明
 
 - 仓位与日级快照仅存本机 `data/desk.db`
+- 重点变化（可买入、卖出建议、主线切换、相位恐慌/高潮）会打 **Windows 右下角通知**；`config.TOAST_ENABLED` 可关，同键约 180 秒冷却
 - 公开行情可能延迟或限流；盘中刷新过快有被封风险，可按需改 `SESSION_REFRESH_SECONDS`
 - 界面术语旁的 `?` 会弹出含义与近似算法（见 `glossary.py`）

@@ -24,6 +24,8 @@ from market_desk.config import (
     IDLE_CHECK_SECONDS,
     PIN_INDUSTRY_ALIASES,
     SESSION_REFRESH_SECONDS,
+    TOAST_COOLDOWN_SECONDS,
+    TOAST_ENABLED,
 )
 from market_desk.db import (
     init_db,
@@ -45,6 +47,7 @@ from market_desk.eastmoney import (
 )
 from market_desk.filters import is_limit_down, is_main_board
 from market_desk.glossary import GLOSSARY
+from market_desk.notify import build_toast_alerts, notify_windows
 from market_desk.sentiment import (
     auction_from_quotes,
     board_cycle_tags,
@@ -84,6 +87,8 @@ class DeskEngine:
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._eod_date: str | None = None
+        self._toast_armed = False
+        self._toast_sent: dict[str, float] = {}
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -246,7 +251,28 @@ class DeskEngine:
                 "glossary": GLOSSARY,
             }
             payload["deltas"] = build_deltas(payload, prev)
+            self._emit_toasts(prev, payload)
             self.snapshot = payload
+
+    def _emit_toasts(
+        self,
+        previous: dict[str, Any] | None,
+        current: dict[str, Any],
+    ) -> None:
+        """Fire Windows toasts for newly important transitions only."""
+        if not TOAST_ENABLED:
+            return
+        if not self._toast_armed:
+            self._toast_armed = True
+            return
+        now_ts = datetime.now(CN_TZ).timestamp()
+        for key, title, body in build_toast_alerts(previous, current):
+            last = self._toast_sent.get(key)
+            if last is not None and now_ts - last < TOAST_COOLDOWN_SECONDS:
+                continue
+            if notify_windows(title, body):
+                self._toast_sent[key] = now_ts
+                log.info("toast %s | %s", title, body)
 
     async def _yesterday(
         self,
