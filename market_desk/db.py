@@ -136,6 +136,21 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT,
+                note TEXT,
+                suggest_price REAL,
+                stop_price REAL,
+                chase_price REAL,
+                first_seen_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS session_segment (
                 trade_date TEXT NOT NULL,
                 segment TEXT NOT NULL,
@@ -922,3 +937,288 @@ def delete_signal(signal_id: int) -> bool:
         cur = conn.execute("DELETE FROM signals WHERE id = ?", (signal_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def add_watchlist(
+    code: str,
+    name: str = "",
+    *,
+    note: str = "",
+    suggest_price: float | None = None,
+    stop_price: float | None = None,
+    chase_price: float | None = None,
+) -> dict[str, Any]:
+    """Insert or refresh a personal watchlist row; first_seen/suggest stay locked."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    code = str(code or "").zfill(6)
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id, first_seen_at, suggest_price, stop_price, chase_price FROM watchlist WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE watchlist
+                SET name = COALESCE(NULLIF(?, ''), name),
+                    note = ?,
+                    stop_price = COALESCE(?, stop_price),
+                    chase_price = COALESCE(?, chase_price)
+                WHERE code = ?
+                """,
+                (name, note, stop_price, chase_price, code),
+            )
+            if existing["suggest_price"] is None and suggest_price is not None:
+                conn.execute(
+                    "UPDATE watchlist SET suggest_price = ? WHERE code = ?",
+                    (float(suggest_price), code),
+                )
+            conn.commit()
+            row = conn.execute("SELECT * FROM watchlist WHERE code = ?", (code,)).fetchone()
+            return dict(row)
+        conn.execute(
+            """
+            INSERT INTO watchlist(
+                code, name, note, suggest_price, stop_price, chase_price, first_seen_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (code, name, note, suggest_price, stop_price, chase_price, now, now),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM watchlist WHERE code = ?", (code,)).fetchone()
+        return dict(row)
+
+
+def load_watchlist() -> list[dict[str, Any]]:
+    """Return personal watchlist rows, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, code, name, note, suggest_price, stop_price, chase_price,
+                   first_seen_at, created_at
+            FROM watchlist
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_watchlist(item_id: int) -> bool:
+    """Delete one watchlist row by id."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM watchlist WHERE id = ?", (int(item_id),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def export_backup_payload() -> dict[str, Any]:
+    """Export core local tables as a JSON-serializable backup dict."""
+    with _connect() as conn:
+        signals = [dict(r) for r in conn.execute("SELECT * FROM signals ORDER BY id").fetchall()]
+        positions = [dict(r) for r in conn.execute("SELECT * FROM positions ORDER BY id").fetchall()]
+        watchlist = [dict(r) for r in conn.execute("SELECT * FROM watchlist ORDER BY id").fetchall()]
+        digests = [dict(r) for r in conn.execute("SELECT * FROM review_digest ORDER BY trade_date").fetchall()]
+        settings = [dict(r) for r in conn.execute("SELECT * FROM settings").fetchall()]
+        overrides = [dict(r) for r in conn.execute("SELECT * FROM trend_override").fetchall()]
+    return {
+        "version": 1,
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "signals": signals,
+        "positions": positions,
+        "watchlist": watchlist,
+        "review_digest": digests,
+        "settings": settings,
+        "trend_override": overrides,
+    }
+
+
+def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> dict[str, int]:
+    """Import a backup payload. When replace=True, clear target tables first."""
+    if not isinstance(payload, dict):
+        raise ValueError("backup payload must be an object")
+    counts = {
+        "signals": 0,
+        "positions": 0,
+        "watchlist": 0,
+        "review_digest": 0,
+        "settings": 0,
+        "trend_override": 0,
+    }
+    with _connect() as conn:
+        if replace:
+            for table in (
+                "signals",
+                "positions",
+                "watchlist",
+                "review_digest",
+                "settings",
+                "trend_override",
+            ):
+                conn.execute(f"DELETE FROM {table}")
+        for row in payload.get("positions") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO positions(code, name, buy_price, qty, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(row.get("code") or "").zfill(6),
+                    row.get("name") or "",
+                    float(row.get("buy_price") or 0),
+                    int(row.get("qty") or 0),
+                    row.get("note") or "",
+                    row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["positions"] += 1
+        for row in payload.get("watchlist") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO watchlist(
+                    code, name, note, suggest_price, stop_price, chase_price, first_seen_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code) DO UPDATE SET
+                    name = excluded.name,
+                    note = excluded.note,
+                    stop_price = excluded.stop_price,
+                    chase_price = excluded.chase_price
+                """,
+                (
+                    str(row.get("code") or "").zfill(6),
+                    row.get("name") or "",
+                    row.get("note") or "",
+                    row.get("suggest_price"),
+                    row.get("stop_price"),
+                    row.get("chase_price"),
+                    row.get("first_seen_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["watchlist"] += 1
+        for row in payload.get("signals") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO signals(
+                    trade_date, signaled_at, signal_type, action, phase, mainline,
+                    code, name, kind, price, last, ready, payload,
+                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+                    outcome_label, outcome_checked_at, note, skipped, traded, fill_price, fill_qty
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date, code, signal_type) DO UPDATE SET
+                    action = excluded.action,
+                    phase = excluded.phase,
+                    mainline = excluded.mainline,
+                    name = excluded.name,
+                    kind = excluded.kind,
+                    last = excluded.last,
+                    ready = excluded.ready,
+                    payload = excluded.payload,
+                    note = excluded.note,
+                    skipped = excluded.skipped,
+                    traded = excluded.traded,
+                    fill_price = excluded.fill_price,
+                    fill_qty = excluded.fill_qty,
+                    outcome_day1_pct = excluded.outcome_day1_pct,
+                    outcome_day3_pct = excluded.outcome_day3_pct,
+                    outcome_mfe_pct = excluded.outcome_mfe_pct,
+                    outcome_mae_pct = excluded.outcome_mae_pct,
+                    outcome_label = excluded.outcome_label,
+                    outcome_checked_at = excluded.outcome_checked_at
+                """,
+                (
+                    row.get("trade_date"),
+                    row.get("signaled_at"),
+                    row.get("signal_type"),
+                    row.get("action"),
+                    row.get("phase"),
+                    row.get("mainline"),
+                    str(row.get("code") or "").zfill(6),
+                    row.get("name"),
+                    row.get("kind"),
+                    row.get("price"),
+                    row.get("last"),
+                    int(row.get("ready") or 0),
+                    row.get("payload")
+                    if isinstance(row.get("payload"), str)
+                    else json.dumps(row.get("payload") or {}, ensure_ascii=False),
+                    row.get("outcome_day1_pct"),
+                    row.get("outcome_day3_pct"),
+                    row.get("outcome_mfe_pct"),
+                    row.get("outcome_mae_pct"),
+                    row.get("outcome_label"),
+                    row.get("outcome_checked_at"),
+                    row.get("note"),
+                    int(row.get("skipped") or 0),
+                    int(row.get("traded") or 0),
+                    row.get("fill_price"),
+                    row.get("fill_qty"),
+                ),
+            )
+            counts["signals"] += 1
+        for row in payload.get("review_digest") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO review_digest(trade_date, payload, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(trade_date) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    row.get("trade_date"),
+                    row.get("payload")
+                    if isinstance(row.get("payload"), str)
+                    else json.dumps(row.get("payload") or {}, ensure_ascii=False),
+                    row.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["review_digest"] += 1
+        for row in payload.get("settings") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO settings(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    row.get("key"),
+                    row.get("value")
+                    if isinstance(row.get("value"), str)
+                    else json.dumps(row.get("value"), ensure_ascii=False),
+                    row.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["settings"] += 1
+        for row in payload.get("trend_override") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO trend_override(trade_date, code, verdict, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(trade_date, code) DO UPDATE SET
+                    verdict = excluded.verdict,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    row.get("trade_date"),
+                    str(row.get("code") or "").zfill(6),
+                    row.get("verdict"),
+                    row.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["trend_override"] += 1
+        conn.commit()
+    return counts

@@ -936,6 +936,50 @@ def position_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a richer risk panel: weights, soft caps, and P&L distribution."""
+    from market_desk.config import (
+        POSITION_MAX_NAMES,
+        POSITION_MAX_SINGLE_PCT,
+        POSITION_MAX_TOTAL_COST,
+    )
+
+    base = position_summary(rows)
+    market = float(base.get("market") or 0)
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        mkt = float(r.get("market") or 0) if r.get("market") is not None else None
+        weight = round(mkt / market * 100.0, 1) if market > 0 and mkt is not None else None
+        items.append(
+            {
+                "id": r.get("id"),
+                "code": r.get("code"),
+                "name": r.get("name"),
+                "cost": r.get("cost"),
+                "market": r.get("market"),
+                "pnl": r.get("pnl"),
+                "pnl_pct": r.get("pnl_pct"),
+                "weight_pct": weight,
+                "over_weight": bool(weight is not None and weight >= POSITION_MAX_SINGLE_PCT),
+            }
+        )
+    items.sort(key=lambda x: float(x.get("weight_pct") or 0), reverse=True)
+    winners = sum(1 for r in rows if (r.get("pnl_pct") or 0) > 0)
+    losers = sum(1 for r in rows if (r.get("pnl_pct") or 0) < 0)
+    return {
+        **base,
+        "items": items,
+        "winners": winners,
+        "losers": losers,
+        "flat": max(0, len(rows) - winners - losers),
+        "caps": {
+            "max_names": POSITION_MAX_NAMES,
+            "max_single_pct": POSITION_MAX_SINGLE_PCT,
+            "max_total_cost": POSITION_MAX_TOTAL_COST,
+        },
+    }
+
+
 def build_deltas(current: dict[str, Any], previous: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Compare key gauges with the previous refresh."""
     prev_m = (previous or {}).get("metrics") or {}

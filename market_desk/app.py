@@ -16,16 +16,22 @@ from pydantic import BaseModel, Field
 from market_desk.config import STATIC_DIR
 from market_desk.db import (
     add_position,
+    add_watchlist,
     delete_position,
     delete_signal,
+    delete_watchlist,
+    export_backup_payload,
+    import_backup_payload,
     load_positions,
     load_signal,
+    load_watchlist,
     trim_position,
     update_signal_meta,
 )
 from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
+from market_desk.report import build_daily_report
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
 
@@ -81,6 +87,24 @@ class TrendOverrideIn(BaseModel):
 
     code: str
     verdict: str = Field(description="up or down")
+
+
+class WatchlistIn(BaseModel):
+    """Payload for adding a personal watchlist ticker."""
+
+    code: str
+    name: str = ""
+    note: str = ""
+    suggest_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    chase_price: float | None = Field(default=None, gt=0)
+
+
+class BackupIn(BaseModel):
+    """JSON backup import payload."""
+
+    replace: bool = False
+    payload: dict[str, Any]
 
 
 @asynccontextmanager
@@ -323,3 +347,64 @@ def trend_override(body: TrendOverrideIn) -> dict:
     if flag not in ("up", "down"):
         raise HTTPException(400, "verdict must be up or down")
     return engine.apply_trend_override(code, flag)
+
+
+@app.get("/api/watchlist")
+def list_watchlist() -> dict:
+    """Return personal watchlist rows with last known marks."""
+    rows = engine.sync_watchlist()
+    return {"ok": True, "watchlist": rows}
+
+
+@app.post("/api/watchlist")
+def create_watchlist(body: WatchlistIn) -> dict:
+    """Add or refresh one personal watchlist ticker."""
+    code = normalize_code(body.code)
+    if len(code) != 6 or not code.isdigit():
+        raise HTTPException(400, "code must be a 6-digit ticker")
+    add_watchlist(
+        code,
+        body.name.strip(),
+        note=body.note.strip(),
+        suggest_price=body.suggest_price,
+        stop_price=body.stop_price,
+        chase_price=body.chase_price,
+    )
+    return {"ok": True, "watchlist": engine.sync_watchlist()}
+
+
+@app.delete("/api/watchlist/{item_id}")
+def remove_watchlist(item_id: int) -> dict:
+    """Delete one personal watchlist row."""
+    if not delete_watchlist(item_id):
+        raise HTTPException(404, "watchlist item not found")
+    return {"ok": True, "watchlist": engine.sync_watchlist()}
+
+
+@app.get("/api/report/today")
+async def report_today() -> dict:
+    """Return today's markdown journal for copy / download."""
+    review = await engine.build_review()
+    text = build_daily_report(snapshot=engine.snapshot, review=review)
+    return {"ok": True, "markdown": text, "summary": review.get("summary")}
+
+
+@app.get("/api/backup")
+def backup_export() -> dict:
+    """Export local desk data as JSON."""
+    return {"ok": True, "backup": export_backup_payload()}
+
+
+@app.post("/api/backup/import")
+def backup_import(body: BackupIn) -> dict:
+    """Import a previously exported JSON backup."""
+    try:
+        counts = import_backup_payload(body.payload, replace=bool(body.replace))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    from market_desk.settings import get_settings
+
+    get_settings(refresh=True)
+    engine.sync_positions()
+    engine.sync_watchlist()
+    return {"ok": True, "counts": counts}

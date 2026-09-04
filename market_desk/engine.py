@@ -34,6 +34,7 @@ from market_desk.db import (
     load_session_segments,
     load_trend_overrides,
     load_unscored_signals,
+    load_watchlist,
     save_auction,
     save_board_daily,
     save_daily,
@@ -82,6 +83,7 @@ from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
 from market_desk.verdict import (
     apply_stock_daily_trends,
     build_deltas,
+    build_risk_overview,
     build_sell_advice,
     build_verdict,
     decorate_positions,
@@ -133,12 +135,25 @@ class DeskEngine:
         positions = decorate_positions(load_positions(), quotes)
         self.snapshot["positions"] = positions
         self.snapshot["position_summary"] = position_summary(positions)
+        self.snapshot["risk_overview"] = build_risk_overview(positions)
         self.snapshot["sell_advice"] = build_sell_advice(
             positions,
             self.snapshot.get("verdict") or {},
             self.snapshot.get("phase") or "",
         )
         return positions
+
+    def sync_watchlist(self, quotes: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        """Reload personal watchlist and attach last prices when available."""
+        qmap = dict(quotes or {})
+        if not qmap:
+            for row in self.snapshot.get("watchlist") or []:
+                code = str(row.get("code") or "").zfill(6)
+                if row.get("last") is not None:
+                    qmap[code] = {"price": row.get("last"), "pct": row.get("last_pct"), "name": row.get("name")}
+        rows = _decorate_watchlist(load_watchlist(), qmap)
+        self.snapshot["watchlist"] = rows
+        return rows
 
     async def _loop(self) -> None:
         first = True
@@ -200,10 +215,14 @@ class DeskEngine:
                 pin_cards = await self._pin_cards(client, boards, hot_cards, ctx)
                 ice_cards = await self._ice_cards(client, boards, hot_cards, ctx)
                 pos_rows = load_positions()
+                wl_rows = load_watchlist()
+                need_codes = [str(r.get("code") or "") for r in pos_rows] + [
+                    str(r.get("code") or "") for r in wl_rows
+                ]
                 pos_quote_map = await _safe(
                     fetch_quotes,
                     client,
-                    [str(r.get("code") or "") for r in pos_rows],
+                    need_codes,
                     errors=errors,
                     label="pos",
                 )
@@ -215,6 +234,7 @@ class DeskEngine:
             if not isinstance(pos_quote_map, dict):
                 pos_quote_map = {}
             positions = decorate_positions(pos_rows, pos_quote_map)
+            watchlist = _decorate_watchlist(wl_rows, pos_quote_map)
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
             temperature = score_temperature(metrics)
@@ -294,6 +314,8 @@ class DeskEngine:
                 "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
                 "positions": positions,
                 "position_summary": position_summary(positions),
+                "risk_overview": build_risk_overview(positions),
+                "watchlist": watchlist,
                 "sell_advice": build_sell_advice(positions, verdict, phase),
                 "glossary": GLOSSARY,
             }
@@ -723,6 +745,24 @@ async def _safe(fn, *args, errors: list[str], label: str):
 def _minutes(now: datetime) -> int:
     """Return minutes since midnight for session-window checks."""
     return now.hour * 60 + now.minute
+
+
+def _decorate_watchlist(
+    rows: list[dict[str, Any]],
+    quotes: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach live quote fields onto personal watchlist rows."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        code = str(item.get("code") or "").zfill(6)
+        q = quotes.get(code) or {}
+        item["code"] = code
+        item["name"] = item.get("name") or q.get("name") or code
+        item["last"] = q.get("price")
+        item["last_pct"] = q.get("pct")
+        out.append(item)
+    return out
 
 
 def _decorate_segments(

@@ -337,6 +337,7 @@ def build_today_digest(
             switches = 0
     day1_vals = [num(r.get("outcome_day1_pct")) for r in scored]
     day1_vals = [v for v in day1_vals if v is not None]
+    exec_score = build_exec_score(today_rows)
     return {
         "date": trade_date,
         "buy_n": len(buys),
@@ -350,7 +351,87 @@ def build_today_digest(
         "buy_hit_rate": None if not scored else round(100.0 * hit / len(scored), 1),
         "buy_avg_day1": None if not day1_vals else round(sum(day1_vals) / len(day1_vals), 2),
         "scored_n": len(scored),
+        "exec": exec_score,
     }
+
+
+def classify_fill_execution(row: dict[str, Any]) -> str | None:
+    """Classify a traded buy fill versus the original suggest / chase band."""
+    if str(row.get("signal_type") or "") != "buy":
+        return None
+    if not int(row.get("traded") or 0):
+        return None
+    fill = num(row.get("fill_price"))
+    if fill is None:
+        return None
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    wait = num(row.get("wait_price") if row.get("wait_price") is not None else payload.get("wait_price"))
+    chase = num(row.get("chase_price") if row.get("chase_price") is not None else payload.get("chase_price"))
+    suggest = num(row.get("price"))
+    low = wait if wait is not None else suggest
+    if chase is not None and fill >= chase:
+        return "chase"
+    if low is not None and fill < low:
+        return "below"
+    if low is not None and chase is not None and low <= fill < chase:
+        return "in_band"
+    if low is not None and chase is None and fill >= low:
+        return "in_band"
+    return "other"
+
+
+def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score how well fills followed the original price plan."""
+    traded_buys = [
+        r
+        for r in rows
+        if str(r.get("signal_type") or "") == "buy" and int(r.get("traded") or 0)
+    ]
+    counts = {"in_band": 0, "chase": 0, "below": 0, "other": 0}
+    for row in traded_buys:
+        kind = classify_fill_execution(row)
+        if kind in counts:
+            counts[kind] += 1
+        elif kind:
+            counts["other"] += 1
+    n = sum(counts.values())
+    # Weight: in_band/below good, chase bad.
+    points = counts["in_band"] * 100 + counts["below"] * 90 + counts["other"] * 40 + counts["chase"] * 0
+    score = None if n == 0 else round(points / n, 1)
+    return {
+        "score": score,
+        "traded_buy_n": len(traded_buys),
+        "in_band_n": counts["in_band"],
+        "chase_n": counts["chase"],
+        "below_n": counts["below"],
+        "other_n": counts["other"],
+    }
+
+
+def build_phase_hit_rates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate buy hit-rate by market phase label on the signal row."""
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        if not row.get("outcome_label"):
+            continue
+        phase = str(row.get("phase") or "未标").strip() or "未标"
+        buckets.setdefault(phase, []).append(row)
+    out: list[dict[str, Any]] = []
+    for phase, items in sorted(buckets.items(), key=lambda x: (-len(x[1]), x[0])):
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        out.append(
+            {
+                "phase": phase,
+                "scored_n": len(items),
+                "hit_n": hit,
+                "hit_rate": round(100.0 * hit / len(items), 1) if items else None,
+            }
+        )
+    return out
 
 
 def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
@@ -374,6 +455,9 @@ def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
     for row in snapshot.get("watch") or []:
         if isinstance(row, dict):
             _put(row.get("code"), row.get("price") or row.get("last"))
+    for row in snapshot.get("watchlist") or []:
+        if isinstance(row, dict):
+            _put(row.get("code"), row.get("last") or row.get("price"))
     rec = ((snapshot.get("verdict") or {}).get("recommend") or {}).get("items") or []
     for row in rec:
         if isinstance(row, dict):
@@ -468,6 +552,43 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                     f"band:entry:{code}",
                     "进入可买带",
                     f"{name} {code} 现价 {last} · 建议/回踩 {low} · 不追 {chase}",
+                )
+            )
+    for row in snapshot.get("watchlist") or []:
+        if not isinstance(row, dict):
+            continue
+        code = normalize_code(row.get("code"))
+        if not code:
+            continue
+        last = num(row.get("last")) or quotes.get(code)
+        if last is None:
+            continue
+        name = row.get("name") or code
+        stop = num(row.get("stop_price"))
+        chase = num(row.get("chase_price"))
+        suggest = num(row.get("suggest_price"))
+        if stop is not None and last <= stop:
+            alerts.append(
+                (
+                    f"wl:stop:{code}",
+                    "自选触及止损",
+                    f"{name} {code} 现价 {last} ≤ 止损 {stop}",
+                )
+            )
+        elif chase is not None and last >= chase:
+            alerts.append(
+                (
+                    f"wl:chase:{code}",
+                    "自选触及不追",
+                    f"{name} {code} 现价 {last} ≥ 不追 {chase}",
+                )
+            )
+        elif suggest is not None and abs(last - suggest) / max(suggest, 1e-9) <= 0.008:
+            alerts.append(
+                (
+                    f"wl:suggest:{code}",
+                    "自选靠近建议价",
+                    f"{name} {code} 现价 {last} ≈ 建议 {suggest}",
                 )
             )
     return alerts
@@ -585,6 +706,10 @@ def build_review_payload(
         pass
     summary["today"] = today
     summary["history"] = load_review_digests(limit=20)
+    summary["exec"] = today.get("exec") or build_exec_score(
+        [r for r in rows if str(r.get("trade_date") or "") == day]
+    )
+    summary["phase_hits"] = build_phase_hit_rates(rows)
     return {
         "ok": True,
         "signals": rows,

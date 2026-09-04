@@ -69,6 +69,19 @@
     .rev-hist svg { width: 100%; height: 56px; display: block; }
     .rev-fill { font-size: 12px; color: var(--muted); }
     .rev-fill b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .rev-exec, .rev-phase, .risk-box {
+      margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: #0e141c; font-size: 13px;
+    }
+    .rev-exec .hd, .rev-phase .hd, .risk-box .hd {
+      font-size: 12px; color: var(--muted); margin-bottom: 6px;
+    }
+    .risk-box table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    .risk-box th, .risk-box td {
+      text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .risk-box .warn { color: var(--warn); }
     .detail { color: var(--muted); font-size: 14px; margin: 0; }
     .clock {
       text-align: right; min-width: 240px;
@@ -847,7 +860,29 @@
     </section>
 
     <section class="tab-panel" id="panel-watch" hidden>
-      <section class="card watch-card">
+      <section class="card">
+        <h2 style="text-transform:none">自选观察池<button type="button" class="q" data-term="自选">?</button></h2>
+        <p class="meta">手动钉票：锁定首次时间与建议价，可设止损/不追；触及会弹通知。</p>
+        <form class="pos-form" id="wlForm" style="grid-template-columns: 90px 120px 90px 90px 90px 1fr auto;">
+          <label>代码<input name="code" placeholder="600519" maxlength="6" required /></label>
+          <label>名称<input name="name" placeholder="可空" /></label>
+          <label>建议价<input name="suggest_price" type="number" step="0.001" min="0.001" /></label>
+          <label>止损<input name="stop_price" type="number" step="0.001" min="0.001" /></label>
+          <label>不追<input name="chase_price" type="number" step="0.001" min="0.001" /></label>
+          <label class="wide">备注<input name="note" placeholder="可选" /></label>
+          <button type="submit">加入自选</button>
+        </form>
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th><th>代码</th><th>首次</th><th>建议价</th><th>止损</th><th>不追</th>
+              <th>现价</th><th>当日%</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="wlBody"></tbody>
+        </table>
+      </section>
+      <section class="card watch-card" style="margin-top:12px">
         <h2>异动观察池<button type="button" class="q" data-term="异动">?</button></h2>
         <p class="meta">涨停前12 / 炸板前8 / 跌停前6 / 换手≥15%前6，最多24只。非买点。</p>
         <ul class="watch-list" id="watchList">
@@ -869,6 +904,7 @@
           <button type="submit">记账</button>
         </form>
         <div class="pos-sum" id="posSum"></div>
+        <div class="risk-box" id="riskBox"></div>
         <table>
           <thead>
             <tr>
@@ -887,10 +923,12 @@
         <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button></h2>
         <p class="rev-note">当日信号自动落库。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。进入可买带或触及止损/不追会弹系统通知。</p>
         <div class="rev-today" id="revToday"></div>
+        <div class="rev-exec" id="revExec"></div>
+        <div class="rev-phase" id="revPhase"></div>
         <div class="rev-hist" id="revHist"></div>
         <div class="rev-sum" id="revSum"></div>
         <div class="rev-toolbar">
-          <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto; margin:0; flex:1;">
+          <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto auto auto; margin:0; flex:1;">
             <label>类型
               <select id="revType">
                 <option value="">全部</option>
@@ -908,7 +946,11 @@
             <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
             <button type="button" id="revApply">筛选</button>
             <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
+            <button type="button" id="revReport" class="rev-col-btn">导出日报</button>
+            <button type="button" id="revBackup" class="rev-col-btn">备份</button>
           </div>
+          <input type="file" id="revRestoreFile" accept="application/json,.json" hidden />
+          <button type="button" class="rev-col-btn" id="revRestore">恢复</button>
           <button type="button" class="rev-col-btn" id="revColsBtn">列设置</button>
           <div class="rev-col-panel" id="revColPanel" hidden>
             <div class="hd"><span>拖动排序 · 勾选显示</span><button type="button" class="pos-del" id="revColClose">关闭</button></div>
@@ -1325,7 +1367,22 @@
       document.getElementById("watchList").innerHTML =
         `<li class="hdrow"><span>名称</span><span>代码</span><span>涨跌</span><span>标签</span><span>原因</span></li>` +
         (watchRows || `<li><span class="meta">暂无异动</span></li>`);
+      document.getElementById("wlBody").innerHTML = (d.watchlist || []).map((w) => {
+        const t = (w.first_seen_at || "").slice(0, 16);
+        return `<tr>
+          <td>${tickerHtml(w.name, w.code)}</td>
+          <td>${w.code || ""}</td>
+          <td>${t || "—"}</td>
+          <td>${w.suggest_price ?? "—"}</td>
+          <td>${w.stop_price ?? "—"}</td>
+          <td>${w.chase_price ?? "—"}</td>
+          <td>${w.last ?? "—"}</td>
+          <td>${fmtPct(w.last_pct)}</td>
+          <td><button type="button" class="pos-del wl-del" data-id="${w.id}">删除</button></td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="9" class="meta">暂无自选。上方填代码加入。</td></tr>`;
       const sum = d.position_summary || {};
+      const risk = d.risk_overview || sum;
       const pnlCls = (sum.pnl || 0) >= 0 ? "up" : "down";
       const riskNote = sum.risk_note ? `<span class="bans">${sum.risk_note}</span>` : "";
       document.getElementById("posSum").innerHTML =
@@ -1334,6 +1391,22 @@
         `<span>市值 <b>${fmtMoney(sum.market)}</b></span>` +
         `<span>浮盈 <b class="${pnlCls}">${fmtMoney(sum.pnl)} ${sum.pnl_pct == null ? "" : "(" + (sum.pnl_pct > 0 ? "+" : "") + sum.pnl_pct + "%)"}</b></span>` +
         riskNote;
+      const caps = risk.caps || {};
+      document.getElementById("riskBox").innerHTML =
+        `<div class="hd">风控总览<button type="button" class="q" data-term="风控总览">?</button> · `
+        + `盈 ${risk.winners ?? 0} / 亏 ${risk.losers ?? 0} / 平 ${risk.flat ?? 0}`
+        + ` · 软上限 只数≤${caps.max_names ?? "—"} 单票≤${caps.max_single_pct ?? "—"}% 总成本≤${caps.max_total_cost ?? "—"}</div>`
+        + ((risk.items || []).length
+          ? `<table><thead><tr><th>名称</th><th>占比</th><th>浮盈%</th><th>市值</th></tr></thead><tbody>`
+            + (risk.items || []).map((it) =>
+              `<tr class="${it.over_weight ? "warn" : ""}">
+                <td>${it.name || it.code}</td>
+                <td class="${it.over_weight ? "warn" : ""}">${it.weight_pct == null ? "—" : it.weight_pct + "%"}</td>
+                <td class="${(it.pnl_pct || 0) >= 0 ? "up" : "down"}">${it.pnl_pct == null ? "—" : ((it.pnl_pct > 0 ? "+" : "") + it.pnl_pct + "%")}</td>
+                <td>${fmtMoney(it.market)}</td>
+              </tr>`).join("")
+            + `</tbody></table>`
+          : `<div class="meta">暂无持仓</div>`);
       document.getElementById("posBody").innerHTML = (d.positions || []).map(p => `
         <tr>
           <td>${tickerHtml(p.name, p.code)}</td>
@@ -1620,6 +1693,17 @@
         tcell("已交易/未交易", `${today.traded_n ?? 0} / ${today.skipped_n ?? 0}`),
         tcell("主线切换", today.switch_n ?? 0),
       ].join("");
+      const ex = sum.exec || today.exec || {};
+      document.getElementById("revExec").innerHTML =
+        `<div class="hd">计划执行分<button type="button" class="q" data-term="计划执行分">?</button></div>`
+        + `执行分 <b>${ex.score == null ? "—" : ex.score}</b> · 已成交买 ${ex.traded_buy_n ?? 0}`
+        + ` · 价带内 ${ex.in_band_n ?? 0} · 追高 ${ex.chase_n ?? 0}`
+        + ` · 更低更好 ${ex.below_n ?? 0} · 其他 ${ex.other_n ?? 0}`;
+      const ph = sum.phase_hits || [];
+      document.getElementById("revPhase").innerHTML = ph.length
+        ? (`<div class="hd">相位 × 命中率<button type="button" class="q" data-term="相位命中">?</button></div>`
+          + ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · "))
+        : `<div class="hd">相位 × 命中率</div><span class="meta">有隔日打分后按相位汇总</span>`;
       const hist = sum.history || [];
       document.getElementById("revHist").innerHTML = hist.length
         ? `<div class="hd">近 ${hist.length} 日命中率（有打分日）</div>${hitRateSpark(hist)}`
@@ -1886,6 +1970,49 @@
         alert("记账失败");
       }
     });
+    document.getElementById("wlForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = ev.target;
+      const numOrNull = (v) => {
+        const s = String(v || "").trim();
+        if (!s) return null;
+        const n = Number(s);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      };
+      const payload = {
+        code: f.code.value.trim(),
+        name: f.name.value.trim(),
+        note: f.note.value.trim(),
+        suggest_price: numOrNull(f.suggest_price.value),
+        stop_price: numOrNull(f.stop_price.value),
+        chase_price: numOrNull(f.chase_price.value),
+      };
+      try {
+        const r = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+          alert("加入自选失败");
+          return;
+        }
+        f.reset();
+        await tick();
+        applyMain("watch");
+      } catch (e) {
+        alert("加入自选失败");
+      }
+    });
+    document.getElementById("wlBody").addEventListener("click", async (ev) => {
+      const del = ev.target.closest(".wl-del");
+      if (!del) return;
+      const id = del.getAttribute("data-id");
+      if (!id) return;
+      if (!confirm("删除这条自选？")) return;
+      await fetch("/api/watchlist/" + id, { method: "DELETE" });
+      await tick();
+    });
     document.getElementById("posBody").addEventListener("click", async (ev) => {
       const addBtn = ev.target.closest(".pos-add");
       if (addBtn) {
@@ -2085,6 +2212,73 @@
       a.download = "market-desk-signals.csv";
       a.click();
       URL.revokeObjectURL(a.href);
+    });
+    document.getElementById("revReport").addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/report/today");
+        const d = await r.json();
+        if (!r.ok || !d.markdown) {
+          alert("日报生成失败");
+          return;
+        }
+        const blob = new Blob([d.markdown], { type: "text/markdown;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "market-desk-daily.md";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        try {
+          await navigator.clipboard.writeText(d.markdown);
+          alert("日报已下载，并已复制到剪贴板");
+        } catch (e) {
+          alert("日报已下载");
+        }
+      } catch (e) {
+        alert("日报生成失败");
+      }
+    });
+    document.getElementById("revBackup").addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/backup");
+        const d = await r.json();
+        const blob = new Blob([JSON.stringify(d.backup || {}, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "market-desk-backup.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) {
+        alert("备份失败");
+      }
+    });
+    document.getElementById("revRestore").addEventListener("click", () => {
+      document.getElementById("revRestoreFile").click();
+    });
+    document.getElementById("revRestoreFile").addEventListener("change", async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      ev.target.value = "";
+      if (!file) return;
+      const replace = confirm("恢复备份：确定=清空后覆盖，取消=合并导入");
+      try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        const r = await fetch("/api/backup/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ replace, payload }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          alert("恢复失败");
+          return;
+        }
+        alert("恢复完成：" + JSON.stringify(d.counts || {}));
+        reviewLoadedAt = 0;
+        await loadReview(true);
+        await tick();
+      } catch (e) {
+        alert("恢复失败：文件不是有效 JSON");
+      }
     });
     document.getElementById("revBody").addEventListener("click", async (ev) => {
       const up = ev.target.closest(".rev-up");
