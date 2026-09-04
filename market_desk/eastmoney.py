@@ -298,3 +298,65 @@ async def fetch_board_members(
         if len(members) >= CONSTITUENT_TOP:
             break
     return members
+
+
+def _secid(code: str) -> str:
+    """Map a six-digit code to an East Money secid."""
+    c = normalize_code(code)
+    if c.startswith(("5", "6", "9")):
+        return f"1.{c}"
+    return f"0.{c}"
+
+
+async def fetch_daily_closes(
+    client: httpx.AsyncClient,
+    code: str,
+    limit: int = 60,
+) -> list[float]:
+    """Fetch adjusted daily closes for trend checks (oldest → newest)."""
+    c = normalize_code(code)
+    if not c:
+        return []
+    url = (
+        "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+        f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
+        "&fields1=f1,f2,f3,f4,f5,f6"
+        "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+        f"&klt=101&fqt=1&end=20500101&lmt={limit}"
+    )
+    try:
+        payload = await _get_json(client, url)
+    except Exception:
+        return []
+    rows = ((payload.get("data") or {}).get("klines")) or []
+    closes: list[float] = []
+    for row in rows:
+        parts = str(row).split(",")
+        if len(parts) < 3:
+            continue
+        px = num(parts[2])
+        if px is not None:
+            closes.append(float(px))
+    return closes
+
+
+async def fetch_daily_closes_many(
+    client: httpx.AsyncClient,
+    codes: list[str],
+    limit: int = 60,
+) -> dict[str, list[float]]:
+    """Fetch daily closes for several codes concurrently."""
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in codes:
+        code = normalize_code(raw)
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        uniq.append(code)
+    if not uniq:
+        return {}
+    results = await asyncio.gather(
+        *[fetch_daily_closes(client, code, limit=limit) for code in uniq]
+    )
+    return {code: closes for code, closes in zip(uniq, results)}

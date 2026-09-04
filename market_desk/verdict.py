@@ -8,6 +8,7 @@ from typing import Any
 from market_desk.config import CHINEXT_STAR_ETFS
 from market_desk.filters import is_limit_up, is_main_board, is_st, normalize_code
 from market_desk.mainline import match_mainline_etf, pick_mainline
+from market_desk.trend import classify_daily_trend
 
 
 def build_verdict(
@@ -118,6 +119,100 @@ def build_verdict(
         "phase": phase,
         "temperature": metrics.get("zt"),
     }
+
+
+def apply_stock_daily_trends(
+    recommend: dict[str, Any] | None,
+    closes_by_code: dict[str, list[float]],
+) -> dict[str, Any]:
+    """Attach daily-trend flags to stock cards; demote or drop non-uptrends."""
+    rec = dict(recommend or {})
+    items = list(rec.get("items") or [])
+    if not items:
+        return rec
+
+    etf_items: list[dict[str, Any]] = []
+    up_stocks: list[dict[str, Any]] = []
+    bad_stocks: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("kind") != "stock":
+            etf_items.append(item)
+            continue
+        code = normalize_code(item.get("code"))
+        trend = classify_daily_trend(closes_by_code.get(code) or [])
+        marked = dict(item)
+        marked["trend"] = trend.get("label")
+        marked["trend_ok"] = bool(trend.get("up"))
+        marked["trend_down"] = bool(trend.get("down"))
+        marked["trend_warn"] = trend.get("warn")
+        marked["ma5"] = trend.get("ma5")
+        marked["ma10"] = trend.get("ma10")
+        marked["ma20"] = trend.get("ma20")
+        if trend.get("up"):
+            marked["reason"] = (
+                f"日线上升趋势（MA5 {trend.get('ma5')} / MA20 {trend.get('ma20')}）；"
+                + str(marked.get("reason") or "")
+            )
+            up_stocks.append(marked)
+            continue
+        marked["ready"] = False
+        marked["trend_warn"] = marked.get("trend_warn") or "不是上升趋势"
+        if marked.get("wait_price") is not None:
+            marked["buy_price"] = marked.get("wait_price")
+        marked["role_label"] = "个股·非上升 · 不建议买"
+        marked["reason"] = (
+            f"【不是上升趋势·{trend.get('label') or '日线偏弱'}】"
+            + str(marked.get("reason") or "")
+        )
+        bad_stocks.append(marked)
+
+    if up_stocks:
+        merged = etf_items + up_stocks
+    elif etf_items:
+        merged = etf_items
+    else:
+        merged = etf_items + bad_stocks
+
+    for idx, item in enumerate(merged):
+        if item.get("kind") == "stock" and item.get("trend_ok"):
+            item["role"] = "primary" if idx == 0 or not any(
+                x.get("kind") == "etf" for x in merged
+            ) else "alt"
+            if item.get("ready"):
+                item["role_label"] = (
+                    "个股 主推" if item.get("role") == "primary" else "个股 备选"
+                )
+
+    rec["items"] = merged
+    primary = next((x for x in merged if x.get("role") == "primary"), None) or (
+        merged[0] if merged else None
+    )
+    rec["primary"] = primary
+    if primary:
+        rec["code"] = primary.get("code")
+        rec["name"] = primary.get("name")
+        rec["price"] = primary.get("buy_price") or primary.get("last")
+    dropped = len(bad_stocks) if up_stocks or etf_items else 0
+    if dropped:
+        note = rec.get("size_note") or ""
+        rec["size_note"] = (
+            (note + "；") if note else ""
+        ) + f"已过滤 {dropped} 只非上升趋势个股"
+    if bad_stocks and not up_stocks and not etf_items:
+        rec["buy"] = False
+        rec["title"] = "个股非上升趋势"
+        rec["text"] = "日线不是上升趋势，个股暂不建议买"
+        rec["size_note"] = "下降/震荡个股仅作警示展示，不要按建议价买入。"
+    elif merged:
+        tradable = [
+            x
+            for x in merged
+            if x.get("ready") and (x.get("kind") != "stock" or x.get("trend_ok"))
+        ]
+        if not tradable and rec.get("buy"):
+            if not any(x.get("kind") == "etf" and x.get("ready") for x in merged):
+                rec["buy"] = False
+    return rec
 
 
 def _build_recommend(

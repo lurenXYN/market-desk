@@ -39,6 +39,7 @@ from market_desk.db import (
 )
 from market_desk.eastmoney import (
     fetch_board_members,
+    fetch_daily_closes_many,
     fetch_hot_boards,
     fetch_main_quotes,
     fetch_yesterday_zt,
@@ -65,6 +66,7 @@ from market_desk.sentiment import (
 )
 from market_desk.tencent import fetch_etfs, fetch_quotes
 from market_desk.verdict import (
+    apply_stock_daily_trends,
     build_deltas,
     build_sell_advice,
     build_verdict,
@@ -89,6 +91,7 @@ class DeskEngine:
         self._eod_date: str | None = None
         self._toast_armed = False
         self._toast_sent: dict[str, float] = {}
+        self._kline_cache: dict[str, tuple[float, list[float]]] = {}
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -219,6 +222,7 @@ class DeskEngine:
             verdict = build_verdict(
                 now, phase, metrics, etfs, hot_cards, prev, zt
             )
+            await self._apply_recommend_trends(client, verdict)
             payload = {
                 "ok": True,
                 "error": None,
@@ -273,6 +277,36 @@ class DeskEngine:
             if notify_windows(title, body):
                 self._toast_sent[key] = now_ts
                 log.info("toast %s | %s", title, body)
+
+    async def _apply_recommend_trends(
+        self,
+        client: httpx.AsyncClient,
+        verdict: dict[str, Any],
+    ) -> None:
+        """Fetch daily closes for recommended stocks and filter non-uptrends."""
+        rec = verdict.get("recommend") or {}
+        codes = [
+            str(x.get("code") or "")
+            for x in (rec.get("items") or [])
+            if x.get("kind") == "stock" and x.get("code")
+        ]
+        if not codes:
+            return
+        now_ts = datetime.now(CN_TZ).timestamp()
+        need: list[str] = []
+        closes_by_code: dict[str, list[float]] = {}
+        for code in codes:
+            hit = self._kline_cache.get(code)
+            if hit and now_ts - hit[0] < 300:
+                closes_by_code[code] = hit[1]
+            else:
+                need.append(code)
+        if need:
+            fetched = await fetch_daily_closes_many(client, need, limit=60)
+            for code, closes in fetched.items():
+                self._kline_cache[code] = (now_ts, closes)
+                closes_by_code[code] = closes
+        verdict["recommend"] = apply_stock_daily_trends(rec, closes_by_code)
 
     async def _yesterday(
         self,
