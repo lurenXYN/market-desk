@@ -439,7 +439,8 @@ def _apply_ready_confirmations(
         try:
             if last is not None and high not in (None, 0) and float(high) > 0:
                 dist = (float(high) - float(last)) / float(high) * 100.0
-                need = 0.35 if kind == "etf" else 0.6
+                # Stricter than priced near_high: ready buys need clearer room.
+                need = 0.50 if kind == "etf" else 0.90
                 if dist < need:
                     flags.append("离日高过近")
         except (TypeError, ValueError):
@@ -796,18 +797,19 @@ def _score_stock(
     pullback = None
     if high and high > 0:
         pullback = (float(high) - float(price)) / float(high) * 100.0
-    if strict and (pullback is None or pullback < 0.8 or pullback > 4.0):
+    if strict and (pullback is None or pullback < 1.0 or pullback > 4.0):
         return None
     score = 20.0 - abs(float(pct) - 2.0) * 2.0
     if pullback is not None:
-        if 0.8 <= pullback <= 4.0:
+        if 1.0 <= pullback <= 4.0:
             score += 15.0
         elif pullback > 4.0:
             score += 4.0
         else:
             score -= 6.0
     boards = int(boards_by.get(code) or 0)
-    ready = pullback is not None and pullback >= 0.8
+    # Ready only after a clearer day-high pullback to cut chase entries.
+    ready = pullback is not None and pullback >= 1.0
     reason = _stock_reason(pct, pullback, ready)
     out = dict(member)
     out["code"] = code
@@ -869,7 +871,10 @@ def _recommend_item(
     low = quote.get("low")
     high = quote.get("high")
     near_high = bool(
-        last and high and high > 0 and (float(high) - float(last)) / float(high) * 100.0 < (0.25 if etf else 0.35)
+        last
+        and high
+        and high > 0
+        and (float(high) - float(last)) / float(high) * 100.0 < (0.40 if etf else 0.55)
     )
     buy_now = bool(ready and last is not None and not near_high)
     wait = _wait_price(last, low, etf)

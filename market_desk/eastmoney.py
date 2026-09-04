@@ -388,7 +388,18 @@ async def fetch_minute_trends(
         px = num(parts[1])
         if px is None:
             continue
-        out.append({"time": str(parts[0]), "price": float(px)})
+        # Eastmoney trends: time,price,avg,volume,amount,...
+        avg = num(parts[2]) if len(parts) > 2 else None
+        vol = num(parts[3]) if len(parts) > 3 else None
+        amt = num(parts[4]) if len(parts) > 4 else None
+        point: dict[str, Any] = {"time": str(parts[0]), "price": float(px)}
+        if avg is not None:
+            point["avg"] = float(avg)
+        if vol is not None:
+            point["volume"] = float(vol)
+        if amt is not None:
+            point["amount"] = float(amt)
+        out.append(point)
     return out
 
 
