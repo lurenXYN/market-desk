@@ -219,6 +219,7 @@ def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "buy_avg_day3": _avg(scored_buys, "outcome_day3_pct"),
         "paper_avg_day3": paper_pnl,
         "skipped": sum(1 for r in rows if int(r.get("skipped") or 0)),
+        "traded": sum(1 for r in rows if int(r.get("traded") or 0)),
         "pending": sum(1 for r in active if not r.get("outcome_label")),
     }
 
@@ -268,6 +269,11 @@ def enrich_signals_with_live_marks(
             labels.append("建议价附近")
         item["live_last"] = last
         item["live_pct"] = num(q.get("pct"))
+        sig_px = num(item.get("price"))
+        if last is not None and sig_px is not None and sig_px > 0:
+            item["dev_pct"] = round((float(last) / float(sig_px) - 1.0) * 100.0, 2)
+        else:
+            item["dev_pct"] = None
         item["price_flags"] = flags
         item["price_mark"] = " / ".join(labels) if labels else ""
         # Buying caution for same-day signals.

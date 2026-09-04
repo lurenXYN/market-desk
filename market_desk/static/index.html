@@ -554,6 +554,19 @@
       background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;
       border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
     }
+    .rev-actions .rev-trade {
+      background: #082028; color: var(--ice); border: 1px solid #164e63;
+      border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
+    }
+    .rev-actions .rev-trade.on, .rev-actions .rev-skip.on {
+      outline: 1px solid var(--ferm);
+    }
+    .rev-actions .rev-skip {
+      background: transparent; color: var(--warn); border: 1px solid #5a3d2a;
+      border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
+    }
+    .dev-up { color: var(--up); font-weight: 700; }
+    .dev-down { color: var(--down); font-weight: 700; }
     .pos-form {
       display: grid;
       grid-template-columns: 90px 140px 90px 90px 1fr auto;
@@ -1332,9 +1345,8 @@
       document.getElementById("revSum").innerHTML = [
         cell("买入信号", sum.buy_total ?? 0),
         cell("买入命中率", sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
-        cell("模拟三日均涨", sum.paper_avg_day3 == null ? "—" : ((sum.paper_avg_day3 > 0 ? "+" : "") + sum.paper_avg_day3 + "%"),
-          (sum.paper_avg_day3 || 0) >= 0 ? "up" : "down"),
-        cell("待隔日 / 未交易", `${sum.pending ?? 0} / ${sum.skipped ?? 0}`),
+        cell("已交易 / 未交易", `${sum.traded ?? 0} / ${sum.skipped ?? 0}`),
+        cell("待隔日打分", sum.pending ?? 0),
       ].join("");
       const type = (document.getElementById("revType") || {}).value || "";
       const kind = (document.getElementById("revKind") || {}).value || "";
@@ -1350,9 +1362,13 @@
         const d1 = r.outcome_day1_pct;
         const d3 = r.outcome_day3_pct;
         const skipped = !!Number(r.skipped || 0);
+        const traded = !!Number(r.traded || 0);
         const confirmed = (r.note || "").includes("确认上升") || (r.payload && r.payload.trend_manual === "up");
-        const label = confirmed ? "已确认上升" : (skipped ? "未交易" : (r.outcome_label || "待隔日"));
-        const pend = (!confirmed && r.payload && r.payload.trend_pending) ? " · 待自判" : "";
+        let label = r.outcome_label || "待隔日";
+        if (traded) label = "已交易" + (r.outcome_label ? ` · ${r.outcome_label}` : "");
+        else if (skipped) label = "未交易";
+        else if (confirmed) label = "已确认上升" + (r.outcome_label ? ` · ${r.outcome_label}` : "");
+        const pend = (!confirmed && !traded && !skipped && r.payload && r.payload.trend_pending) ? " · 待自判" : "";
         const flags = r.price_flags || [];
         let markCls = "";
         if (flags.includes("stop_hit")) markCls = "mark-stop";
@@ -1367,12 +1383,16 @@
         const liveHtml = r.live_last != null
           ? `<div class="meta">现价 ${r.live_last}${r.live_pct == null ? "" : " " + ((r.live_pct > 0 ? "+" : "") + Number(r.live_pct).toFixed(2) + "%")}</div>`
           : "";
+        const dev = r.dev_pct;
+        const devHtml = dev == null
+          ? ""
+          : `<div class="${dev >= 0 ? "dev-up" : "dev-down"}">偏离 ${(dev > 0 ? "+" : "") + Number(dev).toFixed(2)}%</div>`;
         return `<tr>
           <td>${r.trade_date || ""}</td>
           <td>${typ}</td>
           <td>${tickerHtml(r.name, r.code)}${liveHtml}${markHtml}${cautionHtml}</td>
           <td>${r.code || ""}</td>
-          <td>${r.price ?? "—"}</td>
+          <td>${r.price ?? "—"}${devHtml}</td>
           <td>${r.mainline || "—"}</td>
           <td>${r.phase || "—"}</td>
           <td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>
@@ -1380,7 +1400,9 @@
           <td>${label}${pend}</td>
           <td>
             <div class="rev-actions">
-              <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}" title="确认为上升趋势">确认上升</button>
+              <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}">确认上升</button>
+              <button type="button" class="rev-trade${traded ? " on" : ""}" data-id="${r.id}">已交易</button>
+              <button type="button" class="rev-skip${skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
               <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
             </div>
           </td>
@@ -1676,13 +1698,12 @@
             alert("确认失败");
             return;
           }
-          // Also mark this signal note so the list shows the judgment.
           const id = up.getAttribute("data-id");
           if (id) {
             await fetch("/api/review/" + id, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ note: "确认上升趋势", skipped: false }),
+              body: JSON.stringify({ note: "确认上升趋势" }),
             });
           }
           reviewLoadedAt = 0;
@@ -1691,6 +1712,32 @@
         } catch (e) {
           alert("确认失败");
         }
+        return;
+      }
+      const trade = ev.target.closest(".rev-trade");
+      if (trade) {
+        const id = trade.getAttribute("data-id");
+        if (!id) return;
+        await fetch("/api/review/" + id, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ traded: true, skipped: false }),
+        });
+        reviewLoadedAt = 0;
+        await loadReview(true);
+        return;
+      }
+      const skip = ev.target.closest(".rev-skip");
+      if (skip) {
+        const id = skip.getAttribute("data-id");
+        if (!id) return;
+        await fetch("/api/review/" + id, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skipped: true, traded: false }),
+        });
+        reviewLoadedAt = 0;
+        await loadReview(true);
         return;
       }
       const del = ev.target.closest(".rev-del");

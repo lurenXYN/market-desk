@@ -94,6 +94,7 @@ def init_db() -> None:
                 outcome_checked_at TEXT,
                 note TEXT,
                 skipped INTEGER DEFAULT 0,
+                traded INTEGER DEFAULT 0,
                 UNIQUE(trade_date, code, signal_type)
             )
             """
@@ -107,6 +108,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signals ADD COLUMN note TEXT")
         if "skipped" not in cols:
             conn.execute("ALTER TABLE signals ADD COLUMN skipped INTEGER DEFAULT 0")
+        if "traded" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN traded INTEGER DEFAULT 0")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS session_segment (
@@ -445,7 +448,7 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped
+                   outcome_label, outcome_checked_at, note, skipped, traded
             FROM signals
             ORDER BY trade_date DESC, id DESC
             LIMIT ?
@@ -464,6 +467,7 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
         else:
             item["payload"] = {}
         item["skipped"] = int(item.get("skipped") or 0)
+        item["traded"] = int(item.get("traded") or 0)
         out.append(item)
     return out
 
@@ -476,7 +480,7 @@ def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, A
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped
+                   outcome_label, outcome_checked_at, note, skipped, traded
             FROM signals
             WHERE trade_date < ?
               AND (outcome_label IS NULL OR outcome_label = '')
@@ -498,6 +502,7 @@ def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, A
         else:
             item["payload"] = {}
         item["skipped"] = int(item.get("skipped") or 0)
+        item["traded"] = int(item.get("traded") or 0)
         out.append(item)
     return out
 
@@ -530,17 +535,34 @@ def mark_signal_outcome(signal_id: int, outcome: dict[str, Any]) -> bool:
         return cur.rowcount > 0
 
 
-def update_signal_meta(signal_id: int, *, skipped: int | None = None, note: str | None = None) -> bool:
+def update_signal_meta(
+    signal_id: int,
+    *,
+    skipped: int | None = None,
+    traded: int | None = None,
+    note: str | None = None,
+) -> bool:
     """Update user review flags on a signal row."""
     with _connect() as conn:
-        row = conn.execute("SELECT id, note, skipped FROM signals WHERE id = ?", (signal_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, note, skipped, traded FROM signals WHERE id = ?",
+            (signal_id,),
+        ).fetchone()
         if not row:
             return False
         new_skipped = int(row["skipped"] or 0) if skipped is None else int(skipped)
+        new_traded = int(row["traded"] or 0) if traded is None else int(traded)
+        # Keep traded / skipped mutually exclusive when either is set explicitly.
+        if traded is not None and int(traded):
+            new_skipped = 0
+            new_traded = 1
+        if skipped is not None and int(skipped):
+            new_traded = 0
+            new_skipped = 1
         new_note = row["note"] if note is None else note
         cur = conn.execute(
-            "UPDATE signals SET skipped = ?, note = ? WHERE id = ?",
-            (new_skipped, new_note, signal_id),
+            "UPDATE signals SET skipped = ?, traded = ?, note = ? WHERE id = ?",
+            (new_skipped, new_traded, new_note, signal_id),
         )
         conn.commit()
         return cur.rowcount > 0

@@ -46,6 +46,7 @@ class SignalMetaIn(BaseModel):
     """User annotation for a logged buy/sell signal."""
 
     skipped: bool | None = None
+    traded: bool | None = None
     note: str | None = None
 
 
@@ -194,10 +195,11 @@ def trim_position_api(pid: int, body: TrimIn) -> dict:
 
 @app.post("/api/review/{sid}")
 def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
-    """Mark a signal as skipped (not traded) or attach a note."""
+    """Mark a signal as traded / not traded, or attach a note."""
     ok = update_signal_meta(
         sid,
         skipped=None if body.skipped is None else (1 if body.skipped else 0),
+        traded=None if body.traded is None else (1 if body.traded else 0),
         note=body.note,
     )
     if not ok:
