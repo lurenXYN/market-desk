@@ -400,7 +400,11 @@ def load_positions() -> list[dict[str, Any]]:
 
 
 def upsert_signal(row: dict[str, Any]) -> None:
-    """Insert or refresh a same-day signal keyed by date + code + type."""
+    """Insert or refresh a same-day signal keyed by date + code + type.
+
+    ``signaled_at`` is kept from the first insert so the review panel shows
+    when the name first entered the watch list, not the latest refresh.
+    """
     now_payload = json.dumps(row.get("payload") or {}, ensure_ascii=False)
     with _connect() as conn:
         conn.execute(
@@ -410,7 +414,6 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 code, name, kind, price, last, ready, payload
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(trade_date, code, signal_type) DO UPDATE SET
-                signaled_at = excluded.signaled_at,
                 action = excluded.action,
                 phase = excluded.phase,
                 mainline = excluded.mainline,
