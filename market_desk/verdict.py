@@ -105,10 +105,10 @@ def build_verdict(
         action, reason, size_hint, phase=phase
     )
     algo_notes.extend(review_notes)
-    if similar and similar.get("bias"):
-        size_hint = _join_hint(size_hint, str(similar.get("bias")))
-        if similar.get("n"):
-            algo_notes.append(f"相似日n={similar.get('n')}")
+    action, reason, size_hint, similar_notes = apply_similar_gate(
+        action, reason, size_hint, similar=similar
+    )
+    algo_notes.extend(similar_notes)
 
     headline = f"实时主线 · {board_name or '未明'}"
     meaning = {
@@ -370,6 +370,37 @@ def apply_review_bias(
         hint = _join_hint(hint, f"相位{phase}命中{rate}%一般，偏小仓")
         notes.append(f"复盘命中{rate}%偏弱")
     return act, why, hint, stock_block, notes
+
+
+def apply_similar_gate(
+    action: str,
+    reason: str,
+    size_hint: str,
+    *,
+    similar: dict[str, Any] | None,
+) -> tuple[str, str, str, list[str]]:
+    """Use similar-day cool/hot bias as a real action gate, not only a hint."""
+    notes: list[str] = []
+    sim = similar or {}
+    hint = size_hint or ""
+    act = action
+    why = reason
+    bias = str(sim.get("bias") or "").strip()
+    gate = sim.get("gate")
+    n = int(sim.get("n") or 0)
+    if bias:
+        hint = _join_hint(hint, bias)
+    if n:
+        notes.append(f"相似日n={n}")
+    if gate == "cool" and act == "可买入" and n >= 2:
+        act = "观察回踩"
+        why = f"相似日偏降温，降级观察回踩：{why}"
+        notes.append("相似日降温闸门")
+        hint = _join_hint(hint, "相似日降温只试错或观望")
+    elif gate == "hot" and act == "可买入":
+        hint = _join_hint(hint, "相似日偏升温仍防追高")
+        notes.append("相似日升温防追")
+    return act, why, hint, notes
 
 
 def _join_hint(base: str, extra: str) -> str:

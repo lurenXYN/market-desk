@@ -60,12 +60,14 @@ from market_desk.eastmoney import (
     fetch_daily_klines_many,
     fetch_hot_boards,
     fetch_main_quotes,
+    fetch_minute_trends,
     fetch_yesterday_zt,
     fetch_zb_pool,
     fetch_zt_pool,
 )
 from market_desk.filters import is_limit_down, is_main_board
 from market_desk.glossary import GLOSSARY
+from market_desk.minute_confirm import apply_minute_confirmations
 from market_desk.notify import build_toast_alerts, notify_windows
 from market_desk.sentiment import (
     auction_from_quotes,
@@ -112,6 +114,7 @@ class DeskEngine:
         self._toast_armed = False
         self._toast_sent: dict[str, float] = {}
         self._kline_cache: dict[str, tuple[float, list[float]]] = {}
+        self._minute_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -297,6 +300,7 @@ class DeskEngine:
                 similar=similar,
             )
             await self._apply_recommend_trends(client, verdict, trade_date_dash)
+            await self._apply_recommend_minutes(client, verdict)
             updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
             try:
                 self._persist_session_context(
@@ -492,6 +496,46 @@ class DeskEngine:
         verdict["recommend"] = apply_stock_daily_trends(
             rec, closes_by_code, fetch_ok_by_code, overrides
         )
+
+    async def _apply_recommend_minutes(
+        self,
+        client: httpx.AsyncClient,
+        verdict: dict[str, Any],
+    ) -> None:
+        """Fetch minute series for ready cards and downgrade failed structures."""
+        rec = verdict.get("recommend") or {}
+        codes = sorted(
+            {
+                str(x.get("code") or "").zfill(6)
+                for x in (rec.get("items") or [])
+                if x.get("ready") and x.get("code")
+            }
+        )
+        if not codes:
+            return
+        now_ts = datetime.now(CN_TZ).timestamp()
+        minutes_by_code: dict[str, list[dict[str, Any]]] = {}
+        need: list[str] = []
+        for code in codes:
+            hit = self._minute_cache.get(code)
+            if hit and now_ts - hit[0] < 45:
+                minutes_by_code[code] = hit[1]
+            else:
+                need.append(code)
+        if need:
+            fetched = await asyncio.gather(
+                *[fetch_minute_trends(client, c) for c in need],
+                return_exceptions=True,
+            )
+            for code, rows in zip(need, fetched):
+                if isinstance(rows, Exception):
+                    log.debug("minute fetch %s failed: %s", code, rows)
+                    minutes_by_code[code] = []
+                    continue
+                series = list(rows or [])
+                self._minute_cache[code] = (now_ts, series)
+                minutes_by_code[code] = series
+        verdict["recommend"] = apply_minute_confirmations(rec, minutes_by_code)
 
     def apply_trend_override(self, code: str, verdict_flag: str) -> dict[str, Any]:
         """Persist a manual trend judgment and refresh recommend cards in-memory."""

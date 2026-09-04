@@ -68,6 +68,20 @@
       letter-spacing: 0.02em;
     }
     .mainline-title .meta { font-size: 14px; font-weight: 500; margin-left: 8px; }
+    .mainline-title .no-etf-badge {
+      display: inline-block; margin-left: 10px; padding: 2px 10px;
+      border: 1px solid #a16207; border-radius: 4px;
+      color: #fbbf24; background: #1c1508;
+      font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+      vertical-align: middle;
+    }
+    .no-etf-banner {
+      margin: 8px 0 12px; padding: 10px 12px;
+      border: 1px solid #a16207; border-radius: 6px;
+      background: #1c1508; color: #fbbf24;
+      font-size: 14px; font-weight: 600; line-height: 1.45;
+    }
+    .no-etf-banner[hidden] { display: none; }
     .verdict-one {
       font-size: 15px; color: var(--text); margin: 0 0 10px; line-height: 1.4;
       max-width: 52rem;
@@ -132,9 +146,6 @@
     .sellbox .pos-btn.sell-go {
       border-color: #5a6a80; color: var(--muted); background: transparent;
     }
-    .sellbox .rec-card.sell-now .pos-btn.sell-go {
-      border-color: #8b3a3a; color: #fecaca;
-    }
     @media (max-width: 960px) {
       .playbook { grid-template-columns: 1fr; }
       .desk-pair { grid-template-columns: 1fr; }
@@ -170,8 +181,17 @@
     }
     .clock .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
     .deltas {
-      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px;
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;
     }
+    .desk-deltas {
+      margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px;
+    }
+    .desk-deltas > summary {
+      cursor: pointer; color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
+      list-style: none; user-select: none; margin-bottom: 8px;
+    }
+    .desk-deltas > summary::-webkit-details-marker { display: none; }
+    .desk-deltas[hidden] { display: none; }
     .delta {
       border: 1px solid var(--line); border-radius: 6px;
       padding: 6px 10px; min-width: 118px;
@@ -217,7 +237,24 @@
       border-radius: 6px;
     }
     .rec-card.wait { border-color: #4a4a28; background: #14140e; }
-    .rec-card.sell-now { border-color: #8b3a3a; background: #1a1010; }
+    .rec-card.buy-ready {
+      border-color: #3ecf8e; background: #102018;
+      box-shadow: inset 3px 0 0 #3ecf8e;
+    }
+    .rec-card.buy-ready .role { color: #86efac; }
+    .rec-card.buy-ready .buy .val { color: #86efac; }
+    .buybox .rec-card.buy-ready .pos-btn.rec-pos {
+      border-color: #3ecf8e; color: #bbf7d0; background: #0c1a14;
+    }
+    .rec-card.sell-now {
+      border-color: #ef4444; background: #1a1010;
+      box-shadow: inset 3px 0 0 #ef4444;
+    }
+    .rec-card.sell-now .role { color: #fecaca; }
+    .rec-card.sell-now .sell .val { color: #fecaca; }
+    .sellbox .rec-card.sell-now .pos-btn.sell-go {
+      border-color: #ef4444; color: #fecaca; background: #1a0c0c;
+    }
     .rec-card .role {
       display: flex; justify-content: space-between; align-items: baseline;
       font-size: 11px; color: var(--muted); letter-spacing: 0.08em;
@@ -874,6 +911,9 @@
             <span class="meta" id="phasePill"></span>
           </div>
           <h1 class="mainline-title" id="headline">等待数据</h1>
+          <div class="no-etf-banner" id="noEtfBanner" hidden>
+            主线暂无映射 ETF：本轮不做载体定价买入，只观察回踩；创业板/科创个股仍不推荐。
+          </div>
           <p class="verdict-one" id="meaning"></p>
           <div class="playbook" id="playbook">
             <div class="pb do"><div class="lab">能做 <button type="button" class="q" data-term="Playbook">?</button></div><div class="txt" id="pbDo">—</div></div>
@@ -911,7 +951,10 @@
           <div class="sub" id="dataAge">数据尚未刷新</div>
         </div>
       </div>
-      <div class="deltas" id="deltas"></div>
+      <details class="desk-deltas" id="deskDeltas">
+        <summary>指标较上轮变化（次要，点击展开）</summary>
+        <div class="deltas" id="deltas"></div>
+      </details>
       <details class="desk-secondary" id="deskSecondary">
         <summary>盘中分段 · 主线切换（次要信息，点击展开）</summary>
         <div class="sec-title meta">
@@ -1244,7 +1287,7 @@
           </div>`;
       const cardCls = [
         "rec-card",
-        wait ? "wait" : "",
+        wait ? "wait" : "buy-ready",
         trendBad ? "trend-down" : "",
         pending ? "trend-pending" : "",
       ].filter(Boolean).join(" ");
@@ -1361,7 +1404,11 @@
       document.getElementById("headline").innerHTML =
         `${termHtml("实时主线")} · ${ml}`
         + ((v.mainline && v.mainline.etf_mapped === false)
-          ? `<span class="meta">无ETF映射</span>` : "");
+          ? `<span class="no-etf-badge">无ETF映射</span>` : "");
+      const noEtf = document.getElementById("noEtfBanner");
+      if (noEtf) {
+        noEtf.hidden = !(v.mainline && v.mainline.etf_mapped === false && ml && ml !== "未明");
+      }
       // One-line summary only; long algo text stays folded.
       const one = (v.meaning || v.reason || "").split("（")[0].trim();
       document.getElementById("meaning").textContent = one || "";
@@ -1403,7 +1450,11 @@
       document.getElementById("sellItems").innerHTML = (sell.items || []).map(sellCard).join("");
       document.getElementById("dataTime").textContent = (d.updated_at || "").slice(11) || "--:--:--";
       document.getElementById("dataAge").textContent = dataAgeText(d.updated_at);
-      document.getElementById("deltas").innerHTML = (d.deltas || []).map(fmtDelta).join("");
+      const deltasEl = document.getElementById("deltas");
+      const deskDeltas = document.getElementById("deskDeltas");
+      const deltaRows = d.deltas || [];
+      if (deltasEl) deltasEl.innerHTML = deltaRows.map(fmtDelta).join("");
+      if (deskDeltas) deskDeltas.hidden = !deltaRows.length;
       document.getElementById("segNote").textContent = seg.note || "";
       document.getElementById("segStrip").innerHTML = (d.session_segments || []).map((s) => {
         const act = s.action || "—";

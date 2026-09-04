@@ -26,6 +26,7 @@ def build_similar_days(
             "peers": [],
             "note": "相似日需要更多日级快照后再对照",
             "bias": "",
+            "gate": None,
         }
 
     try:
@@ -87,16 +88,21 @@ def build_similar_days(
             note += f"、涨停均值 {avg_z}"
         if cooler >= hotter + 2 and cooler >= 2:
             bias = "相似日后偏降温，新开仓宜更小"
+            gate = "cool"
         elif hotter >= cooler + 2 and hotter >= 2:
             bias = "相似日后偏升温，仍防追高"
+            gate = "hot"
         else:
             bias = "相似日次日冷热互现，按回踩执行"
+            gate = "mixed"
     elif peers:
         note += "；尚缺次日样本"
         bias = "相似日样本不足，不作倾向"
+        gate = None
     else:
         note = f"近端暂无接近的「{phase}」日"
         bias = ""
+        gate = None
 
     return {
         "phase": phase,
@@ -104,6 +110,7 @@ def build_similar_days(
         "peers": peers,
         "note": note,
         "bias": bias,
+        "gate": gate,
         "next_temp_avg": None if not next_temps else round(sum(next_temps) / len(next_temps), 1),
         "next_zt_avg": None if not next_zts else round(sum(next_zts) / len(next_zts), 1),
         "cooler_n": cooler,
