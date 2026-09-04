@@ -61,7 +61,13 @@ from market_desk.sentiment import (
     spark_values,
 )
 from market_desk.tencent import fetch_etfs, fetch_quotes
-from market_desk.verdict import build_deltas, build_verdict, decorate_positions, position_summary
+from market_desk.verdict import (
+    build_deltas,
+    build_sell_advice,
+    build_verdict,
+    decorate_positions,
+    position_summary,
+)
 
 log = logging.getLogger("market_desk")
 
@@ -105,6 +111,11 @@ class DeskEngine:
         positions = decorate_positions(load_positions(), quotes)
         self.snapshot["positions"] = positions
         self.snapshot["position_summary"] = position_summary(positions)
+        self.snapshot["sell_advice"] = build_sell_advice(
+            positions,
+            self.snapshot.get("verdict") or {},
+            self.snapshot.get("phase") or "",
+        )
         return positions
 
     async def _loop(self) -> None:
@@ -231,6 +242,7 @@ class DeskEngine:
                 "verdict": verdict,
                 "positions": positions,
                 "position_summary": position_summary(positions),
+                "sell_advice": build_sell_advice(positions, verdict, phase),
                 "glossary": GLOSSARY,
             }
             payload["deltas"] = build_deltas(payload, prev)
@@ -577,27 +589,72 @@ def _today_events(
 
 
 def _cycle_view(history: list[dict[str, Any]], today: str) -> dict[str, Any]:
+    """Build a climax-relative timeline; attach daily snapshots so nodes are clickable."""
     ordered = list(reversed(history))
+    by_date = {r.get("trade_date"): r for r in history if r.get("trade_date")}
     last_climax = None
     for row in ordered:
         if row.get("phase") == "高潮":
             last_climax = row.get("trade_date")
+    dates = [r.get("trade_date") for r in ordered]
     offset = 0
-    if last_climax:
-        dates = [r.get("trade_date") for r in ordered]
-        try:
-            offset = dates.index(today) - dates.index(last_climax)
-        except ValueError:
-            offset = 0
+    anchor_idx = -1
+    if last_climax and last_climax in dates and today in dates:
+        offset = dates.index(today) - dates.index(last_climax)
+        anchor_idx = dates.index(last_climax)
+    elif today in dates:
+        offset = 0
+        anchor_idx = dates.index(today)
+    elif dates:
+        offset = 0
+        anchor_idx = len(dates) - 1
+
     nodes = []
     for i in range(-1, 10):
-        label = "今" if i == offset else f"D{i:+d}".replace("+", "+")
-        nodes.append({"i": i, "current": i == offset, "label": label})
+        trade_date = None
+        row = None
+        if anchor_idx >= 0:
+            idx = anchor_idx + i
+            if 0 <= idx < len(dates):
+                trade_date = dates[idx]
+                row = by_date.get(trade_date)
+        is_now = i == offset
+        detail = None
+        if row:
+            detail = {
+                "trade_date": trade_date,
+                "phase": row.get("phase"),
+                "temperature": row.get("temperature"),
+                "zt": row.get("zt"),
+                "dt": row.get("dt"),
+                "zb_rate": row.get("zb_rate"),
+                "height": row.get("height"),
+                "promotion": row.get("promotion"),
+                "premium": row.get("premium"),
+                "event": row.get("event"),
+                "ups": row.get("ups"),
+                "downs": row.get("downs"),
+                "amount_yi": row.get("amount_yi"),
+            }
+        nodes.append(
+            {
+                "i": i,
+                "current": is_now,
+                "label": "今" if is_now else f"D{i:+d}",
+                "trade_date": trade_date,
+                "has_data": detail is not None,
+                "detail": detail,
+            }
+        )
     return {
         "offset": offset,
         "last_climax": last_climax,
         "nodes": nodes,
-        "note": f"距上次高潮 {offset} 日" if last_climax else "本地尚无高潮样本，先攒日级数据",
+        "note": (
+            f"距上次高潮 {offset} 日 · 可点击日子查看当日摘要"
+            if last_climax
+            else "本地尚无高潮样本，先攒日级数据 · 可点有数据的日子"
+        ),
     }
 
 

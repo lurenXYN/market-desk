@@ -10,7 +10,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 HOST = "127.0.0.1"
 PORT = 8765
 # Hit East Money / Tencent only in session; idle loop just waits for the next open.
-SESSION_REFRESH_SECONDS = 90
+SESSION_REFRESH_SECONDS = 20
 IDLE_CHECK_SECONDS = 60
 
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"

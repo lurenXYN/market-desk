@@ -81,20 +81,28 @@
     .arrow-flat { color: var(--muted); }
     .bans { margin-top: 10px; font-size: 14px; color: var(--warn); }
     .meaning { font-size: 16px; color: var(--warn); margin: 0 0 10px; }
-    .buybox {
-      margin-top: 14px; padding: 14px 16px;
+    .desk-pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .buybox, .sellbox {
+      margin-top: 0; padding: 14px 16px;
       border: 1px solid var(--line); border-radius: 8px; background: #0e1210;
     }
     .buybox.on { border-color: #3ecf8e; background: #102018; }
     .buybox.off { border-color: #5a3d2a; background: #161210; }
-    .buybox .k { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
+    .sellbox.on { border-color: #8b3a3a; background: #1a1010; }
+    .sellbox.off { border-color: #3a4558; background: #10141c; }
+    .buybox .k, .sellbox .k { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
     .buyline {
       font-size: 22px; font-weight: 750; line-height: 1.25; margin: 6px 0 8px;
     }
     .buymeta { font-size: 14px; margin: 4px 0; }
     .rec-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: 1fr;
       gap: 8px;
       margin-top: 10px;
     }
@@ -105,6 +113,7 @@
       border-radius: 6px;
     }
     .rec-card.wait { border-color: #4a4a28; background: #14140e; }
+    .rec-card.sell-now { border-color: #8b3a3a; background: #1a1010; }
     .rec-card .role {
       display: flex; justify-content: space-between; align-items: baseline;
       font-size: 11px; color: var(--muted); letter-spacing: 0.08em;
@@ -122,10 +131,17 @@
     .rec-prices .lab { color: var(--muted); font-size: 11px; }
     .rec-prices .val { font-size: 15px; font-weight: 650; }
     .rec-prices .buy .val { color: var(--ferm); }
+    .rec-prices .sell .val { color: var(--up); }
     .rec-prices .stop .val { color: var(--warn); }
     .rec-prices .chase .val { color: var(--up); }
     .rec-why { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
     .rec-card .pos-btn { margin-top: 8px; width: 100%; }
+    .pos-btn.sell-go {
+      background: #3a1a1a; color: var(--up); border-color: #8b3a3a;
+    }
+    @media (max-width: 900px) {
+      .desk-pair { grid-template-columns: 1fr; }
+    }
     .hdr {
       display: flex; justify-content: space-between; align-items: baseline;
       margin-bottom: 10px; gap: 12px;
@@ -195,8 +211,15 @@
     .node {
       min-width: 42px; text-align: center; padding: 6px 4px;
       border: 1px solid var(--line); border-radius: 4px; color: var(--muted);
+      background: transparent; cursor: pointer; font: inherit;
     }
+    .node:hover:not(:disabled) { border-color: var(--ice); color: var(--ice); }
     .node.now { border-color: var(--ferm); color: var(--ferm); background: #102018; }
+    .node.sel { border-color: var(--ice); color: var(--ice); background: #082028; }
+    .node.now.sel { border-color: var(--ferm); color: var(--ferm); box-shadow: inset 0 0 0 1px var(--ferm); }
+    .node:disabled, .node.muted {
+      opacity: 0.4; cursor: not-allowed;
+    }
     .events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
     .events li { padding-left: 10px; border-left: 2px solid var(--line); color: var(--text); }
     .events li.warn { border-color: var(--warn); color: var(--warn); }
@@ -359,13 +382,21 @@
           <p class="reason" id="reason"></p>
           <p class="detail" id="detail"></p>
           <div class="bans" id="bans"></div>
-          <div class="buybox off" id="buybox">
-            <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button></div>
-            <div class="buyline" id="buyline">暂不买入</div>
-            <div class="buymeta" id="buymeta"></div>
-            <div class="buymeta" id="buystop"></div>
-            <div class="rec-grid" id="recItems"></div>
-            <div class="buymeta bans" id="buyavoid"></div>
+          <div class="desk-pair">
+            <div class="buybox off" id="buybox">
+              <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button></div>
+              <div class="buyline" id="buyline">暂不买入</div>
+              <div class="buymeta" id="buymeta"></div>
+              <div class="buymeta" id="buystop"></div>
+              <div class="rec-grid" id="recItems"></div>
+              <div class="buymeta bans" id="buyavoid"></div>
+            </div>
+            <div class="sellbox off" id="sellbox">
+              <div class="k">仓位建议卖出<button type="button" class="q" data-term="建议卖出">?</button></div>
+              <div class="buyline" id="sellline">暂无仓位</div>
+              <div class="buymeta" id="sellmeta"></div>
+              <div class="rec-grid" id="sellItems"></div>
+            </div>
           </div>
         </div>
         <div class="clock">
@@ -526,6 +557,26 @@
           data-price="${buy ?? ""}">按建议价记账</button>
       </article>`;
     };
+    const sellCard = (it) => {
+      const kind = it.kind || "stock";
+      const sellNow = !!it.ready;
+      const sell = it.sell_price != null ? it.sell_price : it.last;
+      const pnl = it.pnl_pct;
+      const pnlHtml = pnl == null ? "—" : `<span class="${pnl >= 0 ? "up" : "down"}">${(pnl > 0 ? "+" : "") + Number(pnl).toFixed(2)}%</span>`;
+      return `<article class="rec-card${sellNow ? " sell-now" : " wait"}">
+        <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
+        <div class="nm">${it.name || "—"}<span>${it.code || ""} · ${it.qty || 0}股</span></div>
+        <div class="rec-prices">
+          <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
+          <div class="sell"><div class="lab">建议卖</div><div class="val">${fmtPx(sell, kind)}</div></div>
+          <div><div class="lab">成本</div><div class="val">${fmtPx(it.buy_price, kind)}</div></div>
+          <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
+          <div><div class="lab">浮盈</div><div class="val">${pnlHtml}</div></div>
+        </div>
+        <div class="rec-why">${it.reason || ""}</div>
+        <button type="button" class="pos-btn sell-go">去仓位页核对</button>
+      </article>`;
+    };
     const termHtml = (name) => {
       if (!name) return "";
       const key = ({ "炸板%": "炸板", "晋级%": "晋级率" })[name] || name;
@@ -607,13 +658,19 @@
       document.getElementById("buystop").textContent = rec.stop || "";
       document.getElementById("buyavoid").textContent = rec.avoid || "";
       document.getElementById("recItems").innerHTML = (rec.items || []).map(recCard).join("");
+      const sell = d.sell_advice || {};
+      const sellBox = document.getElementById("sellbox");
+      sellBox.className = "sellbox " + (sell.sell ? "on" : "off");
+      document.getElementById("sellline").textContent = sell.text || sell.title || "暂无仓位";
+      document.getElementById("sellmeta").textContent = sell.size_note || "";
+      document.getElementById("sellItems").innerHTML = (sell.items || []).map(sellCard).join("");
       document.getElementById("dataTime").textContent = (d.updated_at || "").slice(11) || "--:--:--";
       document.getElementById("dataAge").textContent = dataAgeText(d.updated_at);
       document.getElementById("deltas").innerHTML = (d.deltas || []).map(fmtDelta).join("");
       document.getElementById("filter").textContent = d.filter || "";
       document.getElementById("stamp").textContent =
         (d.live ? "盘中 " : "停源 ") + (d.updated_at || "") +
-        (d.live ? (" · " + (d.refresh_seconds || 90) + "秒一刷") : " · 午休/收盘不打行情") +
+        (d.live ? (" · " + (d.refresh_seconds || 20) + "秒一刷") : " · 午休/收盘不打行情") +
         (d.warnings && d.warnings.length ? " · 部分源失败" : "");
       document.getElementById("liveDot").className = "dot" + (d.live ? " on" : "");
       document.getElementById("phaseName").innerHTML = termHtml(phase);
@@ -637,12 +694,8 @@
         <div><b>${m.ups ?? 0}/${m.downs ?? 0}</b>涨跌</div>`;
       const cyc = d.cycle || {};
       document.getElementById("cycleNote").textContent = cyc.note || "";
-      document.getElementById("timeline").innerHTML = (cyc.nodes || []).map(n =>
-        `<div class="node ${n.current ? "now" : ""}">${n.current ? "今" : "D" + (n.i >= 0 ? "+" + n.i : n.i)}</div>`
-      ).join("");
-      document.getElementById("events").innerHTML = (d.events || []).map(e =>
-        `<li class="${e.tone === "warn" ? "warn" : (e.tone === "hot" ? "hot" : (e.tone === "ice" ? "ice" : ""))}">${e.text}</li>`
-      ).join("");
+      paintTimeline(d);
+      paintCycleEvents(d);
       const a = d.auction || {};
       document.getElementById("aucPremium").innerHTML = fmtPct(m.premium);
       document.getElementById("aucMed").innerHTML = fmtPct(a.median_open);
@@ -740,6 +793,60 @@
 
     let lastData = null;
     let currentTab = "hist";
+    let cycleSel = null;
+
+    function paintTimeline(d) {
+      const cyc = (d && d.cycle) || {};
+      const nodes = cyc.nodes || [];
+      const active = cycleSel == null
+        ? (nodes.find((n) => n.current) || {}).i
+        : cycleSel;
+      document.getElementById("timeline").innerHTML = nodes.map((n) => {
+        const label = n.current ? "今" : ("D" + (n.i >= 0 ? "+" + n.i : n.i));
+        const can = n.has_data || n.current;
+        const cls = [
+          "node",
+          n.current ? "now" : "",
+          active === n.i ? "sel" : "",
+          can ? "" : "muted",
+        ].filter(Boolean).join(" ");
+        return `<button type="button" class="${cls}" data-i="${n.i}" ${can ? "" : "disabled"}>${label}</button>`;
+      }).join("");
+    }
+
+    function paintCycleEvents(d) {
+      const cyc = (d && d.cycle) || {};
+      const nodes = cyc.nodes || [];
+      const liveHtml = (d.events || []).map((e) =>
+        `<li class="${e.tone === "warn" ? "warn" : (e.tone === "hot" ? "hot" : (e.tone === "ice" ? "ice" : ""))}">${e.text}</li>`
+      ).join("");
+      let node = null;
+      if (cycleSel != null) {
+        node = nodes.find((n) => n.i === cycleSel) || null;
+      }
+      if (!node || node.current) {
+        document.getElementById("cycleNote").textContent = cyc.note || "";
+        document.getElementById("events").innerHTML = liveHtml || `<li class="meta">暂无事件</li>`;
+        return;
+      }
+      const det = node.detail;
+      if (!det) {
+        document.getElementById("cycleNote").textContent =
+          (node.label || ("D" + node.i)) + " 尚无日级样本";
+        document.getElementById("events").innerHTML =
+          `<li class="meta">这一天还没有本地日级数据，先攒几天再回看。</li>`;
+        return;
+      }
+      document.getElementById("cycleNote").textContent =
+        `${det.trade_date || ""} · ${node.label || ""} · 点击「今」回到实时`;
+      document.getElementById("events").innerHTML = [
+        `<li>相位 ${det.phase || "—"} · 温度 ${det.temperature ?? "—"}</li>`,
+        `<li class="hot">涨停 ${det.zt ?? "—"} / 跌停 ${det.dt ?? "—"} · 涨跌 ${det.ups ?? "—"}/${det.downs ?? "—"}</li>`,
+        `<li>高度 ${det.height ?? "—"} · 晋级% ${det.promotion ?? "—"} · 炸板% ${det.zb_rate ?? "—"}</li>`,
+        `<li>昨停溢价 ${det.premium ?? "—"} · 成交亿 ${det.amount_yi ?? "—"}</li>`,
+        det.event ? `<li class="warn">${det.event}</li>` : "",
+      ].filter(Boolean).join("");
+    }
     function applyTab(tab) {
       currentTab = tab;
       document.querySelectorAll("#tabs span[data-tab]").forEach((el) =>
@@ -784,7 +891,7 @@
       if (tickLive === live && tickTimer) return;
       tickLive = live;
       if (tickTimer) clearInterval(tickTimer);
-      tickTimer = setInterval(tick, live ? 30000 : 60000);
+      tickTimer = setInterval(tick, live ? 20000 : 60000);
     }
     scheduleTick(false);
     setInterval(paintClock, 1000);
@@ -792,6 +899,16 @@
       const hit = ev.target.closest("[data-tab]");
       if (!hit) return;
       applyTab(hit.getAttribute("data-tab"));
+    });
+    document.getElementById("timeline").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".node");
+      if (!btn || btn.disabled) return;
+      const i = Number(btn.getAttribute("data-i"));
+      if (Number.isNaN(i) || !lastData) return;
+      const node = ((lastData.cycle || {}).nodes || []).find((n) => n.i === i);
+      cycleSel = node && node.current ? null : i;
+      paintTimeline(lastData);
+      paintCycleEvents(lastData);
     });
     document.getElementById("buybox").addEventListener("click", (ev) => {
       const btn = ev.target.closest(".rec-pos");
@@ -803,6 +920,10 @@
       if (!form.qty.value) form.qty.value = "100";
       applyTab("pos");
       form.qty.focus();
+    });
+    document.getElementById("sellbox").addEventListener("click", (ev) => {
+      if (!ev.target.closest(".sell-go")) return;
+      applyTab("pos");
     });
     document.getElementById("posForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();

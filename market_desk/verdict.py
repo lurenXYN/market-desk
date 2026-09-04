@@ -459,6 +459,158 @@ def _stop_line(primary: dict[str, Any] | None) -> str:
     return f"参考止损 {primary.get('stop_price')}（跌破日低视为回踩失败）"
 
 
+def build_sell_advice(
+    positions: list[dict[str, Any]],
+    verdict: dict[str, Any] | None,
+    phase: str,
+) -> dict[str, Any]:
+    """Build sell / hold cards for locally recorded positions."""
+    verdict = verdict or {}
+    items: list[dict[str, Any]] = []
+    for row in positions or []:
+        item = _sell_item(row, verdict, phase)
+        if item:
+            items.append(item)
+    rank = {"stop": 0, "take": 1, "trim": 2, "hold": 3}
+    items.sort(key=lambda x: (rank.get(str(x.get("urgency") or "hold"), 9), -(x.get("pnl_pct") or 0)))
+    items = items[:4]
+    sell_now = [x for x in items if x.get("ready")]
+    if not positions:
+        return {
+            "sell": False,
+            "empty": True,
+            "title": "暂无仓位",
+            "text": "暂无仓位 · 买入记账后这里给出卖出建议",
+            "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。",
+            "items": [],
+        }
+    if sell_now:
+        primary = sell_now[0]
+        text = (
+            f"{primary.get('role_label')} {primary.get('name')} {primary.get('code')}  "
+            f"{primary.get('sell_price')}"
+        )
+        size_note = "到价就动手。本地提示，不会下单。"
+    else:
+        primary = items[0] if items else None
+        text = (
+            f"继续持有 · 盯 {primary.get('name')} 目标 {primary.get('sell_price')}"
+            if primary
+            else "继续持有"
+        )
+        size_note = "未触发卖点时，建议卖=目标价，止损按成本下方。"
+    return {
+        "sell": bool(sell_now),
+        "empty": False,
+        "title": "建议卖出" if sell_now else "仓位观察",
+        "text": text,
+        "size_note": size_note,
+        "items": items,
+        "primary": primary if items else None,
+    }
+
+
+def _sell_item(
+    row: dict[str, Any],
+    verdict: dict[str, Any],
+    phase: str,
+) -> dict[str, Any] | None:
+    """Decide whether a held name should be sold, trimmed, or held."""
+    code = normalize_code(row.get("code"))
+    name = str(row.get("name") or code)
+    last = row.get("last")
+    buy = float(row.get("buy_price") or 0)
+    if not code or not buy:
+        return None
+    etf = _is_etf_code(code)
+    digits = 3 if etf else 2
+    high = row.get("high")
+    low = row.get("low")
+    pct = row.get("last_pct")
+    pnl_pct = row.get("pnl_pct")
+    if pnl_pct is None and last is not None and buy:
+        pnl_pct = (float(last) / buy - 1.0) * 100.0
+    pullback = None
+    if last is not None and high not in (None, 0) and float(high) > 0:
+        pullback = (float(high) - float(last)) / float(high) * 100.0
+
+    stop = buy * (0.985 if etf else 0.97)
+    if low not in (None, 0) and float(low) < buy:
+        stop = max(float(low), buy * (0.98 if etf else 0.96))
+    target = buy * (1.03 if etf else 1.05)
+    if high not in (None, 0) and float(high) > target:
+        target = float(high) * (0.995 if etf else 0.99)
+
+    action = verdict.get("action") or ""
+    main_status = ((verdict.get("mainline") or {}).get("status")) or ""
+    soft_exit = action == "观望" or main_status == "退潮" or phase in ("恐慌", "高潮")
+
+    urgency = "hold"
+    ready = False
+    role_label = "继续持有"
+    sell_price = target
+    reason_parts: list[str] = []
+
+    if last is None:
+        role_label = "待行情"
+        reason_parts.append("尚无现价，先不判卖点")
+    elif float(last) <= stop or (pnl_pct is not None and pnl_pct <= (-1.5 if etf else -3.0)):
+        urgency = "stop"
+        ready = True
+        role_label = "止损卖出"
+        sell_price = float(last)
+        reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，触及止损带")
+    elif (
+        pnl_pct is not None
+        and pnl_pct >= (3.0 if etf else 5.0)
+        and pullback is not None
+        and pullback >= (0.8 if etf else 1.5)
+    ):
+        urgency = "take"
+        ready = True
+        role_label = "冲高回落止盈"
+        sell_price = float(last)
+        reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%")
+    elif pnl_pct is not None and pnl_pct >= (5.0 if etf else 8.0):
+        urgency = "take"
+        ready = True
+        role_label = "落袋为安"
+        sell_price = float(last)
+        reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，建议减仓或了结")
+    elif soft_exit and pnl_pct is not None and pnl_pct > 0.5:
+        urgency = "trim"
+        ready = True
+        role_label = "建议减仓"
+        sell_price = float(last)
+        reason_parts.append(f"主线转弱/相位偏热，浮盈 {_fmt_pct(pnl_pct)} 先减")
+    else:
+        role_label = "继续持有"
+        sell_price = target
+        reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，未到卖点，盯目标价")
+        if pullback is not None:
+            reason_parts.append(f"高点回撤 {pullback:.1f}%")
+
+    return {
+        "id": row.get("id"),
+        "kind": "etf" if etf else "stock",
+        "kind_label": "ETF" if etf else "个股",
+        "role_label": role_label,
+        "urgency": urgency,
+        "ready": ready,
+        "code": code,
+        "name": name,
+        "qty": int(row.get("qty") or 0),
+        "last": _px(last, digits),
+        "pct": None if pct is None else round(float(pct), 2),
+        "pnl_pct": None if pnl_pct is None else round(float(pnl_pct), 2),
+        "buy_price": _px(buy, digits),
+        "sell_price": _px(sell_price, digits),
+        "stop_price": _px(stop, digits),
+        "target_price": _px(target, digits),
+        "reason": "，".join(reason_parts),
+    }
+
+
 def decorate_positions(
     rows: list[dict[str, Any]], quotes: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
