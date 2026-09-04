@@ -43,6 +43,7 @@ from market_desk.db import (
     save_daily,
     upsert_session_segment,
 )
+from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
     build_review_payload,
@@ -283,6 +284,7 @@ class DeskEngine:
                 "verdict": verdict,
                 "session_segments": segments,
                 "mainline_switches": switches,
+                "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
                 "positions": positions,
                 "position_summary": position_summary(positions),
                 "sell_advice": build_sell_advice(positions, verdict, phase),
@@ -678,6 +680,7 @@ async def _enrich_board(
     card["tone"] = tone
     card["cluster"] = cluster_path(hist, zt_n)
     card["spark"] = spark_values(hist, zt_n)
+    card["hist"] = hist
     card["note"] = board_note(flags, leader_name, leader_boards, card.get("slot_name"), ice)
     card["focus"] = round(zt_n / max(len(zt), 1) * 100.0, 1) if zt else 0.0
     return card

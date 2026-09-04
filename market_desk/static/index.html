@@ -512,6 +512,34 @@
       color: var(--text); font-size: 13px;
     }
     .switch-list .t { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+    .life-grid {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px; margin-top: 10px;
+    }
+    .life-col {
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0e141c; padding: 10px;
+      min-height: 160px;
+    }
+    .life-col h3 {
+      margin: 0 0 8px; font-size: 13px; letter-spacing: 0.06em;
+      color: var(--muted); font-weight: 700;
+    }
+    .life-col.start h3 { color: var(--ferm); }
+    .life-col.run h3 { color: var(--ice); }
+    .life-col.end h3 { color: var(--warn); }
+    .life-item {
+      border: 1px solid var(--line); border-radius: 6px;
+      padding: 8px; margin-bottom: 8px; background: #121826;
+    }
+    .life-item .hd { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+    .life-item .nm { font-size: 14px; font-weight: 700; }
+    .life-item .spark { height: 22px; margin: 6px 0; }
+    .rev-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .rev-actions .rev-up {
+      background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;
+      border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
+    }
     .pos-form {
       display: grid;
       grid-template-columns: 90px 140px 90px 90px 1fr auto;
@@ -541,7 +569,7 @@
       border-radius: 4px; padding: 2px 8px; cursor: pointer;
     }
     @media (max-width: 1200px) {
-      .grid-top, .boards, .pin-row, .rev-sum { grid-template-columns: 1fr 1fr; }
+      .grid-top, .boards, .pin-row, .rev-sum, .life-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 700px) {
       .rec-prices { grid-template-columns: repeat(3, 1fr); }
@@ -617,6 +645,13 @@
     </section>
 
     <section class="tab-panel" id="panel-market" hidden>
+    <section class="card mid" style="margin-top:0">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        主线生命周期<button type="button" class="q" data-term="主线生命周期">?</button>
+      </h2>
+      <p class="meta" id="lifeNote">按近几日热点持续度划分启动 / 进行 / 退潮</p>
+      <div class="life-grid" id="lifeGrid"></div>
+    </section>
     <section class="grid-top">
       <article class="card">
         <h2>大盘相位<button type="button" class="q" id="phaseHelp" data-term="相位">?</button> · LIVE</h2>
@@ -746,7 +781,7 @@
             <tr>
               <th>日期</th><th>类型</th><th>名称</th><th>代码</th>
               <th>建议价</th><th>主线</th><th>相位</th>
-              <th>次日%</th><th>三日%</th><th>结果</th><th></th>
+              <th>次日%</th><th>三日%</th><th>结果</th><th>操作</th>
             </tr>
           </thead>
           <tbody id="revBody"></tbody>
@@ -1054,6 +1089,31 @@
       document.getElementById("etfs").innerHTML = (d.etfs || []).map(e =>
         `<span class="chip${e.stock_no_perm ? " perm" : ""}">${e.name} ${fmtPct(e.pct)}${e.stock_no_perm ? " · ETF可买" : ""}</span>`
       ).join("");
+      const life = d.mainline_lifecycle || {};
+      document.getElementById("lifeNote").textContent = life.note || "按近几日热点持续度划分启动 / 进行 / 退潮";
+      const lifeCard = (b) => {
+        const spark = (b.spark || []).map(h => `<i style="height:${Math.max(8, h)}%"></i>`).join("");
+        return `<article class="life-item">
+          <div class="hd">
+            <div class="nm">${b.name || "—"}</div>
+            <span class="tag ${tagClass(b.status)}">${termHtml(b.status || "观察")}</span>
+          </div>
+          <div class="meta">${b.headline || ""}</div>
+          <div class="spark">${spark}</div>
+          <div class="meta">${termHtml("聚集度")} ${b.cluster || (b.zt_n ?? 0)} · 热度日 ${b.hot_days ?? 0}</div>
+          <div class="meta" style="margin-top:4px">${termHtml("总龙头")} ${b.leader_name || "—"} ${b.leader_boards || 0}板 · ${fmtPct(b.pct)}</div>
+          <div class="note" style="margin-top:6px">${b.note || ""}</div>
+        </article>`;
+      };
+      const lifeCol = (cls, title, rows) => `
+        <div class="life-col ${cls}">
+          <h3>${title} · ${(rows || []).length}</h3>
+          ${(rows || []).map(lifeCard).join("") || `<div class="meta">暂无</div>`}
+        </div>`;
+      document.getElementById("lifeGrid").innerHTML =
+        lifeCol("start", "马上开始", life.starting) +
+        lifeCol("run", "进行中", life.ongoing) +
+        lifeCol("end", "快结束", life.ending);
       const cg = d.contagion || {};
       const cgEl = document.getElementById("contagion");
       cgEl.className = "contagion " + (cg.on ? "on" : "off");
@@ -1263,8 +1323,9 @@
         const d1 = r.outcome_day1_pct;
         const d3 = r.outcome_day3_pct;
         const skipped = !!Number(r.skipped || 0);
-        const label = skipped ? "未交易" : (r.outcome_label || "待隔日");
-        const pend = r.payload && r.payload.trend_pending ? " · 待自判" : "";
+        const confirmed = (r.note || "").includes("确认上升") || (r.payload && r.payload.trend_manual === "up");
+        const label = confirmed ? "已确认上升" : (skipped ? "未交易" : (r.outcome_label || "待隔日"));
+        const pend = (!confirmed && r.payload && r.payload.trend_pending) ? " · 待自判" : "";
         return `<tr>
           <td>${r.trade_date || ""}</td>
           <td>${typ}</td>
@@ -1277,10 +1338,10 @@
           <td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>
           <td>${label}${pend}</td>
           <td>
-            <button type="button" class="pos-del rev-skip" data-id="${r.id}" data-skipped="${skipped ? 0 : 1}">
-              ${skipped ? "恢复计入" : "未交易"}
-            </button>
-            <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
+            <div class="rev-actions">
+              <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}" title="确认为上升趋势">确认上升</button>
+              <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
+            </div>
           </td>
         </tr>`;
       }).join("") || `<tr><td colspan="11" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
@@ -1560,6 +1621,37 @@
       URL.revokeObjectURL(a.href);
     });
     document.getElementById("revBody").addEventListener("click", async (ev) => {
+      const up = ev.target.closest(".rev-up");
+      if (up) {
+        const code = up.getAttribute("data-code");
+        if (!code) return;
+        try {
+          const r = await fetch("/api/trend-override", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, verdict: "up" }),
+          });
+          if (!r.ok) {
+            alert("确认失败");
+            return;
+          }
+          // Also mark this signal note so the list shows the judgment.
+          const id = up.getAttribute("data-id");
+          if (id) {
+            await fetch("/api/review/" + id, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ note: "确认上升趋势", skipped: false }),
+            });
+          }
+          reviewLoadedAt = 0;
+          await loadReview(true);
+          await tick();
+        } catch (e) {
+          alert("确认失败");
+        }
+        return;
+      }
       const del = ev.target.closest(".rev-del");
       if (del) {
         const id = del.getAttribute("data-id");
@@ -1570,17 +1662,6 @@
         await loadReview(true);
         return;
       }
-      const btn = ev.target.closest(".rev-skip");
-      if (!btn) return;
-      const id = btn.getAttribute("data-id");
-      const skipped = btn.getAttribute("data-skipped") === "1";
-      await fetch("/api/review/" + id, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skipped }),
-      });
-      reviewLoadedAt = 0;
-      await loadReview(true);
     });
 
     const pop = document.getElementById("termPop");
