@@ -423,6 +423,7 @@
       background: rgba(0,0,0,.55);
       display: flex; justify-content: flex-end;
     }
+    .chart-mask[hidden] { display: none !important; }
     .chart-drawer {
       width: min(460px, 100%); height: 100%;
       background: #0e141c; border-left: 1px solid var(--line);
@@ -1463,6 +1464,9 @@
     document.getElementById("chartClose").addEventListener("click", closeChart);
     document.getElementById("chartMask").addEventListener("click", (ev) => {
       if (ev.target.id === "chartMask") closeChart();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") closeChart();
     });
     document.getElementById("chartRefresh").addEventListener("click", () => {
       if (chartCode) openChart(chartCode);
