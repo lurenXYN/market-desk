@@ -17,6 +17,14 @@ DEFAULTS: dict[str, Any] = {
     "switch_min_seconds": int(cfg.MAINLINE_SWITCH_MIN_SECONDS),
     "toast_enabled": bool(cfg.TOAST_ENABLED),
     "toast_cooldown": int(cfg.TOAST_COOLDOWN_SECONDS),
+    # all | traded_watch | watch_only | off
+    "alert_mode": "all",
+    "daily_loss_cap_pct": -3.0,
+    "cool_after_losses": 3,
+    "target_total_cost": float(cfg.POSITION_MAX_TOTAL_COST),
+    "equal_weight_target": True,
+    "batch_plan": True,
+    "auto_backup": True,
 }
 
 
@@ -67,4 +75,14 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["switch_min_seconds"] = max(30, min(900, int(out["switch_min_seconds"])))
     out["toast_enabled"] = bool(out["toast_enabled"])
     out["toast_cooldown"] = max(30, min(900, int(out["toast_cooldown"])))
+    mode = str(out.get("alert_mode") or "all").strip().lower()
+    if mode not in ("all", "traded_watch", "watch_only", "off"):
+        mode = "all"
+    out["alert_mode"] = mode
+    out["daily_loss_cap_pct"] = max(-20.0, min(0.0, float(out["daily_loss_cap_pct"])))
+    out["cool_after_losses"] = max(1, min(10, int(out["cool_after_losses"])))
+    out["target_total_cost"] = max(1000.0, min(5_000_000.0, float(out["target_total_cost"])))
+    out["equal_weight_target"] = bool(out["equal_weight_target"])
+    out["batch_plan"] = bool(out["batch_plan"])
+    out["auto_backup"] = bool(out["auto_backup"])
     return out

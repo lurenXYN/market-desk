@@ -612,7 +612,7 @@ def _recommend_item(
         role_label = f"{kind_label} 主推" if role == "primary" else f"{kind_label} 备选"
     else:
         role_label = f"{kind_label} 盯回踩"
-    return {
+    item = {
         "kind": "etf" if etf else "stock",
         "kind_label": kind_label,
         "role": role,
@@ -631,6 +631,24 @@ def _recommend_item(
         "reason": reason,
         "qty": 100,
     }
+    item["batch_plan"] = _batch_plan_lots(item.get("buy_price") or item.get("last"), etf=etf)
+    return item
+
+
+def _batch_plan_lots(buy: float | None, *, etf: bool) -> list[dict[str, Any]] | None:
+    """Build a 1/2/3-lot buy plan when the batch_plan setting is enabled."""
+    from market_desk.settings import setting
+
+    if not bool(setting("batch_plan", True)):
+        return None
+    unit = 100
+    labels = ("试错", "确认", "加仓")
+    lots: list[dict[str, Any]] = []
+    for i, label in enumerate(labels, start=1):
+        qty = unit
+        cost = None if buy is None else round(float(buy) * qty, 2 if not etf else 3)
+        lots.append({"lot": i, "qty": qty, "label": label, "approx_cost": cost})
+    return lots
 
 
 def _wait_price(last: float | None, low: float | None, etf: bool) -> float | None:
@@ -943,13 +961,25 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
         POSITION_MAX_SINGLE_PCT,
         POSITION_MAX_TOTAL_COST,
     )
+    from market_desk.settings import setting
 
     base = position_summary(rows)
     market = float(base.get("market") or 0)
+    cost = float(base.get("cost") or 0)
+    target_cost = float(setting("target_total_cost", POSITION_MAX_TOTAL_COST))
+    equal_w = bool(setting("equal_weight_target", True))
+    loss_cap = float(setting("daily_loss_cap_pct", -3.0))
+    cool_n = int(setting("cool_after_losses", 3))
+    equal_share = round(100.0 / len(rows), 1) if equal_w and rows else None
     items: list[dict[str, Any]] = []
     for r in rows:
         mkt = float(r.get("market") or 0) if r.get("market") is not None else None
         weight = round(mkt / market * 100.0, 1) if market > 0 and mkt is not None else None
+        weight_dev = (
+            round(weight - equal_share, 1)
+            if weight is not None and equal_share is not None
+            else None
+        )
         items.append(
             {
                 "id": r.get("id"),
@@ -960,12 +990,35 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "pnl": r.get("pnl"),
                 "pnl_pct": r.get("pnl_pct"),
                 "weight_pct": weight,
+                "target_weight_pct": equal_share,
+                "weight_dev_pct": weight_dev,
                 "over_weight": bool(weight is not None and weight >= POSITION_MAX_SINGLE_PCT),
             }
         )
     items.sort(key=lambda x: float(x.get("weight_pct") or 0), reverse=True)
     winners = sum(1 for r in rows if (r.get("pnl_pct") or 0) > 0)
     losers = sum(1 for r in rows if (r.get("pnl_pct") or 0) < 0)
+    pnl_pct = base.get("pnl_pct")
+    target_dev = round((cost / target_cost - 1.0) * 100.0, 1) if target_cost > 0 else None
+    loss_cap_hit = bool(pnl_pct is not None and float(pnl_pct) <= loss_cap)
+    cool_hit = bool(losers >= cool_n)
+    tips: list[str] = []
+    if loss_cap_hit:
+        tips.append(
+            f"浮盈已触及单日亏损帽 {loss_cap:g}%（当前 {pnl_pct}%），建议停手、只减不加"
+        )
+    if cool_hit:
+        tips.append(f"浮亏标的 {losers} 只 ≥ 连亏降温阈值 {cool_n}，先冷静再开新仓")
+    if target_dev is not None and abs(target_dev) >= 15:
+        tips.append(f"总成本相对目标 {target_cost:.0f} 偏差 {target_dev:+.1f}%")
+    for it in items:
+        if it.get("weight_dev_pct") is not None and abs(float(it["weight_dev_pct"])) >= 12:
+            tips.append(
+                f"{it.get('name') or it.get('code')} 相对等权偏差 "
+                f"{float(it['weight_dev_pct']):+.1f}%"
+            )
+            if len(tips) >= 6:
+                break
     return {
         **base,
         "items": items,
@@ -977,6 +1030,14 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "max_single_pct": POSITION_MAX_SINGLE_PCT,
             "max_total_cost": POSITION_MAX_TOTAL_COST,
         },
+        "target_total_cost": target_cost,
+        "target_dev_pct": target_dev,
+        "equal_weight_target": equal_w,
+        "daily_loss_cap_pct": loss_cap,
+        "cool_after_losses": cool_n,
+        "loss_cap_hit": loss_cap_hit,
+        "cool_hit": cool_hit,
+        "tips": tips,
     }
 
 

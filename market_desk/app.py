@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -24,6 +24,7 @@ from market_desk.db import (
     import_backup_payload,
     load_positions,
     load_signal,
+    load_signals,
     load_watchlist,
     trim_position,
     update_signal_meta,
@@ -80,6 +81,13 @@ class SettingsIn(BaseModel):
     switch_min_seconds: int | None = None
     toast_enabled: bool | None = None
     toast_cooldown: int | None = None
+    alert_mode: str | None = None
+    daily_loss_cap_pct: float | None = None
+    cool_after_losses: int | None = None
+    target_total_cost: float | None = None
+    equal_weight_target: bool | None = None
+    batch_plan: bool | None = None
+    auto_backup: bool | None = None
 
 
 class TrendOverrideIn(BaseModel):
@@ -148,7 +156,7 @@ async def review() -> dict:
 
 
 @app.get("/api/chart/{code}")
-async def chart(code: str) -> dict:
+async def chart(code: str, signal_at: str | None = Query(default=None)) -> dict:
     """Return intraday + daily series and a Xueqiu deep-link for one ticker."""
     c = normalize_code(code)
     if len(c) != 6 or not c.isdigit():
@@ -176,6 +184,18 @@ async def chart(code: str) -> dict:
             if normalize_code(w.get("code")) == c:
                 name = str(w.get("name") or "")
                 break
+    sig = (signal_at or "").strip() or None
+    if not sig:
+        today = str(engine.snapshot.get("trade_date") or "")
+        for row in load_signals(limit=120):
+            if normalize_code(row.get("code")) != c:
+                continue
+            if today and str(row.get("trade_date") or "") != today:
+                continue
+            raw = str(row.get("signaled_at") or "").strip()
+            if raw:
+                sig = raw
+                break
     return {
         "ok": True,
         "code": c,
@@ -185,6 +205,7 @@ async def chart(code: str) -> dict:
         "trend": trend,
         "daily": bars,
         "minute": minutes,
+        "signal_at": sig,
     }
 
 

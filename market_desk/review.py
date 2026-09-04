@@ -16,6 +16,7 @@ from market_desk.db import (
 )
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
+from market_desk.settings import setting
 
 # In-memory last-price ticks for short-horizon ↑/↓ on the review panel.
 _PRICE_TICKS: dict[str, list[tuple[float, float]]] = {}
@@ -382,30 +383,77 @@ def classify_fill_execution(row: dict[str, Any]) -> str | None:
 
 def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Score how well fills followed the original price plan."""
+
+    def _score_group(items: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = {"in_band": 0, "chase": 0, "below": 0, "other": 0}
+        for row in items:
+            kind = classify_fill_execution(row)
+            if kind in counts:
+                counts[kind] += 1
+            elif kind:
+                counts["other"] += 1
+        n = sum(counts.values())
+        points = (
+            counts["in_band"] * 100
+            + counts["below"] * 90
+            + counts["other"] * 40
+            + counts["chase"] * 0
+        )
+        score = None if n == 0 else round(points / n, 1)
+        return {
+            "score": score,
+            "traded_buy_n": len(items),
+            "in_band_n": counts["in_band"],
+            "chase_n": counts["chase"],
+            "below_n": counts["below"],
+            "other_n": counts["other"],
+        }
+
     traded_buys = [
         r
         for r in rows
         if str(r.get("signal_type") or "") == "buy" and int(r.get("traded") or 0)
     ]
-    counts = {"in_band": 0, "chase": 0, "below": 0, "other": 0}
-    for row in traded_buys:
-        kind = classify_fill_execution(row)
-        if kind in counts:
-            counts[kind] += 1
-        elif kind:
-            counts["other"] += 1
-    n = sum(counts.values())
-    # Weight: in_band/below good, chase bad.
-    points = counts["in_band"] * 100 + counts["below"] * 90 + counts["other"] * 40 + counts["chase"] * 0
-    score = None if n == 0 else round(points / n, 1)
-    return {
-        "score": score,
-        "traded_buy_n": len(traded_buys),
-        "in_band_n": counts["in_band"],
-        "chase_n": counts["chase"],
-        "below_n": counts["below"],
-        "other_n": counts["other"],
+    etf = [r for r in traded_buys if str(r.get("kind") or "") == "etf"]
+    stock = [r for r in traded_buys if str(r.get("kind") or "") != "etf"]
+    overall = _score_group(traded_buys)
+    overall["by_kind"] = {
+        "etf": _score_group(etf),
+        "stock": _score_group(stock),
     }
+    return overall
+
+
+def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[dict[str, Any]]:
+    """List same-day buys that were skipped or never traded while price already ran."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("trade_date") or "") != trade_date:
+            continue
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        skipped = int(row.get("skipped") or 0)
+        traded = int(row.get("traded") or 0)
+        flags = row.get("price_flags") or []
+        miss = "miss_pullback" in flags or "未回踩" in str(row.get("price_mark") or "")
+        if not ((skipped and miss) or (not traded and not skipped and miss)):
+            continue
+        out.append(
+            {
+                "id": row.get("id"),
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "price": row.get("price"),
+                "live_last": row.get("live_last"),
+                "dev_pct": row.get("dev_pct"),
+                "skipped": skipped,
+                "traded": traded,
+                "price_mark": row.get("price_mark"),
+                "mainline": row.get("mainline"),
+                "signaled_at": row.get("signaled_at"),
+            }
+        )
+    return out
 
 
 def build_phase_hit_rates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -591,7 +639,30 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                     f"{name} {code} 现价 {last} ≈ 建议 {suggest}",
                 )
             )
-    return alerts
+    # Alert scope: all plans, or only traded / watchlist to cut toast noise.
+    mode = str(setting("alert_mode", "all") or "all")
+    if mode == "off":
+        return []
+    traded_codes = {
+        normalize_code(r.get("code"))
+        for r in load_signals(limit=120)
+        if str(r.get("trade_date") or "") == trade_date and int(r.get("traded") or 0)
+    }
+    watch_codes = {
+        normalize_code(r.get("code"))
+        for r in (snapshot.get("watchlist") or [])
+        if isinstance(r, dict)
+    }
+    filtered: list[tuple[str, str, str]] = []
+    for key, title, body in alerts:
+        code = key.rsplit(":", 1)[-1]
+        is_wl = key.startswith("wl:")
+        if mode == "watch_only" and not is_wl:
+            continue
+        if mode == "traded_watch" and not (is_wl or code in traded_codes or code in watch_codes):
+            continue
+        filtered.append((key, title, body))
+    return filtered
 
 
 def enrich_signals_with_live_marks(
@@ -710,6 +781,7 @@ def build_review_payload(
         [r for r in rows if str(r.get("trade_date") or "") == day]
     )
     summary["phase_hits"] = build_phase_hit_rates(rows)
+    summary["missed_buys"] = build_missed_buys(rows, trade_date=day)
     return {
         "ok": True,
         "signals": rows,

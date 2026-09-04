@@ -514,6 +514,24 @@
       background: #2a1010; color: #ffb4b4; font-size: 13px;
     }
     .data-banner.on { display: block; }
+    .data-banner.warn {
+      display: block; border-color: #8b6a2a; background: #2a2210; color: #ffd58a;
+    }
+    .data-banner.ok-soft {
+      display: block; border-color: #2f5a3a; background: #102018; color: #a7f3d0;
+    }
+    .rec-actions { display: flex; gap: 6px; margin-top: 8px; }
+    .rec-actions .pos-btn { flex: 1; margin-top: 0; width: auto; }
+    .rec-batch {
+      margin-top: 6px; font-size: 11px; color: var(--muted); line-height: 1.45;
+    }
+    .rev-missed {
+      margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: #141018; font-size: 13px;
+    }
+    .rev-missed .hd { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .rev-missed li { margin: 2px 0; }
+    .risk-tips { margin-top: 6px; color: var(--warn); font-size: 12px; line-height: 1.45; }
     .seg-strip {
       display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px; margin-top: 12px;
@@ -729,10 +747,31 @@
         <label>主线迟滞分<input id="setSticky" type="number" min="0" max="40" step="0.5" /></label>
         <label>切换去抖秒<input id="setSwitch" type="number" min="30" max="900" /></label>
         <label>通知冷却秒<input id="setToastCd" type="number" min="30" max="900" /></label>
+        <label>提醒范围
+          <select id="setAlertMode">
+            <option value="all">全部计划</option>
+            <option value="traded_watch">已交易+自选</option>
+            <option value="watch_only">仅自选</option>
+            <option value="off">关闭价带提醒</option>
+          </select>
+        </label>
+        <label>单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
+        <label>连亏降温只数<input id="setCoolN" type="number" min="1" max="10" /></label>
+        <label>目标总成本<input id="setTargetCost" type="number" min="1000" step="1000" /></label>
         <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
           <input id="setToastOn" type="checkbox" /> 开启通知
         </label>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
+          <input id="setEqualW" type="checkbox" /> 等权目标
+        </label>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
+          <input id="setBatch" type="checkbox" /> 分批计划
+        </label>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
+          <input id="setAutoBackup" type="checkbox" /> 收盘自动备份
+        </label>
       </div>
+      <div class="meta" style="margin-top:8px">快捷键：1–6 切页 · 复盘页 T 确认首条未交易 · Esc 关图</div>
       <div class="ft" style="margin-top:10px">
         <button type="button" class="rev-col-btn" id="settingsSave">保存</button>
       </div>
@@ -924,6 +963,7 @@
         <p class="rev-note">当日信号自动落库。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。进入可买带或触及止损/不追会弹系统通知。</p>
         <div class="rev-today" id="revToday"></div>
         <div class="rev-exec" id="revExec"></div>
+        <div class="rev-missed" id="revMissed"></div>
         <div class="rev-phase" id="revPhase"></div>
         <div class="rev-hist" id="revHist"></div>
         <div class="rev-sum" id="revSum"></div>
@@ -1018,12 +1058,15 @@
       const prefix = /^[569]/.test(c) ? "SH" : "SZ";
       return `https://xueqiu.com/S/${prefix}${c}`;
     };
-    const tickerHtml = (name, code, extra) => {
+    const tickerHtml = (name, code, extra, opts) => {
       const c = String(code || "").replace(/\D/g, "");
       const label = name || c || "—";
       if (!c) return label;
       const xq = xueqiuUrl(c);
-      return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}" title="点开看图，可跳雪球">${label}</a>`
+      const sig = opts && opts.signal_at
+        ? ` data-signal-at="${String(opts.signal_at).replace(/"/g, "")}"`
+        : "";
+      return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig} title="点开看图，可跳雪球">${label}</a>`
         + `<span class="meta"> ${c}${extra || ""}</span>`
         + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
     };
@@ -1060,12 +1103,27 @@
         trendHtml = `<div class="trend-ok">日线 · ${it.trend_manual === "up" ? "自判上升趋势" : "上升趋势"}（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>
           ${it.trend_manual === "up" ? `<div class="trend-judge"><button type="button" class="down-btn js-trend" data-code="${it.code || ""}" data-verdict="down">改判非上升</button><span></span></div>` : ""}`;
       }
-      const actionHtml = (trendBad || pending)
-        ? ""
-        : `<button type="button" class="pos-btn rec-pos"
+      const pinBtn = `<button type="button" class="pos-btn rec-pin"
             data-code="${it.code || ""}"
             data-name="${it.name || ""}"
-            data-price="${buy ?? ""}">按建议价记账</button>`;
+            data-suggest="${buy ?? ""}"
+            data-stop="${it.stop_price ?? ""}"
+            data-chase="${it.chase_price ?? ""}">钉自选</button>`;
+      const actionHtml = (trendBad || pending)
+        ? `<div class="rec-actions">${pinBtn}</div>`
+        : `<div class="rec-actions">
+            <button type="button" class="pos-btn rec-pos"
+              data-code="${it.code || ""}"
+              data-name="${it.name || ""}"
+              data-price="${buy ?? ""}">按建议价记账</button>
+            ${pinBtn}
+          </div>`;
+      const batch = (it.batch_plan || []).map((b) =>
+        `${b.lot}·${b.label}${b.qty}股${b.approx_cost != null ? "≈" + b.approx_cost : ""}`
+      ).join(" → ");
+      const batchHtml = batch
+        ? `<div class="rec-batch"><button type="button" class="q" data-term="分批计划">?</button> 分批 ${batch}</div>`
+        : "";
       const cardCls = [
         "rec-card",
         wait ? "wait" : "",
@@ -1084,6 +1142,7 @@
           <div class="chase"><div class="lab">不追</div><div class="val">${fmtPx(it.chase_price, kind)}</div></div>
         </div>
         <div class="rec-why">${it.reason || ""}</div>
+        ${batchHtml}
         ${actionHtml}
       </article>`;
     };
@@ -1224,17 +1283,28 @@
       document.getElementById("stamp").textContent =
         (d.live ? "盘中 " : "停源 ") + (d.updated_at || "") +
         (d.live ? (" · " + (d.refresh_seconds || 20) + "秒一刷") : " · 午休/收盘不打行情") +
+        (d.trading_day === false ? " · 非交易日" : "") +
         (d.warnings && d.warnings.length ? " · 部分源失败" : "");
       document.getElementById("liveDot").className = "dot" + (d.live ? " on" : "");
       const warnEl = document.getElementById("dataBanner");
+      const health = d.health || {};
       const warns = [];
-      if (d.warnings && d.warnings.length) warns.push("行情源异常：" + d.warnings.join("、"));
+      if (health.score != null) warns.push(`健康度 ${health.score}`);
+      (health.tips || []).forEach((t) => warns.push(t));
+      if (d.warnings && d.warnings.length && !(health.tips || []).length) {
+        warns.push("行情源异常：" + d.warnings.join("、"));
+      }
       if (!d.ok && d.error) warns.push(String(d.error));
-      if (d.live && Array.isArray(d.etfs) && d.etfs.length === 0) warns.push("ETF 报价为空，可能腾讯源异常");
-      if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0) warns.push("热点板块为空，东财板块源可能失败");
+      if (d.live && Array.isArray(d.etfs) && d.etfs.length === 0 && !(health.tips || []).some((t) => t.includes("ETF"))) {
+        warns.push("ETF 报价为空，可能腾讯源异常");
+      }
+      if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0 && !(health.tips || []).some((t) => t.includes("热点"))) {
+        warns.push("热点板块为空，东财板块源可能失败");
+      }
       if (warns.length) {
-        warnEl.className = "data-banner on";
-        warnEl.textContent = "⚠ " + warns.join(" · ");
+        const lvl = health.level || (d.warnings && d.warnings.length ? "bad" : "warn");
+        warnEl.className = "data-banner " + (lvl === "ok" ? "ok-soft" : (lvl === "warn" ? "warn" : "on"));
+        warnEl.innerHTML = `⚠ ${warns.join(" · ")} <button type="button" class="q" data-term="健康度">?</button>`;
       } else {
         warnEl.className = "data-banner";
         warnEl.textContent = "";
@@ -1392,16 +1462,25 @@
         `<span>浮盈 <b class="${pnlCls}">${fmtMoney(sum.pnl)} ${sum.pnl_pct == null ? "" : "(" + (sum.pnl_pct > 0 ? "+" : "") + sum.pnl_pct + "%)"}</b></span>` +
         riskNote;
       const caps = risk.caps || {};
+      const tipHtml = (risk.tips || []).length
+        ? `<div class="risk-tips">${(risk.tips || []).map((t) => `· ${t}`).join("<br/>")}</div>`
+        : "";
+      const targetBit = risk.target_total_cost != null
+        ? ` · 目标成本 ${fmtMoney(risk.target_total_cost)}${risk.target_dev_pct == null ? "" : "（偏差 " + (risk.target_dev_pct > 0 ? "+" : "") + risk.target_dev_pct + "%）"}`
+        : "";
       document.getElementById("riskBox").innerHTML =
         `<div class="hd">风控总览<button type="button" class="q" data-term="风控总览">?</button> · `
         + `盈 ${risk.winners ?? 0} / 亏 ${risk.losers ?? 0} / 平 ${risk.flat ?? 0}`
-        + ` · 软上限 只数≤${caps.max_names ?? "—"} 单票≤${caps.max_single_pct ?? "—"}% 总成本≤${caps.max_total_cost ?? "—"}</div>`
+        + ` · 软上限 只数≤${caps.max_names ?? "—"} 单票≤${caps.max_single_pct ?? "—"}% 总成本≤${caps.max_total_cost ?? "—"}`
+        + `${targetBit}</div>`
+        + tipHtml
         + ((risk.items || []).length
-          ? `<table><thead><tr><th>名称</th><th>占比</th><th>浮盈%</th><th>市值</th></tr></thead><tbody>`
+          ? `<table><thead><tr><th>名称</th><th>占比</th><th>等权偏</th><th>浮盈%</th><th>市值</th></tr></thead><tbody>`
             + (risk.items || []).map((it) =>
               `<tr class="${it.over_weight ? "warn" : ""}">
                 <td>${it.name || it.code}</td>
                 <td class="${it.over_weight ? "warn" : ""}">${it.weight_pct == null ? "—" : it.weight_pct + "%"}</td>
+                <td>${it.weight_dev_pct == null ? "—" : ((it.weight_dev_pct > 0 ? "+" : "") + it.weight_dev_pct + "%")}</td>
                 <td class="${(it.pnl_pct || 0) >= 0 ? "up" : "down"}">${it.pnl_pct == null ? "—" : ((it.pnl_pct > 0 ? "+" : "") + it.pnl_pct + "%")}</td>
                 <td>${fmtMoney(it.market)}</td>
               </tr>`).join("")
@@ -1432,6 +1511,7 @@
     let cycleSel = null;
     let reviewLoadedAt = 0;
     let chartCode = "";
+    let chartSignalAt = "";
 
     function sparkSvg(values, opts) {
       const pts = (values || []).map(Number).filter((v) => !Number.isNaN(v));
@@ -1451,25 +1531,45 @@
       let html = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`;
       html += line(pts, opts && opts.color || "#60a5fa", 1.8);
       overlays.forEach((o) => { html += line(o.values, o.color || "#34d399", o.width || 1.2); });
+      const mi = opts && opts.markerIndex;
+      if (mi != null && mi >= 0 && mi < pts.length) {
+        const x = xAt(mi, pts.length).toFixed(1);
+        html += `<line x1="${x}" x2="${x}" y1="${pad}" y2="${h - pad}" stroke="#f87171" stroke-width="1.4" stroke-dasharray="3 2"/>`;
+        html += `<text x="${x}" y="${pad + 10}" fill="#f87171" font-size="10">信号</text>`;
+      }
       html += `</svg>`;
       return html;
     }
 
     function paintChart(payload) {
       const trend = (payload && payload.trend) || {};
+      const sig = payload && payload.signal_at;
       document.getElementById("chartTitle").textContent =
         `${payload.name || "—"} · ${payload.symbol || payload.code || ""}`;
       document.getElementById("chartMeta").textContent =
         `日线 ${trend.label || "—"}` +
         (trend.ma5 != null ? ` · MA5 ${trend.ma5}` : "") +
-        (trend.ma20 != null ? ` · MA20 ${trend.ma20}` : "");
+        (trend.ma20 != null ? ` · MA20 ${trend.ma20}` : "") +
+        (sig ? ` · 信号 ${String(sig).slice(11, 16) || sig}` : "");
       const xq = payload.xueqiu_url || xueqiuUrl(payload.code);
       const a = document.getElementById("chartXq");
       a.href = xq || "#";
       a.textContent = xq ? `雪球看盘 · ${payload.symbol || ""}` : "雪球看盘";
-      const minutes = (payload.minute || []).map((x) => x.price);
+      const minuteRows = payload.minute || [];
+      const minutes = minuteRows.map((x) => x.price);
+      let markerIndex = null;
+      if (sig) {
+        const m = String(sig).match(/(\d{2}:\d{2})/);
+        const hhmm = m ? m[1] : "";
+        if (hhmm) {
+          for (let i = 0; i < minuteRows.length; i++) {
+            const t = String(minuteRows[i].time || "");
+            if (t.includes(hhmm)) { markerIndex = i; break; }
+          }
+        }
+      }
       document.getElementById("chartMinute").innerHTML = sparkSvg(minutes, {
-        color: "#34d399", empty: "分时暂无数据（休市或源失败）",
+        color: "#34d399", empty: "分时暂无数据（休市或源失败）", markerIndex,
       });
       const closes = (payload.daily || []).map((x) => x.close);
       const ma = (n) => closes.map((_, i) => {
@@ -1489,10 +1589,11 @@
       });
     }
 
-    async function openChart(code, name) {
+    async function openChart(code, name, signalAt) {
       const c = String(code || "").replace(/\D/g, "");
       if (!c) return;
       chartCode = c;
+      chartSignalAt = signalAt || "";
       const mask = document.getElementById("chartMask");
       mask.hidden = false;
       document.getElementById("chartTitle").textContent = `${name || c} · ${c}`;
@@ -1504,10 +1605,12 @@
       a.href = xq;
       a.textContent = `雪球看盘 · ${xq.split("/").pop()}`;
       try {
-        const r = await fetch("/api/chart/" + c);
+        const q = chartSignalAt ? ("?signal_at=" + encodeURIComponent(chartSignalAt)) : "";
+        const r = await fetch("/api/chart/" + c + q);
         const d = await r.json();
         if (!d.ok) throw new Error("bad");
         if (name && !d.name) d.name = name;
+        if (chartSignalAt && !d.signal_at) d.signal_at = chartSignalAt;
         paintChart(d);
       } catch (e) {
         document.getElementById("chartMeta").textContent = "拉取失败，仍可点雪球看盘";
@@ -1637,7 +1740,7 @@
           ? `<span class="rev-type-sell">卖</span>`
           : ctx.typ;
       }
-      if (col === "name") return `${tickerHtml(r.name, r.code)}${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
+      if (col === "name") return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
       if (col === "code") return r.code || "";
       if (col === "price") return `${r.price ?? "—"}${ctx.devHtml}`;
       if (col === "fill") {
@@ -1694,11 +1797,26 @@
         tcell("主线切换", today.switch_n ?? 0),
       ].join("");
       const ex = sum.exec || today.exec || {};
+      const by = ex.by_kind || {};
+      const etfEx = by.etf || {};
+      const stkEx = by.stock || {};
       document.getElementById("revExec").innerHTML =
         `<div class="hd">计划执行分<button type="button" class="q" data-term="计划执行分">?</button></div>`
         + `执行分 <b>${ex.score == null ? "—" : ex.score}</b> · 已成交买 ${ex.traded_buy_n ?? 0}`
         + ` · 价带内 ${ex.in_band_n ?? 0} · 追高 ${ex.chase_n ?? 0}`
-        + ` · 更低更好 ${ex.below_n ?? 0} · 其他 ${ex.other_n ?? 0}`;
+        + ` · 更低更好 ${ex.below_n ?? 0} · 其他 ${ex.other_n ?? 0}`
+        + `<div class="meta" style="margin-top:4px">ETF ${etfEx.score == null ? "—" : etfEx.score}（${etfEx.traded_buy_n ?? 0}）`
+        + ` · 个股 ${stkEx.score == null ? "—" : stkEx.score}（${stkEx.traded_buy_n ?? 0}）</div>`;
+      const missed = sum.missed_buys || [];
+      document.getElementById("revMissed").innerHTML = missed.length
+        ? (`<div class="hd">漏买清单<button type="button" class="q" data-term="漏买清单">?</button> · ${missed.length}</div>`
+          + `<ul style="margin:0;padding-left:18px">` + missed.map((m) =>
+            `<li>${tickerHtml(m.name, m.code, "", { signal_at: m.signaled_at || "" })}`
+            + ` 建议 ${m.price ?? "—"} · 现 ${m.live_last ?? "—"}`
+            + `${m.dev_pct == null ? "" : " · 偏离 " + ((m.dev_pct > 0 ? "+" : "") + Number(m.dev_pct).toFixed(2) + "%")}`
+            + ` · ${m.skipped ? "已跳过" : "未点已交易"} · ${m.price_mark || "未回踩上行"}</li>`
+          ).join("") + `</ul>`)
+        : `<div class="hd">漏买清单<button type="button" class="q" data-term="漏买清单">?</button></div><span class="meta">今日暂无「未交易且未回踩上行」项</span>`;
       const ph = sum.phase_hits || [];
       document.getElementById("revPhase").innerHTML = ph.length
         ? (`<div class="hd">相位 × 命中率<button type="button" class="q" data-term="相位命中">?</button></div>`
@@ -1929,14 +2047,45 @@
         return;
       }
       const btn = ev.target.closest(".rec-pos");
-      if (!btn) return;
-      const form = document.getElementById("posForm");
-      form.code.value = btn.dataset.code || "";
-      form.name.value = btn.dataset.name || "";
-      form.buy_price.value = btn.dataset.price || "";
-      if (!form.qty.value) form.qty.value = "100";
-      applyMain("pos");
-      form.qty.focus();
+      if (btn) {
+        const form = document.getElementById("posForm");
+        form.code.value = btn.dataset.code || "";
+        form.name.value = btn.dataset.name || "";
+        form.buy_price.value = btn.dataset.price || "";
+        if (!form.qty.value) form.qty.value = "100";
+        applyMain("pos");
+        form.qty.focus();
+        return;
+      }
+      const pin = ev.target.closest(".rec-pin");
+      if (!pin) return;
+      const numOrNull = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      };
+      try {
+        const r = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code: pin.dataset.code || "",
+            name: pin.dataset.name || "",
+            suggest_price: numOrNull(pin.dataset.suggest),
+            stop_price: numOrNull(pin.dataset.stop),
+            chase_price: numOrNull(pin.dataset.chase),
+            note: "从推荐钉入",
+          }),
+        });
+        if (!r.ok) {
+          alert("钉自选失败");
+          return;
+        }
+        pin.textContent = "已钉";
+        pin.disabled = true;
+        await tick();
+      } catch (e) {
+        alert("钉自选失败");
+      }
     });
     document.getElementById("sellbox").addEventListener("click", (ev) => {
       if (!ev.target.closest(".sell-go")) return;
@@ -2059,17 +2208,33 @@
       const hit = ev.target.closest("a.js-chart");
       if (!hit) return;
       ev.preventDefault();
-      openChart(hit.dataset.code, hit.dataset.name);
+      openChart(hit.dataset.code, hit.dataset.name, hit.dataset.signalAt || hit.getAttribute("data-signal-at") || "");
     });
     document.getElementById("chartClose").addEventListener("click", closeChart);
     document.getElementById("chartMask").addEventListener("click", (ev) => {
       if (ev.target.id === "chartMask") closeChart();
     });
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") closeChart();
+      if (ev.key === "Escape") {
+        closeChart();
+        return;
+      }
+      const tag = ((ev.target && ev.target.tagName) || "").toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (ev.target && ev.target.isContentEditable)) {
+        return;
+      }
+      const tabMap = { "1": "desk", "2": "market", "3": "boards", "4": "watch", "5": "pos", "6": "review" };
+      if (tabMap[ev.key]) {
+        applyMain(tabMap[ev.key]);
+        return;
+      }
+      if ((ev.key === "t" || ev.key === "T") && currentMain === "review") {
+        const btn = document.querySelector("#revBody .rev-trade:not(.on)");
+        if (btn) btn.click();
+      }
     });
     document.getElementById("chartRefresh").addEventListener("click", () => {
-      if (chartCode) openChart(chartCode);
+      if (chartCode) openChart(chartCode, "", chartSignalAt);
     });
     function deskFileDate() {
       const d = (lastData && lastData.trade_date)
@@ -2097,6 +2262,13 @@
         document.getElementById("setSwitch").value = s.switch_min_seconds ?? 180;
         document.getElementById("setToastCd").value = s.toast_cooldown ?? 180;
         document.getElementById("setToastOn").checked = !!s.toast_enabled;
+        document.getElementById("setAlertMode").value = s.alert_mode || "all";
+        document.getElementById("setLossCap").value = s.daily_loss_cap_pct ?? -3;
+        document.getElementById("setCoolN").value = s.cool_after_losses ?? 3;
+        document.getElementById("setTargetCost").value = s.target_total_cost ?? 50000;
+        document.getElementById("setEqualW").checked = s.equal_weight_target !== false;
+        document.getElementById("setBatch").checked = s.batch_plan !== false;
+        document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
       } catch (e) {}
       panel.hidden = false;
     }
@@ -2115,6 +2287,13 @@
         switch_min_seconds: Number(document.getElementById("setSwitch").value),
         toast_cooldown: Number(document.getElementById("setToastCd").value),
         toast_enabled: !!document.getElementById("setToastOn").checked,
+        alert_mode: document.getElementById("setAlertMode").value,
+        daily_loss_cap_pct: Number(document.getElementById("setLossCap").value),
+        cool_after_losses: Number(document.getElementById("setCoolN").value),
+        target_total_cost: Number(document.getElementById("setTargetCost").value),
+        equal_weight_target: !!document.getElementById("setEqualW").checked,
+        batch_plan: !!document.getElementById("setBatch").checked,
+        auto_backup: !!document.getElementById("setAutoBackup").checked,
       };
       const r = await fetch("/api/settings", {
         method: "POST",
@@ -2215,7 +2394,7 @@
       const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "market-desk-signals.csv";
+      a.download = `market-desk-signals-${deskFileDate()}.csv`;
       a.click();
       URL.revokeObjectURL(a.href);
     });
@@ -2230,7 +2409,7 @@
         const blob = new Blob([d.markdown], { type: "text/markdown;charset=utf-8" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "market-desk-daily.md";
+        a.download = `market-desk-daily-${deskFileDate()}.md`;
         a.click();
         URL.revokeObjectURL(a.href);
         try {
@@ -2250,7 +2429,7 @@
         const blob = new Blob([JSON.stringify(d.backup || {}, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "market-desk-backup.json";
+        a.download = `market-desk-backup-${deskFileDate()}.json`;
         a.click();
         URL.revokeObjectURL(a.href);
       } catch (e) {

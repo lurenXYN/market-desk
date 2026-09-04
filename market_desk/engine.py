@@ -23,6 +23,8 @@ from market_desk.config import (
     ICE_BOARD_COUNT,
     PIN_INDUSTRY_ALIASES,
 )
+from market_desk.calendar import is_trading_day
+from market_desk.backup_store import write_auto_backup
 from market_desk.settings import setting
 from market_desk.db import (
     init_db,
@@ -162,13 +164,19 @@ class DeskEngine:
             live = _is_session(now)
             today = now.strftime("%Y-%m-%d")
             after_close = (
-                _is_weekday(now) and _minutes(now) >= 15 * 60 + 5 and self._eod_date != today
+                is_trading_day(now) and _minutes(now) >= 15 * 60 + 5 and self._eod_date != today
             )
             if first or live or after_close:
                 try:
                     await self.refresh()
                     if after_close:
                         self._eod_date = today
+                        if bool(setting("auto_backup", True)):
+                            try:
+                                path = write_auto_backup(trade_date=today)
+                                log.info("auto backup written %s", path)
+                            except Exception:
+                                log.exception("auto backup failed")
                 except Exception:
                     log.exception("refresh failed")
                     self.snapshot["ok"] = False
@@ -177,6 +185,7 @@ class DeskEngine:
             elif self.snapshot.get("ok"):
                 self.snapshot["live"] = False
                 self.snapshot["polling"] = False
+                self.snapshot["trading_day"] = is_trading_day(now)
             await asyncio.sleep(
                 int(setting("refresh_seconds", 20)) if live else int(setting("idle_seconds", 60))
             )
@@ -291,6 +300,7 @@ class DeskEngine:
                 "trade_date": trade_date_dash,
                 "live": _is_session(now),
                 "polling": _is_session(now),
+                "trading_day": is_trading_day(now),
                 "refresh_seconds": int(setting("refresh_seconds", 20)),
                 "phase": phase,
                 "temperature": temperature,
@@ -319,6 +329,7 @@ class DeskEngine:
                 "sell_advice": build_sell_advice(positions, verdict, phase),
                 "glossary": GLOSSARY,
             }
+            payload["health"] = _build_health(now, errors, updated_at, payload)
             payload["deltas"] = build_deltas(payload, prev)
             self._emit_toasts(prev, payload)
             try:
@@ -502,7 +513,7 @@ class DeskEngine:
     ) -> list[dict[str, Any]]:
         cursor = now.date() - timedelta(days=1)
         for _ in range(10):
-            if cursor.weekday() >= 5:
+            if not is_trading_day(cursor):
                 cursor -= timedelta(days=1)
                 continue
             key = cursor.strftime("%Y%m%d")
@@ -798,10 +809,62 @@ def _is_weekday(now: datetime) -> bool:
 
 
 def _is_session(now: datetime) -> bool:
+    """Return True during A-share continuous auction on a trading day."""
+    if not is_trading_day(now):
+        return False
     minutes = _minutes(now)
     morning = 9 * 60 + 15 <= minutes <= 11 * 60 + 30
     afternoon = 13 * 60 <= minutes <= 15 * 60 + 5
-    return _is_weekday(now) and (morning or afternoon)
+    return morning or afternoon
+
+
+def _build_health(
+    now: datetime,
+    errors: list[str],
+    updated_at: str | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble a visible data-health strip for the dashboard banner."""
+    failed = list(errors or [])
+    live = bool(payload.get("live"))
+    trading = bool(payload.get("trading_day"))
+    tips: list[str] = []
+    score = 100
+    if not trading:
+        tips.append("今日非交易日（周末或节假日），不刷盘中行情")
+        score -= 5
+    if failed:
+        score -= min(60, 15 * len(failed))
+        tips.append("行情源异常：" + "、".join(failed[:6]))
+    if live and not (payload.get("etfs") or []):
+        score -= 15
+        tips.append("ETF 报价为空")
+    if live and not (payload.get("hot_boards") or []):
+        score -= 15
+        tips.append("热点板块为空")
+    if live and not (payload.get("indices") or []):
+        score -= 10
+        tips.append("指数为空")
+    stale_sec = None
+    if updated_at:
+        try:
+            ts = datetime.strptime(updated_at[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN_TZ)
+            stale_sec = max(0, int((now - ts).total_seconds()))
+            if live and stale_sec > int(setting("refresh_seconds", 20)) * 3:
+                score -= 20
+                tips.append(f"快照偏旧约 {stale_sec}s")
+        except Exception:
+            stale_sec = None
+    score = max(0, min(100, score))
+    level = "ok" if score >= 80 else ("warn" if score >= 50 else "bad")
+    return {
+        "score": score,
+        "level": level,
+        "trading_day": trading,
+        "failed_sources": failed,
+        "stale_seconds": stale_sec,
+        "tips": tips,
+    }
 
 
 def _event_line(phase: str, metrics: dict[str, Any], hot: list[dict[str, Any]]) -> str:
