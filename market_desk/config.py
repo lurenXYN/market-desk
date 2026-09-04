@@ -46,6 +46,17 @@ ETF_WATCH = [
     ("sh588000", "588000", "科创50ETF"),
 ]
 
+# Major A-share indices (Tencent symbol, display code, name).
+INDEX_WATCH = [
+    ("sh000001", "000001", "上证指数"),
+    ("sz399001", "399001", "深证成指"),
+    ("sz399006", "399006", "创业板指"),
+    ("sh000688", "000688", "科创50"),
+    ("sh000300", "000300", "沪深300"),
+    ("sh000905", "000905", "中证500"),
+    ("sh000016", "000016", "上证50"),
+]
+
 # These two ETFs are tradable. ChiNext / STAR stocks are not recommended.
 CHINEXT_STAR_ETFS = frozenset({"159915", "588000"})
 

@@ -223,9 +223,77 @@ def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_review_payload(limit: int = 60) -> dict[str, Any]:
-    """Load recent signals and summary without network I/O."""
+def enrich_signals_with_live_marks(
+    rows: list[dict[str, Any]],
+    quotes: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flag signals whose live price hit stop or chase levels."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        code = normalize_code(item.get("code"))
+        q = quotes.get(code) or {}
+        last = num(q.get("price"))
+        stop = num(payload.get("stop_price"))
+        chase = num(payload.get("chase_price"))
+        wait = num(payload.get("wait_price"))
+        flags: list[str] = []
+        labels: list[str] = []
+        if last is not None and stop is not None and last <= stop:
+            flags.append("stop_hit")
+            labels.append("触及止损")
+        if last is not None and chase is not None and last >= chase:
+            flags.append("chase_hit")
+            labels.append("触及不追")
+        if (
+            last is not None
+            and wait is not None
+            and stop is not None
+            and stop < last < wait
+            and "stop_hit" not in flags
+            and "chase_hit" not in flags
+        ):
+            flags.append("near_wait")
+            labels.append("回踩区间")
+        if (
+            last is not None
+            and wait is not None
+            and chase is not None
+            and wait <= last < chase
+            and "chase_hit" not in flags
+            and "stop_hit" not in flags
+        ):
+            flags.append("in_band")
+            labels.append("建议价附近")
+        item["live_last"] = last
+        item["live_pct"] = num(q.get("pct"))
+        item["price_flags"] = flags
+        item["price_mark"] = " / ".join(labels) if labels else ""
+        # Buying caution for same-day signals.
+        if str(item.get("signal_type") or "") == "buy":
+            if "stop_hit" in flags:
+                item["buy_caution"] = "现价已到止损带，当日不宜再按原计划买"
+            elif "chase_hit" in flags:
+                item["buy_caution"] = "现价已过不追价，当日不宜追高"
+            elif "near_wait" in flags:
+                item["buy_caution"] = "现价在回踩带，可观察是否站稳"
+            else:
+                item["buy_caution"] = ""
+        else:
+            item["buy_caution"] = ""
+        out.append(item)
+    return out
+
+
+def build_review_payload(
+    limit: int = 60,
+    quotes: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Load recent signals and summary; optionally attach live price marks."""
     rows = load_signals(limit=limit)
+    if quotes:
+        rows = enrich_signals_with_live_marks(rows, quotes)
     return {
         "ok": True,
         "signals": rows,

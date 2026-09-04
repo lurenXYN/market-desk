@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from market_desk.config import ETF_WATCH, HTTP_HEADERS, CHINEXT_STAR_ETFS
+from market_desk.config import ETF_WATCH, HTTP_HEADERS, CHINEXT_STAR_ETFS, INDEX_WATCH
 from market_desk.numbers import num
 
 
@@ -16,6 +16,43 @@ def tencent_symbol(code: str) -> str:
     if c.startswith(("5", "6", "9")):
         return "sh" + c
     return "sz" + c
+
+
+async def fetch_indices(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Fetch major index quotes (上证/创业板/科创50/…)."""
+    if not INDEX_WATCH:
+        return []
+    url = "https://qt.gtimg.cn/q=" + ",".join(sym for sym, _, _ in INDEX_WATCH)
+    resp = await client.get(url, headers=HTTP_HEADERS, timeout=15.0)
+    resp.raise_for_status()
+    text = resp.content.decode("gbk", errors="ignore")
+    by_code: dict[str, dict[str, Any]] = {}
+    for chunk in text.split(";"):
+        if '="' not in chunk:
+            continue
+        body = chunk.split('="', 1)[1].rstrip('";')
+        fields = body.split("~")
+        if len(fields) < 33:
+            continue
+        code = str(fields[2]).zfill(6)
+        by_code[code] = {
+            "code": code,
+            "name": str(fields[1] or ""),
+            "price": num(fields[3]),
+            "pct": num(fields[32]),
+            "open": num(fields[5]),
+            "high": num(fields[33]) if len(fields) > 33 else None,
+            "low": num(fields[34]) if len(fields) > 34 else None,
+            "prev": num(fields[4]),
+        }
+    out: list[dict[str, Any]] = []
+    for _sym, code, name in INDEX_WATCH:
+        row = dict(by_code.get(code) or {})
+        row["code"] = code
+        row["name"] = name
+        row["kind"] = "index"
+        out.append(row)
+    return out
 
 
 async def fetch_etfs(client: httpx.AsyncClient) -> list[dict[str, Any]]:

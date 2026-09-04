@@ -79,7 +79,7 @@ from market_desk.sentiment import (
     score_temperature,
     spark_values,
 )
-from market_desk.tencent import fetch_etfs, fetch_quotes
+from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
 from market_desk.verdict import (
     apply_stock_daily_trends,
     build_deltas,
@@ -173,12 +173,13 @@ class DeskEngine:
             trade_date_dash = now.strftime("%Y-%m-%d")
             errors: list[str] = []
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                zt, zb, quotes, boards, etfs = await asyncio.gather(
+                zt, zb, quotes, boards, etfs, indices = await asyncio.gather(
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
                     _safe(fetch_zb_pool, client, trade_date, errors=errors, label="zb"),
                     _safe(fetch_main_quotes, client, errors=errors, label="quotes"),
                     _safe(fetch_hot_boards, client, errors=errors, label="boards"),
                     _safe(fetch_etfs, client, errors=errors, label="etf"),
+                    _safe(fetch_indices, client, errors=errors, label="index"),
                 )
                 yesterday_zt = await self._yesterday(client, now, errors)
                 zt = zt or []
@@ -186,6 +187,7 @@ class DeskEngine:
                 quotes = quotes or []
                 boards = boards or []
                 etfs = etfs or []
+                indices = indices or []
                 yesterday_zt = yesterday_zt or []
                 ctx = {
                     "zt": zt,
@@ -272,6 +274,7 @@ class DeskEngine:
                 "kpis": kpi_bars(metrics),
                 "auction": auction,
                 "etfs": etfs,
+                "indices": indices,
                 "hot_boards": hot_cards,
                 "pin_boards": pin_cards,
                 "ice_boards": ice_cards,
@@ -342,15 +345,20 @@ class DeskEngine:
         """Score pending historical signals then return the review panel payload."""
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         pending = load_unscored_signals(today, limit=80)
-        if pending:
-            codes = [str(r.get("code") or "") for r in pending]
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        quotes: dict[str, dict[str, Any]] = {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                if pending:
+                    codes = [str(r.get("code") or "") for r in pending]
                     packed = await fetch_daily_klines_many(client, codes, limit=40)
-                apply_outcomes(pending, packed)
-            except Exception:
-                log.exception("signal scoring failed")
-        return build_review_payload(limit=limit)
+                    apply_outcomes(pending, packed)
+                # Live marks for stop / chase on all recent signals.
+                recent = build_review_payload(limit=limit).get("signals") or []
+                live_codes = [str(r.get("code") or "") for r in recent]
+                quotes = await fetch_quotes(client, live_codes)
+        except Exception:
+            log.exception("signal scoring / live marks failed")
+        return build_review_payload(limit=limit, quotes=quotes)
 
     def _emit_toasts(
         self,

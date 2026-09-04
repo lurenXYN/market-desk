@@ -516,6 +516,20 @@
       display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 10px; margin-top: 10px;
     }
+    .idx-strip {
+      display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 8px; margin-top: 8px;
+    }
+    .idx-card {
+      border: 1px solid var(--line); border-radius: 6px;
+      background: #0e141c; padding: 8px 10px;
+    }
+    .idx-card .n { color: var(--muted); font-size: 11px; }
+    .idx-card .p { font-size: 16px; font-weight: 750; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .idx-card .c { font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .mark-stop { color: var(--up); font-weight: 700; }
+    .mark-chase { color: var(--climax); font-weight: 700; }
+    .mark-ok { color: var(--ferm); }
     .life-col {
       border: 1px solid var(--line); border-radius: 8px;
       background: #0e141c; padding: 10px;
@@ -569,11 +583,11 @@
       border-radius: 4px; padding: 2px 8px; cursor: pointer;
     }
     @media (max-width: 1200px) {
-      .grid-top, .boards, .pin-row, .rev-sum, .life-grid { grid-template-columns: 1fr; }
+      .grid-top, .boards, .pin-row, .rev-sum, .life-grid, .idx-strip { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 700px) {
-      .rec-prices { grid-template-columns: repeat(3, 1fr); }
-      .rev-sum, .grid-top, .boards, .pin-row { grid-template-columns: 1fr; }
+      .rec-prices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .rev-sum, .grid-top, .boards, .pin-row, .life-grid, .idx-strip { grid-template-columns: 1fr; }
       .pos-form { grid-template-columns: 1fr 1fr; }
     }
   </style>
@@ -646,11 +660,8 @@
 
     <section class="tab-panel" id="panel-market" hidden>
     <section class="card mid" style="margin-top:0">
-      <h2 style="text-transform:none;letter-spacing:0.04em">
-        主线生命周期<button type="button" class="q" data-term="主线生命周期">?</button>
-      </h2>
-      <p class="meta" id="lifeNote">按近几日热点持续度划分启动 / 进行 / 退潮</p>
-      <div class="life-grid" id="lifeGrid"></div>
+      <h2 style="text-transform:none;letter-spacing:0.04em">主要指数</h2>
+      <div class="idx-strip" id="idxStrip"></div>
     </section>
     <section class="grid-top">
       <article class="card">
@@ -697,6 +708,13 @@
         </thead>
         <tbody id="hist"></tbody>
       </table>
+    </section>
+    <section class="card mid">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        主线生命周期<button type="button" class="q" data-term="主线生命周期">?</button>
+      </h2>
+      <p class="meta" id="lifeNote">按近几日热点持续度划分启动 / 进行 / 退潮</p>
+      <div class="life-grid" id="lifeGrid"></div>
     </section>
     </section>
 
@@ -1089,6 +1107,15 @@
       document.getElementById("etfs").innerHTML = (d.etfs || []).map(e =>
         `<span class="chip${e.stock_no_perm ? " perm" : ""}">${e.name} ${fmtPct(e.pct)}${e.stock_no_perm ? " · ETF可买" : ""}</span>`
       ).join("");
+      document.getElementById("idxStrip").innerHTML = (d.indices || []).map((x) => {
+        const pct = x.pct;
+        const cls = pct == null ? "" : (pct >= 0 ? "up" : "down");
+        return `<div class="idx-card">
+          <div class="n">${x.name || x.code || ""}</div>
+          <div class="p ${cls}">${x.price == null ? "—" : Number(x.price).toFixed(2)}</div>
+          <div class="c ${cls}">${pct == null ? "—" : ((pct > 0 ? "+" : "") + Number(pct).toFixed(2) + "%")}</div>
+        </div>`;
+      }).join("") || `<div class="meta">指数待刷新</div>`;
       const life = d.mainline_lifecycle || {};
       document.getElementById("lifeNote").textContent = life.note || "按近几日热点持续度划分启动 / 进行 / 退潮";
       const lifeCard = (b) => {
@@ -1326,10 +1353,24 @@
         const confirmed = (r.note || "").includes("确认上升") || (r.payload && r.payload.trend_manual === "up");
         const label = confirmed ? "已确认上升" : (skipped ? "未交易" : (r.outcome_label || "待隔日"));
         const pend = (!confirmed && r.payload && r.payload.trend_pending) ? " · 待自判" : "";
+        const flags = r.price_flags || [];
+        let markCls = "";
+        if (flags.includes("stop_hit")) markCls = "mark-stop";
+        else if (flags.includes("chase_hit")) markCls = "mark-chase";
+        else if (r.price_mark) markCls = "mark-ok";
+        const markHtml = r.price_mark
+          ? `<div class="${markCls}">${r.price_mark}</div>`
+          : "";
+        const cautionHtml = r.buy_caution
+          ? `<div class="meta ${markCls}">${r.buy_caution}</div>`
+          : "";
+        const liveHtml = r.live_last != null
+          ? `<div class="meta">现价 ${r.live_last}${r.live_pct == null ? "" : " " + ((r.live_pct > 0 ? "+" : "") + Number(r.live_pct).toFixed(2) + "%")}</div>`
+          : "";
         return `<tr>
           <td>${r.trade_date || ""}</td>
           <td>${typ}</td>
-          <td>${tickerHtml(r.name, r.code)}</td>
+          <td>${tickerHtml(r.name, r.code)}${liveHtml}${markHtml}${cautionHtml}</td>
           <td>${r.code || ""}</td>
           <td>${r.price ?? "—"}</td>
           <td>${r.mainline || "—"}</td>
