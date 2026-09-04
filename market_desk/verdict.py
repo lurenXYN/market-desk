@@ -102,12 +102,28 @@ def build_verdict(
         recommend["size_note"] = f"{size_hint}；{recommend['size_note']}"
     elif size_hint:
         recommend["size_note"] = size_hint
+    prev_name = (
+        (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name") or ""
+    ).strip()
+    narrative = _mainline_narrative(
+        board_name=board_name,
+        status=status,
+        action=action,
+        phase=phase,
+        pct=main.get("pct"),
+        zt_n=main.get("zt_n"),
+        leader_name=main.get("leader_name"),
+        prev_name=prev_name,
+        segment_label=str(seg.get("label") or ""),
+        size_hint=size_hint,
+    )
     return {
         "action": action,
         "headline": headline,
         "meaning": meaning,
         "reason": reason,
         "detail": detail,
+        "narrative": narrative,
         "recommend": recommend,
         "mainline": {
             "name": board_name,
@@ -137,6 +153,51 @@ def build_verdict(
         "phase": phase,
         "temperature": metrics.get("zt"),
     }
+
+
+def _mainline_narrative(
+    *,
+    board_name: str,
+    status: str,
+    action: str,
+    phase: str,
+    pct: Any,
+    zt_n: Any,
+    leader_name: str | None,
+    prev_name: str,
+    segment_label: str,
+    size_hint: str | None,
+) -> str:
+    """Build a one-line explanation of why the live mainline looks this way."""
+    bits: list[str] = []
+    if prev_name and board_name and prev_name != board_name:
+        bits.append(f"主线由「{prev_name}」切到「{board_name}」")
+    elif board_name:
+        bits.append(f"当前主线「{board_name}」")
+    else:
+        bits.append("主线尚未识别")
+    if status:
+        bits.append(f"状态{status}")
+    if pct is not None:
+        try:
+            bits.append(f"涨幅{float(pct):+.2f}%")
+        except (TypeError, ValueError):
+            pass
+    if zt_n is not None:
+        try:
+            bits.append(f"涨停{int(zt_n)}只")
+        except (TypeError, ValueError):
+            pass
+    if leader_name:
+        bits.append(f"龙头{leader_name}")
+    if phase:
+        bits.append(f"大盘{phase}")
+    if segment_label:
+        bits.append(segment_label)
+    bits.append(f"结论{action}")
+    if size_hint:
+        bits.append(size_hint)
+    return "；".join(bits) + "。"
 
 
 def apply_stock_daily_trends(

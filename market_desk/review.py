@@ -8,8 +8,10 @@ from typing import Any
 
 from market_desk.db import (
     load_mainline_switches,
+    load_review_digests,
     load_signals,
     mark_signal_outcome,
+    save_review_digest,
     upsert_signal,
 )
 from market_desk.filters import normalize_code
@@ -199,7 +201,9 @@ def score_signal_with_closes(
     dates: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Score a buy/sell signal against subsequent daily closes. Return outcome fields or None."""
-    price = num(signal.get("price"))
+    price = num(signal.get("fill_price"))
+    if price is None or price <= 0:
+        price = num(signal.get("price"))
     if price is None or price <= 0 or not closes:
         return None
     trade_date = str(signal.get("trade_date") or "")
@@ -310,21 +314,29 @@ def build_today_digest(
 ) -> dict[str, Any]:
     """Build a same-day review digest for the summary strip."""
     today_rows = [r for r in rows if str(r.get("trade_date") or "") == trade_date]
-    buys = [r for r in today_rows if r.get("signal_type") == "buy"]
-    sells = [r for r in today_rows if r.get("signal_type") == "sell"]
+    buys = [r for r in today_rows if r.get("signal_type") == "buy" and not int(r.get("skipped") or 0)]
+    sells = [r for r in today_rows if r.get("signal_type") == "sell" and not int(r.get("skipped") or 0)]
+    scored = [r for r in buys if r.get("outcome_label")]
+    hit = sum(1 for r in scored if (r.get("outcome_label") or "") in {"次日红", "三日红"})
     miss = sum(
         1
         for r in buys
         if "miss_pullback" in (r.get("price_flags") or [])
         or "未回踩" in str(r.get("price_mark") or "")
     )
-    in_band = sum(1 for r in buys if "in_band" in (r.get("price_flags") or []) or "near_wait" in (r.get("price_flags") or []))
+    in_band = sum(
+        1
+        for r in buys
+        if "in_band" in (r.get("price_flags") or []) or "near_wait" in (r.get("price_flags") or [])
+    )
     switches = switch_count
     if switches is None:
         try:
             switches = len(load_mainline_switches(trade_date, limit=40))
         except Exception:
             switches = 0
+    day1_vals = [num(r.get("outcome_day1_pct")) for r in scored]
+    day1_vals = [v for v in day1_vals if v is not None]
     return {
         "date": trade_date,
         "buy_n": len(buys),
@@ -335,6 +347,9 @@ def build_today_digest(
         "skipped_n": sum(1 for r in today_rows if int(r.get("skipped") or 0)),
         "switch_n": int(switches or 0),
         "phase": phase or "",
+        "buy_hit_rate": None if not scored else round(100.0 * hit / len(scored), 1),
+        "buy_avg_day1": None if not day1_vals else round(sum(day1_vals) / len(day1_vals), 2),
+        "scored_n": len(scored),
     }
 
 
@@ -563,7 +578,13 @@ def build_review_payload(
         rows = enrich_signals_with_live_marks(rows, quotes)
     day = trade_date or datetime.now().strftime("%Y-%m-%d")
     summary = summarize_signals(rows)
-    summary["today"] = build_today_digest(rows, trade_date=day, phase=phase)
+    today = build_today_digest(rows, trade_date=day, phase=phase)
+    try:
+        save_review_digest(day, today)
+    except Exception:
+        pass
+    summary["today"] = today
+    summary["history"] = load_review_digests(limit=20)
     return {
         "ok": True,
         "signals": rows,

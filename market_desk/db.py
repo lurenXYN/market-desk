@@ -95,6 +95,8 @@ def init_db() -> None:
                 note TEXT,
                 skipped INTEGER DEFAULT 0,
                 traded INTEGER DEFAULT 0,
+                fill_price REAL,
+                fill_qty INTEGER,
                 UNIQUE(trade_date, code, signal_type)
             )
             """
@@ -110,6 +112,28 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signals ADD COLUMN skipped INTEGER DEFAULT 0")
         if "traded" not in cols:
             conn.execute("ALTER TABLE signals ADD COLUMN traded INTEGER DEFAULT 0")
+        if "fill_price" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN fill_price REAL")
+        if "fill_qty" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN fill_qty INTEGER")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_digest (
+                trade_date TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS session_segment (
@@ -402,8 +426,8 @@ def load_positions() -> list[dict[str, Any]]:
 def upsert_signal(row: dict[str, Any]) -> None:
     """Insert or refresh a same-day signal keyed by date + code + type.
 
-    ``signaled_at`` is kept from the first insert so the review panel shows
-    when the name first entered the watch list, not the latest refresh.
+    ``signaled_at`` and ``price`` are kept from the first insert so the review
+    panel shows the first watch time and the first suggested entry price.
     """
     now_payload = json.dumps(row.get("payload") or {}, ensure_ascii=False)
     with _connect() as conn:
@@ -419,7 +443,6 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 mainline = excluded.mainline,
                 name = excluded.name,
                 kind = excluded.kind,
-                price = excluded.price,
                 last = excluded.last,
                 ready = excluded.ready,
                 payload = excluded.payload
@@ -451,7 +474,8 @@ def load_signal(signal_id: int) -> dict[str, Any] | None:
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped, traded
+                   outcome_label, outcome_checked_at, note, skipped, traded,
+                   fill_price, fill_qty
             FROM signals
             WHERE id = ?
             """,
@@ -481,7 +505,8 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped, traded
+                   outcome_label, outcome_checked_at, note, skipped, traded,
+                   fill_price, fill_qty
             FROM signals
             ORDER BY trade_date DESC, id DESC
             LIMIT ?
@@ -513,7 +538,8 @@ def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, A
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped, traded
+                   outcome_label, outcome_checked_at, note, skipped, traded,
+                   fill_price, fill_qty
             FROM signals
             WHERE trade_date < ?
               AND (outcome_label IS NULL OR outcome_label = '')
@@ -574,11 +600,13 @@ def update_signal_meta(
     skipped: int | None = None,
     traded: int | None = None,
     note: str | None = None,
+    fill_price: float | None = None,
+    fill_qty: int | None = None,
 ) -> bool:
-    """Update user review flags on a signal row."""
+    """Update user review flags and optional fill fields on a signal row."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, note, skipped, traded FROM signals WHERE id = ?",
+            "SELECT id, note, skipped, traded, fill_price, fill_qty FROM signals WHERE id = ?",
             (signal_id,),
         ).fetchone()
         if not row:
@@ -593,12 +621,93 @@ def update_signal_meta(
             new_traded = 0
             new_skipped = 1
         new_note = row["note"] if note is None else note
+        new_fill_px = row["fill_price"] if fill_price is None else float(fill_price)
+        new_fill_qty = row["fill_qty"] if fill_qty is None else int(fill_qty)
         cur = conn.execute(
-            "UPDATE signals SET skipped = ?, traded = ?, note = ? WHERE id = ?",
-            (new_skipped, new_traded, new_note, signal_id),
+            """
+            UPDATE signals
+            SET skipped = ?, traded = ?, note = ?, fill_price = ?, fill_qty = ?
+            WHERE id = ?
+            """,
+            (new_skipped, new_traded, new_note, new_fill_px, new_fill_qty, signal_id),
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def save_review_digest(trade_date: str, payload: dict[str, Any]) -> None:
+    """Upsert one trade-date review digest for historical charts."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO review_digest(trade_date, payload, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(trade_date) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (trade_date, json.dumps(payload, ensure_ascii=False), now),
+        )
+        conn.commit()
+
+
+def load_review_digests(limit: int = 20) -> list[dict[str, Any]]:
+    """Return recent review digests, oldest-first for charting."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT trade_date, payload, updated_at
+            FROM review_digest
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in reversed(list(rows)):
+        try:
+            payload = json.loads(row["payload"])
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["trade_date"] = row["trade_date"]
+        payload["updated_at"] = row["updated_at"]
+        out.append(payload)
+    return out
+
+
+def load_setting(key: str) -> Any | None:
+    """Load one JSON settings value by key."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value"])
+    except json.JSONDecodeError:
+        return None
+
+
+def save_setting(key: str, value: Any) -> None:
+    """Persist one JSON settings value by key."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, json.dumps(value, ensure_ascii=False), now),
+        )
+        conn.commit()
 
 
 def upsert_session_segment(row: dict[str, Any]) -> None:

@@ -21,13 +21,9 @@ import httpx
 from market_desk.config import (
     HOT_BOARD_COUNT,
     ICE_BOARD_COUNT,
-    IDLE_CHECK_SECONDS,
-    MAINLINE_SWITCH_MIN_SECONDS,
     PIN_INDUSTRY_ALIASES,
-    SESSION_REFRESH_SECONDS,
-    TOAST_COOLDOWN_SECONDS,
-    TOAST_ENABLED,
 )
+from market_desk.settings import setting
 from market_desk.db import (
     init_db,
     load_auction,
@@ -166,7 +162,9 @@ class DeskEngine:
             elif self.snapshot.get("ok"):
                 self.snapshot["live"] = False
                 self.snapshot["polling"] = False
-            await asyncio.sleep(SESSION_REFRESH_SECONDS if live else IDLE_CHECK_SECONDS)
+            await asyncio.sleep(
+                int(setting("refresh_seconds", 20)) if live else int(setting("idle_seconds", 60))
+            )
 
     async def refresh(self) -> None:
         """Pull public snapshots and rebuild the dashboard payload."""
@@ -273,7 +271,7 @@ class DeskEngine:
                 "trade_date": trade_date_dash,
                 "live": _is_session(now),
                 "polling": _is_session(now),
-                "refresh_seconds": SESSION_REFRESH_SECONDS,
+                "refresh_seconds": int(setting("refresh_seconds", 20)),
                 "phase": phase,
                 "temperature": temperature,
                 "metrics": metrics,
@@ -345,7 +343,7 @@ class DeskEngine:
                     "phase": phase,
                     "temperature": temperature,
                 },
-                min_seconds=MAINLINE_SWITCH_MIN_SECONDS,
+                min_seconds=int(setting("switch_min_seconds", 180)),
             )
 
     async def build_review(self, limit: int = 60) -> dict[str, Any]:
@@ -379,12 +377,13 @@ class DeskEngine:
         current: dict[str, Any],
     ) -> None:
         """Fire Windows toasts for newly important transitions only."""
-        if not TOAST_ENABLED:
+        if not bool(setting("toast_enabled", True)):
             return
         if not self._toast_armed:
             self._toast_armed = True
             return
         now_ts = datetime.now(CN_TZ).timestamp()
+        cooldown = int(setting("toast_cooldown", 180))
         alerts = list(build_toast_alerts(previous, current))
         try:
             alerts.extend(build_price_touch_alerts(current))
@@ -392,7 +391,7 @@ class DeskEngine:
             log.exception("price-touch alerts failed")
         for key, title, body in alerts:
             last = self._toast_sent.get(key)
-            if last is not None and now_ts - last < TOAST_COOLDOWN_SECONDS:
+            if last is not None and now_ts - last < cooldown:
                 continue
             if notify_windows(title, body):
                 self._toast_sent[key] = now_ts

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from market_desk.config import MAINLINE_ETF_RULES, MAINLINE_STICKY_MARGIN
+from market_desk.config import MAINLINE_ETF_RULES
+from market_desk.settings import setting
 
 
 def pick_mainline(
@@ -31,7 +32,7 @@ def pick_mainline(
         return leader
     if (leader.get("name") or "") == sticky:
         return leader
-    need = MAINLINE_STICKY_MARGIN if margin is None else float(margin)
+    need = float(margin) if margin is not None else float(setting("sticky_margin", 8.0))
     if mainline_score(leader) >= mainline_score(incumbent) + need:
         return leader
     return incumbent
