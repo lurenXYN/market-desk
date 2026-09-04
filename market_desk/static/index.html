@@ -2071,6 +2071,12 @@
     document.getElementById("chartRefresh").addEventListener("click", () => {
       if (chartCode) openChart(chartCode);
     });
+    function deskFileDate() {
+      const d = (lastData && lastData.trade_date)
+        || (lastReview && lastReview.summary && lastReview.summary.today && lastReview.summary.today.date)
+        || new Date().toISOString().slice(0, 10);
+      return String(d).replace(/[^\d-]/g, "") || new Date().toISOString().slice(0, 10);
+    }
     document.getElementById("revApply").addEventListener("click", () => paintReview(lastReview));
     document.getElementById("revColsBtn").addEventListener("click", (ev) => {
       ev.stopPropagation();
