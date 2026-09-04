@@ -187,6 +187,28 @@
       background: var(--muted); margin-right: 6px;
     }
     .dot.on { background: var(--live); box-shadow: 0 0 8px var(--live); }
+    .nav-tabs {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      margin: 0 0 12px; padding: 4px;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0c121a;
+    }
+    .nav-tabs button {
+      appearance: none; border: 1px solid transparent;
+      background: transparent; color: var(--muted);
+      padding: 8px 14px; border-radius: 6px;
+      font: inherit; font-size: 13px; font-weight: 650;
+      letter-spacing: 0.04em; cursor: pointer;
+    }
+    .nav-tabs button:hover { color: var(--text); background: #151c28; }
+    .nav-tabs button.on {
+      color: var(--text); background: #15241c;
+      border-color: #2f5a3a;
+    }
+    .nav-tabs button .hint {
+      margin-left: 6px; color: var(--muted); font-weight: 500; font-size: 11px;
+    }
+    .tab-panel[hidden] { display: none !important; }
     .grid-top {
       display: grid;
       grid-template-columns: 1.15fr 1fr 0.95fr;
@@ -266,9 +288,20 @@
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; }
     th { color: var(--muted); font-weight: 600; }
     .mid { margin-top: 10px; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 8px; color: var(--muted); }
-    .tabs span { cursor: pointer; padding-bottom: 4px; }
-    .tabs .on { color: var(--text); border-bottom: 2px solid var(--ferm); }
+    .subtabs { display: flex; gap: 8px; margin-bottom: 8px; color: var(--muted); }
+    .subtabs span { cursor: pointer; padding-bottom: 4px; }
+    .subtabs .on { color: var(--text); border-bottom: 2px solid var(--ferm); }
+    .rev-sum {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px; margin: 10px 0 14px;
+    }
+    .rev-card {
+      border: 1px solid var(--line); border-radius: 6px;
+      background: var(--card2); padding: 10px 12px;
+    }
+    .rev-card .lab { color: var(--muted); font-size: 11px; }
+    .rev-card .val { font-size: 22px; font-weight: 750; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .rev-note { color: var(--muted); font-size: 12px; margin: 0 0 10px; line-height: 1.45; }
     .boards {
       margin-top: 10px;
       display: grid;
@@ -398,16 +431,38 @@
       background: transparent; color: var(--warn); border: 1px solid #5a3d2a;
       border-radius: 4px; padding: 2px 8px; cursor: pointer;
     }
+    @media (max-width: 1200px) {
+      .grid-top, .boards, .pin-row, .rev-sum { grid-template-columns: 1fr 1fr; }
+    }
     @media (max-width: 700px) {
       .rec-prices { grid-template-columns: repeat(3, 1fr); }
-    }
-    @media (max-width: 1200px) {
-      .grid-top, .boards, .pin-row { grid-template-columns: 1fr; }
+      .rev-sum, .grid-top, .boards, .pin-row { grid-template-columns: 1fr; }
+      .pos-form { grid-template-columns: 1fr 1fr; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <div class="hdr">
+      <h1>A股情绪作战台 <span class="meta" id="filter"></span></h1>
+      <div class="meta">
+        <span class="dot" id="liveDot"></span>
+        <span id="stamp">加载中…</span>
+        <span id="pageClock" style="margin-left:10px"></span>
+      </div>
+    </div>
+
+    <nav class="nav-tabs" id="navTabs" aria-label="主页签">
+      <button type="button" class="on" data-main="desk">作战<span class="hint">买卖</span></button>
+      <button type="button" data-main="market">大盘<span class="hint">相位</span></button>
+      <button type="button" data-main="boards">板块<span class="hint">热点</span></button>
+      <button type="button" data-main="watch">观察<span class="hint">异动</span></button>
+      <button type="button" data-main="pos">仓位</button>
+      <button type="button" data-main="review">复盘<span class="hint">信号</span></button>
+      <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
+    </nav>
+
+    <section class="tab-panel" id="panel-desk">
     <div class="banner cash" id="banner">
       <div class="banner-top">
         <div>
@@ -436,20 +491,13 @@
         <div class="clock">
           <div class="t" id="dataTime">--:--:--</div>
           <div class="sub" id="dataAge">数据尚未刷新</div>
-          <div class="sub" id="pageClock"></div>
         </div>
       </div>
       <div class="deltas" id="deltas"></div>
     </div>
+    </section>
 
-    <div class="hdr">
-      <h1>A股情绪作战台 <span class="meta" id="filter"></span></h1>
-      <div class="meta">
-        <span class="dot" id="liveDot"></span>
-        <span id="stamp">加载中…</span>
-      </div>
-    </div>
-
+    <section class="tab-panel" id="panel-market" hidden>
     <section class="grid-top">
       <article class="card">
         <h2>大盘相位<button type="button" class="q" id="phaseHelp" data-term="相位">?</button> · LIVE</h2>
@@ -478,16 +526,8 @@
         <div class="contagion off" id="contagion">冰点 / 传染待刷新</div>
       </article>
     </section>
-
     <section class="card mid">
-      <div class="tabs" id="tabs">
-        <span class="on" data-tab="hist">大盘日级明细 · 主板</span>
-        <span data-tab="watch">异动观察池</span>
-        <span data-tab="pos">仓位</span>
-        <button type="button" class="q" data-term="异动">?</button>
-        <button type="button" class="q" data-term="仓位">?</button>
-      </div>
-      <div id="panel-hist">
+      <h2 style="text-transform:none;letter-spacing:0.04em">大盘日级明细 · 主板</h2>
       <table>
         <thead>
           <tr>
@@ -503,14 +543,38 @@
         </thead>
         <tbody id="hist"></tbody>
       </table>
+    </section>
+    </section>
+
+    <section class="tab-panel" id="panel-boards" hidden>
+      <div class="sec-title meta">
+        <span>置顶观察 · 通信 / 医药 / 算力</span>
       </div>
-      <div id="panel-watch" hidden>
+      <section class="pin-row" id="pins"></section>
+      <div class="sec-title meta">
+        <span>实时冰点板块<button type="button" class="q" data-term="冰点">?</button> · 东财行业跌幅最深 · 非买点</span>
+        <span>传染<button type="button" class="q" data-term="传染预警">?</button> = 板块内多只靠近跌停</span>
+      </div>
+      <section class="boards" id="ice"></section>
+      <div class="sec-title meta">
+        <span>实时热点板块 · 东财行业+概念</span>
+      </div>
+      <section class="boards" id="boards"></section>
+    </section>
+
+    <section class="tab-panel" id="panel-watch" hidden>
+      <section class="card watch-card">
+        <h2>异动观察池<button type="button" class="q" data-term="异动">?</button></h2>
         <p class="meta">涨停前12 / 炸板前8 / 跌停前6 / 换手≥15%前6，最多24只。非买点。</p>
         <ul class="watch-list" id="watchList">
           <li class="hdrow"><span>名称</span><span>代码</span><span>涨跌</span><span>标签</span><span>原因</span></li>
         </ul>
-      </div>
-      <div id="panel-pos" hidden>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="panel-pos" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">仓位记账<button type="button" class="q" data-term="仓位">?</button></h2>
         <p class="meta">本地记账，不会下单。填代码、买入价、股数后点记账。现价随刷新更新。</p>
         <form class="pos-form" id="posForm">
           <label>代码<input name="code" placeholder="515050" maxlength="6" required /></label>
@@ -531,24 +595,26 @@
           </thead>
           <tbody id="posBody"></tbody>
         </table>
-      </div>
+      </section>
     </section>
 
-    <div class="sec-title meta">
-      <span>置顶观察 · 通信 / 医药 / 算力</span>
-    </div>
-    <section class="pin-row" id="pins"></section>
-
-    <div class="sec-title meta">
-      <span>实时冰点板块<button type="button" class="q" data-term="冰点">?</button> · 东财行业跌幅最深 · 非买点</span>
-      <span>传染<button type="button" class="q" data-term="传染预警">?</button> = 板块内多只靠近跌停</span>
-    </div>
-    <section class="boards" id="ice"></section>
-
-    <div class="sec-title meta">
-      <span>实时热点板块 · 东财行业+概念</span>
-    </div>
-    <section class="boards" id="boards"></section>
+    <section class="tab-panel" id="panel-review" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button></h2>
+        <p class="rev-note">当日「可买入 / 建议卖」会自动落库；隔日后按收盘价打分。今日信号显示「待隔日」。</p>
+        <div class="rev-sum" id="revSum"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>日期</th><th>类型</th><th>名称</th><th>代码</th>
+              <th>建议价</th><th>主线</th><th>相位</th>
+              <th>次日%</th><th>三日%</th><th>结果</th>
+            </tr>
+          </thead>
+          <tbody id="revBody"></tbody>
+        </table>
+      </section>
+    </section>
   </div>
 
   <div id="termPop" class="term-pop" hidden></div>
@@ -577,7 +643,13 @@
       const buy = it.buy_price != null ? it.buy_price : it.last;
       const trendHtml = trendBad
         ? `<div class="trend-bad">⚠ 不是上升趋势 · ${it.trend || "日线偏弱"}</div>
-           <div class="trend-bad-sub">下降/震荡不做推荐买入</div>`
+           <div class="trend-bad-sub">${
+             it.trend_quality === "fetch_fail"
+               ? "日线行情未取到，暂不判定为上升趋势"
+               : (it.trend_quality === "thin"
+                 ? "上市交易日不足约20根，样本不够算MA20"
+                 : "下降/震荡不做推荐买入")
+           }</div>`
         : (it.trend_ok
           ? `<div class="trend-ok">日线 · 上升趋势（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>`
           : "");
@@ -833,12 +905,58 @@
           <td>${fmtPct(p.last_pct)}</td>
           <td><button type="button" class="pos-del" data-id="${p.id}">删除</button></td>
         </tr>`).join("") || `<tr><td colspan="11" class="meta">暂无仓位，先记账</td></tr>`;
-      applyTab(currentTab);
     }
 
     let lastData = null;
-    let currentTab = "hist";
+    let currentMain = "desk";
     let cycleSel = null;
+    let reviewLoadedAt = 0;
+
+    function paintReview(payload) {
+      const sum = (payload && payload.summary) || {};
+      const cell = (lab, val, cls) =>
+        `<div class="rev-card"><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
+      document.getElementById("revSum").innerHTML = [
+        cell("买入信号", sum.buy_total ?? 0),
+        cell("买入命中率", sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
+        cell("买入次日均涨", sum.buy_avg_day1 == null ? "—" : ((sum.buy_avg_day1 > 0 ? "+" : "") + sum.buy_avg_day1 + "%"),
+          (sum.buy_avg_day1 || 0) >= 0 ? "up" : "down"),
+        cell("待隔日打分", sum.pending ?? 0),
+      ].join("");
+      const rows = (payload && payload.signals) || [];
+      document.getElementById("revBody").innerHTML = rows.map((r) => {
+        const typ = r.signal_type === "sell" ? "卖" : "买";
+        const d1 = r.outcome_day1_pct;
+        const d3 = r.outcome_day3_pct;
+        const label = r.outcome_label || "待隔日";
+        return `<tr>
+          <td>${r.trade_date || ""}</td>
+          <td>${typ}</td>
+          <td>${r.name || ""}</td>
+          <td>${r.code || ""}</td>
+          <td>${r.price ?? "—"}</td>
+          <td>${r.mainline || "—"}</td>
+          <td>${r.phase || "—"}</td>
+          <td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>
+          <td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>
+          <td>${label}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="10" class="meta">暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
+    }
+
+    async function loadReview(force) {
+      const now = Date.now();
+      if (!force && now - reviewLoadedAt < 30000) return;
+      try {
+        const r = await fetch("/api/review");
+        const d = await r.json();
+        paintReview(d);
+        reviewLoadedAt = now;
+      } catch (e) {
+        document.getElementById("revBody").innerHTML =
+          `<tr><td colspan="10" class="meta">复盘加载失败</td></tr>`;
+      }
+    }
 
     function paintTimeline(d) {
       const cyc = (d && d.cycle) || {};
@@ -892,21 +1010,21 @@
         det.event ? `<li class="warn">${det.event}</li>` : "",
       ].filter(Boolean).join("");
     }
-    function applyTab(tab) {
-      currentTab = tab;
-      document.querySelectorAll("#tabs span[data-tab]").forEach((el) =>
-        el.classList.toggle("on", el.getAttribute("data-tab") === tab)
+    function applyMain(tab) {
+      currentMain = tab || "desk";
+      document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
+        el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
       );
-      const hist = document.getElementById("panel-hist");
-      const watch = document.getElementById("panel-watch");
-      if (hist) hist.hidden = tab !== "hist";
-      if (watch) watch.hidden = tab !== "watch";
-      const pos = document.getElementById("panel-pos");
-      if (pos) pos.hidden = tab !== "pos";
+      ["desk", "market", "boards", "watch", "pos", "review"].forEach((name) => {
+        const el = document.getElementById("panel-" + name);
+        if (el) el.hidden = name !== currentMain;
+      });
+      if (currentMain === "review") loadReview(false);
+      try { localStorage.setItem("desk-main-tab", currentMain); } catch (e) {}
     }
     function paintClock() {
-      document.getElementById("pageClock").textContent =
-        "本机现在 " + new Date().toTimeString().slice(0, 8);
+      const el = document.getElementById("pageClock");
+      if (el) el.textContent = "本机 " + new Date().toTimeString().slice(0, 8);
       if (lastData) {
         document.getElementById("dataAge").textContent = dataAgeText(lastData.updated_at);
       }
@@ -929,6 +1047,11 @@
         document.getElementById("dataAge").textContent = "数据源中断";
       }
     }
+    try {
+      const saved = localStorage.getItem("desk-main-tab");
+      if (saved) currentMain = saved;
+    } catch (e) {}
+    applyMain(currentMain);
     tick();
     let tickTimer = null;
     let tickLive = null;
@@ -940,10 +1063,10 @@
     }
     scheduleTick(false);
     setInterval(paintClock, 1000);
-    document.getElementById("tabs").addEventListener("click", (ev) => {
-      const hit = ev.target.closest("[data-tab]");
+    document.getElementById("navTabs").addEventListener("click", (ev) => {
+      const hit = ev.target.closest("button[data-main]");
       if (!hit) return;
-      applyTab(hit.getAttribute("data-tab"));
+      applyMain(hit.getAttribute("data-main"));
     });
     document.getElementById("timeline").addEventListener("click", (ev) => {
       const btn = ev.target.closest(".node");
@@ -963,12 +1086,12 @@
       form.name.value = btn.dataset.name || "";
       form.buy_price.value = btn.dataset.price || "";
       if (!form.qty.value) form.qty.value = "100";
-      applyTab("pos");
+      applyMain("pos");
       form.qty.focus();
     });
     document.getElementById("sellbox").addEventListener("click", (ev) => {
       if (!ev.target.closest(".sell-go")) return;
-      applyTab("pos");
+      applyMain("pos");
     });
     document.getElementById("posForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -993,7 +1116,7 @@
         }
         f.reset();
         await tick();
-        applyTab("pos");
+        applyMain("pos");
       } catch (e) {
         alert("记账失败");
       }
@@ -1005,7 +1128,7 @@
       if (!id) return;
       await fetch("/api/positions/" + id, { method: "DELETE" });
       await tick();
-      applyTab("pos");
+      applyMain("pos");
     });
 
     const pop = document.getElementById("termPop");

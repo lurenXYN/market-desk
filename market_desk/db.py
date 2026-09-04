@@ -69,6 +69,33 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                signaled_at TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                action TEXT,
+                phase TEXT,
+                mainline TEXT,
+                code TEXT NOT NULL,
+                name TEXT,
+                kind TEXT,
+                price REAL NOT NULL,
+                last REAL,
+                ready INTEGER,
+                payload TEXT,
+                outcome_day1_pct REAL,
+                outcome_day3_pct REAL,
+                outcome_mfe_pct REAL,
+                outcome_mae_pct REAL,
+                outcome_label TEXT,
+                outcome_checked_at TEXT,
+                UNIQUE(trade_date, code, signal_type)
+            )
+            """
+        )
         conn.commit()
 
 
@@ -244,3 +271,133 @@ def load_positions() -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def upsert_signal(row: dict[str, Any]) -> None:
+    """Insert or refresh a same-day signal keyed by date + code + type."""
+    now_payload = json.dumps(row.get("payload") or {}, ensure_ascii=False)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO signals(
+                trade_date, signaled_at, signal_type, action, phase, mainline,
+                code, name, kind, price, last, ready, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_date, code, signal_type) DO UPDATE SET
+                signaled_at = excluded.signaled_at,
+                action = excluded.action,
+                phase = excluded.phase,
+                mainline = excluded.mainline,
+                name = excluded.name,
+                kind = excluded.kind,
+                price = excluded.price,
+                last = excluded.last,
+                ready = excluded.ready,
+                payload = excluded.payload
+            """,
+            (
+                row.get("trade_date"),
+                row.get("signaled_at"),
+                row.get("signal_type"),
+                row.get("action"),
+                row.get("phase"),
+                row.get("mainline"),
+                row.get("code"),
+                row.get("name"),
+                row.get("kind"),
+                row.get("price"),
+                row.get("last"),
+                int(row.get("ready") or 0),
+                now_payload,
+            ),
+        )
+        conn.commit()
+
+
+def load_signals(limit: int = 60) -> list[dict[str, Any]]:
+    """Return recent signals, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
+                   code, name, kind, price, last, ready, payload,
+                   outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+                   outcome_label, outcome_checked_at
+            FROM signals
+            ORDER BY trade_date DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        raw = item.get("payload")
+        if isinstance(raw, str) and raw:
+            try:
+                item["payload"] = json.loads(raw)
+            except json.JSONDecodeError:
+                item["payload"] = {}
+        else:
+            item["payload"] = {}
+        out.append(item)
+    return out
+
+
+def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, Any]]:
+    """Return signals before a date that still lack an outcome label."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
+                   code, name, kind, price, last, ready, payload,
+                   outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+                   outcome_label, outcome_checked_at
+            FROM signals
+            WHERE trade_date < ? AND (outcome_label IS NULL OR outcome_label = '')
+            ORDER BY trade_date ASC, id ASC
+            LIMIT ?
+            """,
+            (before_date, limit),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        raw = item.get("payload")
+        if isinstance(raw, str) and raw:
+            try:
+                item["payload"] = json.loads(raw)
+            except json.JSONDecodeError:
+                item["payload"] = {}
+        else:
+            item["payload"] = {}
+        out.append(item)
+    return out
+
+
+def mark_signal_outcome(signal_id: int, outcome: dict[str, Any]) -> bool:
+    """Persist scored outcome fields for one signal row."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE signals SET
+                outcome_day1_pct = ?,
+                outcome_day3_pct = ?,
+                outcome_mfe_pct = ?,
+                outcome_mae_pct = ?,
+                outcome_label = ?,
+                outcome_checked_at = ?
+            WHERE id = ?
+            """,
+            (
+                outcome.get("outcome_day1_pct"),
+                outcome.get("outcome_day3_pct"),
+                outcome.get("outcome_mfe_pct"),
+                outcome.get("outcome_mae_pct"),
+                outcome.get("outcome_label"),
+                outcome.get("outcome_checked_at"),
+                signal_id,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0

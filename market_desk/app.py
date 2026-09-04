@@ -61,6 +61,12 @@ def health() -> dict:
     return {"ok": True, "updated_at": engine.snapshot.get("updated_at")}
 
 
+@app.get("/api/review")
+async def review() -> dict:
+    """Return signal history with scored outcomes for the review tab."""
+    return await engine.build_review()
+
+
 @app.get("/api/positions")
 def list_positions() -> dict:
     """Return recorded positions with the last known marks."""

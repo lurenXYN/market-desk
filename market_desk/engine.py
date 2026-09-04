@@ -33,13 +33,20 @@ from market_desk.db import (
     load_board_hist_map,
     load_daily,
     load_positions,
+    load_unscored_signals,
     save_auction,
     save_board_daily,
     save_daily,
 )
+from market_desk.review import (
+    apply_outcomes,
+    build_review_payload,
+    record_session_signals,
+)
 from market_desk.eastmoney import (
     fetch_board_members,
     fetch_daily_closes_many,
+    fetch_daily_klines_many,
     fetch_hot_boards,
     fetch_main_quotes,
     fetch_yesterday_zt,
@@ -256,7 +263,25 @@ class DeskEngine:
             }
             payload["deltas"] = build_deltas(payload, prev)
             self._emit_toasts(prev, payload)
+            try:
+                record_session_signals(payload)
+            except Exception:
+                log.exception("signal record failed")
             self.snapshot = payload
+
+    async def build_review(self, limit: int = 60) -> dict[str, Any]:
+        """Score pending historical signals then return the review panel payload."""
+        today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        pending = load_unscored_signals(today, limit=80)
+        if pending:
+            codes = [str(r.get("code") or "") for r in pending]
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                    packed = await fetch_daily_klines_many(client, codes, limit=40)
+                apply_outcomes(pending, packed)
+            except Exception:
+                log.exception("signal scoring failed")
+        return build_review_payload(limit=limit)
 
     def _emit_toasts(
         self,
@@ -283,7 +308,7 @@ class DeskEngine:
         client: httpx.AsyncClient,
         verdict: dict[str, Any],
     ) -> None:
-        """Fetch daily closes for recommended stocks and filter non-uptrends."""
+        """Fetch daily closes for recommended stocks and mark non-uptrends."""
         rec = verdict.get("recommend") or {}
         codes = [
             str(x.get("code") or "")
@@ -295,18 +320,24 @@ class DeskEngine:
         now_ts = datetime.now(CN_TZ).timestamp()
         need: list[str] = []
         closes_by_code: dict[str, list[float]] = {}
+        fetch_ok_by_code: dict[str, bool] = {}
         for code in codes:
             hit = self._kline_cache.get(code)
             if hit and now_ts - hit[0] < 300:
                 closes_by_code[code] = hit[1]
+                fetch_ok_by_code[code] = bool(hit[1])
             else:
                 need.append(code)
         if need:
             fetched = await fetch_daily_closes_many(client, need, limit=60)
-            for code, closes in fetched.items():
+            for code in need:
+                closes = fetched.get(code) or []
                 self._kline_cache[code] = (now_ts, closes)
                 closes_by_code[code] = closes
-        verdict["recommend"] = apply_stock_daily_trends(rec, closes_by_code)
+                fetch_ok_by_code[code] = bool(closes)
+        verdict["recommend"] = apply_stock_daily_trends(
+            rec, closes_by_code, fetch_ok_by_code
+        )
 
     async def _yesterday(
         self,

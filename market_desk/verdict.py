@@ -124,12 +124,14 @@ def build_verdict(
 def apply_stock_daily_trends(
     recommend: dict[str, Any] | None,
     closes_by_code: dict[str, list[float]],
+    fetch_ok_by_code: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Attach daily-trend flags to stock cards; keep non-uptrends visible with warnings."""
     rec = dict(recommend or {})
     items = list(rec.get("items") or [])
     if not items:
         return rec
+    fetch_ok_by_code = fetch_ok_by_code or {}
 
     etf_items: list[dict[str, Any]] = []
     up_stocks: list[dict[str, Any]] = []
@@ -139,12 +141,21 @@ def apply_stock_daily_trends(
             etf_items.append(item)
             continue
         code = normalize_code(item.get("code"))
-        trend = classify_daily_trend(closes_by_code.get(code) or [])
+        closes = closes_by_code.get(code)
+        # Missing key or explicit False → treat as fetch failure.
+        if code not in closes_by_code:
+            fetch_ok = False
+            closes = []
+        else:
+            fetch_ok = fetch_ok_by_code.get(code, True)
+            closes = closes or []
+        trend = classify_daily_trend(closes, fetch_ok=fetch_ok)
         marked = dict(item)
         marked["trend"] = trend.get("label")
         marked["trend_ok"] = bool(trend.get("up"))
         marked["trend_down"] = bool(trend.get("down"))
         marked["trend_warn"] = trend.get("warn")
+        marked["trend_quality"] = trend.get("quality")
         marked["ma5"] = trend.get("ma5")
         marked["ma10"] = trend.get("ma10")
         marked["ma20"] = trend.get("ma20")

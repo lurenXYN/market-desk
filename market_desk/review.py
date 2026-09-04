@@ -1,0 +1,240 @@
+"""Signal logging and post-trade review helpers."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from market_desk.db import (
+    load_signals,
+    mark_signal_outcome,
+    upsert_signal,
+)
+from market_desk.filters import normalize_code
+from market_desk.numbers import num
+
+
+def record_session_signals(snapshot: dict[str, Any]) -> int:
+    """Persist buy/sell recommendations for the current session. Return insert/update count."""
+    trade_date = snapshot.get("trade_date") or ""
+    if not trade_date:
+        return 0
+    signaled_at = snapshot.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    phase = snapshot.get("phase") or ""
+    verdict = snapshot.get("verdict") or {}
+    action = verdict.get("action") or ""
+    mainline = ((verdict.get("mainline") or {}).get("name")) or ""
+    n = 0
+
+    rec = verdict.get("recommend") or {}
+    if action in ("可买入", "可小仓") or rec.get("buy"):
+        for item in rec.get("items") or []:
+            code = normalize_code(item.get("code"))
+            if not code:
+                continue
+            kind = item.get("kind") or "stock"
+            if kind == "stock" and not item.get("trend_ok"):
+                continue
+            if not item.get("ready") and not rec.get("buy"):
+                continue
+            price = num(item.get("buy_price"))
+            if price is None:
+                price = num(item.get("last"))
+            if price is None:
+                continue
+            upsert_signal(
+                {
+                    "trade_date": trade_date,
+                    "signaled_at": signaled_at,
+                    "signal_type": "buy",
+                    "action": action,
+                    "phase": phase,
+                    "mainline": mainline,
+                    "code": code,
+                    "name": item.get("name") or "",
+                    "kind": kind,
+                    "price": float(price),
+                    "last": num(item.get("last")),
+                    "ready": 1 if item.get("ready") else 0,
+                    "payload": {
+                        "wait_price": item.get("wait_price"),
+                        "stop_price": item.get("stop_price"),
+                        "chase_price": item.get("chase_price"),
+                        "pct": item.get("pct"),
+                        "trend": item.get("trend"),
+                    },
+                }
+            )
+            n += 1
+
+    sell = snapshot.get("sell_advice") or {}
+    for item in sell.get("items") or []:
+        if not item.get("ready"):
+            continue
+        code = normalize_code(item.get("code"))
+        if not code:
+            continue
+        price = num(item.get("sell_price"))
+        if price is None:
+            price = num(item.get("last"))
+        if price is None:
+            continue
+        upsert_signal(
+            {
+                "trade_date": trade_date,
+                "signaled_at": signaled_at,
+                "signal_type": "sell",
+                "action": item.get("role_label") or "建议卖出",
+                "phase": phase,
+                "mainline": mainline,
+                "code": code,
+                "name": item.get("name") or "",
+                "kind": item.get("kind") or "stock",
+                "price": float(price),
+                "last": num(item.get("last")),
+                "ready": 1,
+                "payload": {
+                    "buy_price": item.get("buy_price"),
+                    "stop_price": item.get("stop_price"),
+                    "pnl_pct": item.get("pnl_pct"),
+                    "qty": item.get("qty"),
+                },
+            }
+        )
+        n += 1
+    return n
+
+
+def score_signal_with_closes(
+    signal: dict[str, Any],
+    closes: list[float],
+    dates: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Score a buy/sell signal against subsequent daily closes. Return outcome fields or None."""
+    price = num(signal.get("price"))
+    if price is None or price <= 0 or not closes:
+        return None
+    trade_date = str(signal.get("trade_date") or "")
+    sig_type = signal.get("signal_type") or "buy"
+
+    # Prefer closes strictly after the signal date when dates are available.
+    after: list[float] = []
+    if dates and len(dates) == len(closes) and trade_date:
+        for d, px in zip(dates, closes):
+            if str(d) > trade_date:
+                after.append(float(px))
+        if not after:
+            return None
+    else:
+        return None
+    if not after:
+        return None
+
+    day1 = after[0]
+    day3 = after[min(2, len(after) - 1)]
+    peak = max(after)
+    trough = min(after)
+    if sig_type == "buy":
+        d1 = (day1 / price - 1.0) * 100.0
+        d3 = (day3 / price - 1.0) * 100.0
+        mfe = (peak / price - 1.0) * 100.0
+        mae = (trough / price - 1.0) * 100.0
+        if d1 >= 1.0:
+            label = "次日红"
+        elif d1 <= -1.5:
+            label = "次日绿"
+        elif d3 >= 2.0:
+            label = "三日红"
+        elif d3 <= -2.0:
+            label = "三日绿"
+        else:
+            label = "平淡"
+    else:
+        # Sell: positive means avoiding further drop (price fell after sell).
+        d1 = (price / day1 - 1.0) * 100.0
+        d3 = (price / day3 - 1.0) * 100.0
+        mfe = (price / trough - 1.0) * 100.0
+        mae = (price / peak - 1.0) * 100.0
+        if d1 >= 1.0:
+            label = "卖后回落"
+        elif d1 <= -1.5:
+            label = "卖后继续涨"
+        else:
+            label = "平淡"
+
+    return {
+        "outcome_day1_pct": round(d1, 2),
+        "outcome_day3_pct": round(d3, 2),
+        "outcome_mfe_pct": round(mfe, 2),
+        "outcome_mae_pct": round(mae, 2),
+        "outcome_label": label,
+        "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate hit-rate style stats for the review panel."""
+    buys = [r for r in rows if r.get("signal_type") == "buy"]
+    sells = [r for r in rows if r.get("signal_type") == "sell"]
+    scored_buys = [r for r in buys if r.get("outcome_label")]
+    scored_sells = [r for r in sells if r.get("outcome_label")]
+
+    def _rate(items: list[dict[str, Any]], good: set[str]) -> float | None:
+        if not items:
+            return None
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in good)
+        return round(100.0 * hit / len(items), 1)
+
+    def _avg(items: list[dict[str, Any]], key: str) -> float | None:
+        vals = [num(r.get(key)) for r in items]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            return None
+        return round(sum(vals) / len(vals), 2)
+
+    return {
+        "buy_total": len(buys),
+        "buy_scored": len(scored_buys),
+        "sell_total": len(sells),
+        "sell_scored": len(scored_sells),
+        "buy_hit_rate": _rate(scored_buys, {"次日红", "三日红"}),
+        "sell_hit_rate": _rate(scored_sells, {"卖后回落"}),
+        "buy_avg_day1": _avg(scored_buys, "outcome_day1_pct"),
+        "buy_avg_day3": _avg(scored_buys, "outcome_day3_pct"),
+        "pending": sum(1 for r in rows if not r.get("outcome_label")),
+    }
+
+
+def build_review_payload(limit: int = 60) -> dict[str, Any]:
+    """Load recent signals and summary without network I/O."""
+    rows = load_signals(limit=limit)
+    return {
+        "ok": True,
+        "signals": rows,
+        "summary": summarize_signals(rows),
+    }
+
+
+def apply_outcomes(
+    rows: list[dict[str, Any]],
+    closes_map: dict[str, tuple[list[str], list[float]]],
+) -> int:
+    """Write scored outcomes for signals that have forward closes. Return update count."""
+    n = 0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for row in rows:
+        if row.get("outcome_label"):
+            continue
+        if str(row.get("trade_date") or "") >= today:
+            continue
+        code = normalize_code(row.get("code"))
+        packed = closes_map.get(code)
+        if not packed:
+            continue
+        dates, closes = packed
+        outcome = score_signal_with_closes(row, closes, dates)
+        if not outcome:
+            continue
+        if mark_signal_outcome(int(row["id"]), outcome):
+            n += 1
+    return n

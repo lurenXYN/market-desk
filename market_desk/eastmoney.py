@@ -308,15 +308,15 @@ def _secid(code: str) -> str:
     return f"0.{c}"
 
 
-async def fetch_daily_closes(
+async def fetch_daily_klines(
     client: httpx.AsyncClient,
     code: str,
     limit: int = 60,
-) -> list[float]:
-    """Fetch adjusted daily closes for trend checks (oldest → newest)."""
+) -> tuple[list[str], list[float]]:
+    """Fetch adjusted daily dates and closes (oldest → newest)."""
     c = normalize_code(code)
     if not c:
-        return []
+        return [], []
     url = (
         "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
@@ -327,16 +327,29 @@ async def fetch_daily_closes(
     try:
         payload = await _get_json(client, url)
     except Exception:
-        return []
+        return [], []
     rows = ((payload.get("data") or {}).get("klines")) or []
+    dates: list[str] = []
     closes: list[float] = []
     for row in rows:
         parts = str(row).split(",")
         if len(parts) < 3:
             continue
         px = num(parts[2])
-        if px is not None:
-            closes.append(float(px))
+        if px is None:
+            continue
+        dates.append(str(parts[0]))
+        closes.append(float(px))
+    return dates, closes
+
+
+async def fetch_daily_closes(
+    client: httpx.AsyncClient,
+    code: str,
+    limit: int = 60,
+) -> list[float]:
+    """Fetch adjusted daily closes for trend checks (oldest → newest)."""
+    _dates, closes = await fetch_daily_klines(client, code, limit=limit)
     return closes
 
 
@@ -346,6 +359,16 @@ async def fetch_daily_closes_many(
     limit: int = 60,
 ) -> dict[str, list[float]]:
     """Fetch daily closes for several codes concurrently."""
+    packed = await fetch_daily_klines_many(client, codes, limit=limit)
+    return {code: closes for code, (_dates, closes) in packed.items()}
+
+
+async def fetch_daily_klines_many(
+    client: httpx.AsyncClient,
+    codes: list[str],
+    limit: int = 60,
+) -> dict[str, tuple[list[str], list[float]]]:
+    """Fetch daily dates+closes for several codes concurrently."""
     uniq: list[str] = []
     seen: set[str] = set()
     for raw in codes:
@@ -357,6 +380,6 @@ async def fetch_daily_closes_many(
     if not uniq:
         return {}
     results = await asyncio.gather(
-        *[fetch_daily_closes(client, code, limit=limit) for code in uniq]
+        *[fetch_daily_klines(client, code, limit=limit) for code in uniq]
     )
-    return {code: closes for code, closes in zip(uniq, results)}
+    return {code: pair for code, pair in zip(uniq, results)}
