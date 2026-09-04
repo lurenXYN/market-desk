@@ -291,6 +291,10 @@ def enrich_signals_with_live_marks(
             item["dev_pct"] = round((float(last) / float(sig_px) - 1.0) * 100.0, 2)
         else:
             item["dev_pct"] = None
+        if last is not None and chase is not None and chase > 0:
+            item["chase_dev_pct"] = round((float(last) / float(chase) - 1.0) * 100.0, 2)
+        else:
+            item["chase_dev_pct"] = None
         item["price_flags"] = flags
         item["price_mark"] = " / ".join(labels) if labels else ""
         # Buying caution for same-day signals.

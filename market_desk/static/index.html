@@ -1446,7 +1446,7 @@
       if (col === "chase") {
         const chase = r.chase_price != null ? r.chase_price
           : (r.payload && r.payload.chase_price != null ? r.payload.chase_price : null);
-        return chase == null ? "—" : chase;
+        return `${chase == null ? "—" : chase}${ctx.chaseDevHtml}`;
       }
       if (col === "mainline") return r.mainline || "—";
       if (col === "phase") return r.phase || "—";
