@@ -76,6 +76,7 @@ from market_desk.sentiment import (
     classify_phase,
     cluster_path,
     cycle_flags,
+    enrich_market_context,
     ice_status,
     kpi_bars,
     score_temperature,
@@ -246,6 +247,10 @@ class DeskEngine:
             watchlist = _decorate_watchlist(wl_rows, pos_quote_map)
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
+            history_prev = load_daily(20)
+            metrics = enrich_market_context(
+                metrics, indices=indices, history=history_prev
+            )
             temperature = score_temperature(metrics)
             phase = classify_phase(metrics, temperature)
             auction = self._auction(trade_date, now, quotes)
@@ -263,6 +268,10 @@ class DeskEngine:
                     "promotion": metrics["promotion"],
                     "premium": metrics["premium"],
                     "amount_yi": metrics["amount_yi"],
+                    "amount_pctile": metrics.get("amount_pctile"),
+                    "big_drop": metrics.get("big_drop"),
+                    "hs300_pct": metrics.get("hs300_pct"),
+                    "cyb_pct": metrics.get("cyb_pct"),
                     "event": _event_line(phase, metrics, hot_cards),
                 },
             )
@@ -270,7 +279,7 @@ class DeskEngine:
             cycle = _cycle_view(history, trade_date_dash)
             prev = self.snapshot if self.snapshot.get("ok") else None
             verdict = build_verdict(
-                now, phase, metrics, etfs, hot_cards, prev, zt
+                now, phase, metrics, etfs, hot_cards, prev, zt, auction=auction
             )
             await self._apply_recommend_trends(client, verdict, trade_date_dash)
             updated_at = now.strftime("%Y-%m-%d %H:%M:%S")

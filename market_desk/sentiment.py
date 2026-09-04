@@ -34,6 +34,7 @@ def build_market_metrics(
     premium = median(y_pcts) or 0.0
     amount = sum(q.get("amount") or 0.0 for q in quotes)
     breadth = (ups / len(valid) * 100.0) if valid else 0.0
+    big_drop = sum(1 for q in valid if (q["pct"] or 0) <= -5.0)
     return {
         "sample": len(valid),
         "ups": ups,
@@ -48,8 +49,80 @@ def build_market_metrics(
         "premium": round(premium, 2),
         "breadth": round(breadth, 1),
         "amount_yi": round(amount / 1e8, 1),
+        "big_drop": big_drop,
         "leader": max(zt_pool, key=lambda x: int(x.get("boards") or 0), default=None),
     }
+
+
+def enrich_market_context(
+    metrics: dict[str, Any],
+    *,
+    indices: list[dict[str, Any]] | None = None,
+    history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Attach amount percentile, index bias and volume/index gate flags."""
+    m = dict(metrics or {})
+    amounts = [
+        float(h.get("amount_yi") or 0)
+        for h in (history or [])
+        if h.get("amount_yi") is not None and float(h.get("amount_yi") or 0) > 0
+    ]
+    # Prefer prior sessions so today's unfinished amount does not inflate the rank.
+    today_amt = float(m.get("amount_yi") or 0)
+    prior = amounts[1:] if amounts and abs(amounts[0] - today_amt) < 1e-6 else amounts
+    amt_pctile = None
+    if prior and today_amt > 0:
+        below = sum(1 for a in prior if a <= today_amt)
+        amt_pctile = round(100.0 * below / len(prior), 1)
+    elif prior:
+        amt_pctile = 0.0
+    m["amount_pctile"] = amt_pctile
+    m["thin_volume"] = bool(amt_pctile is not None and amt_pctile < 30)
+    m["hot_volume"] = bool(amt_pctile is not None and amt_pctile >= 70)
+
+    by_name = {(x.get("name") or ""): x for x in (indices or [])}
+    by_code = {str(x.get("code") or ""): x for x in (indices or [])}
+    hs = by_name.get("沪深300") or by_code.get("000300") or {}
+    cyb = by_name.get("创业板指") or by_code.get("399006") or {}
+    sh = by_name.get("上证指数") or by_code.get("000001") or {}
+    hs_pct = hs.get("pct")
+    cyb_pct = cyb.get("pct")
+    sh_pct = sh.get("pct")
+    m["hs300_pct"] = None if hs_pct is None else round(float(hs_pct), 2)
+    m["cyb_pct"] = None if cyb_pct is None else round(float(cyb_pct), 2)
+    m["sh_pct"] = None if sh_pct is None else round(float(sh_pct), 2)
+    if hs_pct is not None and cyb_pct is not None:
+        m["index_spread"] = round(float(cyb_pct) - float(hs_pct), 2)
+    else:
+        m["index_spread"] = None
+
+    weak = False
+    if hs_pct is not None and float(hs_pct) <= -1.2:
+        weak = True
+    if sh_pct is not None and float(sh_pct) <= -1.5:
+        weak = True
+    if hs_pct is not None and cyb_pct is not None and float(hs_pct) < 0 and float(cyb_pct) <= -2.0:
+        weak = True
+    strong = bool(
+        hs_pct is not None
+        and float(hs_pct) >= 0.5
+        and (cyb_pct is None or float(cyb_pct) >= -0.3)
+    )
+    m["weak_index"] = weak
+    m["strong_index"] = strong
+    gates: list[str] = []
+    if m["thin_volume"]:
+        gates.append(f"成交额分位偏低({amt_pctile})")
+    if m["hot_volume"]:
+        gates.append(f"成交额分位偏高({amt_pctile})")
+    if weak:
+        gates.append("指数偏弱")
+    if strong:
+        gates.append("指数偏强")
+    if int(m.get("big_drop") or 0) >= 80:
+        gates.append(f"大面{m.get('big_drop')}家")
+    m["context_gates"] = gates
+    return m
 
 
 def score_temperature(m: dict[str, Any]) -> int:
@@ -62,17 +135,46 @@ def score_temperature(m: dict[str, Any]) -> int:
     temp += min(max(m["premium"] or 0, 0) / 8.0, 1.0) * 10
     temp += (1.0 - min((m["zb_rate"] or 0) / 100.0, 1.0)) * 8
     temp += (1.0 - min((m["dt"] or 0) / 40.0, 1.0)) * 7
+    # Soft adjustments from volume / index / cascade sells.
+    if m.get("thin_volume"):
+        temp -= 6
+    elif m.get("hot_volume"):
+        temp += 3
+    if m.get("weak_index"):
+        temp -= 5
+    elif m.get("strong_index"):
+        temp += 2
+    big_drop = int(m.get("big_drop") or 0)
+    if big_drop >= 120:
+        temp -= 10
+    elif big_drop >= 80:
+        temp -= 6
     return int(round(max(0.0, min(temp, 100.0))))
 
 
 def classify_phase(m: dict[str, Any], temperature: int) -> str:
     """Classify the session into panic / divergence / ferment / climax."""
-    if m["dt"] >= 40 or temperature < 28 or (m["zt"] <= 8 and m["dt"] >= 15):
+    big_drop = int(m.get("big_drop") or 0)
+    if (
+        m["dt"] >= 40
+        or temperature < 28
+        or (m["zt"] <= 8 and m["dt"] >= 15)
+        or (big_drop >= 120 and temperature < 40)
+        or (m.get("weak_index") and m["dt"] >= 25)
+    ):
         return "恐慌"
+
+    climax = False
     if m["height"] >= 6 and m["promotion"] >= 28 and m["zt"] >= 35:
-        return "高潮"
+        climax = True
     if temperature >= 72 and m["height"] >= 5:
+        climax = True
+    # Block fake climax on thin volume or collapsing indices.
+    if climax and (m.get("thin_volume") or m.get("weak_index")):
+        return "发酵" if temperature >= 45 else "分歧"
+    if climax:
         return "高潮"
+
     if m["zb_rate"] >= 48 or (m["zt"] < 18 and m["promotion"] < 12):
         return "分歧"
     if temperature >= 45:
@@ -82,11 +184,21 @@ def classify_phase(m: dict[str, Any], temperature: int) -> str:
 
 def kpi_bars(m: dict[str, Any]) -> list[dict[str, Any]]:
     """Build the horizontal KPI bars shown on the sentiment card."""
+    amt_fill = m.get("amount_pctile")
+    if amt_fill is None:
+        amt_fill = _clip(float(m.get("amount_yi") or 0), 0, 12000)
     return [
         {"key": "昨停溢价", "value": m["premium"], "unit": "%", "fill": _clip(m["premium"], 0, 8), "hue": "blue"},
         {"key": "晋级率", "value": m["promotion"], "unit": "%", "fill": _clip(m["promotion"], 0, 60), "hue": "green"},
         {"key": "高度", "value": m["height"], "unit": "板", "fill": _clip(m["height"], 0, 8), "hue": "orange"},
         {"key": "广度", "value": m["breadth"], "unit": "%", "fill": _clip(m["breadth"], 0, 70), "hue": "cyan"},
+        {
+            "key": "成交分位",
+            "value": m.get("amount_pctile") if m.get("amount_pctile") is not None else m.get("amount_yi"),
+            "unit": "%" if m.get("amount_pctile") is not None else "亿",
+            "fill": float(amt_fill),
+            "hue": "blue",
+        },
         {
             "key": "炸板",
             "value": m["zb_rate"],

@@ -20,6 +20,7 @@ def build_verdict(
     hot: list[dict[str, Any]],
     prev: dict[str, Any] | None,
     zt: list[dict[str, Any]] | None = None,
+    auction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Announce the live mainline and a matching vehicle, without a fixed ticker."""
     sticky = (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name")
@@ -38,6 +39,7 @@ def build_verdict(
     status = main.get("status") or ""
     seg = session_segment(now)
     auction_only = seg.get("key") == "auction"
+    algo_notes: list[str] = []
 
     if not board_name:
         action = "观望"
@@ -74,6 +76,20 @@ def build_verdict(
         status=status,
         phase=phase,
     )
+    action, reason, size_hint, gate_notes = apply_market_gates(
+        action,
+        reason,
+        size_hint,
+        metrics=metrics,
+        auction=auction,
+        phase=phase,
+        segment_key=str(seg.get("key") or "closed"),
+    )
+    algo_notes.extend(gate_notes)
+    action, reason, size_hint, stock_block, review_notes = apply_review_bias(
+        action, reason, size_hint, phase=phase
+    )
+    algo_notes.extend(review_notes)
 
     headline = f"实时主线 · {board_name or '未明'}"
     meaning = {
@@ -96,8 +112,13 @@ def build_verdict(
             f"{reason}"
         )
     bans = [b["name"] for b in (hot or []) if b.get("status") == "尖峰禁追"][:4]
-    stocks = [] if _blocks_chi_star_stocks(board_name) else _stock_candidates(main, zt or [])
+    stocks: list[dict[str, Any]] = []
+    if not stock_block and not _blocks_chi_star_stocks(board_name):
+        stocks = _stock_candidates(main, zt or [])
+    elif stock_block and action in ("可买入", "观察回踩"):
+        algo_notes.append("复盘命中偏低，本轮禁个股只留 ETF")
     recommend = _build_recommend(action, main, vehicle, bounce, stocks, bans)
+    recommend = _apply_ready_confirmations(recommend, vehicle, metrics)
     if size_hint and recommend.get("size_note"):
         recommend["size_note"] = f"{size_hint}；{recommend['size_note']}"
     elif size_hint:
@@ -117,6 +138,8 @@ def build_verdict(
         segment_label=str(seg.get("label") or ""),
         size_hint=size_hint,
     )
+    if algo_notes:
+        narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:4]) + "。"
     return {
         "action": action,
         "headline": headline,
@@ -125,6 +148,7 @@ def build_verdict(
         "detail": detail,
         "narrative": narrative,
         "recommend": recommend,
+        "algo_notes": algo_notes,
         "mainline": {
             "name": board_name,
             "bk": main.get("bk"),
@@ -152,6 +176,7 @@ def build_verdict(
         "segment_size_hint": size_hint,
         "phase": phase,
         "temperature": metrics.get("zt"),
+        "stock_block": stock_block,
     }
 
 
@@ -198,6 +223,176 @@ def _mainline_narrative(
     if size_hint:
         bits.append(size_hint)
     return "；".join(bits) + "。"
+
+
+def apply_market_gates(
+    action: str,
+    reason: str,
+    size_hint: str,
+    *,
+    metrics: dict[str, Any] | None,
+    auction: dict[str, Any] | None,
+    phase: str,
+    segment_key: str,
+) -> tuple[str, str, str, list[str]]:
+    """Tighten buy actions using volume, index and auction context."""
+    notes: list[str] = []
+    m = metrics or {}
+    hint = size_hint or ""
+    act = action
+    why = reason
+
+    if phase == "恐慌" and act == "可买入":
+        act = "观望"
+        why = f"相位恐慌，新开仓关闭：{why}"
+        notes.append("恐慌禁开仓")
+
+    if m.get("weak_index") and act == "可买入":
+        act = "观察回踩"
+        why = f"指数偏弱，降级观察回踩：{why}"
+        notes.append("指数闸门")
+        hint = _join_hint(hint, "指数偏弱宜更小仓")
+
+    if m.get("thin_volume") and act == "可买入":
+        act = "观察回踩"
+        why = f"成交额分位偏低，防缩量假强：{why}"
+        notes.append("缩量闸门")
+        hint = _join_hint(hint, "缩量行情小仓或不做")
+
+    if int(m.get("big_drop") or 0) >= 100 and act == "可买入":
+        act = "观察回踩"
+        why = f"大面家数偏多，降级观察：{why}"
+        notes.append("大面闸门")
+
+    auc = auction or {}
+    med = auc.get("median_open")
+    try:
+        med_f = float(med) if med is not None else None
+    except (TypeError, ValueError):
+        med_f = None
+    if med_f is not None and segment_key in ("open30", "morning", "afternoon"):
+        if med_f <= -1.2 and act == "可买入":
+            act = "观察回踩"
+            why = f"弱竞价(中位{med_f:.2f}%)，降级观察：{why}"
+            notes.append("弱竞价闸门")
+            hint = _join_hint(hint, "弱竞价只试错或观望")
+        elif med_f <= -0.5:
+            hint = _join_hint(hint, "竞价偏弱控仓")
+            notes.append("竞价偏弱")
+        elif med_f >= 2.0 and act == "可买入":
+            hint = _join_hint(hint, "强竞价勿追高")
+            notes.append("强竞价防追")
+
+    for g in m.get("context_gates") or []:
+        if g not in notes:
+            notes.append(str(g))
+    return act, why, hint, notes[:6]
+
+
+def apply_review_bias(
+    action: str,
+    reason: str,
+    size_hint: str,
+    *,
+    phase: str,
+) -> tuple[str, str, str, bool, list[str]]:
+    """Use historical phase hit-rate to shrink size or block stocks."""
+    notes: list[str] = []
+    stock_block = False
+    hint = size_hint or ""
+    act = action
+    why = reason
+    try:
+        from market_desk.db import load_signals
+        from market_desk.review import build_phase_hit_rates
+
+        hits = build_phase_hit_rates(load_signals(limit=240))
+    except Exception:
+        return act, why, hint, False, notes
+    row = next((h for h in hits if str(h.get("phase") or "") == str(phase or "")), None)
+    if not row or int(row.get("scored_n") or 0) < 5 or row.get("hit_rate") is None:
+        return act, why, hint, False, notes
+    rate = float(row["hit_rate"])
+    scored = int(row["scored_n"])
+    if rate < 35:
+        stock_block = True
+        hint = _join_hint(hint, f"相位{phase}命中{rate}%（n={scored}）偏低，仅ETF小仓")
+        notes.append(f"复盘命中{rate}%")
+        if act == "可买入":
+            # Keep ETF path but mark size; do not fully close unless panic-like.
+            pass
+    elif rate < 45:
+        hint = _join_hint(hint, f"相位{phase}命中{rate}%一般，偏小仓")
+        notes.append(f"复盘命中{rate}%偏弱")
+    return act, why, hint, stock_block, notes
+
+
+def _join_hint(base: str, extra: str) -> str:
+    """Append a size-hint fragment without duplicating text."""
+    base = (base or "").strip()
+    extra = (extra or "").strip()
+    if not extra:
+        return base
+    if not base:
+        return extra
+    if extra in base:
+        return base
+    return f"{base}；{extra}"
+
+
+def _apply_ready_confirmations(
+    recommend: dict[str, Any],
+    vehicle: dict[str, Any],
+    metrics: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Downgrade ready cards that fail relative-strength or day-high checks."""
+    rec = dict(recommend or {})
+    items = [dict(x) for x in (rec.get("items") or [])]
+    if not items:
+        return rec
+    m = metrics or {}
+    v_pct = vehicle.get("pct")
+    changed = False
+    for item in items:
+        if not item.get("ready"):
+            continue
+        flags: list[str] = []
+        last = item.get("last")
+        high = item.get("high")
+        kind = item.get("kind") or "stock"
+        try:
+            if last is not None and high not in (None, 0) and float(high) > 0:
+                dist = (float(high) - float(last)) / float(high) * 100.0
+                need = 0.35 if kind == "etf" else 0.6
+                if dist < need:
+                    flags.append("离日高过近")
+        except (TypeError, ValueError):
+            pass
+        if kind == "stock" and v_pct is not None and item.get("pct") is not None:
+            try:
+                if float(item["pct"]) < float(v_pct) - 1.5:
+                    flags.append("弱于主线ETF")
+            except (TypeError, ValueError):
+                pass
+        if kind == "stock" and m.get("weak_index"):
+            flags.append("指数弱禁个股现买")
+        if not flags:
+            continue
+        changed = True
+        item["ready"] = False
+        if item.get("wait_price") is not None:
+            item["buy_price"] = item.get("wait_price")
+        item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
+        item["reason"] = (str(item.get("reason") or "") + "；确认失败：" + "、".join(flags)).strip("；")
+        item["confirm_fail"] = flags
+    if not changed:
+        return rec
+    rec["items"] = items
+    if rec.get("buy") and not any(x.get("ready") for x in items):
+        rec["buy"] = False
+        rec["title"] = "盯回踩价，先不追"
+        rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "确认条件未过，先等回踩")
+    return rec
 
 
 def apply_stock_daily_trends(
@@ -814,6 +1009,7 @@ def _sell_item(
     action = verdict.get("action") or ""
     main_status = ((verdict.get("mainline") or {}).get("status")) or ""
     soft_exit = action == "观望" or main_status == "退潮" or phase in ("恐慌", "高潮")
+    carrier = verdict.get("carrier") or {}
 
     urgency = "hold"
     ready = False
@@ -840,9 +1036,10 @@ def _sell_item(
     ):
         urgency = "take"
         ready = True
-        role_label = "冲高回落止盈"
+        deep = pullback >= (1.2 if etf else 2.5) and pnl_pct >= (4.0 if etf else 6.0)
+        role_label = "结构回撤减仓" if deep else "冲高回落止盈"
         sell_price = float(last)
-        sell_pct = 50
+        sell_pct = 40 if deep else 50
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%")
     elif pnl_pct is not None and pnl_pct >= (5.0 if etf else 8.0):
         urgency = "take"
@@ -858,6 +1055,19 @@ def _sell_item(
         sell_price = float(last)
         sell_pct = 30
         reason_parts.append(f"主线转弱/相位偏热，浮盈 {_fmt_pct(pnl_pct)} 先减")
+    elif (
+        not etf
+        and carrier.get("falling")
+        and pnl_pct is not None
+        and pnl_pct > -1.0
+        and last is not None
+    ):
+        urgency = "trim"
+        ready = True
+        role_label = "载体走弱减仓"
+        sell_price = float(last)
+        sell_pct = 30
+        reason_parts.append("主线 ETF/载体价格较上一轮回落，个股先减")
     else:
         role_label = "继续持有"
         sell_price = target

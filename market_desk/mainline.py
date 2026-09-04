@@ -63,7 +63,7 @@ def etf_spec_for_name(board_name: str) -> tuple[str, str, str] | None:
 
 
 def mainline_score(board: dict[str, Any]) -> float:
-    """Score a hot board for mainline ranking."""
+    """Score a hot board for mainline ranking, with multi-day persistence."""
     status = board.get("status") or ""
     rank = {
         "确认中": 50.0,
@@ -71,9 +71,21 @@ def mainline_score(board: dict[str, Any]) -> float:
         "观察": 12.0,
         "退潮": -25.0,
     }.get(status, 0.0)
+    hist = list(board.get("hist") or [])
+    # Reward boards that stayed hot across recent sessions (anti one-day wonder).
+    persist = 0
+    for row in hist[-5:]:
+        zt_n = int(row.get("zt_n") or 0)
+        pct = float(row.get("pct") or 0)
+        if zt_n >= 2 or pct >= 1.5:
+            persist += 1
+    today_hot = int(board.get("zt_n") or 0) >= 2 or float(board.get("pct") or 0) >= 1.5
+    if today_hot:
+        persist += 1
     return (
         rank
         + float(board.get("zt_n") or 0) * 5.0
         + float(board.get("pct") or 0)
         + float(board.get("focus") or 0) * 0.15
+        + min(persist, 6) * 3.0
     )
