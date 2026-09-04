@@ -28,21 +28,27 @@ from market_desk.config import (
     TOAST_ENABLED,
 )
 from market_desk.db import (
+    add_mainline_switch,
     init_db,
     load_auction,
     load_board_hist_map,
     load_daily,
+    load_mainline_switches,
     load_positions,
+    load_session_segments,
     load_unscored_signals,
     save_auction,
     save_board_daily,
     save_daily,
+    upsert_session_segment,
 )
 from market_desk.review import (
     apply_outcomes,
     build_review_payload,
     record_session_signals,
 )
+from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_segment
+
 from market_desk.eastmoney import (
     fetch_board_members,
     fetch_daily_closes_many,
@@ -230,11 +236,29 @@ class DeskEngine:
                 now, phase, metrics, etfs, hot_cards, prev, zt
             )
             await self._apply_recommend_trends(client, verdict)
+            updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                self._persist_session_context(
+                    trade_date_dash,
+                    updated_at,
+                    verdict,
+                    phase,
+                    temperature,
+                    prev,
+                )
+            except Exception:
+                log.exception("session context persist failed")
+            segments = _decorate_segments(
+                load_session_segments(trade_date_dash),
+                (verdict.get("segment") or {}).get("display_key")
+                or (verdict.get("segment") or {}).get("key"),
+            )
+            switches = load_mainline_switches(trade_date_dash)
             payload = {
                 "ok": True,
                 "error": None,
                 "warnings": errors,
-                "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_at": updated_at,
                 "prev_updated_at": (prev or {}).get("updated_at"),
                 "trade_date": trade_date_dash,
                 "live": _is_session(now),
@@ -256,6 +280,8 @@ class DeskEngine:
                 "watch": _watch_pool(zt, zb, quotes),
                 "filter": "个股只做主板 · 创业板/科创走 ETF",
                 "verdict": verdict,
+                "session_segments": segments,
+                "mainline_switches": switches,
                 "positions": positions,
                 "position_summary": position_summary(positions),
                 "sell_advice": build_sell_advice(positions, verdict, phase),
@@ -268,6 +294,46 @@ class DeskEngine:
             except Exception:
                 log.exception("signal record failed")
             self.snapshot = payload
+
+    def _persist_session_context(
+        self,
+        trade_date: str,
+        updated_at: str,
+        verdict: dict[str, Any],
+        phase: str,
+        temperature: int,
+        previous: dict[str, Any] | None,
+    ) -> None:
+        """Save segment conclusions and append mainline switch events."""
+        seg = verdict.get("segment") or session_segment(datetime.now(CN_TZ))
+        if seg.get("key") in SEGMENT_ORDER:
+            upsert_session_segment(
+                segment_snapshot_row(
+                    trade_date, seg, verdict, phase, temperature, updated_at
+                )
+            )
+        # Also keep the last active trading segment frozen when we enter lunch/close.
+        if seg.get("key") == "closed":
+            # Prefer updating morning during lunch, afternoon after close if already saved.
+            pass
+
+        cur_name = ((verdict.get("mainline") or {}).get("name") or "").strip()
+        prev_name = (
+            (((previous or {}).get("verdict") or {}).get("mainline") or {}).get("name")
+            or ""
+        ).strip()
+        if cur_name and prev_name and cur_name != prev_name:
+            add_mainline_switch(
+                {
+                    "trade_date": trade_date,
+                    "switched_at": updated_at,
+                    "from_name": prev_name,
+                    "to_name": cur_name,
+                    "action": verdict.get("action"),
+                    "phase": phase,
+                    "temperature": temperature,
+                }
+            )
 
     async def build_review(self, limit: int = 60) -> dict[str, Any]:
         """Score pending historical signals then return the review panel payload."""
@@ -589,6 +655,33 @@ async def _safe(fn, *args, errors: list[str], label: str):
 def _minutes(now: datetime) -> int:
     """Return minutes since midnight for session-window checks."""
     return now.hour * 60 + now.minute
+
+
+def _decorate_segments(
+    rows: list[dict[str, Any]],
+    current_key: str | None,
+) -> list[dict[str, Any]]:
+    """Merge saved segment rows into a fixed morning→afternoon strip."""
+    from market_desk.session import SEGMENT_LABELS, SEGMENT_ORDER
+
+    by = {str(r.get("segment")): dict(r) for r in rows or []}
+    out: list[dict[str, Any]] = []
+    for key in SEGMENT_ORDER:
+        row = by.get(key) or {
+            "segment": key,
+            "label": SEGMENT_LABELS.get(key, key),
+            "action": None,
+            "mainline": "",
+            "phase": "",
+            "reason": "",
+            "size_hint": "",
+            "updated_at": None,
+        }
+        row["label"] = row.get("label") or SEGMENT_LABELS.get(key, key)
+        row["current"] = key == current_key
+        row["filled"] = bool(row.get("action"))
+        out.append(row)
+    return out
 
 
 def _is_weekday(now: datetime) -> bool:

@@ -8,6 +8,7 @@ from typing import Any
 from market_desk.config import CHINEXT_STAR_ETFS
 from market_desk.filters import is_limit_up, is_main_board, is_st, normalize_code
 from market_desk.mainline import match_mainline_etf, pick_mainline
+from market_desk.session import apply_segment_bias, session_segment
 from market_desk.trend import classify_daily_trend
 
 
@@ -34,8 +35,8 @@ def build_verdict(
     prev_px = (((prev or {}).get("verdict") or {}).get("carrier") or {}).get("price")
     falling = price is not None and prev_px is not None and price < prev_px - 1e-6
     status = main.get("status") or ""
-    hhmm = now.hour * 100 + now.minute
-    auction_only = 915 <= hhmm < 930
+    seg = session_segment(now)
+    auction_only = seg.get("key") == "auction"
 
     if not board_name:
         action = "观望"
@@ -65,27 +66,41 @@ def build_verdict(
         action = "观察回踩"
         reason = f"实时主线倾向 {board_name}，结构未完全确认"
 
+    action, reason, size_hint = apply_segment_bias(
+        action,
+        reason,
+        segment_key=str(seg.get("key") or "closed"),
+        status=status,
+        phase=phase,
+    )
+
     headline = f"实时主线 · {board_name or '未明'}"
     meaning = {
         "观望": "主线未明或已退潮，先看不买。",
         "观察回踩": "主线已经认出来了，但过热或未站稳，等回踩。",
         "可买入": "主线确认。优先 ETF（含创业板ETF、科创50ETF）。个股只给主板回踩票，创业/科创个股不推荐。",
-    }[action]
+    }.get(action, "")
+    if size_hint:
+        meaning = f"{meaning}（{size_hint}）"
     if vehicle.get("code"):
         detail = (
-            f"{board_name} · {vehicle.get('name')} {vehicle.get('code')} "
+            f"[{seg.get('label')}] {board_name} · {vehicle.get('name')} {vehicle.get('code')} "
             f"{vehicle.get('price') or '—'} {_fmt_pct(pct)}"
             f"{'，日低回升 ' + _fmt_num(bounce) + '%' if bounce is not None else ''}。{reason}"
         )
     else:
         detail = (
-            f"{board_name or '—'} { _fmt_pct(main.get('pct')) } · "
+            f"[{seg.get('label')}] {board_name or '—'} { _fmt_pct(main.get('pct')) } · "
             f"总龙头 {main.get('leader_name') or '—'} {main.get('leader_boards') or 0}板。"
             f"{reason}"
         )
     bans = [b["name"] for b in (hot or []) if b.get("status") == "尖峰禁追"][:4]
     stocks = [] if _blocks_chi_star_stocks(board_name) else _stock_candidates(main, zt or [])
     recommend = _build_recommend(action, main, vehicle, bounce, stocks, bans)
+    if size_hint and recommend.get("size_note"):
+        recommend["size_note"] = f"{size_hint}；{recommend['size_note']}"
+    elif size_hint:
+        recommend["size_note"] = size_hint
     return {
         "action": action,
         "headline": headline,
@@ -116,6 +131,8 @@ def build_verdict(
         },
         "bans": bans,
         "auction_only": auction_only,
+        "segment": seg,
+        "segment_size_hint": size_hint,
         "phase": phase,
         "temperature": metrics.get("zt"),
     }

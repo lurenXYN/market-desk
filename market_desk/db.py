@@ -107,6 +107,37 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signals ADD COLUMN note TEXT")
         if "skipped" not in cols:
             conn.execute("ALTER TABLE signals ADD COLUMN skipped INTEGER DEFAULT 0")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_segment (
+                trade_date TEXT NOT NULL,
+                segment TEXT NOT NULL,
+                label TEXT,
+                action TEXT,
+                mainline TEXT,
+                phase TEXT,
+                temperature INTEGER,
+                reason TEXT,
+                size_hint TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (trade_date, segment)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mainline_switch (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                switched_at TEXT NOT NULL,
+                from_name TEXT,
+                to_name TEXT,
+                action TEXT,
+                phase TEXT,
+                temperature INTEGER
+            )
+            """
+        )
         conn.commit()
 
 
@@ -502,3 +533,91 @@ def update_signal_meta(signal_id: int, *, skipped: int | None = None, note: str 
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def upsert_session_segment(row: dict[str, Any]) -> None:
+    """Upsert today's conclusion for one intraday segment."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO session_segment(
+                trade_date, segment, label, action, mainline, phase,
+                temperature, reason, size_hint, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_date, segment) DO UPDATE SET
+                label = excluded.label,
+                action = excluded.action,
+                mainline = excluded.mainline,
+                phase = excluded.phase,
+                temperature = excluded.temperature,
+                reason = excluded.reason,
+                size_hint = excluded.size_hint,
+                updated_at = excluded.updated_at
+            """,
+            (
+                row.get("trade_date"),
+                row.get("segment"),
+                row.get("label"),
+                row.get("action"),
+                row.get("mainline"),
+                row.get("phase"),
+                row.get("temperature"),
+                row.get("reason"),
+                row.get("size_hint"),
+                row.get("updated_at"),
+            ),
+        )
+        conn.commit()
+
+
+def load_session_segments(trade_date: str) -> list[dict[str, Any]]:
+    """Return saved segment conclusions for a trade date."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT trade_date, segment, label, action, mainline, phase,
+                   temperature, reason, size_hint, updated_at
+            FROM session_segment
+            WHERE trade_date = ?
+            """,
+            (trade_date,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_mainline_switch(row: dict[str, Any]) -> None:
+    """Append a mainline switch event for the day."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO mainline_switch(
+                trade_date, switched_at, from_name, to_name, action, phase, temperature
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row.get("trade_date"),
+                row.get("switched_at"),
+                row.get("from_name"),
+                row.get("to_name"),
+                row.get("action"),
+                row.get("phase"),
+                row.get("temperature"),
+            ),
+        )
+        conn.commit()
+
+
+def load_mainline_switches(trade_date: str, limit: int = 40) -> list[dict[str, Any]]:
+    """Return today's mainline switches, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, trade_date, switched_at, from_name, to_name, action, phase, temperature
+            FROM mainline_switch
+            WHERE trade_date = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (trade_date, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
