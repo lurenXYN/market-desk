@@ -125,7 +125,7 @@ def apply_stock_daily_trends(
     recommend: dict[str, Any] | None,
     closes_by_code: dict[str, list[float]],
 ) -> dict[str, Any]:
-    """Attach daily-trend flags to stock cards; demote or drop non-uptrends."""
+    """Attach daily-trend flags to stock cards; keep non-uptrends visible with warnings."""
     rec = dict(recommend or {})
     items = list(rec.get("items") or [])
     if not items:
@@ -159,6 +159,7 @@ def apply_stock_daily_trends(
         marked["trend_warn"] = marked.get("trend_warn") or "不是上升趋势"
         if marked.get("wait_price") is not None:
             marked["buy_price"] = marked.get("wait_price")
+        marked["role"] = "watch"
         marked["role_label"] = "个股·非上升 · 不建议买"
         marked["reason"] = (
             f"【不是上升趋势·{trend.get('label') or '日线偏弱'}】"
@@ -166,38 +167,39 @@ def apply_stock_daily_trends(
         )
         bad_stocks.append(marked)
 
-    if up_stocks:
-        merged = etf_items + up_stocks
-    elif etf_items:
-        merged = etf_items
-    else:
-        merged = etf_items + bad_stocks
+    # Always show non-uptrend names with a loud badge; never silently drop them.
+    merged = etf_items + up_stocks + bad_stocks
 
     for idx, item in enumerate(merged):
         if item.get("kind") == "stock" and item.get("trend_ok"):
-            item["role"] = "primary" if idx == 0 or not any(
-                x.get("kind") == "etf" for x in merged
-            ) else "alt"
+            has_etf = any(x.get("kind") == "etf" for x in merged)
+            item["role"] = "alt" if has_etf or idx > 0 else "primary"
             if item.get("ready"):
                 item["role_label"] = (
                     "个股 主推" if item.get("role") == "primary" else "个股 备选"
                 )
 
     rec["items"] = merged
-    primary = next((x for x in merged if x.get("role") == "primary"), None) or (
-        merged[0] if merged else None
-    )
+    primary = next(
+        (
+            x
+            for x in merged
+            if x.get("kind") == "etf" or (x.get("kind") == "stock" and x.get("trend_ok"))
+        ),
+        None,
+    ) or (merged[0] if merged else None)
+    if primary and primary.get("kind") == "etf":
+        primary["role"] = "primary"
     rec["primary"] = primary
     if primary:
         rec["code"] = primary.get("code")
         rec["name"] = primary.get("name")
         rec["price"] = primary.get("buy_price") or primary.get("last")
-    dropped = len(bad_stocks) if up_stocks or etf_items else 0
-    if dropped:
+    if bad_stocks:
         note = rec.get("size_note") or ""
         rec["size_note"] = (
             (note + "；") if note else ""
-        ) + f"已过滤 {dropped} 只非上升趋势个股"
+        ) + f"含 {len(bad_stocks)} 只非上升趋势个股（已红标，不建议买）"
     if bad_stocks and not up_stocks and not etf_items:
         rec["buy"] = False
         rec["title"] = "个股非上升趋势"
