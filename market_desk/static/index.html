@@ -482,6 +482,33 @@
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; }
     th { color: var(--muted); font-weight: 600; }
+    .rev-table {
+      table-layout: auto;
+      width: 100%;
+    }
+    .rev-table th,
+    .rev-table td {
+      white-space: nowrap;
+      vertical-align: top;
+    }
+    .rev-table th.col-board,
+    .rev-table td.col-board {
+      white-space: normal;
+      word-break: break-word;
+      line-height: 1.35;
+      min-width: 7.5em;
+      max-width: 12em;
+    }
+    .rev-table th.col-ops,
+    .rev-table td.col-ops {
+      white-space: normal;
+      min-width: 11em;
+    }
+    .rev-table td.col-board .board-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
     .mid { margin-top: 10px; }
     .subtabs { display: flex; gap: 8px; margin-bottom: 8px; color: var(--muted); }
     .subtabs span { cursor: pointer; padding-bottom: 4px; }
@@ -1193,7 +1220,7 @@
             </div>
           </div>
         </div>
-        <table>
+        <table class="rev-table">
           <thead>
             <tr id="revHead"></tr>
           </thead>
@@ -2022,7 +2049,13 @@
         return `${chase == null ? "—" : chase}${ctx.chaseDevHtml}`;
       }
       if (col === "mainline") return r.mainline || "—";
-      if (col === "board") return r.board_text || "—";
+      if (col === "board") {
+        const boards = (r.boards && r.boards.length)
+          ? r.boards
+          : String(r.board_text || "—").split(/\s*\/\s*/).filter(Boolean);
+        if (!boards.length) return "—";
+        return `<div class="board-lines">${boards.map((b) => `<span>${b}</span>`).join("")}</div>`;
+      }
       if (col === "vs_ml") {
         const tag = r.vs_mainline || "—";
         const match = r.board_match;
@@ -2032,11 +2065,11 @@
       if (col === "phase") return r.phase || "—";
       if (col === "day1") {
         const d1 = r.outcome_day1_pct;
-        return `<td class="${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>`;
+        return `<td class="col-day1 ${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>`;
       }
       if (col === "day3") {
         const d3 = r.outcome_day3_pct;
-        return `<td class="${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>`;
+        return `<td class="col-day3 ${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>`;
       }
       if (col === "result") return `${ctx.label}${ctx.pend}`;
       if (col === "ops") {
@@ -2117,7 +2150,9 @@
         return true;
       });
       const cols = visibleRevCols();
-      document.getElementById("revHead").innerHTML = cols.map((id) => `<th>${revColLabel(id)}</th>`).join("");
+      document.getElementById("revHead").innerHTML = cols.map((id) =>
+        `<th class="col-${id}">${revColLabel(id)}</th>`
+      ).join("");
       const colspan = Math.max(cols.length, 1);
       document.getElementById("revBody").innerHTML = rows.map((r) => {
         const typ = r.signal_type === "sell" ? "卖" : "买";
