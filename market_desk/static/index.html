@@ -276,6 +276,8 @@
     }
     .rec-card.sell-now .role { color: #fecaca; }
     .rec-card.sell-now .sell .val { color: #fecaca; }
+    .rec-card.t1-lock { opacity: 0.85; }
+    .rec-card.t1-lock .role { color: #fde68a; }
     .sellbox .rec-card.sell-now .pos-btn.sell-go {
       border-color: #ef4444; color: #fecaca; background: #1a0c0c;
     }
@@ -1347,11 +1349,12 @@
     const sellCard = (it) => {
       const kind = it.kind || "stock";
       const sellNow = !!it.ready;
+      const t1 = !!it.t1_locked;
       const sell = it.sell_price != null ? it.sell_price : it.last;
       const pnl = it.pnl_pct;
       const pnlHtml = pnl == null ? "—" : `<span class="${pnl >= 0 ? "up" : "down"}">${(pnl > 0 ? "+" : "") + Number(pnl).toFixed(2)}%</span>`;
       const sellPct = it.sell_pct != null ? ` · 建议卖 ${it.sell_pct}%` : "";
-      return `<article class="rec-card${sellNow ? " sell-now" : " wait"}">
+      return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
         <div class="rec-prices">
@@ -1361,8 +1364,8 @@
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div><div class="lab">浮盈</div><div class="val">${pnlHtml}</div></div>
         </div>
-        <div class="rec-why">${it.reason || ""}${it.sell_pct != null ? `；建议卖出约 ${it.sell_pct}% 仓位` : ""}</div>
-        <button type="button" class="pos-btn sell-go">去仓位页核对</button>
+        <div class="rec-why">${it.reason || ""}${it.sell_pct != null && !t1 ? `；建议卖出约 ${it.sell_pct}% 仓位` : ""}</div>
+        <button type="button" class="pos-btn sell-go">${t1 ? "T+1 隔日可卖" : "去仓位页核对"}</button>
       </article>`;
     };
     const termHtml = (name) => {
@@ -2028,9 +2031,13 @@
       }
       if (col === "result") return `${ctx.label}${ctx.pend}`;
       if (col === "ops") {
+        const t1 = !!ctx.t1Locked;
+        const tradeBtn = t1
+          ? `<button type="button" class="rev-trade" disabled title="当日买入，隔日才能卖（T+1）">T+1不可卖</button>`
+          : `<button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${r.live_last != null ? r.live_last : (r.price ?? "")}">已交易</button>`;
         return `<div class="rev-actions">
           <button type="button" class="rev-up" data-code="${r.code || ""}" data-id="${r.id}">确认上升</button>
-          <button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${r.live_last != null ? r.live_last : (r.price ?? "")}">已交易</button>
+          ${tradeBtn}
           <button type="button" class="rev-skip${ctx.skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
           <button type="button" class="pos-del rev-del" data-id="${r.id}">删除</button>
         </div>`;
@@ -2136,7 +2143,24 @@
         const chaseDevHtml = chaseDev == null
           ? ""
           : `<div class="${chaseDev >= 0 ? "dev-up" : "dev-down"}">偏离 ${(chaseDev > 0 ? "+" : "") + Number(chaseDev).toFixed(2)}%</div>`;
-        const ctx = { typ, skipped, traded, label, pend, markHtml, cautionHtml, liveHtml, devHtml, chaseDevHtml };
+        let t1Locked = false;
+        if (r.signal_type === "sell") {
+          const day = String(r.trade_date || (lastData && lastData.trade_date) || "").slice(0, 10);
+          const code = String(r.code || "").replace(/\D/g, "").padStart(6, "0");
+          const pos = ((lastData && lastData.positions) || []).find(
+            (p) => String(p.code || "").replace(/\D/g, "").padStart(6, "0") === code
+          );
+          const buyDay = String((pos && (pos.last_buy_date || pos.created_at)) || "").slice(0, 10);
+          if (day && buyDay && day === buyDay) t1Locked = true;
+          const sameBuy = (lastReview.signals || []).some((s) =>
+            s.signal_type === "buy"
+            && String(s.trade_date || "").slice(0, 10) === day
+            && String(s.code || "").replace(/\D/g, "").padStart(6, "0") === code
+            && Number(s.traded || 0)
+          );
+          if (sameBuy) t1Locked = true;
+        }
+        const ctx = { typ, skipped, traded, label, pend, markHtml, cautionHtml, liveHtml, devHtml, chaseDevHtml, t1Locked };
         const tds = cols.map((id) => {
           const html = revCellHtml(id, r, ctx);
           if (id === "day1" || id === "day3") return html;
@@ -2847,17 +2871,21 @@
           });
           const d = await r.json().catch(() => ({}));
           if (!r.ok) {
-            alert(typeof d.detail === "string" ? d.detail : "记账失败，已尽量标记交易状态");
-            await fetch("/api/review/" + id, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                traded: true,
-                skipped: false,
-                fill_price: typ === "buy" && px ? Number(px) : undefined,
-                fill_qty: typ === "buy" ? qty : undefined,
-              }),
-            });
+            const detail = typeof d.detail === "string" ? d.detail : "记账失败";
+            alert(detail);
+            // Do not force-mark traded on T+1 or other sell booking failures.
+            if (typ === "buy" && !(String(detail).includes("T+1"))) {
+              await fetch("/api/review/" + id, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  traded: true,
+                  skipped: false,
+                  fill_price: px ? Number(px) : undefined,
+                  fill_qty: qty,
+                }),
+              });
+            }
           }
         } catch (e) {
           alert("操作失败");

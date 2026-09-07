@@ -22,6 +22,7 @@ from market_desk.db import (
     delete_watchlist,
     export_backup_payload,
     import_backup_payload,
+    is_t1_locked,
     load_positions,
     load_signal,
     load_signals,
@@ -298,6 +299,30 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
         fill_px = float(row.get("price") or row.get("last") or 0) or None
     if fill_qty is None and sig_type == "buy":
         fill_qty = 100
+
+    if sig_type == "sell" and code:
+        trade_day = str(
+            row.get("trade_date") or engine.snapshot.get("trade_date") or ""
+        )[:10]
+        positions = [p for p in load_positions() if normalize_code(p.get("code")) == code]
+        if positions and is_t1_locked(positions[0], trade_day):
+            raise HTTPException(
+                400,
+                "T+1：当日买入的仓位隔日才能卖，不能在复盘里记卖出",
+            )
+        bought_today = any(
+            str(s.get("trade_date") or "")[:10] == trade_day
+            and str(s.get("signal_type") or "") == "buy"
+            and normalize_code(s.get("code")) == code
+            and int(s.get("traded") or 0)
+            for s in load_signals(limit=120)
+        )
+        if bought_today:
+            raise HTTPException(
+                400,
+                "T+1：当日买入的仓位隔日才能卖，不能在复盘里记卖出",
+            )
+
     update_signal_meta(
         sid,
         traded=1,

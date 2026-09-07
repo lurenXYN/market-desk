@@ -148,6 +148,7 @@ class DeskEngine:
             positions,
             self.snapshot.get("verdict") or {},
             self.snapshot.get("phase") or "",
+            trade_date=self.snapshot.get("trade_date"),
         )
         return positions
 
@@ -356,7 +357,9 @@ class DeskEngine:
                 "position_summary": position_summary(positions),
                 "risk_overview": build_risk_overview(positions),
                 "watchlist": watchlist,
-                "sell_advice": build_sell_advice(positions, verdict, phase),
+                "sell_advice": build_sell_advice(
+                    positions, verdict, phase, trade_date=trade_date_dash
+                ),
                 "glossary": GLOSSARY,
             }
             payload["health"] = _build_health(now, errors, updated_at, payload)

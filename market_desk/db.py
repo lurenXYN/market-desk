@@ -65,10 +65,24 @@ def init_db() -> None:
                 buy_price REAL NOT NULL,
                 qty INTEGER NOT NULL,
                 note TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                last_buy_date TEXT
             )
             """
         )
+        pos_cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(positions)").fetchall()
+        }
+        if "last_buy_date" not in pos_cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN last_buy_date TEXT")
+            conn.execute(
+                """
+                UPDATE positions
+                SET last_buy_date = substr(created_at, 1, 10)
+                WHERE last_buy_date IS NULL OR last_buy_date = ''
+                """
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS signals (
@@ -327,9 +341,13 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
     """Insert a position, or average into an existing same-code row."""
     code = str(code or "").zfill(6)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    buy_day = now[:10]
     with _connect() as conn:
         existing = conn.execute(
-            "SELECT id, name, buy_price, qty, note FROM positions WHERE code = ? ORDER BY id DESC LIMIT 1",
+            """
+            SELECT id, name, buy_price, qty, note, created_at, last_buy_date
+            FROM positions WHERE code = ? ORDER BY id DESC LIMIT 1
+            """,
             (code,),
         ).fetchone()
         if existing:
@@ -347,7 +365,7 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
             conn.execute(
                 """
                 UPDATE positions
-                SET name = ?, buy_price = ?, qty = ?, note = ?
+                SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?
                 WHERE id = ?
                 """,
                 (
@@ -355,6 +373,7 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
                     round(avg, 4),
                     new_qty,
                     merged_note,
+                    buy_day,
                     int(existing["id"]),
                 ),
             )
@@ -366,15 +385,16 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
                 "buy_price": round(avg, 4),
                 "qty": new_qty,
                 "note": merged_note,
-                "created_at": now,
+                "created_at": existing["created_at"] or now,
+                "last_buy_date": buy_day,
                 "averaged": True,
             }
         cur = conn.execute(
             """
-            INSERT INTO positions(code, name, buy_price, qty, note, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO positions(code, name, buy_price, qty, note, created_at, last_buy_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (code, name, buy_price, qty, note, now),
+            (code, name, buy_price, qty, note, now, buy_day),
         )
         pid = int(cur.lastrowid)
         conn.commit()
@@ -386,6 +406,7 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
         "qty": qty,
         "note": note,
         "created_at": now,
+        "last_buy_date": buy_day,
     }
 
 
@@ -396,7 +417,10 @@ def trim_position(pid: int, qty: int) -> dict[str, Any] | None:
         return None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, code, name, buy_price, qty, note, created_at FROM positions WHERE id = ?",
+            """
+            SELECT id, code, name, buy_price, qty, note, created_at, last_buy_date
+            FROM positions WHERE id = ?
+            """,
             (pid,),
         ).fetchone()
         if not row:
@@ -430,12 +454,35 @@ def load_positions() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, code, name, buy_price, qty, note, created_at
+            SELECT id, code, name, buy_price, qty, note, created_at, last_buy_date
             FROM positions
             ORDER BY id DESC
             """
         ).fetchall()
-    return [dict(row) for row in rows]
+    out = []
+    for row in rows:
+        item = dict(row)
+        if not item.get("last_buy_date"):
+            item["last_buy_date"] = str(item.get("created_at") or "")[:10] or None
+        out.append(item)
+    return out
+
+
+def position_buy_day(row: dict[str, Any] | None) -> str:
+    """Return YYYY-MM-DD of the latest buy for a position row."""
+    if not row:
+        return ""
+    day = str(row.get("last_buy_date") or "").strip()[:10]
+    if day:
+        return day
+    return str(row.get("created_at") or "").strip()[:10]
+
+
+def is_t1_locked(row: dict[str, Any] | None, trade_date: str | None) -> bool:
+    """Return True when A-share T+1 blocks selling this position today."""
+    buy_day = position_buy_day(row)
+    day = str(trade_date or "").strip()[:10]
+    return bool(buy_day and day and buy_day == day)
 
 
 def upsert_signal(row: dict[str, Any]) -> None:

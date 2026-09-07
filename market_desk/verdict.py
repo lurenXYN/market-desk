@@ -1052,12 +1052,15 @@ def build_sell_advice(
     positions: list[dict[str, Any]],
     verdict: dict[str, Any] | None,
     phase: str,
+    *,
+    trade_date: str | None = None,
 ) -> dict[str, Any]:
     """Build sell / hold cards for locally recorded positions."""
     verdict = verdict or {}
+    day = str(trade_date or "").strip()[:10]
     items: list[dict[str, Any]] = []
     for row in positions or []:
-        item = _sell_item(row, verdict, phase)
+        item = _sell_item(row, verdict, phase, trade_date=day)
         if item:
             items.append(item)
     rank = {"stop": 0, "take": 1, "trim": 2, "hold": 3}
@@ -1070,7 +1073,7 @@ def build_sell_advice(
             "empty": True,
             "title": "暂无仓位",
             "text": "暂无仓位 · 买入记账后这里给出卖出建议",
-            "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。",
+            "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。当日买入受 T+1 限制，隔日才可卖。",
             "items": [],
         }
     if sell_now:
@@ -1082,12 +1085,15 @@ def build_sell_advice(
         size_note = "到价就动手。本地提示，不会下单。"
     else:
         primary = items[0] if items else None
+        t1_n = sum(1 for x in items if x.get("t1_locked"))
         text = (
             f"继续持有 · 盯 {primary.get('name')} 目标 {primary.get('sell_price')}"
             if primary
             else "继续持有"
         )
         size_note = "未触发卖点时，建议卖=目标价，止损按成本下方。"
+        if t1_n:
+            size_note = f"有 {t1_n} 只当日买入（T+1），隔日才能卖。" + size_note
     return {
         "sell": bool(sell_now),
         "empty": False,
@@ -1103,8 +1109,12 @@ def _sell_item(
     row: dict[str, Any],
     verdict: dict[str, Any],
     phase: str,
+    *,
+    trade_date: str | None = None,
 ) -> dict[str, Any] | None:
     """Decide whether a held name should be sold, trimmed, or held."""
+    from market_desk.db import is_t1_locked, position_buy_day
+
     code = normalize_code(row.get("code"))
     name = str(row.get("name") or code)
     last = row.get("last")
@@ -1134,6 +1144,8 @@ def _sell_item(
     main_status = ((verdict.get("mainline") or {}).get("status")) or ""
     soft_exit = action == "观望" or main_status == "退潮" or phase in ("恐慌", "高潮")
     carrier = verdict.get("carrier") or {}
+    t1_locked = is_t1_locked(row, trade_date)
+    buy_day = position_buy_day(row)
 
     urgency = "hold"
     ready = False
@@ -1200,6 +1212,15 @@ def _sell_item(
         if pullback is not None:
             reason_parts.append(f"高点回撤 {pullback:.1f}%")
 
+    if t1_locked and ready:
+        ready = False
+        role_label = f"T+1锁定·{role_label}"
+        sell_pct = 0
+        reason_parts.insert(0, f"当日买入（{buy_day or '今'}）隔日才能卖")
+    elif t1_locked:
+        role_label = "T+1锁定"
+        reason_parts.insert(0, f"当日买入（{buy_day or '今'}）隔日才能卖")
+
     return {
         "id": row.get("id"),
         "kind": "etf" if etf else "stock",
@@ -1207,6 +1228,8 @@ def _sell_item(
         "role_label": role_label,
         "urgency": urgency,
         "ready": ready,
+        "t1_locked": t1_locked,
+        "last_buy_date": buy_day or None,
         "code": code,
         "name": name,
         "qty": int(row.get("qty") or 0),
