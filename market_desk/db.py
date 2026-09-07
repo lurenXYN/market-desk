@@ -611,9 +611,51 @@ def upsert_signal(row: dict[str, Any]) -> None:
 
     ``signaled_at`` and ``price`` are kept from the first insert so the review
     panel shows the first watch time and the first suggested entry price.
+    Payload is merged; first non-empty ``board_names`` is locked so later hot-board
+    rotations cannot wipe the所属板块 column.
     """
-    now_payload = json.dumps(row.get("payload") or {}, ensure_ascii=False)
+    trade_date = row.get("trade_date")
+    code = row.get("code")
+    signal_type = row.get("signal_type")
+    incoming = dict(row.get("payload") or {})
     with _connect() as conn:
+        existing = conn.execute(
+            """
+            SELECT signaled_at, price, payload
+            FROM signals
+            WHERE trade_date = ? AND code = ? AND signal_type = ?
+            """,
+            (trade_date, code, signal_type),
+        ).fetchone()
+        old_payload: dict[str, Any] = {}
+        if existing and existing["payload"]:
+            try:
+                raw = json.loads(existing["payload"])
+                if isinstance(raw, dict):
+                    old_payload = raw
+            except json.JSONDecodeError:
+                old_payload = {}
+        merged = {**old_payload, **incoming}
+        old_boards = [
+            str(x).strip()
+            for x in (old_payload.get("board_names") or [])
+            if str(x).strip()
+        ]
+        new_boards = [
+            str(x).strip()
+            for x in (incoming.get("board_names") or [])
+            if str(x).strip()
+        ]
+        if old_boards and not new_boards:
+            merged["board_names"] = old_boards
+            if old_payload.get("vs_mainline") is not None and not incoming.get("vs_mainline"):
+                merged["vs_mainline"] = old_payload.get("vs_mainline")
+            if "board_match" in old_payload and "board_match" not in incoming:
+                merged["board_match"] = old_payload.get("board_match")
+        elif old_boards and new_boards and old_boards != new_boards:
+            # Prefer richer first capture; only replace when newly resolved from empty.
+            pass
+        now_payload = json.dumps(merged, ensure_ascii=False)
         conn.execute(
             """
             INSERT INTO signals(
@@ -631,13 +673,13 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 payload = excluded.payload
             """,
             (
-                row.get("trade_date"),
+                trade_date,
                 row.get("signaled_at"),
-                row.get("signal_type"),
+                signal_type,
                 row.get("action"),
                 row.get("phase"),
                 row.get("mainline"),
-                row.get("code"),
+                code,
                 row.get("name"),
                 row.get("kind"),
                 row.get("price"),

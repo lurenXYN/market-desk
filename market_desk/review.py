@@ -7,9 +7,11 @@ from datetime import datetime
 from typing import Any
 
 from market_desk.db import (
+    list_signal_trade_dates,
     load_mainline_switches,
     load_review_digests,
     load_signals,
+    load_signals_for_date,
     mark_signal_outcome,
     save_review_digest,
     upsert_signal,
@@ -179,14 +181,16 @@ def enrich_signals_with_boards(
     for row in rows:
         item = dict(row)
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        stored = payload.get("board_names") or item.get("boards")
+        stored = payload.get("board_names")
+        if stored is None:
+            stored = item.get("boards")
         names = [str(x).strip() for x in (stored or []) if str(x).strip()]
         if not names:
             names = lookup_code_boards(item.get("code") or "", boards)
-        # ETF / primary vehicle often has no constituent hit; fall back to mainline label.
-        if not names and str(item.get("kind") or "") == "etf":
+        # Hot/pin pools rotate; fall back to the signal's session mainline label.
+        if not names:
             ml = str(item.get("mainline") or "").strip()
-            if ml:
+            if ml and ml not in ("未明", "—"):
                 names = [ml]
         cmp = compare_boards_to_mainline(names, item.get("mainline"))
         item["boards"] = cmp["boards"]
@@ -221,12 +225,6 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
             if not code:
                 continue
             kind = item.get("kind") or "stock"
-            pending = bool(item.get("trend_pending"))
-            manual_up = item.get("trend_manual") == "up"
-            if kind == "stock" and not item.get("trend_ok") and not pending and not manual_up:
-                # Confirmed non-uptrend: still log for review when action is buy-ish.
-                if action not in ("可买入", "可小仓", "观察回踩") and not rec.get("buy"):
-                    continue
             if kind == "etf" and not item.get("ready") and not rec.get("buy"):
                 if action not in ("可买入", "可小仓", "观察回踩"):
                     continue
@@ -260,9 +258,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "pct": item.get("pct"),
                         "trend": item.get("trend"),
                         "trend_quality": item.get("trend_quality"),
-                        "trend_pending": pending,
-                        "trend_manual": item.get("trend_manual"),
+                        "trend_pending": False,
+                        "trend_unknown": bool(item.get("trend_unknown")),
                         "trend_ok": bool(item.get("trend_ok")),
+                        "trend_down": bool(item.get("trend_down")),
                         "board_names": board_cmp["boards"],
                         "vs_mainline": board_cmp["vs_mainline"],
                         "board_match": board_cmp["match"],
@@ -284,6 +283,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         if price is None:
             continue
         board_names = lookup_code_boards(code, board_cards)
+        if not board_names and mainline:
+            board_names = [mainline]
         board_cmp = compare_boards_to_mainline(board_names, mainline)
         upsert_signal(
             {
@@ -631,6 +632,29 @@ def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
     return out
 
 
+def _entry_band_worth_alert(
+    *,
+    last: float,
+    low: float,
+    chase: float,
+    pct: float | None,
+) -> bool:
+    """
+    Return True only for a meaningful pullback entry, not a late chase inside the band.
+
+    Suppress when the day move is already hot, or price sits in the upper half
+    of [wait, chase) — those are usually already-extended prints, not buys.
+    """
+    if chase <= low:
+        return False
+    if pct is not None and float(pct) >= 5.0:
+        return False
+    # Upper ~40% of the band ≈ already near 不追; only alert the lower pullback zone.
+    if (float(last) - float(low)) / (float(chase) - float(low)) >= 0.40:
+        return False
+    return True
+
+
 def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str, str, str]]:
     """Emit toasts when live price hits stop / chase / buy-band on today's plans."""
     if not snapshot or not snapshot.get("ok"):
@@ -654,15 +678,14 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                 "code": code,
                 "name": item.get("name") or code,
                 "last": num(item.get("last")) or quotes.get(code),
+                "pct": num(item.get("pct")),
                 "buy": num(item.get("buy_price")),
                 "wait": num(item.get("wait_price")),
                 "stop": num(item.get("stop_price")),
                 "chase": num(item.get("chase_price")),
             }
         )
-    for row in load_signals(limit=80):
-        if str(row.get("trade_date") or "") != trade_date:
-            continue
+    for row in load_signals_for_date(trade_date):
         if str(row.get("signal_type") or "") != "buy":
             continue
         if int(row.get("skipped") or 0):
@@ -677,6 +700,7 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                 "code": code,
                 "name": row.get("name") or code,
                 "last": quotes.get(code) or num(row.get("last")),
+                "pct": None,
                 "buy": num(row.get("price")),
                 "wait": num(payload.get("wait_price")),
                 "stop": num(payload.get("stop_price")),
@@ -696,6 +720,7 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
         wait = p.get("wait")
         buy = p.get("buy")
         low = wait if wait is not None else buy
+        pct = p.get("pct")
         if stop is not None and last <= stop:
             alerts.append(
                 (
@@ -712,7 +737,12 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                     f"{name} {code} 现价 {last} ≥ 不追 {chase}，不宜追高",
                 )
             )
-        elif low is not None and chase is not None and low <= last < chase:
+        elif (
+            low is not None
+            and chase is not None
+            and low <= last < chase
+            and _entry_band_worth_alert(last=float(last), low=float(low), chase=float(chase), pct=pct)
+        ):
             alerts.append(
                 (
                     f"band:entry:{code}",
@@ -758,13 +788,14 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                 )
             )
     # Alert scope: all plans, or only traded / watchlist to cut toast noise.
-    mode = str(setting("alert_mode", "all") or "all")
+    mode = str(setting("alert_mode", "traded_watch") or "traded_watch")
     if mode == "off":
         return []
+    day_rows = load_signals_for_date(trade_date)
     traded_codes = {
         normalize_code(r.get("code"))
-        for r in load_signals(limit=120)
-        if str(r.get("trade_date") or "") == trade_date and int(r.get("traded") or 0)
+        for r in day_rows
+        if int(r.get("traded") or 0)
     }
     watch_codes = {
         normalize_code(r.get("code"))
@@ -876,36 +907,53 @@ def enrich_signals_with_live_marks(
 
 
 def build_review_payload(
-    limit: int = 60,
+    limit: int = 180,
     quotes: dict[str, dict[str, Any]] | None = None,
     *,
     trade_date: str | None = None,
     phase: str | None = None,
     boards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Load recent signals and summary; optionally attach live price marks."""
-    rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
+    """Load one trade-date's signals plus global summary for the review tab."""
+    calendar_today = datetime.now().strftime("%Y-%m-%d")
+    day = str(trade_date or calendar_today).strip()[:10] or calendar_today
+    global_rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
+    day_rows = [_flatten_signal_prices(r) for r in load_signals_for_date(day)]
     if quotes:
-        rows = enrich_signals_with_live_marks(rows, quotes)
-    rows = enrich_signals_with_boards(rows, boards)
-    day = trade_date or datetime.now().strftime("%Y-%m-%d")
-    summary = summarize_signals(rows)
-    today = build_today_digest(rows, trade_date=day, phase=phase)
-    try:
-        save_review_digest(day, today)
-    except Exception:
-        pass
-    summary["today"] = today
+        day_rows = enrich_signals_with_live_marks(day_rows, quotes)
+    day_rows = enrich_signals_with_boards(day_rows, boards)
+    day_phase = phase
+    if not day_phase and day_rows:
+        day_phase = str(day_rows[0].get("phase") or "") or None
+    digest = build_today_digest(day_rows, trade_date=day, phase=day_phase)
+    if day == calendar_today or day_rows:
+        try:
+            save_review_digest(day, digest)
+        except Exception:
+            pass
+    summary = summarize_signals(global_rows)
+    dates = list_signal_trade_dates(limit=40)
+    if calendar_today not in dates:
+        dates = [calendar_today] + dates
+    elif dates and dates[0] != calendar_today:
+        dates = [calendar_today] + [d for d in dates if d != calendar_today]
+    if day not in dates:
+        dates = [day] + [d for d in dates if d != day]
+    summary["today"] = digest
+    summary["view_date"] = day
+    summary["calendar_today"] = calendar_today
+    summary["dates"] = dates
     summary["history"] = load_review_digests(limit=20)
-    summary["exec"] = today.get("exec") or build_exec_score(
-        [r for r in rows if str(r.get("trade_date") or "") == day]
-    )
-    summary["phase_hits"] = build_phase_hit_rates(rows)
-    summary["missed_buys"] = build_missed_buys(rows, trade_date=day)
+    summary["exec"] = digest.get("exec") or build_exec_score(day_rows)
+    summary["phase_hits"] = build_phase_hit_rates(global_rows)
+    summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
     return {
         "ok": True,
-        "signals": rows,
+        "signals": day_rows,
         "summary": summary,
+        "view_date": day,
+        "calendar_today": calendar_today,
+        "dates": dates,
     }
 
 

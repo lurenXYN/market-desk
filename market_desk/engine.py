@@ -68,7 +68,7 @@ from market_desk.eastmoney import (
     fetch_zb_pool,
     fetch_zt_pool,
 )
-from market_desk.filters import is_limit_down, is_main_board
+from market_desk.filters import is_limit_down, is_main_board, normalize_code
 from market_desk.glossary import GLOSSARY
 from market_desk.minute_confirm import apply_minute_confirmations
 from market_desk.notify import (
@@ -363,7 +363,16 @@ class DeskEngine:
                 "cycle": cycle,
                 "similar_days": similar,
                 "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
-                "watch": _watch_pool(zt, zb, quotes),
+                "watch": _decorate_watch_pool(
+                    _watch_pool(zt, zb, quotes),
+                    list(hot_cards) + list(pin_cards),
+                    ((verdict.get("mainline") or {}).get("name")) or "",
+                    {
+                        normalize_code(w.get("code"))
+                        for w in watchlist
+                        if normalize_code(w.get("code"))
+                    },
+                ),
                 "filter": "个股只做主板 · 市值门槛 · 创业板/科创走 ETF",
                 "verdict": verdict,
                 "session_segments": segments,
@@ -1153,17 +1162,19 @@ def _watch_pool(
     zb: list[dict[str, Any]],
     quotes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Build a compact intraday anomaly list (not a buy list)."""
     rows: list[dict[str, Any]] = []
     for item in sorted(zt, key=lambda x: int(x.get("boards") or 0), reverse=True)[:12]:
         rows.append(
             {
                 **item,
+                "group": "涨停",
                 "tag": "禁追" if int(item.get("boards") or 0) >= 2 else "观察",
                 "reason": f"{item.get('boards')}板涨停",
             }
         )
     for item in zb[:8]:
-        rows.append({**item, "tag": "观察", "reason": "炸板"})
+        rows.append({**item, "group": "炸板", "tag": "观察", "reason": "炸板"})
     dt = [q for q in quotes if is_limit_down(q.get("name"), q.get("pct"))]
     for item in dt[:6]:
         rows.append(
@@ -1171,6 +1182,7 @@ def _watch_pool(
                 "code": item["code"],
                 "name": item["name"],
                 "pct": item["pct"],
+                "group": "跌停",
                 "tag": "观察",
                 "reason": "跌停",
                 "boards": 0,
@@ -1188,12 +1200,38 @@ def _watch_pool(
                 "code": item["code"],
                 "name": item["name"],
                 "pct": item["pct"],
+                "group": "高换手",
                 "tag": "禁追" if (item.get("pct") or 0) >= 7 else "观察",
                 "reason": f"换手 {item.get('turnover'):.0f}%",
                 "boards": 0,
             }
         )
     return rows[:24]
+
+
+def _decorate_watch_pool(
+    rows: list[dict[str, Any]],
+    boards: list[dict[str, Any]] | None,
+    mainline: str | None,
+    watchlist_codes: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Attach board / mainline hints and watchlist membership for the watch tab."""
+    from market_desk.review import compare_boards_to_mainline, lookup_code_boards
+
+    wl = watchlist_codes or set()
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        item = dict(row)
+        code = normalize_code(item.get("code"))
+        names = lookup_code_boards(code, boards)
+        cmp = compare_boards_to_mainline(names, mainline)
+        item["board_names"] = cmp["boards"]
+        item["board_text"] = cmp["board_text"] if names else ""
+        item["vs_mainline"] = cmp["vs_mainline"] if names else None
+        item["board_match"] = cmp["match"]
+        item["in_watchlist"] = code in wl
+        out.append(item)
+    return out
 
 
 engine = DeskEngine()
