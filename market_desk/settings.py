@@ -17,8 +17,10 @@ DEFAULTS: dict[str, Any] = {
     "switch_min_seconds": int(cfg.MAINLINE_SWITCH_MIN_SECONDS),
     "toast_enabled": bool(cfg.TOAST_ENABLED),
     "toast_cooldown": int(cfg.TOAST_COOLDOWN_SECONDS),
-    # all | traded_watch | watch_only | off
-    "alert_mode": "all",
+    # Decision / phase / mainline toasts (sell always follows toast pipeline).
+    "decision_alerts": True,
+    # all | traded_watch | watch_only | off  (price-band scope only)
+    "alert_mode": "traded_watch",
     "daily_loss_cap_pct": -3.0,
     "cool_after_losses": 3,
     "target_total_cost": float(cfg.POSITION_MAX_TOTAL_COST),
@@ -27,6 +29,10 @@ DEFAULTS: dict[str, Any] = {
     "auto_backup": True,
     "account_equity": 50000.0,
     "risk_pct_per_trade": 1.0,
+    # Total market-cap floor (亿元) for stock recommend cards; 0 = off.
+    "min_stock_mv_yi": float(cfg.MIN_STOCK_MV_YI),
+    # Mute buy pricing / buy toasts for N minutes after 09:30; 0 = off.
+    "open_mute_minutes": int(cfg.OPEN_MUTE_MINUTES),
 }
 
 
@@ -77,9 +83,10 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["switch_min_seconds"] = max(30, min(900, int(out["switch_min_seconds"])))
     out["toast_enabled"] = bool(out["toast_enabled"])
     out["toast_cooldown"] = max(30, min(900, int(out["toast_cooldown"])))
-    mode = str(out.get("alert_mode") or "all").strip().lower()
+    out["decision_alerts"] = bool(out["decision_alerts"])
+    mode = str(out.get("alert_mode") or "traded_watch").strip().lower()
     if mode not in ("all", "traded_watch", "watch_only", "off"):
-        mode = "all"
+        mode = "traded_watch"
     out["alert_mode"] = mode
     out["daily_loss_cap_pct"] = max(-20.0, min(0.0, float(out["daily_loss_cap_pct"])))
     out["cool_after_losses"] = max(1, min(10, int(out["cool_after_losses"])))
@@ -89,4 +96,6 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["auto_backup"] = bool(out["auto_backup"])
     out["account_equity"] = max(1000.0, min(5_000_000.0, float(out["account_equity"])))
     out["risk_pct_per_trade"] = max(0.2, min(5.0, float(out["risk_pct_per_trade"])))
+    out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
+    out["open_mute_minutes"] = max(0, min(30, int(out["open_mute_minutes"])))
     return out

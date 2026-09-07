@@ -52,6 +52,7 @@ class TrimIn(BaseModel):
     """Payload for reducing share count on an existing position."""
 
     qty: int = Field(gt=0)
+    sell_price: float | None = Field(default=None, gt=0)
 
 
 class SignalMetaIn(BaseModel):
@@ -82,7 +83,9 @@ class SettingsIn(BaseModel):
     switch_min_seconds: int | None = None
     toast_enabled: bool | None = None
     toast_cooldown: int | None = None
+    decision_alerts: bool | None = None
     alert_mode: str | None = None
+    open_mute_minutes: int | None = None
     daily_loss_cap_pct: float | None = None
     cool_after_losses: int | None = None
     target_total_cost: float | None = None
@@ -91,6 +94,7 @@ class SettingsIn(BaseModel):
     auto_backup: bool | None = None
     account_equity: float | None = None
     risk_pct_per_trade: float | None = None
+    min_stock_mv_yi: float | None = None
 
 
 class TrendOverrideIn(BaseModel):
@@ -153,9 +157,9 @@ def health() -> dict:
 
 
 @app.get("/api/review")
-async def review() -> dict:
-    """Return signal history with scored outcomes for the review tab."""
-    return await engine.build_review()
+async def review(date: str | None = Query(default=None)) -> dict:
+    """Return one trade-date's signals with scored outcomes for the review tab."""
+    return await engine.build_review(view_date=date)
 
 
 @app.get("/api/chart/{code}")
@@ -255,7 +259,17 @@ def remove_position(pid: int) -> dict:
 @app.post("/api/positions/{pid}/trim")
 def trim_position_api(pid: int, body: TrimIn) -> dict:
     """Sell/reduce shares on a recorded position (local book only)."""
-    row = trim_position(pid, int(body.qty))
+    trade_day = str(engine.snapshot.get("trade_date") or "")
+    if len(trade_day) == 8:
+        trade_day = f"{trade_day[:4]}-{trade_day[4:6]}-{trade_day[6:8]}"
+    else:
+        trade_day = trade_day[:10] or None
+    row = trim_position(
+        pid,
+        int(body.qty),
+        sell_price=body.sell_price,
+        trade_date=trade_day,
+    )
     if row is None:
         raise HTTPException(404, "position not found")
     rows = engine.sync_positions()
@@ -304,7 +318,11 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
         trade_day = str(
             row.get("trade_date") or engine.snapshot.get("trade_date") or ""
         )[:10]
-        positions = [p for p in load_positions() if normalize_code(p.get("code")) == code]
+        positions = [
+            p
+            for p in load_positions()
+            if normalize_code(p.get("code")) == code and int(p.get("qty") or 0) > 0
+        ]
         if positions and is_t1_locked(positions[0], trade_day):
             raise HTTPException(
                 400,
@@ -341,7 +359,11 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
             qty = int(fill_qty or 100)
             booked = add_position(code, name, px, qty, note)
         else:
-            positions = [p for p in load_positions() if normalize_code(p.get("code")) == code]
+            positions = [
+                p
+                for p in load_positions()
+                if normalize_code(p.get("code")) == code and int(p.get("qty") or 0) > 0
+            ]
             if not positions:
                 raise HTTPException(400, "no local position to trim for this sell signal")
             pos = positions[0]
@@ -350,7 +372,13 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
             qty = min(qty, hold)
             if qty <= 0:
                 raise HTTPException(400, "position qty is zero")
-            booked = trim_position(int(pos["id"]), qty)
+            sell_px = float(fill_px or 0) or None
+            booked = trim_position(
+                int(pos["id"]),
+                qty,
+                sell_price=sell_px,
+                trade_date=str(row.get("trade_date") or "")[:10] or None,
+            )
             update_signal_meta(sid, fill_qty=qty, fill_price=fill_px or float(pos.get("buy_price") or 0) or None)
 
     rows = engine.sync_positions()

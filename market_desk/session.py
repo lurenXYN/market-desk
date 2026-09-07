@@ -11,32 +11,46 @@ SEGMENT_ORDER = ("auction", "open30", "morning", "afternoon")
 SEGMENT_LABELS = {
     "auction": "竞价",
     "open30": "开盘半小时",
+    "open_mute": "开盘静音",
     "morning": "午前",
     "afternoon": "午后",
     "closed": "休市",
 }
 
 
-def session_segment(now: datetime) -> dict[str, Any]:
+def session_segment(
+    now: datetime,
+    *,
+    open_mute_minutes: int = 5,
+) -> dict[str, Any]:
     """Classify the current clock into an intraday trading segment."""
+    minutes = now.hour * 60 + now.minute
     hhmm = now.hour * 100 + now.minute
     weekday = now.weekday() < 5
+    mute_m = max(0, int(open_mute_minutes or 0))
+    open_mute = False
     if not weekday:
         key = "closed"
         note = "周末休市"
-    elif 915 <= hhmm < 930:
+    elif 9 * 60 + 15 <= minutes < 9 * 60 + 30:
         key = "auction"
         note = "竞价认主线，不定价买入"
-    elif 930 <= hhmm < 1000:
+    elif 9 * 60 + 30 <= minutes < 10 * 60:
         key = "open30"
-        note = "开盘半小时波动大，确认后也宜小仓"
-    elif 1000 <= hhmm < 1130:
+        mute_until = 9 * 60 + 30 + mute_m
+        open_mute = bool(mute_m and minutes < mute_until)
+        if open_mute:
+            left = max(0, mute_until - minutes)
+            note = f"开盘静音 {mute_m} 分钟（剩约 {left} 分），只看不买"
+        else:
+            note = "开盘半小时波动大，确认后也宜小仓"
+    elif 10 * 60 <= minutes < 11 * 60 + 30:
         key = "morning"
         note = "午前可按主线正常定价"
-    elif 1130 <= hhmm < 1300:
+    elif 11 * 60 + 30 <= minutes < 13 * 60:
         key = "closed"
         note = "午休，沿用午前结论"
-    elif 1300 <= hhmm < 1500:
+    elif 13 * 60 <= minutes < 15 * 60:
         key = "afternoon"
         note = "午后盯退潮与高潮，买卖更谨慎"
     else:
@@ -44,18 +58,21 @@ def session_segment(now: datetime) -> dict[str, Any]:
         note = "已收盘或未开盘"
     display_key = key
     if key == "closed":
-        if 1130 <= hhmm < 1300:
+        if 11 * 60 + 30 <= minutes < 13 * 60:
             display_key = "morning"
             note = "午休，高亮午前结论"
-        elif hhmm >= 1500 or hhmm < 915:
+        elif minutes >= 15 * 60 or minutes < 9 * 60 + 15:
             display_key = "afternoon"
             note = "休市，高亮午后/最近结论"
+    label_key = "open_mute" if open_mute else key
     return {
         "key": key,
         "display_key": display_key,
-        "label": SEGMENT_LABELS.get(key, key),
+        "label": SEGMENT_LABELS.get(label_key, key),
         "note": note,
         "hhmm": hhmm,
+        "open_mute": open_mute,
+        "open_mute_minutes": mute_m,
         "active": key in SEGMENT_ORDER,
     }
 
@@ -67,6 +84,8 @@ def apply_segment_bias(
     segment_key: str,
     status: str,
     phase: str,
+    open_mute: bool = False,
+    open_mute_minutes: int = 5,
 ) -> tuple[str, str, str]:
     """Soften or tighten the live action by intraday segment.
 
@@ -75,6 +94,12 @@ def apply_segment_bias(
     size_hint = ""
     if segment_key == "auction":
         return "观望", reason if "竞价" in reason else f"竞价阶段：{reason}", "竞价不做买入"
+    if open_mute and segment_key == "open30":
+        mins = max(0, int(open_mute_minutes or 0))
+        size_hint = f"开盘前 {mins} 分钟静音，只看不买"
+        if action == "可买入":
+            return "观察回踩", f"开盘静音，不定价买入：{reason}", size_hint
+        return action, reason if "静音" in reason else f"开盘静音：{reason}", size_hint
     if segment_key == "open30":
         size_hint = "开盘半小时建议更小仓"
         if action == "可买入" and status != "确认中":

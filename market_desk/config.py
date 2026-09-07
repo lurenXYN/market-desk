@@ -143,3 +143,10 @@ CONSTITUENT_TOP = 20
 POSITION_MAX_NAMES = 6
 POSITION_MAX_SINGLE_PCT = 35.0
 POSITION_MAX_TOTAL_COST = 200000.0
+
+# Minimum total market cap (亿元) for main-board stock recommendations; 0 disables.
+# 100 is a practical floor for short-term pullbacks; 80 is also fine if you want more names.
+MIN_STOCK_MV_YI = 100.0
+
+# Mute buy/entry noise for this many minutes after 09:30 (0 = off).
+OPEN_MUTE_MINUTES = 5

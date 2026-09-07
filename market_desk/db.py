@@ -83,6 +83,15 @@ def init_db() -> None:
                 WHERE last_buy_date IS NULL OR last_buy_date = ''
                 """
             )
+        for col, decl in (
+            ("closed_date", "TEXT"),
+            ("last_sell_date", "TEXT"),
+            ("last_sell_price", "REAL"),
+            ("day_sold_qty", "INTEGER DEFAULT 0"),
+            ("day_realized_pnl", "REAL DEFAULT 0"),
+        ):
+            if col not in pos_cols:
+                conn.execute(f"ALTER TABLE positions ADD COLUMN {col} {decl}")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS signals (
@@ -337,15 +346,33 @@ def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[
     return out
 
 
+_POS_SELECT = """
+    id, code, name, buy_price, qty, note, created_at, last_buy_date,
+    closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl
+"""
+
+
+def _position_item(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    """Normalize a positions table row for API / decorate use."""
+    item = dict(row)
+    if not item.get("last_buy_date"):
+        item["last_buy_date"] = str(item.get("created_at") or "")[:10] or None
+    item["day_sold_qty"] = int(item.get("day_sold_qty") or 0)
+    item["day_realized_pnl"] = float(item.get("day_realized_pnl") or 0)
+    qty = int(item.get("qty") or 0)
+    item["closed"] = qty <= 0 and bool(str(item.get("closed_date") or "").strip())
+    return item
+
+
 def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "") -> dict[str, Any]:
-    """Insert a position, or average into an existing same-code row."""
+    """Insert a position, or average into an existing open same-code row."""
     code = str(code or "").zfill(6)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     buy_day = now[:10]
     with _connect() as conn:
         existing = conn.execute(
-            """
-            SELECT id, name, buy_price, qty, note, created_at, last_buy_date
+            f"""
+            SELECT {_POS_SELECT}
             FROM positions WHERE code = ? ORDER BY id DESC LIMIT 1
             """,
             (code,),
@@ -353,6 +380,37 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
         if existing:
             old_qty = int(existing["qty"] or 0)
             old_px = float(existing["buy_price"] or 0)
+            # Reopen a same-day closed row instead of averaging into qty=0.
+            if old_qty <= 0:
+                conn.execute(
+                    """
+                    UPDATE positions
+                    SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
+                        closed_date = NULL, created_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        name or existing["name"] or code,
+                        float(buy_price),
+                        int(qty),
+                        note or existing["note"] or "",
+                        buy_day,
+                        now,
+                        int(existing["id"]),
+                    ),
+                )
+                conn.commit()
+                return {
+                    "id": int(existing["id"]),
+                    "code": code,
+                    "name": name or existing["name"] or code,
+                    "buy_price": float(buy_price),
+                    "qty": int(qty),
+                    "note": note or existing["note"] or "",
+                    "created_at": now,
+                    "last_buy_date": buy_day,
+                    "reopened": True,
+                }
             new_qty = old_qty + int(qty)
             if new_qty <= 0:
                 conn.execute("DELETE FROM positions WHERE id = ?", (int(existing["id"]),))
@@ -365,7 +423,8 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
             conn.execute(
                 """
                 UPDATE positions
-                SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?
+                SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
+                    closed_date = NULL
                 WHERE id = ?
                 """,
                 (
@@ -391,8 +450,11 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
             }
         cur = conn.execute(
             """
-            INSERT INTO positions(code, name, buy_price, qty, note, created_at, last_buy_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO positions(
+                code, name, buy_price, qty, note, created_at, last_buy_date,
+                closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0)
             """,
             (code, name, buy_price, qty, note, now, buy_day),
         )
@@ -410,34 +472,65 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
     }
 
 
-def trim_position(pid: int, qty: int) -> dict[str, Any] | None:
-    """Reduce share count on a position; delete the row when qty reaches zero."""
+def trim_position(
+    pid: int,
+    qty: int,
+    *,
+    sell_price: float | None = None,
+    trade_date: str | None = None,
+) -> dict[str, Any] | None:
+    """Reduce shares; keep qty=0 rows as closed-today until the next trade day."""
     sell = int(qty)
     if sell <= 0:
         return None
+    day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
     with _connect() as conn:
         row = conn.execute(
-            """
-            SELECT id, code, name, buy_price, qty, note, created_at, last_buy_date
-            FROM positions WHERE id = ?
-            """,
+            f"SELECT {_POS_SELECT} FROM positions WHERE id = ?",
             (pid,),
         ).fetchone()
         if not row:
             return None
-        left = int(row["qty"] or 0) - sell
-        if left <= 0:
-            conn.execute("DELETE FROM positions WHERE id = ?", (pid,))
-            conn.commit()
-            item = dict(row)
-            item["qty"] = 0
-            item["deleted"] = True
-            return item
-        conn.execute("UPDATE positions SET qty = ? WHERE id = ?", (left, pid))
+        hold = int(row["qty"] or 0)
+        if hold <= 0:
+            return _position_item(row)
+        sell = min(sell, hold)
+        left = hold - sell
+        buy = float(row["buy_price"] or 0)
+        px = float(sell_price) if sell_price is not None and float(sell_price) > 0 else buy
+        chunk_pnl = round((px - buy) * sell, 2)
+        prev_day = str(row["last_sell_date"] or "")[:10]
+        if prev_day == day:
+            day_sold = int(row["day_sold_qty"] or 0) + sell
+            day_pnl = round(float(row["day_realized_pnl"] or 0) + chunk_pnl, 2)
+        else:
+            day_sold = sell
+            day_pnl = chunk_pnl
+        closed_date = day if left <= 0 else None
+        conn.execute(
+            """
+            UPDATE positions
+            SET qty = ?, closed_date = ?, last_sell_date = ?, last_sell_price = ?,
+                day_sold_qty = ?, day_realized_pnl = ?
+            WHERE id = ?
+            """,
+            (left, closed_date, day, round(px, 4), day_sold, day_pnl, pid),
+        )
         conn.commit()
-        item = dict(row)
-        item["qty"] = left
+        item = _position_item(
+            {
+                **dict(row),
+                "qty": left,
+                "closed_date": closed_date,
+                "last_sell_date": day,
+                "last_sell_price": round(px, 4),
+                "day_sold_qty": day_sold,
+                "day_realized_pnl": day_pnl,
+            }
+        )
         item["trimmed"] = sell
+        item["sell_price"] = round(px, 4)
+        item["realized_chunk"] = chunk_pnl
         return item
 
 
@@ -449,23 +542,51 @@ def delete_position(pid: int) -> bool:
         return cur.rowcount > 0
 
 
+def purge_stale_closed_positions(trade_date: str | None = None) -> dict[str, int]:
+    """Drop fully closed rows from prior trade days; reset stale day-realized fields."""
+    day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+    with _connect() as conn:
+        cur_del = conn.execute(
+            """
+            DELETE FROM positions
+            WHERE qty <= 0
+              AND closed_date IS NOT NULL
+              AND closed_date <> ''
+              AND closed_date < ?
+            """,
+            (day,),
+        )
+        cur_reset = conn.execute(
+            """
+            UPDATE positions
+            SET day_sold_qty = 0, day_realized_pnl = 0
+            WHERE qty > 0
+              AND last_sell_date IS NOT NULL
+              AND last_sell_date <> ''
+              AND last_sell_date < ?
+            """,
+            (day,),
+        )
+        conn.commit()
+        return {
+            "deleted_closed": int(cur_del.rowcount or 0),
+            "reset_day_pnl": int(cur_reset.rowcount or 0),
+        }
+
+
 def load_positions() -> list[dict[str, Any]]:
-    """Return all locally recorded positions, newest first."""
+    """Return all locally recorded positions, newest first (includes closed-today)."""
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT id, code, name, buy_price, qty, note, created_at, last_buy_date
+            f"""
+            SELECT {_POS_SELECT}
             FROM positions
-            ORDER BY id DESC
+            ORDER BY
+              CASE WHEN qty > 0 THEN 0 ELSE 1 END,
+              id DESC
             """
         ).fetchall()
-    out = []
-    for row in rows:
-        item = dict(row)
-        if not item.get("last_buy_date"):
-            item["last_buy_date"] = str(item.get("created_at") or "")[:10] or None
-        out.append(item)
-    return out
+    return [_position_item(row) for row in rows]
 
 
 def position_buy_day(row: dict[str, Any] | None) -> str:
@@ -559,22 +680,18 @@ def load_signal(signal_id: int) -> dict[str, Any] | None:
     return item
 
 
-def load_signals(limit: int = 60) -> list[dict[str, Any]]:
-    """Return recent signals, newest first."""
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
-                   code, name, kind, price, last, ready, payload,
-                   outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped, traded,
-                   fill_price, fill_qty
-            FROM signals
-            ORDER BY trade_date DESC, id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+_SIGNAL_SELECT = """
+    SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
+           code, name, kind, price, last, ready, payload,
+           outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+           outcome_label, outcome_checked_at, note, skipped, traded,
+           fill_price, fill_qty
+    FROM signals
+"""
+
+
+def _decode_signal_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    """Normalize SQLite signal rows into API-ready dicts."""
     out: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
@@ -590,6 +707,53 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
         item["traded"] = int(item.get("traded") or 0)
         out.append(item)
     return out
+
+
+def load_signals(limit: int = 60) -> list[dict[str, Any]]:
+    """Return recent signals, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            _SIGNAL_SELECT
+            + """
+            ORDER BY trade_date DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return _decode_signal_rows(rows)
+
+
+def load_signals_for_date(trade_date: str) -> list[dict[str, Any]]:
+    """Return all signals for one trade date, newest first."""
+    day = str(trade_date or "").strip()[:10]
+    if not day:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            _SIGNAL_SELECT
+            + """
+            WHERE trade_date = ?
+            ORDER BY id DESC
+            """,
+            (day,),
+        ).fetchall()
+    return _decode_signal_rows(rows)
+
+
+def list_signal_trade_dates(limit: int = 40) -> list[str]:
+    """Return distinct trade dates that have signals, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT trade_date
+            FROM signals
+            WHERE trade_date IS NOT NULL AND trade_date != ''
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [str(r["trade_date"]) for r in rows if r["trade_date"]]
 
 
 def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, Any]]:
@@ -1107,8 +1271,11 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
                 continue
             conn.execute(
                 """
-                INSERT INTO positions(code, name, buy_price, qty, note, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO positions(
+                    code, name, buy_price, qty, note, created_at, last_buy_date,
+                    closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(row.get("code") or "").zfill(6),
@@ -1117,6 +1284,12 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
                     int(row.get("qty") or 0),
                     row.get("note") or "",
                     row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    row.get("last_buy_date") or str(row.get("created_at") or "")[:10] or None,
+                    row.get("closed_date"),
+                    row.get("last_sell_date"),
+                    row.get("last_sell_price"),
+                    int(row.get("day_sold_qty") or 0),
+                    float(row.get("day_realized_pnl") or 0),
                 ),
             )
             counts["positions"] += 1

@@ -11,6 +11,7 @@ from market_desk.lifecycle import classify_lifecycle
 from market_desk.mainline import etf_spec_for_name, match_mainline_etf, pick_mainline
 from market_desk.playbook import build_playbook, suggest_risk_qty
 from market_desk.session import apply_segment_bias, session_segment
+from market_desk.settings import setting
 from market_desk.trend import classify_daily_trend
 
 
@@ -42,7 +43,8 @@ def build_verdict(
     falling = price is not None and prev_px is not None and price < prev_px - 1e-6
     status = main.get("status") or ""
     life_stage = classify_lifecycle(main) if board_name else None
-    seg = session_segment(now)
+    mute_m = int(setting("open_mute_minutes", 5))
+    seg = session_segment(now, open_mute_minutes=mute_m)
     auction_only = seg.get("key") == "auction"
     algo_notes: list[str] = []
 
@@ -90,6 +92,8 @@ def build_verdict(
         segment_key=str(seg.get("key") or "closed"),
         status=status,
         phase=phase,
+        open_mute=bool(seg.get("open_mute")),
+        open_mute_minutes=mute_m,
     )
     action, reason, size_hint, gate_notes = apply_market_gates(
         action,
@@ -478,136 +482,88 @@ def apply_stock_daily_trends(
     fetch_ok_by_code: dict[str, bool] | None = None,
     overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Attach daily-trend flags; pending fetch failures wait for manual judgment."""
+    """Attach daily-trend labels for display; do not gate recommendations."""
+    del overrides  # Manual overrides removed; trend is informational only.
     rec = dict(recommend or {})
     items = list(rec.get("items") or [])
     if not items:
         return rec
     fetch_ok_by_code = fetch_ok_by_code or {}
-    overrides = overrides or {}
 
-    etf_items: list[dict[str, Any]] = []
-    up_stocks: list[dict[str, Any]] = []
-    pending_stocks: list[dict[str, Any]] = []
-    bad_stocks: list[dict[str, Any]] = []
+    out_items: list[dict[str, Any]] = []
     for item in items:
         if item.get("kind") != "stock":
-            etf_items.append(item)
+            out_items.append(item)
             continue
         code = normalize_code(item.get("code"))
-        closes = closes_by_code.get(code)
         if code not in closes_by_code:
             fetch_ok = False
-            closes = []
+            closes: list[float] = []
         else:
             fetch_ok = fetch_ok_by_code.get(code, True)
-            closes = closes or []
+            closes = list(closes_by_code.get(code) or [])
         trend = classify_daily_trend(closes, fetch_ok=fetch_ok)
         marked = dict(item)
-        marked["trend"] = trend.get("label")
-        marked["trend_ok"] = bool(trend.get("up"))
-        marked["trend_down"] = bool(trend.get("down"))
-        marked["trend_warn"] = trend.get("warn")
-        marked["trend_quality"] = trend.get("quality")
+        quality = trend.get("quality")
+        marked["trend_quality"] = quality
         marked["trend_pending"] = False
         marked["trend_manual"] = None
         marked["ma5"] = trend.get("ma5")
         marked["ma10"] = trend.get("ma10")
         marked["ma20"] = trend.get("ma20")
 
-        manual = overrides.get(code)
-        quality = trend.get("quality")
-        if manual == "up":
+        if trend.get("up"):
+            marked["trend"] = "上升趋势"
             marked["trend_ok"] = True
             marked["trend_down"] = False
+            marked["trend_unknown"] = False
             marked["trend_warn"] = None
-            marked["trend_pending"] = False
-            marked["trend_manual"] = "up"
-            marked["trend"] = "自判上升趋势"
-            marked["reason"] = "【自判上升趋势】" + str(marked.get("reason") or "")
-            marked["role_label"] = "个股·自判上升"
-            up_stocks.append(marked)
-            continue
-        if manual == "down":
-            marked["trend_ok"] = False
-            marked["ready"] = False
-            marked["trend_warn"] = "不是上升趋势"
-            marked["trend_pending"] = False
-            marked["trend_manual"] = "down"
-            marked["trend"] = "自判非上升"
-            marked["role"] = "watch"
-            marked["role_label"] = "个股·自判非上升 · 不建议买"
-            marked["reason"] = "【自判非上升】" + str(marked.get("reason") or "")
-            if marked.get("wait_price") is not None:
-                marked["buy_price"] = marked.get("wait_price")
-            bad_stocks.append(marked)
-            continue
-
-        if trend.get("up"):
             marked["reason"] = (
                 f"日线上升趋势（MA5 {trend.get('ma5')} / MA20 {trend.get('ma20')}）；"
                 + str(marked.get("reason") or "")
             )
-            up_stocks.append(marked)
-            continue
-
-        # Fetch failed / thin sample: keep visible and let the user judge.
-        if quality in ("fetch_fail", "thin"):
-            marked["trend_pending"] = True
-            marked["trend_warn"] = "待自判趋势"
-            marked["ready"] = False
-            marked["role"] = "watch"
-            marked["role_label"] = "个股·行情待自判"
+        elif quality in ("fetch_fail", "thin"):
+            marked["trend"] = "日线判断不出"
+            marked["trend_ok"] = False
+            marked["trend_down"] = False
+            marked["trend_unknown"] = True
+            marked["trend_warn"] = None
             marked["reason"] = (
-                f"【待自判·{trend.get('label') or '行情未取到'}】"
+                f"【日线判断不出·{trend.get('label') or '行情不足'}】"
                 + str(marked.get("reason") or "")
             )
-            pending_stocks.append(marked)
-            continue
+        else:
+            marked["trend"] = trend.get("label") or "非上升"
+            marked["trend_ok"] = False
+            marked["trend_down"] = True
+            marked["trend_unknown"] = False
+            marked["trend_warn"] = None
+            marked["reason"] = (
+                f"【日线非上升·{trend.get('label') or '偏弱'}】"
+                + str(marked.get("reason") or "")
+            )
+        out_items.append(marked)
 
-        marked["ready"] = False
-        marked["trend_warn"] = marked.get("trend_warn") or "不是上升趋势"
-        if marked.get("wait_price") is not None:
-            marked["buy_price"] = marked.get("wait_price")
-        marked["role"] = "watch"
-        marked["role_label"] = "个股·非上升 · 不建议买"
-        marked["reason"] = (
-            f"【不是上升趋势·{trend.get('label') or '日线偏弱'}】"
-            + str(marked.get("reason") or "")
-        )
-        bad_stocks.append(marked)
+    # Keep ETF first, then stocks in original relative order.
+    etf_items = [x for x in out_items if x.get("kind") == "etf"]
+    stock_items = [x for x in out_items if x.get("kind") != "etf"]
+    for idx, item in enumerate(stock_items):
+        has_etf = bool(etf_items)
+        item["role"] = "alt" if has_etf or idx > 0 else "primary"
+        if item.get("ready"):
+            item["role_label"] = (
+                "个股 主推" if item.get("role") == "primary" else "个股 备选"
+            )
+        elif not item.get("role_label"):
+            item["role_label"] = "个股盯回踩"
 
-    merged = etf_items + up_stocks + pending_stocks + bad_stocks
-
-    for idx, item in enumerate(merged):
-        if item.get("kind") == "stock" and item.get("trend_ok"):
-            has_etf = any(x.get("kind") == "etf" for x in merged)
-            item["role"] = "alt" if has_etf or idx > 0 else "primary"
-            if item.get("ready") or item.get("trend_manual") == "up":
-                # Manual-up restores buy readiness when session action allows.
-                pass
-            if item.get("ready"):
-                item["role_label"] = (
-                    "个股 主推" if item.get("role") == "primary" else "个股 备选"
-                )
-
-    # Manual-up always unlocks the book button; the trader already judged the chart.
-    for item in merged:
-        if item.get("kind") != "stock":
-            continue
-        if item.get("trend_manual") == "up":
-            item["ready"] = True
-            item["role_label"] = item.get("role_label") or "个股·自判上升"
-            if rec.get("buy") is False and (up_stocks or pending_stocks):
-                rec["buy"] = True
-
+    merged = etf_items + stock_items
     rec["items"] = merged
     primary = next(
-        (
-            x
-            for x in merged
-            if x.get("kind") == "etf" or (x.get("kind") == "stock" and x.get("trend_ok"))
-        ),
+        (x for x in merged if x.get("kind") == "etf"),
+        None,
+    ) or next(
+        (x for x in merged if x.get("ready")),
         None,
     ) or (merged[0] if merged else None)
     if primary and primary.get("kind") == "etf":
@@ -617,30 +573,6 @@ def apply_stock_daily_trends(
         rec["code"] = primary.get("code")
         rec["name"] = primary.get("name")
         rec["price"] = primary.get("buy_price") or primary.get("last")
-    notes: list[str] = []
-    if pending_stocks:
-        notes.append(f"含 {len(pending_stocks)} 只行情待自判（可点按钮判定）")
-    if bad_stocks:
-        notes.append(f"含 {len(bad_stocks)} 只非上升趋势个股（已红标，不建议买）")
-    if notes:
-        base = rec.get("size_note") or ""
-        rec["size_note"] = ((base + "；") if base else "") + "；".join(notes)
-    if bad_stocks and not up_stocks and not etf_items and not pending_stocks:
-        rec["buy"] = False
-        rec["title"] = "个股非上升趋势"
-        rec["text"] = "日线不是上升趋势，个股暂不建议买"
-        rec["size_note"] = "下降/震荡个股仅作警示展示，不要按建议价买入。"
-    elif merged:
-        tradable = [
-            x
-            for x in merged
-            if x.get("ready") and (x.get("kind") != "stock" or x.get("trend_ok"))
-        ]
-        if not tradable and rec.get("buy"):
-            if not any(x.get("kind") == "etf" and x.get("ready") for x in merged):
-                # Keep buy true if only pending stocks remain — user may judge up.
-                if not pending_stocks:
-                    rec["buy"] = False
     return rec
 
 
@@ -705,9 +637,9 @@ def _build_recommend(
         if _is_chi_star_etf(vehicle.get("code")):
             size_note = "创业板ETF / 科创50ETF 可以买；对应板块个股无权限，不推荐。"
         elif has_etf:
-            size_note = "优先 ETF；个股只给主板未封板回踩票。创业/科创个股不推荐。"
+            size_note = "优先 ETF；个股只给主板未封板回踩票（过市值门槛）。创业/科创个股不推荐。"
         else:
-            size_note = "该主线暂无映射 ETF，以下为主板未封板回踩票。仓位自己定。"
+            size_note = "该主线暂无映射 ETF，以下为主板未封板回踩票（过市值门槛）。仓位自己定。"
         stop = _stop_line(primary)
     elif wait_action and items:
         title = "盯回踩价，先不追"
@@ -777,6 +709,8 @@ def _score_stock(
     strict: bool,
 ) -> tuple[float, dict[str, Any]] | None:
     """Score one constituent as a pullback candidate, or reject it."""
+    from market_desk.settings import setting
+
     code = normalize_code(member.get("code"))
     name = str(member.get("name") or "")
     pct = member.get("pct")
@@ -790,6 +724,13 @@ def _score_stock(
         return None
     if pct is None:
         return None
+    min_mv = float(setting("min_stock_mv_yi", 100.0) or 0.0)
+    mv_yi = member.get("mv_yi")
+    if min_mv > 0:
+        if mv_yi is None:
+            return None
+        if float(mv_yi) < min_mv:
+            return None
     if strict and (pct < 0 or pct > 5.5):
         return None
     if not strict and (pct < -1.5 or pct > 7.0):
@@ -807,22 +748,34 @@ def _score_stock(
             score += 4.0
         else:
             score -= 6.0
+    # Prefer larger caps slightly when scores are close.
+    if mv_yi is not None:
+        score += min(6.0, float(mv_yi) / 80.0)
     boards = int(boards_by.get(code) or 0)
     # Ready only after a clearer day-high pullback to cut chase entries.
     ready = pullback is not None and pullback >= 1.0
-    reason = _stock_reason(pct, pullback, ready)
+    reason = _stock_reason(pct, pullback, ready, mv_yi=mv_yi)
     out = dict(member)
     out["code"] = code
     out["boards"] = boards
+    out["mv_yi"] = None if mv_yi is None else round(float(mv_yi), 1)
     out["pullback"] = None if pullback is None else round(pullback, 2)
     out["ready"] = ready
     out["reason"] = reason
     return score, out
 
 
-def _stock_reason(pct: float, pullback: float | None, ready: bool) -> str:
+def _stock_reason(
+    pct: float,
+    pullback: float | None,
+    ready: bool,
+    *,
+    mv_yi: float | None = None,
+) -> str:
     """Describe why a stock is listed as a pullback alternative."""
     parts = [f"涨幅 {_fmt_pct(pct)}"]
+    if mv_yi is not None:
+        parts.append(f"市值 {float(mv_yi):.0f}亿")
     if pullback is not None:
         parts.append(f"高点回撤 {pullback:.1f}%")
     parts.append("未封板")
@@ -897,6 +850,7 @@ def _recommend_item(
         "name": quote.get("name"),
         "last": _px(last, digits),
         "pct": None if quote.get("pct") is None else round(float(quote["pct"]), 2),
+        "mv_yi": None if quote.get("mv_yi") is None else round(float(quote["mv_yi"]), 1),
         "buy_price": _px(buy, digits),
         "wait_price": _px(wait, digits),
         "stop_price": _px(stop, digits),
@@ -1060,6 +1014,8 @@ def build_sell_advice(
     day = str(trade_date or "").strip()[:10]
     items: list[dict[str, Any]] = []
     for row in positions or []:
+        if int(row.get("qty") or 0) <= 0:
+            continue
         item = _sell_item(row, verdict, phase, trade_date=day)
         if item:
             items.append(item)
@@ -1067,13 +1023,14 @@ def build_sell_advice(
     items.sort(key=lambda x: (rank.get(str(x.get("urgency") or "hold"), 9), -(x.get("pnl_pct") or 0)))
     items = items[:4]
     sell_now = [x for x in items if x.get("ready")]
-    if not positions:
+    open_n = sum(1 for r in (positions or []) if int(r.get("qty") or 0) > 0)
+    if not open_n:
         return {
             "sell": False,
             "empty": True,
             "title": "暂无仓位",
             "text": "暂无仓位 · 买入记账后这里给出卖出建议",
-            "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。当日买入受 T+1 限制，隔日才可卖。",
+            "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。当日买入受 T+1 限制，隔日才可卖。今日已平不计入卖点。",
             "items": [],
         }
     if sell_now:
@@ -1246,9 +1203,13 @@ def _sell_item(
 
 
 def decorate_positions(
-    rows: list[dict[str, Any]], quotes: dict[str, dict[str, Any]]
+    rows: list[dict[str, Any]],
+    quotes: dict[str, dict[str, Any]],
+    *,
+    trade_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach mark-to-market fields used by the position tab."""
+    """Attach mark-to-market and day-realized fields used by the position tab."""
+    day = str(trade_date or "").strip()[:10]
     out: list[dict[str, Any]] = []
     for row in rows:
         code = str(row.get("code") or "").zfill(6)
@@ -1256,41 +1217,80 @@ def decorate_positions(
         last = q.get("price")
         buy = float(row.get("buy_price") or 0)
         qty = int(row.get("qty") or 0)
-        cost = round(buy * qty, 2)
-        market = round(last * qty, 2) if last is not None else None
-        pnl = round(market - cost, 2) if market is not None else None
-        pnl_pct = round((last / buy - 1.0) * 100.0, 2) if last and buy else None
+        closed_date = str(row.get("closed_date") or "").strip()[:10] or None
+        closed = qty <= 0 and bool(closed_date)
+        sell_px = row.get("last_sell_price")
+        day_sold = int(row.get("day_sold_qty") or 0)
+        day_realized = round(float(row.get("day_realized_pnl") or 0), 2)
+        sell_day = str(row.get("last_sell_date") or "")[:10]
+        if day and sell_day and sell_day != day:
+            day_sold = 0
+            day_realized = 0.0
+        if closed:
+            mark = float(sell_px) if sell_px not in (None, "") else (
+                float(last) if last is not None else buy
+            )
+            sold_qty = day_sold or int(row.get("day_sold_qty") or 0)
+            cost = round(buy * sold_qty, 2) if sold_qty else None
+            market = round(mark * sold_qty, 2) if sold_qty and mark is not None else None
+            pnl = day_realized
+            pnl_pct = round((mark / buy - 1.0) * 100.0, 2) if mark and buy else None
+            last = mark
+        else:
+            cost = round(buy * qty, 2)
+            market = round(last * qty, 2) if last is not None else None
+            pnl = round(market - cost, 2) if market is not None else None
+            pnl_pct = round((last / buy - 1.0) * 100.0, 2) if last and buy else None
         item = dict(row)
         item["code"] = code
         item["name"] = row.get("name") or q.get("name") or code
         item["last"] = last
-        item["last_pct"] = q.get("pct")
+        item["last_pct"] = None if closed else q.get("pct")
         item["high"] = q.get("high")
         item["low"] = q.get("low")
         item["cost"] = cost
         item["market"] = market
         item["pnl"] = pnl
         item["pnl_pct"] = pnl_pct
+        item["closed"] = closed
+        item["closed_date"] = closed_date
+        item["day_sold_qty"] = day_sold
+        item["day_realized_pnl"] = day_realized
+        item["status"] = "今日已平" if closed else ("部分兑现" if day_sold > 0 else "持仓")
         out.append(item)
     return out
 
 
 def position_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate cost / market value / P&L for the position tab."""
+    """Aggregate open book and today realized P&L for the position tab."""
     from market_desk.config import (
         POSITION_MAX_NAMES,
         POSITION_MAX_SINGLE_PCT,
         POSITION_MAX_TOTAL_COST,
     )
 
-    cost = sum(float(r.get("cost") or 0) for r in rows)
-    marked = [r for r in rows if r.get("market") is not None]
+    open_rows = [r for r in rows if int(r.get("qty") or 0) > 0]
+    closed_rows = [r for r in rows if int(r.get("qty") or 0) <= 0]
+    cost = sum(float(r.get("cost") or 0) for r in open_rows)
+    marked = [r for r in open_rows if r.get("market") is not None]
     market = sum(float(r.get("market") or 0) for r in marked)
-    pnl = round(market - cost, 2) if marked else None
-    pnl_pct = round((market / cost - 1.0) * 100.0, 2) if marked and cost else None
+    floating = round(market - cost, 2) if marked else None
+    floating_pct = round((market / cost - 1.0) * 100.0, 2) if marked and cost else None
+    realized = round(sum(float(r.get("day_realized_pnl") or 0) for r in rows), 2)
+    day_total = round((floating or 0) + realized, 2) if marked or realized else (realized if realized else None)
+    day_total_pct = None
+    if day_total is not None and cost:
+        # Percent vs remaining open cost; closed-only days use realized alone.
+        day_total_pct = round(day_total / cost * 100.0, 2)
+    elif day_total is not None and not open_rows and realized:
+        closed_cost = sum(
+            float(r.get("buy_price") or 0) * int(r.get("day_sold_qty") or 0) for r in closed_rows
+        )
+        if closed_cost:
+            day_total_pct = round(day_total / closed_cost * 100.0, 2)
     notes: list[str] = []
-    if len(rows) > POSITION_MAX_NAMES:
-        notes.append(f"持仓只数 {len(rows)} 超过软上限 {POSITION_MAX_NAMES}")
+    if len(open_rows) > POSITION_MAX_NAMES:
+        notes.append(f"持仓只数 {len(open_rows)} 超过软上限 {POSITION_MAX_NAMES}")
     if cost > POSITION_MAX_TOTAL_COST:
         notes.append(f"总成本 {cost:.0f} 超过软上限 {POSITION_MAX_TOTAL_COST:.0f}")
     if market > 0:
@@ -1301,11 +1301,17 @@ def position_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     f"{r.get('name') or r.get('code')} 占比 {share:.0f}% ≥ {POSITION_MAX_SINGLE_PCT:.0f}%"
                 )
     return {
-        "count": len(rows),
+        "count": len(open_rows),
+        "closed_count": len(closed_rows),
         "cost": round(cost, 2),
         "market": round(market, 2) if marked else None,
-        "pnl": pnl,
-        "pnl_pct": pnl_pct,
+        "pnl": floating,
+        "pnl_pct": floating_pct,
+        "floating_pnl": floating,
+        "floating_pct": floating_pct,
+        "realized_pnl": realized,
+        "day_pnl": day_total,
+        "day_pnl_pct": day_total_pct,
         "priced": len(marked),
         "risk_note": "；".join(notes) if notes else "",
     }
@@ -1320,6 +1326,7 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     from market_desk.settings import setting
 
+    open_rows = [r for r in rows if int(r.get("qty") or 0) > 0]
     base = position_summary(rows)
     market = float(base.get("market") or 0)
     cost = float(base.get("cost") or 0)
@@ -1327,9 +1334,9 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
     equal_w = bool(setting("equal_weight_target", True))
     loss_cap = float(setting("daily_loss_cap_pct", -3.0))
     cool_n = int(setting("cool_after_losses", 3))
-    equal_share = round(100.0 / len(rows), 1) if equal_w and rows else None
+    equal_share = round(100.0 / len(open_rows), 1) if equal_w and open_rows else None
     items: list[dict[str, Any]] = []
-    for r in rows:
+    for r in open_rows:
         mkt = float(r.get("market") or 0) if r.get("market") is not None else None
         weight = round(mkt / market * 100.0, 1) if market > 0 and mkt is not None else None
         weight_dev = (
@@ -1346,6 +1353,7 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "market": r.get("market"),
                 "pnl": r.get("pnl"),
                 "pnl_pct": r.get("pnl_pct"),
+                "day_realized_pnl": r.get("day_realized_pnl"),
                 "weight_pct": weight,
                 "target_weight_pct": equal_share,
                 "weight_dev_pct": weight_dev,
@@ -1353,21 +1361,25 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     items.sort(key=lambda x: float(x.get("weight_pct") or 0), reverse=True)
-    winners = sum(1 for r in rows if (r.get("pnl_pct") or 0) > 0)
-    losers = sum(1 for r in rows if (r.get("pnl_pct") or 0) < 0)
-    pnl_pct = base.get("pnl_pct")
+    winners = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) > 0)
+    losers = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) < 0)
+    day_pct = base.get("day_pnl_pct")
+    if day_pct is None:
+        day_pct = base.get("pnl_pct")
     target_dev = round((cost / target_cost - 1.0) * 100.0, 1) if target_cost > 0 else None
-    loss_cap_hit = bool(pnl_pct is not None and float(pnl_pct) <= loss_cap)
+    loss_cap_hit = bool(day_pct is not None and float(day_pct) <= loss_cap)
     cool_hit = bool(losers >= cool_n)
     tips: list[str] = []
     if loss_cap_hit:
         tips.append(
-            f"浮盈已触及单日亏损帽 {loss_cap:g}%（当前 {pnl_pct}%），建议停手、只减不加"
+            f"今日盈亏已触及单日亏损帽 {loss_cap:g}%（当前 {day_pct}%），建议停手、只减不加"
         )
     if cool_hit:
         tips.append(f"浮亏标的 {losers} 只 ≥ 连亏降温阈值 {cool_n}，先冷静再开新仓")
     if target_dev is not None and abs(target_dev) >= 15:
         tips.append(f"总成本相对目标 {target_cost:.0f} 偏差 {target_dev:+.1f}%")
+    if int(base.get("closed_count") or 0):
+        tips.append(f"今日已平 {base['closed_count']} 只，已实现 {base.get('realized_pnl')}，次日自动移出")
     for it in items:
         if it.get("weight_dev_pct") is not None and abs(float(it["weight_dev_pct"])) >= 12:
             tips.append(
@@ -1381,7 +1393,7 @@ def build_risk_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "items": items,
         "winners": winners,
         "losers": losers,
-        "flat": max(0, len(rows) - winners - losers),
+        "flat": max(0, len(open_rows) - winners - losers),
         "caps": {
             "max_names": POSITION_MAX_NAMES,
             "max_single_pct": POSITION_MAX_SINGLE_PCT,

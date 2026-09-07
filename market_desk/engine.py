@@ -34,9 +34,11 @@ from market_desk.db import (
     load_mainline_switches,
     load_positions,
     load_session_segments,
+    load_signals_for_date,
     load_trend_overrides,
     load_unscored_signals,
     load_watchlist,
+    purge_stale_closed_positions,
     save_auction,
     save_board_daily,
     save_daily,
@@ -69,7 +71,13 @@ from market_desk.eastmoney import (
 from market_desk.filters import is_limit_down, is_main_board
 from market_desk.glossary import GLOSSARY
 from market_desk.minute_confirm import apply_minute_confirmations
-from market_desk.notify import build_toast_alerts, notify_windows
+from market_desk.notify import (
+    build_toast_alerts,
+    filter_alerts_for_policy,
+    is_buy_quiet_window,
+    notify_windows,
+    select_toasts_for_round,
+)
 from market_desk.sentiment import (
     auction_from_quotes,
     board_cycle_tags,
@@ -114,6 +122,10 @@ class DeskEngine:
         self._eod_date: str | None = None
         self._toast_armed = False
         self._toast_sent: dict[str, float] = {}
+        # Level toasts (band/wl) stay latched until the condition clears.
+        self._toast_latched: set[str] = set()
+        self._toast_latch_date: str | None = None
+        self._toast_feed: list[dict[str, Any]] = []
         self._kline_cache: dict[str, tuple[float, list[float]]] = {}
         self._minute_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -129,6 +141,9 @@ class DeskEngine:
 
     def sync_positions(self) -> list[dict[str, Any]]:
         """Reload positions from SQLite and reuse last quotes in the snapshot."""
+        trade_date = str(self.snapshot.get("trade_date") or datetime.now().strftime("%Y%m%d"))
+        trade_dash = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}" if len(trade_date) == 8 else trade_date[:10]
+        purge_stale_closed_positions(trade_dash)
         quotes: dict[str, dict[str, Any]] = {}
         for row in self.snapshot.get("positions") or []:
             code = str(row.get("code") or "").zfill(6)
@@ -140,7 +155,7 @@ class DeskEngine:
                 "high": row.get("high"),
                 "low": row.get("low"),
             }
-        positions = decorate_positions(load_positions(), quotes)
+        positions = decorate_positions(load_positions(), quotes, trade_date=trade_dash)
         self.snapshot["positions"] = positions
         self.snapshot["position_summary"] = position_summary(positions)
         self.snapshot["risk_overview"] = build_risk_overview(positions)
@@ -148,7 +163,7 @@ class DeskEngine:
             positions,
             self.snapshot.get("verdict") or {},
             self.snapshot.get("phase") or "",
-            trade_date=self.snapshot.get("trade_date"),
+            trade_date=trade_dash,
         )
         return positions
 
@@ -230,6 +245,7 @@ class DeskEngine:
                 hot_cards = await self._hot_cards(client, boards, ctx)
                 pin_cards = await self._pin_cards(client, boards, hot_cards, ctx)
                 ice_cards = await self._ice_cards(client, boards, hot_cards, ctx)
+                purge_stale_closed_positions(trade_date_dash)
                 pos_rows = load_positions()
                 wl_rows = load_watchlist()
                 need_codes = [str(r.get("code") or "") for r in pos_rows] + [
@@ -249,7 +265,7 @@ class DeskEngine:
             save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards)
             if not isinstance(pos_quote_map, dict):
                 pos_quote_map = {}
-            positions = decorate_positions(pos_rows, pos_quote_map)
+            positions = decorate_positions(pos_rows, pos_quote_map, trade_date=trade_date_dash)
             watchlist = _decorate_watchlist(wl_rows, pos_quote_map)
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
@@ -348,7 +364,7 @@ class DeskEngine:
                 "similar_days": similar,
                 "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
                 "watch": _watch_pool(zt, zb, quotes),
-                "filter": "个股只做主板 · 创业板/科创走 ETF",
+                "filter": "个股只做主板 · 市值门槛 · 创业板/科创走 ETF",
                 "verdict": verdict,
                 "session_segments": segments,
                 "mainline_switches": switches,
@@ -357,6 +373,7 @@ class DeskEngine:
                 "position_summary": position_summary(positions),
                 "risk_overview": build_risk_overview(positions),
                 "watchlist": watchlist,
+                "recent_toasts": list(self._toast_feed),
                 "sell_advice": build_sell_advice(
                     positions, verdict, phase, trade_date=trade_date_dash
                 ),
@@ -413,9 +430,14 @@ class DeskEngine:
                 min_seconds=int(setting("switch_min_seconds", 180)),
             )
 
-    async def build_review(self, limit: int = 60) -> dict[str, Any]:
-        """Score pending historical signals then return the review panel payload."""
+    async def build_review(
+        self,
+        limit: int = 180,
+        view_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Score pending historical signals then return one trade-date review payload."""
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        day = str(view_date or today).strip()[:10] or today
         pending = load_unscored_signals(today, limit=80)
         quotes: dict[str, dict[str, Any]] = {}
         try:
@@ -424,18 +446,20 @@ class DeskEngine:
                     codes = [str(r.get("code") or "") for r in pending]
                     packed = await fetch_daily_klines_many(client, codes, limit=40)
                     apply_outcomes(pending, packed)
-                # Live marks for stop / chase on all recent signals.
-                recent = build_review_payload(limit=limit).get("signals") or []
-                live_codes = [str(r.get("code") or "") for r in recent]
+                day_rows = load_signals_for_date(day)
+                live_codes = [str(r.get("code") or "") for r in day_rows]
                 quotes = await fetch_quotes(client, live_codes)
                 note_quote_ticks(quotes)
         except Exception:
             log.exception("signal scoring / live marks failed")
+        phase = None
+        if day == today and self.snapshot:
+            phase = self.snapshot.get("phase")
         return build_review_payload(
             limit=limit,
             quotes=quotes,
-            trade_date=today,
-            phase=(self.snapshot.get("phase") if self.snapshot else None),
+            trade_date=day,
+            phase=phase,
             boards=list((self.snapshot or {}).get("hot_boards") or [])
             + list((self.snapshot or {}).get("pin_boards") or []),
         )
@@ -445,26 +469,61 @@ class DeskEngine:
         previous: dict[str, Any] | None,
         current: dict[str, Any],
     ) -> None:
-        """Fire Windows toasts for newly important transitions only."""
-        if not bool(setting("toast_enabled", True)):
-            return
+        """Fire page feed + optional Windows toasts for important transitions."""
         if not self._toast_armed:
             self._toast_armed = True
             return
-        now_ts = datetime.now(CN_TZ).timestamp()
+        now = datetime.now(CN_TZ)
+        now_ts = now.timestamp()
+        day = str(current.get("trade_date") or "")
+        if day and day != self._toast_latch_date:
+            self._toast_latched.clear()
+            self._toast_latch_date = day
         cooldown = int(setting("toast_cooldown", 180))
         alerts = list(build_toast_alerts(previous, current))
         try:
             alerts.extend(build_price_touch_alerts(current))
         except Exception:
             log.exception("price-touch alerts failed")
-        for key, title, body in alerts:
-            last = self._toast_sent.get(key)
-            if last is not None and now_ts - last < cooldown:
-                continue
-            if notify_windows(title, body):
-                self._toast_sent[key] = now_ts
-                log.info("toast %s | %s", title, body)
+        alerts = filter_alerts_for_policy(
+            alerts,
+            decision_alerts=bool(setting("decision_alerts", True)),
+            quiet_buy=is_buy_quiet_window(
+                now,
+                trading_day=bool(current.get("trading_day", True)),
+                open_mute_minutes=int(setting("open_mute_minutes", 5)),
+            ),
+        )
+        chosen, latched = select_toasts_for_round(
+            alerts,
+            latched=self._toast_latched,
+            sent_at=self._toast_sent,
+            now_ts=now_ts,
+            cooldown=float(cooldown),
+            max_n=2,
+        )
+        self._toast_latched = latched
+        win_on = bool(setting("toast_enabled", True))
+        stamp = now.strftime("%H:%M:%S")
+        for key, title, body in chosen:
+            self._toast_sent[key] = now_ts
+            self._toast_feed.insert(
+                0,
+                {
+                    "ts": stamp,
+                    "key": key,
+                    "title": title,
+                    "body": body,
+                },
+            )
+            self._toast_feed = self._toast_feed[:12]
+            if win_on:
+                if notify_windows(title, body):
+                    log.info("toast %s | %s", title, body)
+            else:
+                log.info("toast(page) %s | %s", title, body)
+        if chosen:
+            current["recent_toasts"] = list(self._toast_feed)
 
     async def _apply_recommend_trends(
         self,
