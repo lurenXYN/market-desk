@@ -134,11 +134,10 @@
     .desk-secondary {
       margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px;
     }
-    .desk-secondary > summary {
-      cursor: pointer; color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
-      list-style: none; user-select: none; margin-bottom: 8px;
+    .desk-secondary > .sec-hd {
+      color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
+      margin-bottom: 8px;
     }
-    .desk-secondary > summary::-webkit-details-marker { display: none; }
     .rec-risk {
       margin-top: 6px; font-size: 12px; color: #93c5fd; line-height: 1.4;
       font-weight: 600;
@@ -186,11 +185,10 @@
     .desk-deltas {
       margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px;
     }
-    .desk-deltas > summary {
-      cursor: pointer; color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
-      list-style: none; user-select: none; margin-bottom: 8px;
+    .desk-deltas > .sec-hd {
+      color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
+      margin-bottom: 8px;
     }
-    .desk-deltas > summary::-webkit-details-marker { display: none; }
     .desk-deltas[hidden] { display: none; }
     .delta {
       border: 1px solid var(--line); border-radius: 6px;
@@ -951,12 +949,12 @@
           <div class="sub" id="dataAge">数据尚未刷新</div>
         </div>
       </div>
-      <details class="desk-deltas" id="deskDeltas">
-        <summary>指标较上轮变化（次要，点击展开）</summary>
+      <div class="desk-deltas" id="deskDeltas">
+        <div class="sec-hd">指标较上轮变化</div>
         <div class="deltas" id="deltas"></div>
-      </details>
-      <details class="desk-secondary" id="deskSecondary">
-        <summary>盘中分段 · 主线切换（次要信息，点击展开）</summary>
+      </div>
+      <div class="desk-secondary" id="deskSecondary">
+        <div class="sec-hd">盘中分段 · 主线切换</div>
         <div class="sec-title meta">
           <span>盘中分段结论<button type="button" class="q" data-term="盘中分段">?</button></span>
           <span id="segNote"></span>
@@ -966,7 +964,7 @@
           <span>主线切换时间线<button type="button" class="q" data-term="主线切换">?</button></span>
         </div>
         <ul class="switch-list" id="switchList"></ul>
-      </details>
+      </div>
     </div>
     </section>
 
