@@ -52,6 +52,7 @@ from market_desk.review import (
     record_session_signals,
 )
 from market_desk.similar import build_similar_days
+from market_desk.report import build_morning_brief
 from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_segment
 
 from market_desk.eastmoney import (
@@ -360,6 +361,7 @@ class DeskEngine:
             }
             payload["health"] = _build_health(now, errors, updated_at, payload)
             payload["deltas"] = build_deltas(payload, prev)
+            payload["morning_brief"] = build_morning_brief(payload)
             self._emit_toasts(prev, payload)
             try:
                 record_session_signals(payload)

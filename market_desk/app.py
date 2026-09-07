@@ -32,7 +32,7 @@ from market_desk.db import (
 from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
-from market_desk.report import build_daily_report
+from market_desk.report import build_daily_report, build_morning_brief
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
 
@@ -410,6 +410,15 @@ async def report_today() -> dict:
     review = await engine.build_review()
     text = build_daily_report(snapshot=engine.snapshot, review=review)
     return {"ok": True, "markdown": text, "summary": review.get("summary")}
+
+
+@app.get("/api/report/morning")
+def report_morning() -> dict:
+    """Return the rule-based morning decision brief."""
+    brief = (engine.snapshot or {}).get("morning_brief") or build_morning_brief(
+        engine.snapshot
+    )
+    return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
 
 
 @app.get("/api/backup")
