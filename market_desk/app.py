@@ -33,6 +33,7 @@ from market_desk.db import (
 from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
+from market_desk.lots import clear_sell_qty, half_sell_qty
 from market_desk.report import build_daily_report, build_morning_brief
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
@@ -72,6 +73,8 @@ class SignalTradeIn(BaseModel):
     qty: int | None = Field(default=None, gt=0)
     price: float | None = Field(default=None, gt=0)
     note: str | None = None
+    # half = lot-rounded 50%; clear = full exit; ignored for buys.
+    sell_mode: str | None = None
 
 
 class SettingsIn(BaseModel):
@@ -368,7 +371,13 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
                 raise HTTPException(400, "no local position to trim for this sell signal")
             pos = positions[0]
             hold = int(pos.get("qty") or 0)
-            qty = int(body.qty or max(hold // 2, 100 if hold >= 100 else hold))
+            mode = str(body.sell_mode or "").strip().lower()
+            if body.qty is not None:
+                qty = int(body.qty)
+            elif mode in ("clear", "all", "full", "清仓"):
+                qty = clear_sell_qty(hold)
+            else:
+                qty = half_sell_qty(hold)
             qty = min(qty, hold)
             if qty <= 0:
                 raise HTTPException(400, "position qty is zero")
@@ -382,11 +391,50 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
             update_signal_meta(sid, fill_qty=qty, fill_price=fill_px or float(pos.get("buy_price") or 0) or None)
 
     rows = engine.sync_positions()
+    book_summary: dict[str, Any] | None = None
+    if booked:
+        if sig_type == "buy":
+            book_summary = {
+                "side": "buy",
+                "code": code,
+                "name": name or booked.get("name"),
+                "qty": int(booked.get("qty") or fill_qty or 0),
+                "price": float(booked.get("buy_price") or fill_px or 0) or None,
+                "message": (
+                    f"已记买入 {name or code} "
+                    f"{int(fill_qty or booked.get('qty') or 0)}股 "
+                    f"@ {fill_px or booked.get('buy_price')}；"
+                    f"持仓现 {int(booked.get('qty') or 0)}股"
+                ),
+            }
+        else:
+            trimmed = int(booked.get("trimmed") or 0)
+            left = int(booked.get("qty") or 0)
+            book_summary = {
+                "side": "sell",
+                "code": code,
+                "name": name or booked.get("name"),
+                "qty": trimmed,
+                "left": left,
+                "price": booked.get("sell_price") or fill_px,
+                "realized": booked.get("realized_chunk"),
+                "message": (
+                    f"已记卖出 {name or code} {trimmed}股"
+                    + (f" @ {booked.get('sell_price')}" if booked.get("sell_price") else "")
+                    + (f"；剩余 {left}股" if left > 0 else "；已清仓（今日已平）")
+                    + (
+                        f"；本笔盈亏 {booked.get('realized_chunk')}"
+                        if booked.get("realized_chunk") is not None
+                        else ""
+                    )
+                ),
+            }
     return {
         "ok": True,
         "id": sid,
         "signal_type": sig_type,
         "booked": booked,
+        "book_summary": book_summary,
         "positions": rows,
         "summary": engine.snapshot.get("position_summary"),
     }

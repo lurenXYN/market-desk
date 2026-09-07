@@ -54,12 +54,44 @@ def match_mainline_etf(
 
 
 def etf_spec_for_name(board_name: str) -> tuple[str, str, str] | None:
-    """Return (symbol, code, etf_name) for the first matching keyword rule."""
+    """Return (symbol, code, etf_name) for the best matching keyword rule.
+
+    Prefers the longest keyword hit so short keys like「电子」do not beat a more
+    specific board name match when both fire.
+    """
     text = board_name or ""
+    if not text:
+        return None
+    best: tuple[int, tuple[str, str, str]] | None = None
     for keys, spec in MAINLINE_ETF_RULES:
-        if any(k in text for k in keys):
-            return spec
-    return None
+        for key in keys:
+            if key and key in text:
+                score = len(key)
+                if best is None or score > best[0]:
+                    best = (score, spec)
+    return best[1] if best else None
+
+
+def etf_spec_soft_fallback(board_name: str) -> tuple[str, str, str] | None:
+    """Looser map when exact keyword miss: prefer 3-char stems, else 2-char overlap."""
+    text = board_name or ""
+    if not text:
+        return None
+    if etf_spec_for_name(text):
+        return etf_spec_for_name(text)
+    best: tuple[int, tuple[str, str, str]] | None = None
+    for keys, spec in MAINLINE_ETF_RULES:
+        for key in keys:
+            if len(key) < 2:
+                continue
+            score = 0
+            if len(key) >= 3 and (key[:3] in text or (len(text) >= 3 and text[:3] in key)):
+                score = 3
+            elif text[:2] in key or key[:2] in text:
+                score = 2
+            if score and (best is None or score > best[0]):
+                best = (score, spec)
+    return best[1] if best else None
 
 
 def mainline_score(board: dict[str, Any]) -> float:

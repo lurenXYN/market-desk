@@ -75,13 +75,47 @@
       font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
       vertical-align: middle;
     }
+    .mainline-title .soft-etf-badge {
+      display: inline-block; margin-left: 10px; padding: 2px 10px;
+      border: 1px solid #3b5a8b; border-radius: 4px;
+      color: #93c5fd; background: #0c1520;
+      font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+      vertical-align: middle;
+    }
     .no-etf-banner {
       margin: 8px 0 12px; padding: 10px 12px;
       border: 1px solid #a16207; border-radius: 6px;
       background: #1c1508; color: #fbbf24;
       font-size: 14px; font-weight: 600; line-height: 1.45;
     }
+    .no-etf-banner.soft {
+      border-color: #3b5a8b; background: #0c1520; color: #93c5fd;
+    }
     .no-etf-banner[hidden] { display: none; }
+    .today-trio {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+      margin: 0 0 10px; padding: 8px 12px;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0c1218;
+      font-size: 15px; font-weight: 650; letter-spacing: 0.02em;
+    }
+    .today-trio .lab {
+      font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0.12em;
+      margin-right: 2px;
+    }
+    .today-trio .dot { color: var(--muted); font-weight: 400; }
+    .today-trio .w { white-space: nowrap; }
+    .today-trio .w.phase { color: #fde68a; }
+    .today-trio .w.ml { color: var(--text); }
+    .today-trio .w.stage.life-start { color: var(--ferm); }
+    .today-trio .w.stage.life-run { color: #93c5fd; }
+    .today-trio .w.stage.life-end { color: #fdba74; }
+    .pos-btn.exit-pref {
+      border-color: #b45309; background: #2a1810; color: #fdba74; font-weight: 700;
+    }
+    .pos-btn.exit-pref.clear {
+      border-color: #b91c1c; background: #2a1212; color: #fca5a5;
+    }
     .verdict-one {
       font-size: 15px; color: var(--text); margin: 0 0 10px; line-height: 1.4;
       max-width: 52rem;
@@ -648,6 +682,63 @@
       margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5;
       white-space: pre-wrap; font-family: Consolas, "Sarasa Mono SC", monospace;
     }
+    .glossary-panel {
+      position: fixed; right: 16px; top: 58px; z-index: 42;
+      width: min(440px, calc(100vw - 24px));
+      max-height: min(78vh, 720px);
+      display: flex; flex-direction: column;
+      background: #121820; border: 1px solid var(--line); border-radius: 8px;
+      box-shadow: 0 18px 48px rgba(0,0,0,.45); padding: 12px 14px;
+    }
+    .glossary-panel[hidden] { display: none !important; }
+    .glossary-panel .hd {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; margin-bottom: 8px; font-weight: 700;
+    }
+    .glossary-panel .g-search {
+      width: 100%; box-sizing: border-box; margin-bottom: 8px;
+      background: #0e141c; border: 1px solid var(--line); color: var(--text);
+      border-radius: 4px; padding: 7px 10px; font-size: 13px;
+    }
+    .glossary-panel .g-chips {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;
+    }
+    .glossary-panel .g-chip {
+      border: 1px solid var(--line); background: #182230; color: var(--muted);
+      border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer;
+    }
+    .glossary-panel .g-chip.on {
+      border-color: var(--ice); color: var(--ice); background: #0c3040;
+    }
+    .glossary-panel .g-body {
+      overflow: auto; flex: 1; min-height: 0;
+      display: grid; grid-template-columns: 132px 1fr; gap: 10px;
+    }
+    .glossary-panel .g-list {
+      list-style: none; margin: 0; padding: 0; border-right: 1px solid var(--line);
+      overflow: auto; max-height: 100%;
+    }
+    .glossary-panel .g-list li {
+      padding: 6px 8px; cursor: pointer; border-radius: 4px;
+      font-size: 13px; color: var(--text);
+    }
+    .glossary-panel .g-list li:hover { background: #1a2330; }
+    .glossary-panel .g-list li.on { background: #0c3040; color: var(--ice); }
+    .glossary-panel .g-detail { overflow: auto; padding-right: 4px; }
+    .glossary-panel .g-detail h4 { margin: 0 0 8px; font-size: 16px; }
+    .glossary-panel .g-detail .mean { margin: 0 0 10px; font-size: 13px; line-height: 1.5; }
+    .glossary-panel .g-detail .algo {
+      margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5;
+      white-space: pre-wrap; font-family: Consolas, "Sarasa Mono SC", monospace;
+    }
+    @media (max-width: 700px) {
+      .glossary-panel .g-body { grid-template-columns: 1fr; }
+      .glossary-panel .g-list {
+        border-right: none; border-bottom: 1px solid var(--line);
+        max-height: 160px; display: flex; flex-wrap: wrap; gap: 4px;
+      }
+      .glossary-panel .g-list li { padding: 4px 8px; }
+    }
     .ticker {
       color: var(--text); text-decoration: none; border-bottom: 1px dashed #3d4d63;
       cursor: pointer;
@@ -1033,8 +1124,23 @@
       <button type="button" data-main="pos">仓位</button>
       <button type="button" data-main="review">复盘<span class="hint">信号</span></button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
-      <button type="button" class="rev-col-btn" id="settingsBtn" style="margin-left:auto">参数</button>
+      <button type="button" class="rev-col-btn" id="glossaryBtn" style="margin-left:auto" title="浏览全部术语">术语</button>
+      <button type="button" class="rev-col-btn" id="settingsBtn">参数</button>
     </nav>
+    <div class="glossary-panel" id="glossaryPanel" hidden>
+      <div class="hd">
+        <span>术语表</span>
+        <button type="button" class="pos-del" id="glossaryClose">关闭</button>
+      </div>
+      <input class="g-search" id="glossarySearch" type="search" placeholder="搜索：发酵 / 分歧 / 高潮 / 仓位…" autocomplete="off" />
+      <div class="g-chips" id="glossaryChips"></div>
+      <div class="g-body">
+        <ul class="g-list" id="glossaryList"></ul>
+        <div class="g-detail" id="glossaryDetail">
+          <p class="meta">点左侧词条查看含义与近似算法。与界面「?」同源。</p>
+        </div>
+      </div>
+    </div>
     <div class="rev-col-panel settings-panel" id="settingsPanel" hidden style="position:fixed;right:16px;top:58px;z-index:40;">
       <div class="hd"><span>运行参数</span><button type="button" class="pos-del" id="settingsClose">关闭</button></div>
       <div class="pos-form" style="grid-template-columns:1fr 1fr;margin:0;">
@@ -1046,7 +1152,7 @@
         <label>开盘静音分<input id="setOpenMute" type="number" min="0" max="30" step="1" title="9:30后静音分钟数，0=关闭；默认5" /></label>
         <label>价带范围
           <select id="setAlertMode">
-            <option value="traded_watch">已交易+自选（推荐）</option>
+            <option value="traded_watch" title="自选与已交易纳入提醒；已买只保留止损，不再报可买/不追">已交易+自选（推荐）</option>
             <option value="all">全部计划</option>
             <option value="watch_only">仅自选</option>
             <option value="off">关闭价带提醒</option>
@@ -1090,9 +1196,17 @@
             <span class="meta" id="phasePill"></span>
             <span class="meta" id="lifePill"></span>
           </div>
+          <div class="today-trio" id="todayTrio" title="今日三词：相位 · 主线 · 阶段">
+            <span class="lab">今日三词 <button type="button" class="q" data-term="今日三词">?</button></span>
+            <span class="w phase" id="trioPhase">—</span>
+            <span class="dot">·</span>
+            <span class="w ml" id="trioMain">—</span>
+            <span class="dot">·</span>
+            <span class="w stage" id="trioStage">—</span>
+          </div>
           <h1 class="mainline-title" id="headline">等待数据</h1>
           <div class="no-etf-banner" id="noEtfBanner" hidden>
-            主线暂无映射 ETF：本轮不做载体定价买入，只观察回踩；创业板/科创个股仍不推荐。
+            主线暂无映射 ETF：优先盯下方主板回踩票；创业板/科创个股仍不推荐。
           </div>
           <p class="verdict-one" id="meaning"></p>
           <div class="playbook" id="playbook">
@@ -1497,7 +1611,20 @@
       const sell = it.sell_price != null ? it.sell_price : it.last;
       const pnl = it.pnl_pct;
       const pnlHtml = pnl == null ? "—" : `<span class="${pnl >= 0 ? "up" : "down"}">${(pnl > 0 ? "+" : "") + Number(pnl).toFixed(2)}%</span>`;
-      const sellPct = it.sell_pct != null ? ` · 建议卖 ${it.sell_pct}%` : "";
+      const mode = it.exit_mode || "hold";
+      const modeTip = mode === "clear" ? "建议清仓" : (mode === "half" ? "建议先减一半" : "");
+      const sellPct = it.sell_pct != null && it.sell_pct > 0
+        ? ` · ${modeTip || ("建议卖 " + it.sell_pct + "%")}`
+        : "";
+      const halfQ = it.sell_qty_half != null ? it.sell_qty_half : 0;
+      const clearQ = it.sell_qty_clear != null ? it.sell_qty_clear : (it.qty || 0);
+      const halfCls = !t1 && mode === "half" ? " pos-btn exit-pref" : " pos-btn";
+      const clearCls = !t1 && mode === "clear" ? " pos-btn exit-pref clear" : " pos-btn";
+      const actions = t1
+        ? `<button type="button" class="pos-btn sell-go" disabled>T+1 隔日可卖</button>`
+        : `<button type="button" class="${halfCls.trim()} sell-half" data-id="${it.id || ""}" data-qty="${halfQ}" data-last="${it.last ?? ""}">减半 ${halfQ}股</button>
+           <button type="button" class="${clearCls.trim()} sell-clear" data-id="${it.id || ""}" data-qty="${clearQ}" data-last="${it.last ?? ""}">清仓 ${clearQ}股</button>
+           <button type="button" class="pos-btn sell-go">去仓位</button>`;
       return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
@@ -1508,8 +1635,8 @@
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div><div class="lab">浮盈</div><div class="val">${pnlHtml}</div></div>
         </div>
-        <div class="rec-why">${it.reason || ""}${it.sell_pct != null && !t1 ? `；建议卖出约 ${it.sell_pct}% 仓位` : ""}</div>
-        <button type="button" class="pos-btn sell-go">${t1 ? "T+1 隔日可卖" : "去仓位页核对"}</button>
+        <div class="rec-why">${it.reason || ""}</div>
+        <div class="rev-actions" style="margin-top:8px">${actions}</div>
       </article>`;
     };
     const termHtml = (name) => {
@@ -1612,13 +1739,40 @@
           ending: "life-end",
         }[lifeStage] || "");
       }
+      const trioPhase = document.getElementById("trioPhase");
+      const trioMain = document.getElementById("trioMain");
+      const trioStage = document.getElementById("trioStage");
+      if (trioPhase) trioPhase.textContent = (phase && phase !== "—") ? phase : "相位未明";
+      if (trioMain) trioMain.textContent = ml || "主线未明";
+      if (trioStage) {
+        trioStage.textContent = lifeLabel || "阶段未明";
+        trioStage.className = "w stage " + ({
+          starting: "life-start",
+          ongoing: "life-run",
+          ending: "life-end",
+        }[lifeStage] || "");
+      }
+      const softEtf = !!(v.mainline && v.mainline.etf_soft);
+      const noExactEtf = !!(v.mainline && v.mainline.etf_mapped === false && !softEtf);
       document.getElementById("headline").innerHTML =
         `${termHtml("实时主线")} · ${ml}`
-        + ((v.mainline && v.mainline.etf_mapped === false)
-          ? `<span class="no-etf-badge">无ETF映射</span>` : "");
+        + (softEtf
+          ? `<span class="soft-etf-badge">近似ETF</span>`
+          : (noExactEtf ? `<span class="no-etf-badge">无ETF映射</span>` : ""));
       const noEtf = document.getElementById("noEtfBanner");
       if (noEtf) {
-        noEtf.hidden = !(v.mainline && v.mainline.etf_mapped === false && ml && ml !== "未明");
+        if (softEtf && ml && ml !== "未明") {
+          noEtf.hidden = false;
+          noEtf.className = "no-etf-banner soft";
+          const veh = (v.carrier && v.carrier.name) || (v.vehicle && v.vehicle.name) || "行业ETF";
+          noEtf.textContent = `主线无精确ETF映射，载体为近似「${veh}」：仓位宜更小；创业板/科创个股仍不推荐。`;
+        } else if (noExactEtf && ml && ml !== "未明") {
+          noEtf.hidden = false;
+          noEtf.className = "no-etf-banner";
+          noEtf.textContent = "主线暂无映射 ETF：优先盯下方主板回踩票；创业板/科创个股仍不推荐。";
+        } else {
+          noEtf.hidden = true;
+        }
       }
       // One-line summary only; long algo text stays folded.
       const one = (v.meaning || v.reason || "").split("（")[0].trim();
@@ -1968,7 +2122,9 @@
         const actions = closed
           ? `<button type="button" class="pos-del" data-id="${p.id}">删除</button>`
           : `<button type="button" class="pos-del pos-add" data-id="${p.id}" data-code="${p.code}" data-name="${p.name || ""}">加仓</button>
-            <button type="button" class="pos-del pos-trim" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">减仓</button>
+            <button type="button" class="pos-del pos-half" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}" title="对半减仓，按100股四舍五入；≤100股则清仓">减半</button>
+            <button type="button" class="pos-del pos-clear" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">清仓</button>
+            <button type="button" class="pos-del pos-trim" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">自定义</button>
             <button type="button" class="pos-del" data-id="${p.id}">删除</button>`;
         return `
         <tr class="${closed ? "pos-closed" : ""}">
@@ -2257,7 +2413,8 @@
         const tag = r.vs_mainline || "—";
         const match = r.board_match;
         const cls = match === true ? "up" : (match === false ? "down" : "meta");
-        return `<span class="${cls}">${tag}</span>`;
+        const of = r.vs_mainline_of ? `相对当前主线「${r.vs_mainline_of}」` : "相对当前实时主线";
+        return `<span class="${cls}" title="${of}">${tag}</span>`;
       }
       if (col === "phase") return r.phase || "—";
       if (col === "day1") {
@@ -2273,7 +2430,7 @@
         const t1 = !!ctx.t1Locked;
         const tradeBtn = t1
           ? `<button type="button" class="rev-trade" disabled title="当日买入，隔日才能卖（T+1）">T+1不可卖</button>`
-          : `<button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${r.live_last != null ? r.live_last : (r.price ?? "")}">已交易</button>`;
+          : `<button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${r.fill_price != null ? r.fill_price : (r.live_last != null ? r.live_last : (r.price ?? ""))}" data-qty="${r.fill_qty || ""}">已交易</button>`;
         return `<div class="rev-actions">
           ${tradeBtn}
           <button type="button" class="rev-skip${ctx.skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
@@ -2623,10 +2780,71 @@
         alert("钉自选失败");
       }
     });
-    document.getElementById("sellbox").addEventListener("click", (ev) => {
-      if (!ev.target.closest(".sell-go")) return;
-      applyMain("pos");
+    document.getElementById("sellbox").addEventListener("click", async (ev) => {
+      if (ev.target.closest(".sell-go")) {
+        applyMain("pos");
+        return;
+      }
+      const half = ev.target.closest(".sell-half");
+      const clear = ev.target.closest(".sell-clear");
+      const btn = half || clear;
+      if (!btn) return;
+      const id = btn.getAttribute("data-id");
+      const qty = Number(btn.getAttribute("data-qty") || 0);
+      const last = btn.getAttribute("data-last") || "";
+      if (!id || !qty) {
+        alert("无仓位 id，请到仓位页操作");
+        applyMain("pos");
+        return;
+      }
+      const label = half ? "减半" : "清仓";
+      if (!confirm(`${label} ${qty} 股？`)) return;
+      const pxRaw = prompt(`卖出价（回车用现价 ${last || "买价"}）`, last || "");
+      if (pxRaw == null) return;
+      const body = { qty };
+      const sellPx = Number(pxRaw);
+      if (sellPx > 0) body.sell_price = sellPx;
+      else if (Number(last) > 0) body.sell_price = Number(last);
+      const r = await fetch("/api/positions/" + id + "/trim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        alert(label + "失败");
+        return;
+      }
+      await tick();
     });
+
+    async function trimPositionById(id, sellQty, last, label) {
+      if (!id || !sellQty) return false;
+      if (!confirm(`${label} ${sellQty} 股？`)) return false;
+      const pxRaw = prompt(`卖出价（回车用现价 ${last || "买价"}）`, last || "");
+      if (pxRaw == null) return false;
+      const body = { qty: sellQty };
+      const sellPx = Number(pxRaw);
+      if (sellPx > 0) body.sell_price = sellPx;
+      else if (Number(last) > 0) body.sell_price = Number(last);
+      const r = await fetch("/api/positions/" + id + "/trim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        alert(label + "失败");
+        return false;
+      }
+      return true;
+    }
+
+    function halfSellQtyClient(hold) {
+      hold = Number(hold || 0);
+      if (hold <= 0) return 0;
+      if (hold <= 100) return hold;
+      const rounded = Math.floor((hold / 2) / 100 + 0.5) * 100;
+      return Math.min(hold, Math.max(100, rounded || 100));
+    }
     document.getElementById("posForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const f = ev.target;
@@ -2729,37 +2947,48 @@
         form.buy_price.focus();
         return;
       }
+      const halfBtn = ev.target.closest(".pos-half");
+      if (halfBtn) {
+        const id = halfBtn.getAttribute("data-id");
+        const qty = Number(halfBtn.getAttribute("data-qty") || 0);
+        const last = halfBtn.getAttribute("data-last") || "";
+        const sellQty = halfSellQtyClient(qty);
+        if (await trimPositionById(id, sellQty, last, "减半卖出")) {
+          await tick();
+          applyMain("pos");
+        }
+        return;
+      }
+      const clearBtn = ev.target.closest(".pos-clear");
+      if (clearBtn) {
+        const id = clearBtn.getAttribute("data-id");
+        const qty = Number(clearBtn.getAttribute("data-qty") || 0);
+        const last = clearBtn.getAttribute("data-last") || "";
+        if (await trimPositionById(id, qty, last, "清仓")) {
+          await tick();
+          applyMain("pos");
+        }
+        return;
+      }
       const trimBtn = ev.target.closest(".pos-trim");
       if (trimBtn) {
         const id = trimBtn.getAttribute("data-id");
         const qty = Number(trimBtn.getAttribute("data-qty") || 0);
         const last = trimBtn.getAttribute("data-last") || "";
         if (!id || !qty) return;
-        const raw = prompt(`减仓股数（当前 ${qty}，输入要卖掉的股数）`, String(Math.min(qty, 100)));
+        const raw = prompt(`自定义减仓股数（当前 ${qty}，一手=100）`, String(halfSellQtyClient(qty)));
         if (raw == null) return;
         const sellQty = Number(raw);
         if (!sellQty || sellQty <= 0) return;
-        const pxRaw = prompt(`卖出价（用于今日已实现；回车用现价 ${last || "买价"}）`, last || "");
-        if (pxRaw == null) return;
-        const body = { qty: sellQty };
-        const sellPx = Number(pxRaw);
-        if (sellPx > 0) body.sell_price = sellPx;
-        else if (Number(last) > 0) body.sell_price = Number(last);
-        const r = await fetch("/api/positions/" + id + "/trim", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-          alert("减仓失败");
-          return;
+        if (await trimPositionById(id, sellQty, last, "自定义减仓")) {
+          await tick();
+          applyMain("pos");
         }
-        await tick();
-        applyMain("pos");
         return;
       }
       const btn = ev.target.closest(".pos-del");
-      if (!btn || btn.classList.contains("pos-add") || btn.classList.contains("pos-trim")) return;
+      if (!btn || btn.classList.contains("pos-add") || btn.classList.contains("pos-trim")
+          || btn.classList.contains("pos-half") || btn.classList.contains("pos-clear")) return;
       const id = btn.getAttribute("data-id");
       if (!id) return;
       await fetch("/api/positions/" + id, { method: "DELETE" });
@@ -2782,6 +3011,8 @@
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") {
         closeChart();
+        const gPanel = document.getElementById("glossaryPanel");
+        if (gPanel && !gPanel.hidden) gPanel.hidden = true;
         return;
       }
       const tag = ((ev.target && ev.target.tagName) || "").toUpperCase();
@@ -2898,6 +3129,125 @@
       document.getElementById("settingsPanel").hidden = true;
       alert("已保存。刷新间隔下一轮生效。");
     });
+
+    const GLOSSARY_GROUPS = [
+      { id: "phase", label: "相位", keys: ["相位", "恐慌", "分歧", "发酵", "高潮", "温度"] },
+      { id: "action", label: "结论", keys: ["现金", "可小仓", "可买入", "观望", "观察回踩", "禁追", "观察"] },
+      { id: "board", label: "板块", keys: [
+        "实时主线", "主线切换", "主线生命周期", "确认中", "尖峰禁追", "退潮",
+        "点火", "一波", "二波", "加速", "滞涨", "A杀", "修复", "反包", "天地",
+        "聚集度", "总龙头", "卡位龙", "冰点", "冷冻", "相对最冷", "传染", "传染预警",
+      ] },
+      { id: "desk", label: "作战/仓位", keys: [
+        "推荐买入", "建议卖出", "Playbook", "风险股数", "分批计划", "仓位", "T+1",
+        "早决策摘要", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
+      ] },
+      { id: "review", label: "复盘/观察", keys: [
+        "信号复盘", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
+        "相似日", "分时确认", "健康度",
+      ] },
+      { id: "market", label: "大盘指标", keys: [
+        "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "昨停溢价",
+        "成交分位", "周期位置", "竞价基调",
+      ] },
+    ];
+    let glossaryGroup = "phase";
+    let glossaryKey = "";
+
+    function glossaryKeysForGroup(gid) {
+      const all = Object.keys(GLOSSARY || {});
+      if (gid === "all") return all.slice().sort((a, b) => a.localeCompare(b, "zh"));
+      const g = GLOSSARY_GROUPS.find((x) => x.id === gid);
+      if (!g) return [];
+      return g.keys.filter((k) => GLOSSARY[k]);
+    }
+
+    function paintGlossaryDetail(key) {
+      const box = document.getElementById("glossaryDetail");
+      const g = GLOSSARY[key];
+      if (!g) {
+        box.innerHTML = `<p class="meta">点左侧词条查看含义与近似算法。与界面「?」同源。</p>`;
+        return;
+      }
+      glossaryKey = key;
+      box.innerHTML = `<h4>${key}</h4><p class="mean">${g.mean || ""}</p><p class="algo">${g.algo || ""}</p>`;
+    }
+
+    function paintGlossaryList() {
+      const q = (document.getElementById("glossarySearch").value || "").trim().toLowerCase();
+      let keys = glossaryKeysForGroup(glossaryGroup);
+      if (q) {
+        keys = Object.keys(GLOSSARY || {}).filter((k) => {
+          const g = GLOSSARY[k] || {};
+          const blob = `${k} ${g.mean || ""} ${g.algo || ""}`.toLowerCase();
+          return blob.includes(q);
+        }).sort((a, b) => a.localeCompare(b, "zh"));
+      }
+      const list = document.getElementById("glossaryList");
+      if (!keys.length) {
+        list.innerHTML = `<li class="meta">无匹配</li>`;
+        paintGlossaryDetail("");
+        return;
+      }
+      if (!keys.includes(glossaryKey)) glossaryKey = keys[0];
+      list.innerHTML = keys.map((k) =>
+        `<li class="${k === glossaryKey ? "on" : ""}" data-gkey="${k}">${k}</li>`
+      ).join("");
+      paintGlossaryDetail(glossaryKey);
+    }
+
+    function paintGlossaryChips() {
+      const chips = [{ id: "all", label: "全部" }].concat(
+        GLOSSARY_GROUPS.map((g) => ({ id: g.id, label: g.label }))
+      );
+      document.getElementById("glossaryChips").innerHTML = chips.map((c) =>
+        `<button type="button" class="g-chip${c.id === glossaryGroup ? " on" : ""}" data-gg="${c.id}">${c.label}</button>`
+      ).join("");
+    }
+
+    function openGlossary(preferKey) {
+      document.getElementById("settingsPanel").hidden = true;
+      if (preferKey && GLOSSARY[preferKey]) {
+        glossaryKey = preferKey;
+        const hit = GLOSSARY_GROUPS.find((g) => g.keys.includes(preferKey));
+        glossaryGroup = hit ? hit.id : "all";
+      }
+      paintGlossaryChips();
+      paintGlossaryList();
+      document.getElementById("glossaryPanel").hidden = false;
+      document.getElementById("glossarySearch").focus();
+    }
+
+    document.getElementById("glossaryBtn").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const panel = document.getElementById("glossaryPanel");
+      if (!panel.hidden) {
+        panel.hidden = true;
+        return;
+      }
+      openGlossary();
+    });
+    document.getElementById("glossaryClose").addEventListener("click", () => {
+      document.getElementById("glossaryPanel").hidden = true;
+    });
+    document.getElementById("glossarySearch").addEventListener("input", () => paintGlossaryList());
+    document.getElementById("glossaryChips").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-gg]");
+      if (!btn) return;
+      glossaryGroup = btn.getAttribute("data-gg") || "all";
+      document.getElementById("glossarySearch").value = "";
+      paintGlossaryChips();
+      paintGlossaryList();
+    });
+    document.getElementById("glossaryList").addEventListener("click", (ev) => {
+      const li = ev.target.closest("[data-gkey]");
+      if (!li) return;
+      glossaryKey = li.getAttribute("data-gkey") || "";
+      paintGlossaryList();
+    });
+    document.getElementById("settingsBtn").addEventListener("click", () => {
+      document.getElementById("glossaryPanel").hidden = true;
+    }, true);
     document.getElementById("revColClose").addEventListener("click", () => {
       document.getElementById("revColPanel").hidden = true;
     });
@@ -2960,8 +3310,16 @@
       if (panel.hidden) return;
       if (ev.target.closest("#revColPanel") || ev.target.closest("#revColsBtn")) return;
       if (ev.target.closest("#settingsPanel") || ev.target.closest("#settingsBtn")) return;
+      if (ev.target.closest("#glossaryPanel") || ev.target.closest("#glossaryBtn")) return;
       panel.hidden = true;
       document.getElementById("settingsPanel").hidden = true;
+    });
+    document.addEventListener("click", (ev) => {
+      const gPanel = document.getElementById("glossaryPanel");
+      if (gPanel.hidden) return;
+      if (ev.target.closest("#glossaryPanel") || ev.target.closest("#glossaryBtn")) return;
+      if (ev.target.closest(".q")) return;
+      gPanel.hidden = true;
     });
     document.getElementById("revExport").addEventListener("click", () => {
       const rows = lastReview.signals || [];
@@ -3122,15 +3480,69 @@
         const code = trade.getAttribute("data-code") || "";
         const name = trade.getAttribute("data-name") || code;
         let px = trade.getAttribute("data-price") || "";
+        const prefQty = trade.getAttribute("data-qty") || "";
         let book = true;
-        let qty = typ === "buy" ? 100 : undefined;
+        let qty = typ === "buy" ? (prefQty ? Number(prefQty) : 100) : undefined;
         if (typ === "sell") {
-          book = confirm(`${name} ${code}\n标记已交易，并按本地仓位减仓一半？\n取消=只标记，不改仓位`);
+          const holdPos = ((lastData && lastData.positions) || []).find(
+            (p) => String(p.code || "").padStart(6, "0") === String(code || "").padStart(6, "0")
+              && Number(p.qty || 0) > 0
+          );
+          const hold = holdPos ? Number(holdPos.qty || 0) : 0;
+          const halfQ = halfSellQtyClient(hold);
+          const adviceItem = ((((lastData || {}).sell_advice || {}).items) || []).find(
+            (x) => String(x.code || "").padStart(6, "0") === String(code || "").padStart(6, "0")
+          );
+          const exitMode = (adviceItem && adviceItem.exit_mode) || "half";
+          const defAns = exitMode === "clear" ? "2" : "1";
+          const modeHint = exitMode === "clear" ? "作战台建议清仓" : (exitMode === "half" ? "作战台建议先减一半" : "");
+          const ans = prompt(
+            `${name} ${code}\n本地持仓 ${hold || "?"} 股${modeHint ? ` · ${modeHint}` : ""}\n输入 1 = 减半（${halfQ || "?"}股，100股四舍五入）\n输入 2 = 清仓（${hold || "?"}股）\n点取消 = 只标记已交易、不改仓位`,
+            defAns
+          );
+          if (ans === null) {
+            book = false;
+          } else {
+            book = true;
+            const mode = String(ans).trim() === "2" ? "clear" : "half";
+            const pxIn = prompt(`卖出价（默认现价 ${px || ""}）`, px || "");
+            if (pxIn === null) return;
+            if (String(pxIn).trim()) px = String(pxIn).trim();
+            try {
+              const r = await fetch("/api/review/" + id + "/trade", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  book: true,
+                  sell_mode: mode,
+                  price: px ? Number(px) : undefined,
+                }),
+              });
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok) {
+                const detail = typeof d.detail === "string" ? d.detail : "记账失败";
+                alert(detail);
+              } else if (d.book_summary && d.book_summary.message) {
+                alert(d.book_summary.message);
+              } else if (d.booked) {
+                const left = d.booked.qty;
+                const sold = d.booked.trimmed;
+                alert(`已记卖出 ${sold != null ? sold + "股" : ""}，剩余 ${left != null ? left : "?"}股`);
+              }
+            } catch (e) {
+              alert("操作失败");
+            }
+            reviewLoadedAt = 0;
+            await loadReview(true);
+            await tick();
+            return;
+          }
         } else {
           const pxIn = prompt(`${name} ${code}\n成交价（默认 ${px || "建议价"}）`, px || "");
           if (pxIn === null) return;
           if (String(pxIn).trim()) px = String(pxIn).trim();
-          const qtyIn = prompt("成交数量（默认 100）", "100");
+          const qtyDef = String(qty || 100);
+          const qtyIn = prompt("成交数量（默认 " + qtyDef + "）", qtyDef);
           if (qtyIn === null) return;
           if (String(qtyIn).trim()) qty = Number(qtyIn);
           book = confirm(`按 ${px || "建议价"} × ${qty} 写入仓位？\n取消=只标记成交，不改仓位`);
@@ -3162,6 +3574,12 @@
                 }),
               });
             }
+          } else if (book && d.book_summary && d.book_summary.message) {
+            alert(d.book_summary.message);
+          } else if (book && typ === "buy" && d.booked) {
+            alert(`已记买入 ${name || code}，持仓现 ${d.booked.qty || qty}股`);
+          } else if (!book) {
+            alert("已标记成交（未改仓位）");
           }
         } catch (e) {
           alert("操作失败");
@@ -3232,7 +3650,13 @@
       const key = btn.getAttribute("data-term");
       const g = GLOSSARY[key];
       if (!g) { pop.hidden = true; return; }
-      pop.innerHTML = `<h4>${key}</h4><p class="mean">${g.mean}</p><p class="algo">${g.algo}</p>`;
+      // Prefer the glossary drawer for discoverability when user holds Alt.
+      if (ev.altKey) {
+        pop.hidden = true;
+        openGlossary(key);
+        return;
+      }
+      pop.innerHTML = `<h4>${key}</h4><p class="mean">${g.mean}</p><p class="algo">${g.algo}</p><p class="meta" style="margin-top:8px">Alt+点击 ? 打开术语表</p>`;
       pop.hidden = false;
       const r = btn.getBoundingClientRect();
       const width = Math.min(380, window.innerWidth - 16);

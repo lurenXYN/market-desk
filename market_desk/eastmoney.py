@@ -284,6 +284,8 @@ async def fetch_board_members(
         code = normalize_code(item.get("f12"))
         if not is_main_board(code):
             continue
+        mv = num(item.get("f20"))
+        mv_yi = None if mv is None or mv <= 0 else round(float(mv) / 1e8, 2)
         members.append(
             {
                 "code": code,
@@ -293,6 +295,7 @@ async def fetch_board_members(
                 "price": num(item.get("f2")),
                 "high": num(item.get("f15")),
                 "low": num(item.get("f16")),
+                "mv_yi": mv_yi,
             }
         )
         if len(members) >= CONSTITUENT_TOP:

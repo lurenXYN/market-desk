@@ -175,9 +175,18 @@ def compare_boards_to_mainline(
 def enrich_signals_with_boards(
     rows: list[dict[str, Any]],
     boards: list[dict[str, Any]] | None,
+    *,
+    live_mainline: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach board membership and mainline comparison onto review rows."""
+    """Attach board membership and compare them to the live (or fallback) mainline.
+
+    ``所属板块`` prefers the first stored board names. ``对照主线`` always uses
+    ``live_mainline`` when provided, so the review table answers “does it still
+    fit today's mainline?” rather than the signal-time mainline (kept in the
+    separate mainline column).
+    """
     out: list[dict[str, Any]] = []
+    live_ml = str(live_mainline or "").strip()
     for row in rows:
         item = dict(row)
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -187,16 +196,19 @@ def enrich_signals_with_boards(
         names = [str(x).strip() for x in (stored or []) if str(x).strip()]
         if not names:
             names = lookup_code_boards(item.get("code") or "", boards)
-        # Hot/pin pools rotate; fall back to the signal's session mainline label.
+        # Hot/pin pools rotate; fall back to the signal's session mainline label
+        # only as a board-name hint, not as the comparison target.
         if not names:
             ml = str(item.get("mainline") or "").strip()
             if ml and ml not in ("未明", "—"):
                 names = [ml]
-        cmp = compare_boards_to_mainline(names, item.get("mainline"))
+        compare_to = live_ml if live_ml and live_ml not in ("未明", "—") else item.get("mainline")
+        cmp = compare_boards_to_mainline(names, compare_to)
         item["boards"] = cmp["boards"]
         item["board_text"] = cmp["board_text"]
         item["vs_mainline"] = cmp["vs_mainline"]
         item["board_match"] = cmp["match"]
+        item["vs_mainline_of"] = str(compare_to or "").strip() or None
         out.append(item)
     return out
 
@@ -709,6 +721,20 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
         )
 
     alerts: list[tuple[str, str, str]] = []
+    day_rows = load_signals_for_date(trade_date)
+    traded_codes = {
+        normalize_code(r.get("code"))
+        for r in day_rows
+        if int(r.get("traded") or 0)
+    }
+    open_codes = {
+        normalize_code(r.get("code"))
+        for r in (snapshot.get("positions") or [])
+        if isinstance(r, dict) and int(r.get("qty") or 0) > 0
+    }
+    # Already bought → entry / chase bands are noise; keep stop only.
+    owned_codes = {c for c in (traded_codes | open_codes) if c}
+
     for p in plans:
         code = p["code"]
         last = p.get("last")
@@ -721,6 +747,7 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
         buy = p.get("buy")
         low = wait if wait is not None else buy
         pct = p.get("pct")
+        owned = code in owned_codes
         if stop is not None and last <= stop:
             alerts.append(
                 (
@@ -729,6 +756,8 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                     f"{name} {code} 现价 {last} ≤ 止损 {stop}",
                 )
             )
+        elif owned:
+            continue
         elif chase is not None and last >= chase:
             alerts.append(
                 (
@@ -763,6 +792,7 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
         stop = num(row.get("stop_price"))
         chase = num(row.get("chase_price"))
         suggest = num(row.get("suggest_price"))
+        owned = code in owned_codes
         if stop is not None and last <= stop:
             alerts.append(
                 (
@@ -771,6 +801,8 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
                     f"{name} {code} 现价 {last} ≤ 止损 {stop}",
                 )
             )
+        elif owned:
+            continue
         elif chase is not None and last >= chase:
             alerts.append(
                 (
@@ -791,12 +823,6 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
     mode = str(setting("alert_mode", "traded_watch") or "traded_watch")
     if mode == "off":
         return []
-    day_rows = load_signals_for_date(trade_date)
-    traded_codes = {
-        normalize_code(r.get("code"))
-        for r in day_rows
-        if int(r.get("traded") or 0)
-    }
     watch_codes = {
         normalize_code(r.get("code"))
         for r in (snapshot.get("watchlist") or [])
@@ -913,6 +939,7 @@ def build_review_payload(
     trade_date: str | None = None,
     phase: str | None = None,
     boards: list[dict[str, Any]] | None = None,
+    live_mainline: str | None = None,
 ) -> dict[str, Any]:
     """Load one trade-date's signals plus global summary for the review tab."""
     calendar_today = datetime.now().strftime("%Y-%m-%d")
@@ -921,7 +948,9 @@ def build_review_payload(
     day_rows = [_flatten_signal_prices(r) for r in load_signals_for_date(day)]
     if quotes:
         day_rows = enrich_signals_with_live_marks(day_rows, quotes)
-    day_rows = enrich_signals_with_boards(day_rows, boards)
+    day_rows = enrich_signals_with_boards(
+        day_rows, boards, live_mainline=live_mainline
+    )
     day_phase = phase
     if not day_phase and day_rows:
         day_phase = str(day_rows[0].get("phase") or "") or None

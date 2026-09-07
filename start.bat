@@ -56,6 +56,7 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING
 )
 timeout /t 1 /nobreak >nul
 
-echo Starting http://127.0.0.1:8765/
+echo Starting on 127.0.0.1:8765 (LAN disabled)...
+echo Local:  http://127.0.0.1:8765/
 ".venv\Scripts\python.exe" -m market_desk
 pause

@@ -471,6 +471,9 @@ class DeskEngine:
             phase=phase,
             boards=list((self.snapshot or {}).get("hot_boards") or [])
             + list((self.snapshot or {}).get("pin_boards") or []),
+            live_mainline=(
+                ((self.snapshot or {}).get("verdict") or {}).get("mainline") or {}
+            ).get("name"),
         )
 
     def _emit_toasts(

@@ -9,6 +9,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 HOST = "127.0.0.1"
 PORT = 8765
+# Browser open URL (same as bind host when LAN is off).
+BROWSER_HOST = "127.0.0.1"
 # Hit East Money / Tencent only in session; idle loop just waits for the next open.
 SESSION_REFRESH_SECONDS = 20
 IDLE_CHECK_SECONDS = 60
@@ -69,7 +71,7 @@ CHINEXT_STAR_ETFS = frozenset({"159915", "588000"})
 
 MAINLINE_ETF_RULES: list[tuple[tuple[str, ...], tuple[str, str, str]]] = [
     (("通信", "5G", "光通信"), ("sh515050", "515050", "通信ETF")),
-    (("半导体", "芯片", "集成电路", "存储", "封测", "电子"), ("sh512480", "512480", "半导体ETF")),
+    (("半导体", "芯片", "集成电路", "存储", "封测", "电子", "电路板", "覆铜", "PCB", "印制电路"), ("sh512480", "512480", "半导体ETF")),
     (
         ("人工智能", "算力", "光模块", "液冷", "服务器", "光学光电子", "软件", "信创", "机器人", "自动驾驶"),
         ("sz159819", "159819", "人工智能ETF"),
