@@ -436,6 +436,8 @@ class DeskEngine:
             quotes=quotes,
             trade_date=today,
             phase=(self.snapshot.get("phase") if self.snapshot else None),
+            boards=list((self.snapshot or {}).get("hot_boards") or [])
+            + list((self.snapshot or {}).get("pin_boards") or []),
         )
 
     def _emit_toasts(

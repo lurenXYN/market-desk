@@ -1929,6 +1929,8 @@
       { id: "fill", label: "成交" },
       { id: "chase", label: "不追" },
       { id: "mainline", label: "主线" },
+      { id: "board", label: "板块" },
+      { id: "vs_ml", label: "对照主线" },
       { id: "phase", label: "相位" },
       { id: "day1", label: "次日%" },
       { id: "day3", label: "三日%" },
@@ -2020,6 +2022,13 @@
         return `${chase == null ? "—" : chase}${ctx.chaseDevHtml}`;
       }
       if (col === "mainline") return r.mainline || "—";
+      if (col === "board") return r.board_text || "—";
+      if (col === "vs_ml") {
+        const tag = r.vs_mainline || "—";
+        const match = r.board_match;
+        const cls = match === true ? "up" : (match === false ? "down" : "meta");
+        return `<span class="${cls}">${tag}</span>`;
+      }
       if (col === "phase") return r.phase || "—";
       if (col === "day1") {
         const d1 = r.outcome_day1_pct;
@@ -2672,6 +2681,8 @@
         if (id === "fill") return (r.fill_price == null && r.fill_qty == null) ? "" : `${r.fill_price ?? ""}x${r.fill_qty ?? ""}`;
         if (id === "chase") return r.chase_price ?? (r.payload && r.payload.chase_price);
         if (id === "mainline") return r.mainline;
+        if (id === "board") return r.board_text || ((r.boards || []).join("/") );
+        if (id === "vs_ml") return r.vs_mainline || "";
         if (id === "phase") return r.phase;
         if (id === "day1") return r.outcome_day1_pct;
         if (id === "day3") return r.outcome_day3_pct;

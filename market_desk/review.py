@@ -94,6 +94,109 @@ def live_price_slope(code: str, last: float | None) -> dict[str, Any]:
     }
 
 
+def lookup_code_boards(
+    code: str,
+    boards: list[dict[str, Any]] | None,
+    *,
+    limit: int = 4,
+) -> list[str]:
+    """Return board names whose constituent pool contains the code."""
+    c = normalize_code(code)
+    if not c:
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for board in boards or []:
+        name = str(board.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        pool = board.get("pool") or board.get("members") or []
+        hit = False
+        for member in pool:
+            if normalize_code(member.get("code")) == c:
+                hit = True
+                break
+        if not hit:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= limit:
+            break
+    return names
+
+
+def compare_boards_to_mainline(
+    board_names: list[str] | None,
+    mainline: str | None,
+) -> dict[str, Any]:
+    """Classify whether listed boards align with the session mainline."""
+    boards = [str(x).strip() for x in (board_names or []) if str(x).strip()]
+    ml = str(mainline or "").strip()
+    if not boards:
+        return {
+            "boards": [],
+            "board_text": "未归类",
+            "vs_mainline": "未归类",
+            "match": None,
+        }
+    board_text = " / ".join(boards)
+    if not ml or ml in ("未明", "—"):
+        return {
+            "boards": boards,
+            "board_text": board_text,
+            "vs_mainline": "主线未明",
+            "match": None,
+        }
+    if ml in boards:
+        return {
+            "boards": boards,
+            "board_text": board_text,
+            "vs_mainline": "属于主线",
+            "match": True,
+        }
+    soft = any(ml in b or b in ml for b in boards)
+    if soft:
+        return {
+            "boards": boards,
+            "board_text": board_text,
+            "vs_mainline": "接近主线",
+            "match": True,
+        }
+    return {
+        "boards": boards,
+        "board_text": board_text,
+        "vs_mainline": "偏离主线",
+        "match": False,
+    }
+
+
+def enrich_signals_with_boards(
+    rows: list[dict[str, Any]],
+    boards: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Attach board membership and mainline comparison onto review rows."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        stored = payload.get("board_names") or item.get("boards")
+        names = [str(x).strip() for x in (stored or []) if str(x).strip()]
+        if not names:
+            names = lookup_code_boards(item.get("code") or "", boards)
+        # ETF / primary vehicle often has no constituent hit; fall back to mainline label.
+        if not names and str(item.get("kind") or "") == "etf":
+            ml = str(item.get("mainline") or "").strip()
+            if ml:
+                names = [ml]
+        cmp = compare_boards_to_mainline(names, item.get("mainline"))
+        item["boards"] = cmp["boards"]
+        item["board_text"] = cmp["board_text"]
+        item["vs_mainline"] = cmp["vs_mainline"]
+        item["board_match"] = cmp["match"]
+        out.append(item)
+    return out
+
+
 def record_session_signals(snapshot: dict[str, Any]) -> int:
     """Persist buy/sell recommendations for the current session. Return insert/update count."""
     trade_date = snapshot.get("trade_date") or ""
@@ -104,6 +207,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     verdict = snapshot.get("verdict") or {}
     action = verdict.get("action") or ""
     mainline = ((verdict.get("mainline") or {}).get("name")) or ""
+    board_cards = list(snapshot.get("hot_boards") or []) + list(
+        snapshot.get("pin_boards") or []
+    )
     n = 0
 
     rec = verdict.get("recommend") or {}
@@ -129,6 +235,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                 price = num(item.get("last"))
             if price is None:
                 continue
+            board_names = lookup_code_boards(code, board_cards)
+            if not board_names and mainline:
+                board_names = [mainline]
+            board_cmp = compare_boards_to_mainline(board_names, mainline)
             upsert_signal(
                 {
                     "trade_date": trade_date,
@@ -153,6 +263,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "trend_pending": pending,
                         "trend_manual": item.get("trend_manual"),
                         "trend_ok": bool(item.get("trend_ok")),
+                        "board_names": board_cmp["boards"],
+                        "vs_mainline": board_cmp["vs_mainline"],
+                        "board_match": board_cmp["match"],
                     },
                 }
             )
@@ -170,6 +283,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
             price = num(item.get("last"))
         if price is None:
             continue
+        board_names = lookup_code_boards(code, board_cards)
+        board_cmp = compare_boards_to_mainline(board_names, mainline)
         upsert_signal(
             {
                 "trade_date": trade_date,
@@ -189,6 +304,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "stop_price": item.get("stop_price"),
                     "pnl_pct": item.get("pnl_pct"),
                     "qty": item.get("qty"),
+                    "board_names": board_cmp["boards"],
+                    "vs_mainline": board_cmp["vs_mainline"],
+                    "board_match": board_cmp["match"],
                 },
             }
         )
@@ -763,11 +881,13 @@ def build_review_payload(
     *,
     trade_date: str | None = None,
     phase: str | None = None,
+    boards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Load recent signals and summary; optionally attach live price marks."""
     rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
     if quotes:
         rows = enrich_signals_with_live_marks(rows, quotes)
+    rows = enrich_signals_with_boards(rows, boards)
     day = trade_date or datetime.now().strftime("%Y-%m-%d")
     summary = summarize_signals(rows)
     today = build_today_digest(rows, trade_date=day, phase=phase)
