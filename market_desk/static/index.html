@@ -161,6 +161,33 @@
       color: var(--muted); font-size: 12px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
     }
     .morning-brief .copy-btn:hover { color: var(--text); border-color: #5a6a80; }
+    .eod-brief {
+      margin: 0 0 12px; padding: 10px 12px;
+      border: 1px solid var(--line); border-radius: 8px; background: #0c1218;
+    }
+    .eod-brief .hd {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .eod-brief .hd b { color: var(--text); font-size: 13px; letter-spacing: 0.04em; }
+    .eod-brief .focus {
+      margin: 0 0 6px; font-size: 14px; font-weight: 650; line-height: 1.4;
+    }
+    .eod-brief ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .eod-brief li { margin: 2px 0; }
+    .eod-brief .copy-btn {
+      margin-left: auto; border: 1px solid var(--line); background: #151c28;
+      color: var(--muted); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    }
+    .eod-brief .copy-btn:hover { color: var(--text); border-color: #5a6a80; }
+    .rev-vsml {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin: 0 0 10px; font-size: 13px;
+    }
+    .rev-vsml .lab { color: var(--muted); }
+    .rev-vsml .vsml-btn.on {
+      border-color: #3b5a8b; color: #93c5fd; background: #0c1520;
+    }
     .desk-more {
       margin: 0 0 8px; border: 1px dashed #2a3544; border-radius: 8px;
       background: #0a1016;
@@ -301,6 +328,9 @@
     }
     .rec-card.buy-ready .role { color: #86efac; }
     .rec-card.buy-ready .buy .val { color: #86efac; }
+    .buybox .rec-card.buy-ready .pos-btn.rec-book {
+      background: #1a3a28; color: #86efac; border-color: #2f5a3a; font-weight: 700;
+    }
     .buybox .rec-card.buy-ready .pos-btn.rec-pos {
       border-color: #3ecf8e; color: #bbf7d0; background: #0c1a14;
     }
@@ -1433,6 +1463,21 @@
         <div class="rev-today" id="revToday"></div>
         <div class="rev-exec" id="revExec"></div>
         <div class="rev-missed" id="revMissed"></div>
+        <div class="eod-brief" id="eodBrief">
+          <div class="hd">
+            <b>收盘一页纸</b>
+            <button type="button" class="q" data-term="收盘一页纸">?</button>
+            <button type="button" class="copy-btn" id="eodCopy">复制</button>
+          </div>
+          <p class="focus" id="eodFocus">打开复盘日后自动汇总</p>
+          <ul id="eodBullets"></ul>
+        </div>
+        <div class="rev-vsml" id="revVsMl">
+          <span class="lab">对照主线</span>
+          <button type="button" class="rev-col-btn vsml-btn" data-mode="live" id="vsMlLive">实时</button>
+          <button type="button" class="rev-col-btn vsml-btn" data-mode="day" id="vsMlDay">当日</button>
+          <span class="meta" id="vsMlHint"></span>
+        </div>
         <div class="rev-phase" id="revPhase"></div>
         <div class="rev-hist" id="revHist"></div>
         <div class="rev-sum" id="revSum"></div>
@@ -1574,11 +1619,19 @@
             data-stop="${it.stop_price ?? ""}"
             data-chase="${it.chase_price ?? ""}">钉自选</button>`;
       const actionHtml = `<div class="rec-actions">
+            <button type="button" class="pos-btn rec-book"
+              data-code="${it.code || ""}"
+              data-name="${it.name || ""}"
+              data-price="${buy ?? ""}"
+              data-last="${it.last ?? ""}"
+              data-qty="${qtyForBook}"
+              title="确认后写入本地仓位；若有当日买入信号会同步记已交易">记入仓位</button>
             <button type="button" class="pos-btn rec-pos"
               data-code="${it.code || ""}"
               data-name="${it.name || ""}"
               data-price="${buy ?? ""}"
-              data-qty="${qtyForBook}">按建议价记账</button>
+              data-qty="${qtyForBook}"
+              title="只带到仓位页表单，不自动保存">填到仓位页</button>
             ${pinBtn}
           </div>`;
       const cardCls = [
@@ -1730,7 +1783,7 @@
         ? (`相位 ${termHtml(phase)}`) : "";
       const lifePill = document.getElementById("lifePill");
       const lifeStage = (v.mainline && v.mainline.lifecycle) || "";
-      const lifeLabel = ({ starting: "启动", ongoing: "进行中", ending: "退潮" })[lifeStage] || "";
+      const lifeLabel = ({ starting: "萌芽", ongoing: "主升", ending: "衰退" })[lifeStage] || "";
       if (lifePill) {
         lifePill.textContent = lifeLabel ? (`阶段 ${lifeLabel}`) : "";
         lifePill.className = "meta " + ({
@@ -1963,9 +2016,9 @@
           ${(rows || []).map(lifeCard).join("") || `<div class="meta">暂无</div>`}
         </div>`;
       document.getElementById("lifeGrid").innerHTML =
-        lifeCol("start", "马上开始", life.starting) +
-        lifeCol("run", "进行中", life.ongoing) +
-        lifeCol("end", "快结束", life.ending);
+        lifeCol("start", "萌芽", life.starting) +
+        lifeCol("run", "主升", life.ongoing) +
+        lifeCol("end", "衰退", life.ending);
       const cg = d.contagion || {};
       const cgEl = document.getElementById("contagion");
       cgEl.className = "contagion " + (cg.on ? "on" : "off");
@@ -2038,7 +2091,7 @@
             : "—";
           const wlBtn = w.in_watchlist
             ? `<button type="button" class="wl-add in" disabled>已自选</button>`
-            : `<button type="button" class="wl-add" data-code="${w.code || ""}" data-name="${(w.name || "").replace(/"/g, "")}">自选</button>`;
+            : `<button type="button" class="wl-add" data-code="${w.code || ""}" data-name="${(w.name || "").replace(/"/g, "")}" data-suggest="${w.suggest_price ?? ""}" data-stop="${w.stop_price ?? ""}" data-chase="${w.chase_price ?? ""}" title="带入粗略建议/止损/不追价带">自选</button>`;
           watchHtml += `<li class="${mlHit ? "is-ml" : ""}">
             <span>${tickerHtml(w.name, w.code)}</span>
             <span>${w.code || ""}</span>
@@ -2312,12 +2365,28 @@
       { id: "board", label: "板块" },
       { id: "vs_ml", label: "对照主线" },
       { id: "phase", label: "相位" },
+      { id: "holder_n", label: "股东户数" },
+      { id: "holder_chg", label: "户数增减%" },
+      { id: "holder_avg", label: "户均市值" },
       { id: "day1", label: "次日%" },
       { id: "day3", label: "三日%" },
       { id: "result", label: "结果" },
       { id: "ops", label: "操作" },
     ];
     const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({ id: c.id, on: true }));
+
+    function fmtHolderNum(n) {
+      if (n == null || Number.isNaN(Number(n))) return "—";
+      const v = Number(n);
+      if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + "万";
+      return String(Math.round(v));
+    }
+    function fmtHolderAvgWan(n) {
+      if (n == null || Number.isNaN(Number(n))) return "—";
+      const v = Number(n);
+      if (Math.abs(v) >= 100) return v.toFixed(0) + "万";
+      return v.toFixed(2) + "万";
+    }
 
     function loadRevColState() {
       try {
@@ -2413,10 +2482,33 @@
         const tag = r.vs_mainline || "—";
         const match = r.board_match;
         const cls = match === true ? "up" : (match === false ? "down" : "meta");
-        const of = r.vs_mainline_of ? `相对当前主线「${r.vs_mainline_of}」` : "相对当前实时主线";
+        const of = r.vs_mainline_of
+          ? `相对「${r.vs_mainline_of}」`
+          : "相对对照主线";
         return `<span class="${cls}" title="${of}">${tag}</span>`;
       }
       if (col === "phase") return r.phase || "—";
+      if (col === "holder_n") {
+        const tip = [
+          r.holder_end ? `统计截止 ${r.holder_end}` : "",
+          r.holder_notice ? `公告 ${r.holder_notice}` : "",
+          r.holder_prev != null ? `上次 ${fmtHolderNum(r.holder_prev)}` : "",
+        ].filter(Boolean).join(" · ");
+        return `<span title="${tip || "季度披露，非实时"}">${fmtHolderNum(r.holder_num)}</span>`;
+      }
+      if (col === "holder_chg") {
+        const p = r.holder_chg_pct;
+        if (p == null || Number.isNaN(Number(p))) return "—";
+        const n = Number(p);
+        const tip = r.holder_chg != null
+          ? `增减 ${r.holder_chg > 0 ? "+" : ""}${fmtHolderNum(r.holder_chg)} 户`
+          : "较上期";
+        return `<span class="${n >= 0 ? "up" : "down"}" title="${tip}">${(n > 0 ? "+" : "") + n.toFixed(1)}%</span>`;
+      }
+      if (col === "holder_avg") {
+        const tip = r.holder_end ? `统计截止 ${r.holder_end}` : "户均持股市值";
+        return `<span title="${tip}">${fmtHolderAvgWan(r.holder_avg_wan)}</span>`;
+      }
       if (col === "day1") {
         const d1 = r.outcome_day1_pct;
         return `<td class="col-day1 ${d1 == null ? "" : (d1 >= 0 ? "up" : "down")}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1 + "%")}</td>`;
@@ -2498,6 +2590,22 @@
             + ` · ${m.skipped ? "已跳过" : "未点已交易"} · ${m.price_mark || "未回踩上行"}</li>`
           ).join("") + `</ul>`)
         : `<div class="hd">漏买清单<button type="button" class="q" data-term="漏买清单">?</button></div><span class="meta">${dayLabel}暂无「未交易且未回踩上行」项</span>`;
+      paintEodBrief(sum, today, dayLabel);
+      const vsMode = sum.vs_mainline_mode || reviewVsMlMode || "live";
+      reviewVsMlMode = vsMode;
+      const vsLiveBtn = document.getElementById("vsMlLive");
+      const vsDayBtn = document.getElementById("vsMlDay");
+      if (vsLiveBtn) vsLiveBtn.classList.toggle("on", vsMode === "live");
+      if (vsDayBtn) vsDayBtn.classList.toggle("on", vsMode === "day");
+      const vsHint = document.getElementById("vsMlHint");
+      if (vsHint) {
+        const liveN = sum.vs_mainline_live || "—";
+        const dayN = sum.vs_mainline_day || "—";
+        const of = sum.vs_mainline_of || "—";
+        vsHint.textContent = vsMode === "day"
+          ? `当日主线「${dayN}」· 现对照「${of}」（实时=${liveN}）`
+          : `实时主线「${liveN}」· 现对照「${of}」（当日=${dayN}）`;
+      }
       const ph = sum.phase_hits || [];
       document.getElementById("revPhase").innerHTML = ph.length
         ? (`<div class="hd">相位 × 命中率（跨日）<button type="button" class="q" data-term="相位命中">?</button></div>`
@@ -2587,6 +2695,83 @@
 
     let lastReview = { signals: [], summary: {} };
     let reviewViewDate = "";
+    let reviewVsMlMode = "live";
+    window.__eodMarkdown = "";
+
+    function paintEodBrief(sum, today, dayLabel) {
+      const focusEl = document.getElementById("eodFocus");
+      const listEl = document.getElementById("eodBullets");
+      if (!focusEl || !listEl) return;
+      const pos = (lastData && lastData.position_summary) || {};
+      const ex = sum.exec || today.exec || {};
+      const missed = sum.missed_buys || [];
+      const switches = (lastData && lastData.mainline_switches) || [];
+      const switchN = today.switch_n != null ? today.switch_n : switches.length;
+      const phase = today.phase || (lastData && lastData.phase) || "—";
+      const ml = ((((lastData || {}).verdict || {}).mainline || {}).name)
+        || sum.vs_mainline_of
+        || "—";
+      const action = (((lastData || {}).verdict || {}).action) || "—";
+      const floatPnl = pos.floating_pnl != null ? pos.floating_pnl : pos.pnl;
+      const realized = pos.realized_pnl != null ? pos.realized_pnl : 0;
+      let dayPnl = pos.day_pnl;
+      if (dayPnl == null && floatPnl != null) dayPnl = Number(floatPnl) + Number(realized || 0);
+      const money = (v) => {
+        if (v == null || v === "") return "—";
+        const n = Number(v);
+        if (Number.isNaN(n)) return "—";
+        return (n > 0 ? "+" : "") + n.toFixed(2);
+      };
+      let focus = "收盘对照：相位/主线/执行分与盈亏一张纸看完即可。";
+      if (dayPnl != null && Number(dayPnl) < 0) {
+        focus = "收盘优先复盘失误与漏买，明日先降风险再谈进攻。";
+      } else if (action === "可买入" || action === "可小仓") {
+        focus = "收盘对照：今日有进攻窗口，核对价带内成交与仓位纪律。";
+      } else if (missed.length) {
+        focus = "收盘对照：有漏买项，记下是否规则过严或执行犹豫。";
+      }
+      const bullets = [
+        `相位 ${phase} · 结论 ${action} · 主线 ${ml} · 切换 ${switchN} 次`,
+        `执行分 ${ex.score == null ? "—" : ex.score} · 已成交买 ${ex.traded_buy_n ?? 0}`
+          + ` · 价带内 ${ex.in_band_n ?? 0} / 追高 ${ex.chase_n ?? 0}`,
+        `信号 买${today.buy_n ?? 0}/卖${today.sell_n ?? 0}`
+          + ` · 已交易 ${today.traded_n ?? 0} / 未交易 ${today.skipped_n ?? 0}`
+          + ` · 未回踩上行 ${today.miss_pullback_n ?? 0}`,
+        missed.length
+          ? (`漏买 ${missed.length}：` + missed.slice(0, 6).map((m) =>
+            `${m.name || m.code}@${m.price ?? "—"}`).join(" / "))
+          : "漏买：无",
+        `今日盈亏 ${money(dayPnl)}（浮盈 ${money(floatPnl)} + 已实现 ${money(realized)}）`
+          + (pos.day_pnl_pct != null ? ` · ${pos.day_pnl_pct}%` : ""),
+      ];
+      if (isTodayView() && switches.length) {
+        bullets.splice(1, 0, "主线切换：" + switches.slice(0, 4).map((s) => {
+          const at = String(s.switched_at || "").slice(11, 16);
+          return `${at ? at + " " : ""}${s.from_name || "—"}→${s.to_name || "—"}`;
+        }).join("；"));
+      }
+      focusEl.textContent = focus;
+      listEl.innerHTML = bullets.map((b) => `<li>${b}</li>`).join("");
+      const day = today.date || reviewViewDate || "—";
+      window.__eodMarkdown = [
+        `# 收盘一页纸 · ${day}`,
+        "",
+        `**焦点：** ${focus}`,
+        "",
+        "## 要点",
+        ...bullets.map((b) => `- ${b}`),
+        "",
+        "---",
+        "_由 market-desk 规则生成，仅供复盘，不构成投资建议。_",
+      ].join("\n");
+    }
+
+    function isTodayView() {
+      const sum = (lastReview && lastReview.summary) || {};
+      const view = reviewViewDate || sum.view_date || "";
+      const cal = sum.calendar_today || "";
+      return !!(view && cal && view === cal);
+    }
 
     async function loadReview(force, date) {
       const now = Date.now();
@@ -2595,7 +2780,10 @@
         : (reviewViewDate || "").trim();
       if (!force && date === undefined && now - reviewLoadedAt < 30000) return;
       try {
-        const q = want ? ("?date=" + encodeURIComponent(want)) : "";
+        const params = new URLSearchParams();
+        if (want) params.set("date", want);
+        if (reviewVsMlMode) params.set("vs_ml", reviewVsMlMode);
+        const q = params.toString() ? ("?" + params.toString()) : "";
         const r = await fetch("/api/review" + q);
         const d = await r.json();
         paintReview(d);
@@ -2739,6 +2927,48 @@
       paintCycleEvents(lastData);
     });
     document.getElementById("buybox").addEventListener("click", async (ev) => {
+      const bookBtn = ev.target.closest(".rec-book");
+      if (bookBtn) {
+        const code = (bookBtn.dataset.code || "").trim();
+        const name = (bookBtn.dataset.name || "").trim();
+        if (!code) return;
+        let px = bookBtn.dataset.price || bookBtn.dataset.last || "";
+        let qty = Number(bookBtn.dataset.qty || 100) || 100;
+        const pxIn = prompt(
+          `${name || code}\n成交价（默认建议价 ${px || "—"}；可改成实际成交）`,
+          px || ""
+        );
+        if (pxIn === null) return;
+        if (String(pxIn).trim()) px = String(pxIn).trim();
+        const qtyIn = prompt("成交数量（股，默认风险建议股数）", String(qty));
+        if (qtyIn === null) return;
+        if (String(qtyIn).trim()) qty = Number(qtyIn);
+        qty = Math.max(0, Math.floor(Number(qty) || 0));
+        const price = Number(px);
+        if (!(price > 0) || !(qty > 0)) {
+          alert("请填写有效成交价和数量");
+          return;
+        }
+        if (!confirm(`确认记入仓位？\n${name || code} ${code}\n${price} × ${qty} 股\n（仅本地记账，不会下单）`)) {
+          return;
+        }
+        try {
+          const ok = await bookBuyToPosition({
+            code,
+            name,
+            price,
+            qty,
+            note: "作战台记入",
+          });
+          if (ok) {
+            await tick();
+            applyMain("pos");
+          }
+        } catch (e) {
+          alert("记入仓位失败");
+        }
+        return;
+      }
       const btn = ev.target.closest(".rec-pos");
       if (btn) {
         const form = document.getElementById("posForm");
@@ -2780,6 +3010,65 @@
         alert("钉自选失败");
       }
     });
+
+    async function bookBuyToPosition({ code, name, price, qty, note }) {
+      // Book a desk buy into local positions; sync today's buy signal when present.
+      const norm = String(code || "").replace(/\D/g, "").padStart(6, "0");
+      // Prefer review trade path so signal + position stay in sync.
+      try {
+        await loadReview(true, "");
+      } catch (e) { /* ignore */ }
+      const day = (lastData && lastData.trade_date) || (lastReview && lastReview.view_date) || "";
+      const sig = ((lastReview && lastReview.signals) || []).find((s) =>
+        s.signal_type === "buy"
+        && String(s.code || "").replace(/\D/g, "").padStart(6, "0") === norm
+        && (!day || String(s.trade_date || "").slice(0, 10) === String(day).slice(0, 10))
+        && !Number(s.traded || 0)
+      );
+      if (sig && sig.id) {
+        const r = await fetch("/api/review/" + sig.id + "/trade", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            book: true,
+            price,
+            qty,
+            note: note || "作战台记入",
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          alert(typeof d.detail === "string" ? d.detail : "记入仓位失败");
+          return false;
+        }
+        alert((d.book_summary && d.book_summary.message)
+          || `已记买入 ${name || code} ${qty}股 @ ${price}`);
+        reviewLoadedAt = 0;
+        return true;
+      }
+      const r = await fetch("/api/positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: norm,
+          name: name || "",
+          buy_price: price,
+          qty,
+          note: note || "作战台记入",
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(typeof d.detail === "string" ? d.detail : "记入仓位失败");
+        return false;
+      }
+      const hold = ((d.positions || []).find((p) =>
+        String(p.code || "").padStart(6, "0") === norm && Number(p.qty || 0) > 0
+      ) || {}).qty;
+      alert(`已记买入 ${name || code} ${qty}股 @ ${price}`
+        + (hold != null ? `；持仓现 ${hold}股` : ""));
+      return true;
+    }
     document.getElementById("sellbox").addEventListener("click", async (ev) => {
       if (ev.target.closest(".sell-go")) {
         applyMain("pos");
@@ -2922,11 +3211,24 @@
       const code = (btn.getAttribute("data-code") || "").trim();
       const name = (btn.getAttribute("data-name") || "").trim();
       if (!code) return;
+      const suggestRaw = btn.getAttribute("data-suggest");
+      const stopRaw = btn.getAttribute("data-stop");
+      const chaseRaw = btn.getAttribute("data-chase");
+      const suggest = suggestRaw ? Number(suggestRaw) : undefined;
+      const stop = stopRaw ? Number(stopRaw) : undefined;
+      const chase = chaseRaw ? Number(chaseRaw) : undefined;
       try {
         const r = await fetch("/api/watchlist", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code, name, note: "异动池加入" }),
+          body: JSON.stringify({
+            code,
+            name,
+            note: "异动池加入",
+            suggest_price: Number.isFinite(suggest) && suggest > 0 ? suggest : undefined,
+            stop_price: Number.isFinite(stop) && stop > 0 ? stop : undefined,
+            chase_price: Number.isFinite(chase) && chase > 0 ? chase : undefined,
+          }),
         });
         if (!r.ok) {
           alert("加入自选失败");
@@ -3140,10 +3442,10 @@
       ] },
       { id: "desk", label: "作战/仓位", keys: [
         "推荐买入", "建议卖出", "Playbook", "风险股数", "分批计划", "仓位", "T+1",
-        "早决策摘要", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
+        "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
       ] },
       { id: "review", label: "复盘/观察", keys: [
-        "信号复盘", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
+        "信号复盘", "对照主线", "股东户数", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度",
       ] },
       { id: "market", label: "大盘指标", keys: [
@@ -3337,6 +3639,9 @@
         if (id === "board") return r.board_text || ((r.boards || []).join("/") );
         if (id === "vs_ml") return r.vs_mainline || "";
         if (id === "phase") return r.phase;
+        if (id === "holder_n") return r.holder_num ?? "";
+        if (id === "holder_chg") return r.holder_chg_pct ?? "";
+        if (id === "holder_avg") return r.holder_avg_wan ?? "";
         if (id === "day1") return r.outcome_day1_pct;
         if (id === "day3") return r.outcome_day3_pct;
         if (id === "result") return r.outcome_label;
@@ -3403,6 +3708,45 @@
     }
     document.getElementById("morningCopy").addEventListener("click", () => {
       copyMorningBrief();
+    });
+    document.getElementById("eodCopy").addEventListener("click", async () => {
+      let text = window.__eodMarkdown || "";
+      if (!text) {
+        try {
+          const params = new URLSearchParams();
+          if (reviewViewDate) params.set("date", reviewViewDate);
+          const q = params.toString() ? ("?" + params.toString()) : "";
+          const r = await fetch("/api/report/eod" + q);
+          const d = await r.json();
+          text = (d && d.markdown) || "";
+        } catch (e) {
+          text = "";
+        }
+      }
+      if (!text) {
+        alert("收盘一页纸尚未生成");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        alert("收盘一页纸已复制");
+      } catch (e) {
+        const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `market-desk-eod-${deskFileDate()}.md`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        alert("已下载收盘一页纸（剪贴板不可用）");
+      }
+    });
+    document.getElementById("revVsMl").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".vsml-btn");
+      if (!btn) return;
+      const mode = btn.getAttribute("data-mode") || "live";
+      if (mode === reviewVsMlMode) return;
+      reviewVsMlMode = mode;
+      loadReview(true, reviewViewDate || "");
     });
     document.getElementById("revMorning").addEventListener("click", async () => {
       try {

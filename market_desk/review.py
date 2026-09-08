@@ -10,6 +10,7 @@ from market_desk.db import (
     list_signal_trade_dates,
     load_mainline_switches,
     load_review_digests,
+    load_session_segments,
     load_signals,
     load_signals_for_date,
     mark_signal_outcome,
@@ -127,6 +128,43 @@ def lookup_code_boards(
     return names
 
 
+def resolve_day_mainline(trade_date: str) -> str | None:
+    """Best-effort end-of-day / session mainline for a historical trade date.
+
+    Preference: latest filled session segment → last switch ``to_name`` →
+    most common signal-time mainline label that day.
+    """
+    day = str(trade_date or "").strip()[:10]
+    if not day:
+        return None
+    order = {"afternoon": 4, "midday": 3, "open": 2, "auction": 1}
+    best: str | None = None
+    best_rank = -1
+    for seg in load_session_segments(day):
+        name = str(seg.get("mainline") or "").strip()
+        if not name or name in ("未明", "—"):
+            continue
+        rank = order.get(str(seg.get("segment") or ""), 0)
+        if rank >= best_rank:
+            best_rank = rank
+            best = name
+    if best:
+        return best
+    switches = load_mainline_switches(day, limit=1)
+    if switches:
+        name = str(switches[0].get("to_name") or "").strip()
+        if name and name not in ("未明", "—"):
+            return name
+    counts: dict[str, int] = {}
+    for row in load_signals_for_date(day):
+        name = str(row.get("mainline") or "").strip()
+        if name and name not in ("未明", "—"):
+            counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda x: x[1])[0]
+
+
 def compare_boards_to_mainline(
     board_names: list[str] | None,
     mainline: str | None,
@@ -172,18 +210,42 @@ def compare_boards_to_mainline(
     }
 
 
+def enrich_signals_with_holders(
+    rows: list[dict[str, Any]],
+    holders_by_code: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Attach quarterly shareholder-count fields onto review signal rows."""
+    by_code = holders_by_code or {}
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        code = normalize_code(item.get("code"))
+        kind = str(item.get("kind") or "")
+        if kind == "etf" or not code:
+            out.append(item)
+            continue
+        h = by_code.get(code) or {}
+        item["holder_num"] = h.get("holder_num")
+        item["holder_prev"] = h.get("holder_prev")
+        item["holder_chg"] = h.get("holder_chg")
+        item["holder_chg_pct"] = h.get("holder_chg_pct")
+        item["holder_avg_wan"] = h.get("holder_avg_wan")
+        item["holder_end"] = h.get("holder_end")
+        item["holder_notice"] = h.get("holder_notice")
+        out.append(item)
+    return out
+
+
 def enrich_signals_with_boards(
     rows: list[dict[str, Any]],
     boards: list[dict[str, Any]] | None,
     *,
     live_mainline: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach board membership and compare them to the live (or fallback) mainline.
+    """Attach board membership and compare them to the chosen mainline target.
 
-    ``所属板块`` prefers the first stored board names. ``对照主线`` always uses
-    ``live_mainline`` when provided, so the review table answers “does it still
-    fit today's mainline?” rather than the signal-time mainline (kept in the
-    separate mainline column).
+    ``所属板块`` prefers the first stored board names. ``对照主线`` uses
+    ``live_mainline`` when provided (caller selects live vs day-end target).
     """
     out: list[dict[str, Any]] = []
     live_ml = str(live_mainline or "").strip()
@@ -940,17 +1002,37 @@ def build_review_payload(
     phase: str | None = None,
     boards: list[dict[str, Any]] | None = None,
     live_mainline: str | None = None,
+    vs_mainline_mode: str | None = None,
+    holders: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Load one trade-date's signals plus global summary for the review tab."""
     calendar_today = datetime.now().strftime("%Y-%m-%d")
     day = str(trade_date or calendar_today).strip()[:10] or calendar_today
+    live_ml = str(live_mainline or "").strip() or None
+    day_ml = resolve_day_mainline(day)
+    mode_raw = str(vs_mainline_mode or "").strip().lower()
+    if mode_raw in ("day", "eod", "session", "当日", "当日主线"):
+        mode = "day"
+    elif mode_raw in ("live", "now", "实时", "实时主线"):
+        mode = "live"
+    else:
+        # Historical days default to that day's mainline; today defaults to live.
+        mode = "live" if day == calendar_today else "day"
+    compare_ml = day_ml if mode == "day" else live_ml
+    if mode == "day" and not compare_ml:
+        compare_ml = live_ml
+    if mode == "live" and not compare_ml:
+        compare_ml = day_ml
+
     global_rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
     day_rows = [_flatten_signal_prices(r) for r in load_signals_for_date(day)]
     if quotes:
         day_rows = enrich_signals_with_live_marks(day_rows, quotes)
     day_rows = enrich_signals_with_boards(
-        day_rows, boards, live_mainline=live_mainline
+        day_rows, boards, live_mainline=compare_ml
     )
+    if holders:
+        day_rows = enrich_signals_with_holders(day_rows, holders)
     day_phase = phase
     if not day_phase and day_rows:
         day_phase = str(day_rows[0].get("phase") or "") or None
@@ -972,6 +1054,10 @@ def build_review_payload(
     summary["view_date"] = day
     summary["calendar_today"] = calendar_today
     summary["dates"] = dates
+    summary["vs_mainline_mode"] = mode
+    summary["vs_mainline_live"] = live_ml
+    summary["vs_mainline_day"] = day_ml
+    summary["vs_mainline_of"] = compare_ml
     summary["history"] = load_review_digests(limit=20)
     summary["exec"] = digest.get("exec") or build_exec_score(day_rows)
     summary["phase_hits"] = build_phase_hit_rates(global_rows)

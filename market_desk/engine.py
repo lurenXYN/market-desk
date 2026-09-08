@@ -61,6 +61,7 @@ from market_desk.eastmoney import (
     fetch_board_members,
     fetch_daily_closes_many,
     fetch_daily_klines_many,
+    fetch_holder_stats_many,
     fetch_hot_boards,
     fetch_main_quotes,
     fetch_minute_trends,
@@ -453,6 +454,7 @@ class DeskEngine:
         day = str(view_date or today).strip()[:10] or today
         pending = load_unscored_signals(today, limit=80)
         quotes: dict[str, dict[str, Any]] = {}
+        holders: dict[str, dict[str, Any]] = {}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 if pending:
@@ -463,6 +465,12 @@ class DeskEngine:
                 live_codes = [str(r.get("code") or "") for r in day_rows]
                 quotes = await fetch_quotes(client, live_codes)
                 note_quote_ticks(quotes)
+                stock_codes = [
+                    str(r.get("code") or "")
+                    for r in day_rows
+                    if str(r.get("kind") or "") != "etf"
+                ]
+                holders = await fetch_holder_stats_many(client, stock_codes)
         except Exception:
             log.exception("signal scoring / live marks failed")
         phase = None
@@ -479,6 +487,7 @@ class DeskEngine:
                 ((self.snapshot or {}).get("verdict") or {}).get("mainline") or {}
             ).get("name"),
             vs_mainline_mode=vs_mainline_mode,
+            holders=holders,
         )
 
     def _emit_toasts(
