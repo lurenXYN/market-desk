@@ -38,6 +38,53 @@ def pick_mainline(
     return incumbent
 
 
+def pick_side_mainline(
+    hot: list[dict[str, Any]] | None,
+    main: dict[str, Any] | None,
+    *,
+    max_gap: float | None = None,
+) -> dict[str, Any] | None:
+    """Return a competitive runner-up board for observation only.
+
+    Surfaced when its score stays within ``max_gap`` of the live mainline and it
+    is not already in退潮. Never replaces the primary mainline.
+    """
+    if not main:
+        return None
+    main_name = str(main.get("name") or "").strip()
+    if not main_name:
+        return None
+    gap_limit = (
+        float(max_gap)
+        if max_gap is not None
+        else float(setting("side_mainline_gap", 12.0) or 0.0)
+    )
+    if gap_limit <= 0:
+        return None
+    boards = list(hot or [])
+    industries = [b for b in boards if b.get("kind") == "industry"]
+    pool = industries or boards
+    if len(pool) < 2:
+        return None
+    main_score = mainline_score(main)
+    ranked = sorted(pool, key=mainline_score, reverse=True)
+    for board in ranked:
+        name = str(board.get("name") or "").strip()
+        if not name or name == main_name:
+            continue
+        if (board.get("status") or "") == "退潮":
+            continue
+        sc = mainline_score(board)
+        if main_score - sc > gap_limit:
+            continue
+        out = dict(board)
+        out["score"] = round(sc, 1)
+        out["main_score"] = round(main_score, 1)
+        out["score_gap"] = round(main_score - sc, 1)
+        return out
+    return None
+
+
 def match_mainline_etf(
     board_name: str,
     etfs: list[dict[str, Any]],

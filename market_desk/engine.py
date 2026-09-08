@@ -559,11 +559,13 @@ class DeskEngine:
     ) -> None:
         """Fetch daily closes for recommended stocks and mark non-uptrends."""
         rec = verdict.get("recommend") or {}
+        side_rec = verdict.get("side_recommend") or {}
         codes = [
             str(x.get("code") or "")
-            for x in (rec.get("items") or [])
+            for x in list(rec.get("items") or []) + list(side_rec.get("items") or [])
             if x.get("kind") == "stock" and x.get("code")
         ]
+        codes = list(dict.fromkeys(codes))
         if not codes:
             return
         now_ts = datetime.now(CN_TZ).timestamp()
@@ -588,6 +590,16 @@ class DeskEngine:
         verdict["recommend"] = apply_stock_daily_trends(
             rec, closes_by_code, fetch_ok_by_code, overrides
         )
+        if side_rec.get("items"):
+            verdict["side_recommend"] = apply_stock_daily_trends(
+                side_rec, closes_by_code, fetch_ok_by_code, overrides
+            )
+            # Side branch stays observation-only even if trend looks up.
+            for item in (verdict["side_recommend"].get("items") or []):
+                item["ready"] = False
+                if item.get("wait_price") is not None:
+                    item["buy_price"] = item.get("wait_price")
+            verdict["side_recommend"]["buy"] = False
 
     async def _apply_recommend_minutes(
         self,

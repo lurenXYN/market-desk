@@ -222,3 +222,139 @@ def build_daily_report(
         ]
     lines.extend(["", "---", "_由 market-desk 自动生成，仅供复盘，不构成投资建议。_"])
     return "\n".join(lines)
+
+
+def build_eod_onepager(
+    *,
+    snapshot: dict[str, Any] | None,
+    review: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a compact end-of-day one-pager for copy / archive.
+
+    Covers phase, mainline switches, execution score, missed buys, and today's
+    floating + realized P&L. Rule-based only; no LLM and no push.
+    """
+    snap = snapshot or {}
+    rev = review or {}
+    summary = rev.get("summary") or {}
+    today = summary.get("today") or {}
+    exec_score = summary.get("exec") or today.get("exec") or {}
+    missed = summary.get("missed_buys") or []
+    verdict = snap.get("verdict") or {}
+    ml = verdict.get("mainline") or {}
+    pos = snap.get("position_summary") or {}
+    day = today.get("date") or snap.get("trade_date") or "—"
+    phase = snap.get("phase") or today.get("phase") or "—"
+    board = ml.get("name") or "未明"
+    action = verdict.get("action") or "—"
+
+    float_pnl = pos.get("floating_pnl")
+    if float_pnl is None:
+        float_pnl = pos.get("pnl")
+    realized = pos.get("realized_pnl")
+    if realized is None:
+        realized = 0
+    day_pnl = pos.get("day_pnl")
+    if day_pnl is None and float_pnl is not None:
+        day_pnl = float(float_pnl) + float(realized or 0)
+
+    switches = list(snap.get("mainline_switches") or [])
+    # When viewing a non-today review day, prefer digest switch count.
+    switch_n = today.get("switch_n")
+    if switch_n is None:
+        switch_n = len(switches)
+
+    bullets: list[str] = [
+        f"相位 {phase}"
+        + (f" · 温度 {snap.get('temperature')}" if snap.get("temperature") is not None else "")
+        + f" · 结论 {action}",
+        f"主线 {board}（{ml.get('status') or '—'}）· 切换 {switch_n} 次",
+        (
+            f"执行分 {exec_score.get('score') if exec_score.get('score') is not None else '—'} "
+            f"· 已成交买 {exec_score.get('traded_buy_n', 0)} "
+            f"· 价带内 {exec_score.get('in_band_n', 0)} / 追高 {exec_score.get('chase_n', 0)}"
+        ),
+        (
+            f"信号 买{today.get('buy_n', 0)}/卖{today.get('sell_n', 0)} "
+            f"· 已交易 {today.get('traded_n', 0)} / 未交易 {today.get('skipped_n', 0)} "
+            f"· 未回踩上行 {today.get('miss_pullback_n', 0)}"
+        ),
+    ]
+    if switches:
+        recent = switches[:4]
+        bits = []
+        for s in recent:
+            fr = s.get("from_name") or "—"
+            to = s.get("to_name") or "—"
+            at = str(s.get("switched_at") or "")[11:16]
+            bits.append(f"{at} {fr}→{to}" if at else f"{fr}→{to}")
+        bullets.append("主线切换：" + "；".join(bits))
+    if missed:
+        bits = [
+            f"{m.get('name') or m.get('code')}@{m.get('price') or '—'}"
+            for m in missed[:6]
+        ]
+        bullets.append(f"漏买 {len(missed)}：{' / '.join(bits)}")
+    else:
+        bullets.append("漏买：无")
+
+    def _money(v: Any) -> str:
+        if v is None:
+            return "—"
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        return f"{n:+.2f}" if n != 0 else "0.00"
+
+    bullets.append(
+        f"今日盈亏 {_money(day_pnl)}（浮盈 {_money(float_pnl)} + 已实现 {_money(realized)}）"
+        + (f" · {pos.get('day_pnl_pct')}%" if pos.get("day_pnl_pct") is not None else "")
+    )
+
+    if day_pnl is not None and float(day_pnl) < 0:
+        focus = "收盘优先复盘失误与漏买，明日先降风险再谈进攻。"
+    elif action in ("可买入", "可小仓"):
+        focus = "收盘对照：今日有进攻窗口，核对价带内成交与仓位纪律。"
+    elif missed:
+        focus = "收盘对照：有漏买项，记下是否规则过严或执行犹豫。"
+    else:
+        focus = "收盘对照：相位/主线/执行分与盈亏一张纸看完即可。"
+
+    title = f"收盘一页纸 · {day}"
+    as_of = snap.get("updated_at")
+    lines_md = [
+        f"# {title}",
+        "",
+        f"_更新于 {as_of or '—'}_",
+        "",
+        f"**焦点：** {focus}",
+        "",
+        "## 要点",
+    ]
+    for b in bullets:
+        lines_md.append(f"- {b}")
+    lines_md.extend(
+        [
+            "",
+            "---",
+            "_由 market-desk 规则生成，仅供复盘，不构成投资建议。_",
+        ]
+    )
+    markdown = "\n".join(lines_md)
+    return {
+        "title": title,
+        "as_of": as_of,
+        "date": day,
+        "focus": focus,
+        "bullets": bullets,
+        "phase": phase,
+        "mainline": board,
+        "switch_n": switch_n,
+        "exec": exec_score,
+        "missed_n": len(missed),
+        "day_pnl": day_pnl,
+        "floating_pnl": float_pnl,
+        "realized_pnl": realized,
+        "markdown": markdown,
+    }

@@ -4,6 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+# Display labels (UI / glossary). Internal stage keys stay English.
+STAGE_LABELS = {
+    "starting": "萌芽",
+    "ongoing": "主升",
+    "ending": "衰退",
+}
+
+
+def stage_label(stage: str | None) -> str:
+    """Return the Chinese display label for a lifecycle stage key."""
+    if not stage:
+        return ""
+    return STAGE_LABELS.get(str(stage), str(stage))
+
 
 def build_mainline_lifecycle(
     hot: list[dict[str, Any]] | None,
@@ -37,9 +51,9 @@ def build_mainline_lifecycle(
     ongoing.sort(key=_rank_ongoing, reverse=True)
     ending.sort(key=_rank_ending, reverse=True)
 
-    note = "按近几日热点持续度划分：启动候选 / 进行中 / 退潮中（非买卖指令）"
+    note = "按近几日热点持续度划分：萌芽 / 主升 / 衰退（非买卖指令）"
     if bias.get("strict"):
-        note += f"；复盘命中偏弱({bias.get('hit_rate')}%)，退潮判定更敏感"
+        note += f"；复盘命中偏弱({bias.get('hit_rate')}%)，衰退判定更敏感"
     elif bias.get("hit_rate") is not None:
         note += f"；复盘命中约 {bias.get('hit_rate')}%，沿用标准阈值"
 
@@ -204,9 +218,7 @@ def _compact(
     status = str(board.get("status") or "")
     return {
         "stage": stage,
-        "stage_label": {"starting": "马上开始", "ongoing": "进行中", "ending": "快结束"}.get(
-            stage, stage
-        ),
+        "stage_label": stage_label(stage),
         "bk": board.get("bk"),
         "name": board.get("name"),
         "kind": board.get("kind"),

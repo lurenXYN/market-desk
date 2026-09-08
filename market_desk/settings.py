@@ -31,6 +31,8 @@ DEFAULTS: dict[str, Any] = {
     "risk_pct_per_trade": 1.0,
     # Total market-cap floor (亿元) for stock recommend cards; 0 = off.
     "min_stock_mv_yi": float(cfg.MIN_STOCK_MV_YI),
+    # Observation side branch: max main−side score gap to surface (0 = off).
+    "side_mainline_gap": float(cfg.SIDE_MAINLINE_GAP),
     # Mute buy pricing / buy toasts for N minutes after 09:30; 0 = off.
     "open_mute_minutes": int(cfg.OPEN_MUTE_MINUTES),
 }
@@ -97,5 +99,6 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["account_equity"] = max(1000.0, min(5_000_000.0, float(out["account_equity"])))
     out["risk_pct_per_trade"] = max(0.2, min(5.0, float(out["risk_pct_per_trade"])))
     out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
+    out["side_mainline_gap"] = max(0.0, min(40.0, float(out.get("side_mainline_gap") or 0.0)))
     out["open_mute_minutes"] = max(0, min(30, int(out["open_mute_minutes"])))
     return out

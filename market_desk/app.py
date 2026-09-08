@@ -34,7 +34,7 @@ from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
 from market_desk.lots import clear_sell_qty, half_sell_qty
-from market_desk.report import build_daily_report, build_morning_brief
+from market_desk.report import build_daily_report, build_eod_onepager, build_morning_brief
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
 
@@ -160,9 +160,12 @@ def health() -> dict:
 
 
 @app.get("/api/review")
-async def review(date: str | None = Query(default=None)) -> dict:
+async def review(
+    date: str | None = Query(default=None),
+    vs_ml: str | None = Query(default=None, description="live or day"),
+) -> dict:
     """Return one trade-date's signals with scored outcomes for the review tab."""
-    return await engine.build_review(view_date=date)
+    return await engine.build_review(view_date=date, vs_mainline_mode=vs_ml)
 
 
 @app.get("/api/chart/{code}")
@@ -511,6 +514,14 @@ async def report_today() -> dict:
     review = await engine.build_review()
     text = build_daily_report(snapshot=engine.snapshot, review=review)
     return {"ok": True, "markdown": text, "summary": review.get("summary")}
+
+
+@app.get("/api/report/eod")
+async def report_eod(date: str | None = Query(default=None)) -> dict:
+    """Return the compact end-of-day one-pager (phase / switches / exec / P&L)."""
+    review = await engine.build_review(view_date=date)
+    brief = build_eod_onepager(snapshot=engine.snapshot, review=review)
+    return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
 
 
 @app.get("/api/report/morning")

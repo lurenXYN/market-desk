@@ -296,7 +296,7 @@
       gap: 10px;
       margin-top: 14px;
     }
-    .buybox, .sellbox {
+    .buybox, .sellbox, .sidebox {
       margin-top: 0; padding: 14px 16px;
       border: 1px solid var(--line); border-radius: 8px; background: #0e1210;
     }
@@ -304,7 +304,10 @@
     .buybox.off { border-color: #5a3d2a; background: #161210; }
     .sellbox.on { border-color: #8b3a3a; background: #1a1010; }
     .sellbox.off { border-color: #3a4558; background: #10141c; }
-    .buybox .k, .sellbox .k { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
+    .sidebox {
+      margin-top: 10px; border-color: #3a4558; background: #10141c;
+    }
+    .sidebox .k, .buybox .k, .sellbox .k { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
     .buyline {
       font-size: 22px; font-weight: 750; line-height: 1.25; margin: 6px 0 8px;
     }
@@ -1115,8 +1118,15 @@
       padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
     }
     .pos-btn { margin-top: 10px; }
-    .pos-sum { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 10px; font-size: 14px; }
+    .pos-sum { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 10px; font-size: 14px; align-items: baseline; }
     .pos-sum b { font-variant-numeric: tabular-nums; }
+    .pos-sum .day-primary {
+      order: -1; padding: 6px 12px; border-radius: 8px;
+      border: 1px solid var(--line); background: #0c1218;
+      font-size: 16px;
+    }
+    .pos-sum .day-primary b { font-size: 22px; font-weight: 800; }
+    .pos-sum .muted-sec { color: var(--muted); font-size: 13px; }
     tr.pos-closed { opacity: 0.72; }
     tr.pos-closed td:first-child { color: var(--muted); }
     .pos-del {
@@ -1264,7 +1274,7 @@
               <div class="bans" id="bans"></div>
             </div>
           </details>
-          <div class="desk-pair">
+            <div class="desk-pair">
             <div class="buybox off" id="buybox">
               <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button></div>
               <div class="buyline" id="buyline">暂不买入</div>
@@ -1279,6 +1289,14 @@
               <div class="buymeta" id="sellmeta"></div>
               <div class="rec-grid" id="sellItems"></div>
             </div>
+          </div>
+          <div class="sidebox" id="sidebox" hidden>
+            <div class="k">观察支线<button type="button" class="q" data-term="观察支线">?</button>
+              <span class="meta" id="sideGap"></span>
+            </div>
+            <div class="buyline" id="sideline">暂无观察支线</div>
+            <div class="buymeta" id="sidemeta"></div>
+            <div class="rec-grid" id="sideItems"></div>
           </div>
         </div>
         <div class="clock">
@@ -1423,7 +1441,7 @@
     <section class="tab-panel" id="panel-pos" hidden>
       <section class="card">
         <h2 style="text-transform:none">仓位记账<button type="button" class="q" data-term="仓位">?</button></h2>
-        <p class="meta">本地记账，不会下单。当日卖出仍留在列表（今日已平），计入已实现盈亏，下一交易日自动移出。</p>
+        <p class="meta">本地记账，不会下单。汇总优先看<strong>当日盈亏</strong>（相对昨收+今日已实现）；浮盈相对成本作次要参考。当日卖出仍留在列表，下一交易日自动移出。</p>
         <form class="pos-form" id="posForm">
           <label>代码<input name="code" placeholder="515050" maxlength="6" required /></label>
           <label>名称<input name="name" placeholder="可空，自动带行情名" /></label>
@@ -1439,7 +1457,7 @@
             <tr>
               <th>状态</th><th>名称</th><th>代码</th><th>买价</th><th>股数</th>
               <th>成本</th><th>现价/卖价</th><th>市值</th>
-              <th>浮盈</th><th>已实现</th><th>当日%</th><th></th>
+              <th>当日盈亏</th><th>浮盈</th><th>已实现</th><th></th>
             </tr>
           </thead>
           <tbody id="posBody"></tbody>
@@ -1874,6 +1892,34 @@
       }
       document.getElementById("buyavoid").textContent = rec.avoid || "";
       document.getElementById("recItems").innerHTML = (rec.items || []).map(recCard).join("");
+      const side = v.side_mainline || null;
+      const sideRec = v.side_recommend || {};
+      const sideBox = document.getElementById("sidebox");
+      if (sideBox) {
+        if (side && side.name) {
+          sideBox.hidden = false;
+          const gap = side.score_gap;
+          const lifeMap = { starting: "萌芽", ongoing: "主升", ending: "衰退" };
+          const sideLife = lifeMap[side.lifecycle] || "";
+          document.getElementById("sideline").textContent =
+            sideRec.text || sideRec.title || (`观察 · ${side.name}`);
+          document.getElementById("sidemeta").textContent =
+            (sideRec.size_note || "仅观察回踩，不当现买")
+            + (side.status ? ` · ${side.status}` : "")
+            + (side.pct == null ? "" : ` · ${Number(side.pct) > 0 ? "+" : ""}${Number(side.pct).toFixed(2)}%`)
+            + (sideLife ? ` · ${sideLife}` : "");
+          const gapEl = document.getElementById("sideGap");
+          if (gapEl) {
+            gapEl.textContent = gap == null ? "" : (`· 与主线分差 ${gap}`);
+          }
+          document.getElementById("sideItems").innerHTML = (sideRec.items || []).length
+            ? (sideRec.items || []).map(recCard).join("")
+            : `<div class="meta">暂无合格回踩票，可先盯板块状态</div>`;
+        } else {
+          sideBox.hidden = true;
+          document.getElementById("sideItems").innerHTML = "";
+        }
+      }
       const sell = d.sell_advice || {};
       const sellBox = document.getElementById("sellbox");
       sellBox.className = "sellbox " + (sell.sell ? "on" : "off");
@@ -2134,12 +2180,12 @@
       const riskNote = sum.risk_note ? `<span class="bans">${sum.risk_note}</span>` : "";
       const closedBit = sum.closed_count ? ` · 今日已平 ${sum.closed_count}` : "";
       document.getElementById("posSum").innerHTML =
+        `<span class="day-primary">当日盈亏 <b class="${pnlCls}">${fmtMoney(dayPnl)}${dayPct == null ? "" : " (" + (dayPct > 0 ? "+" : "") + dayPct + "%)"}</b></span>` +
         `<span>持仓 <b>${sum.count ?? 0}</b>${closedBit}</span>` +
         `<span>成本 <b>${fmtMoney(sum.cost)}</b></span>` +
         `<span>市值 <b>${fmtMoney(sum.market)}</b></span>` +
-        `<span>浮盈 <b class="${floatCls}">${fmtMoney(floatPnl)} ${floatPct == null ? "" : "(" + (floatPct > 0 ? "+" : "") + floatPct + "%)"}</b></span>` +
-        `<span>已实现 <b class="${realCls}">${fmtMoney(realized)}</b></span>` +
-        `<span>今日合计 <b class="${pnlCls}">${fmtMoney(dayPnl)} ${dayPct == null ? "" : "(" + (dayPct > 0 ? "+" : "") + dayPct + "%)"}</b></span>` +
+        `<span class="muted-sec">浮盈 <b class="${floatCls}">${fmtMoney(floatPnl)}${floatPct == null ? "" : " (" + (floatPct > 0 ? "+" : "") + floatPct + "%)"}</b></span>` +
+        `<span class="muted-sec">已实现 <b class="${realCls}">${fmtMoney(realized)}</b></span>` +
         riskNote;
       const caps = risk.caps || {};
       const tipHtml = (risk.tips || []).length
@@ -2169,6 +2215,7 @@
       document.getElementById("posBody").innerHTML = (d.positions || []).map(p => {
         const closed = !!p.closed || Number(p.qty || 0) <= 0;
         const realizedRow = Number(p.day_realized_pnl || 0);
+        const dayRow = p.day_pnl;
         const qtyLabel = closed
           ? `0（卖 ${p.day_sold_qty || "—"}）`
           : (p.day_sold_qty ? `${p.qty}（已卖 ${p.day_sold_qty}）` : (p.qty ?? ""));
@@ -2179,6 +2226,7 @@
             <button type="button" class="pos-del pos-clear" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">清仓</button>
             <button type="button" class="pos-del pos-trim" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">自定义</button>
             <button type="button" class="pos-del" data-id="${p.id}">删除</button>`;
+        const dayCls = dayRow == null ? "" : ((Number(dayRow) || 0) >= 0 ? "up" : "down");
         return `
         <tr class="${closed ? "pos-closed" : ""}">
           <td>${p.status || (closed ? "今日已平" : "持仓")}</td>
@@ -2189,9 +2237,9 @@
           <td>${fmtMoney(p.cost)}</td>
           <td>${p.last ?? "—"}${closed ? "" : (p.last_pct == null ? "" : " " + fmtPct(p.last_pct))}${p.last_sell_price != null && !closed && p.day_sold_qty ? ` / 卖${p.last_sell_price}` : ""}</td>
           <td>${fmtMoney(p.market)}</td>
+          <td class="${dayCls}">${dayRow == null ? "—" : fmtMoney(dayRow)}</td>
           <td class="${(p.pnl || 0) >= 0 ? "up" : "down"}">${closed ? "—" : fmtMoney(p.pnl)}${closed || p.pnl_pct == null ? "" : ` (${(p.pnl_pct > 0 ? "+" : "") + p.pnl_pct}%)`}</td>
           <td class="${realizedRow >= 0 ? "up" : "down"}">${realizedRow ? fmtMoney(realizedRow) : "—"}</td>
-          <td>${closed ? "—" : fmtPct(p.last_pct)}</td>
           <td>${actions}</td>
         </tr>`;
       }).join("") || `<tr><td colspan="12" class="meta">暂无仓位，先记账</td></tr>`;
@@ -3384,7 +3432,7 @@
         document.getElementById("setTargetCost").value = s.target_total_cost ?? 50000;
         document.getElementById("setEquity").value = s.account_equity ?? s.target_total_cost ?? 50000;
         document.getElementById("setRiskPct").value = s.risk_pct_per_trade ?? 1;
-        document.getElementById("setMinMv").value = s.min_stock_mv_yi ?? 100;
+        document.getElementById("setMinMv").value = s.min_stock_mv_yi ?? 120;
         document.getElementById("setEqualW").checked = s.equal_weight_target !== false;
         document.getElementById("setBatch").checked = s.batch_plan !== false;
         document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
@@ -3436,7 +3484,7 @@
       { id: "phase", label: "相位", keys: ["相位", "恐慌", "分歧", "发酵", "高潮", "温度"] },
       { id: "action", label: "结论", keys: ["现金", "可小仓", "可买入", "观望", "观察回踩", "禁追", "观察"] },
       { id: "board", label: "板块", keys: [
-        "实时主线", "主线切换", "主线生命周期", "确认中", "尖峰禁追", "退潮",
+        "实时主线", "观察支线", "主线切换", "主线生命周期", "确认中", "尖峰禁追", "退潮",
         "点火", "一波", "二波", "加速", "滞涨", "A杀", "修复", "反包", "天地",
         "聚集度", "总龙头", "卡位龙", "冰点", "冷冻", "相对最冷", "传染", "传染预警",
       ] },

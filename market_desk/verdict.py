@@ -13,6 +13,7 @@ from market_desk.mainline import (
     etf_spec_soft_fallback,
     match_mainline_etf,
     pick_mainline,
+    pick_side_mainline,
 )
 from market_desk.playbook import build_playbook, suggest_risk_qty
 from market_desk.session import apply_segment_bias, session_segment
@@ -221,6 +222,19 @@ def build_verdict(
         recommend["size_note"] = size_hint
     playbook = build_playbook(phase, action=action, size_hint=size_hint)
     recommend = _attach_risk_sizing(recommend, playbook=playbook)
+
+    side_info, side_recommend = _build_side_branch(
+        hot=hot,
+        main=main,
+        etfs=etfs,
+        zt=zt or [],
+        zb=zb or [],
+        bans=bans,
+        stock_block=stock_block,
+    )
+    if side_info:
+        algo_notes.append(f"观察支线={side_info.get('name')}")
+
     prev_name = (
         (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name") or ""
     ).strip()
@@ -238,8 +252,19 @@ def build_verdict(
     )
     if life_stage:
         narrative = narrative.rstrip("。") + f"；生命周期{ {'starting':'萌芽','ongoing':'主升','ending':'衰退'}.get(life_stage, life_stage) }。"
+    if side_info and side_info.get("name"):
+        narrative = (
+            narrative.rstrip("。")
+            + f"；观察支线「{side_info.get('name')}」"
+            + (
+                f"（分差{side_info.get('score_gap')}）"
+                if side_info.get("score_gap") is not None
+                else ""
+            )
+            + "，只盯回踩不当现买。"
+        )
     if algo_notes:
-        narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:4]) + "。"
+        narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:5]) + "。"
     return {
         "action": action,
         "headline": headline,
@@ -248,6 +273,8 @@ def build_verdict(
         "detail": detail,
         "narrative": narrative,
         "recommend": recommend,
+        "side_mainline": side_info,
+        "side_recommend": side_recommend,
         "playbook": playbook,
         "algo_notes": algo_notes,
         "mainline": {
@@ -291,6 +318,97 @@ def build_verdict(
         "stock_block": stock_block,
         "similar": similar or {},
     }
+
+
+def _build_side_branch(
+    *,
+    hot: list[dict[str, Any]],
+    main: dict[str, Any],
+    etfs: list[dict[str, Any]],
+    zt: list[dict[str, Any]],
+    zb: list[dict[str, Any]],
+    bans: list[str],
+    stock_block: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Build an observation-only side branch; never marks ready buys."""
+    side = pick_side_mainline(hot, main)
+    if not side:
+        return None, None
+    side_name = str(side.get("name") or "").strip()
+    if not side_name:
+        return None, None
+    exact = etf_spec_for_name(side_name)
+    soft = False
+    vehicle = match_mainline_etf(side_name, etfs) if exact else None
+    if not vehicle:
+        soft_spec = etf_spec_soft_fallback(side_name)
+        if soft_spec:
+            _, code, name = soft_spec
+            quote = next((x for x in (etfs or []) if x.get("code") == code), None)
+            vehicle = (
+                dict(quote)
+                if quote
+                else {
+                    "code": code,
+                    "name": name,
+                    "price": None,
+                    "pct": None,
+                    "low": None,
+                    "high": None,
+                }
+            )
+            soft = True
+    vehicle = vehicle or {}
+    bounce = None
+    price = vehicle.get("price")
+    low = vehicle.get("low")
+    if price is not None and low not in (None, 0):
+        bounce = (float(price) / float(low) - 1.0) * 100.0
+    allow_stocks = not stock_block and not _blocks_chi_star_stocks(side_name)
+    stocks = _stock_candidates(side, zt, zb) if allow_stocks else []
+    # Always observation path: wait prices only, never ready.
+    rec = _build_recommend("观察回踩", side, vehicle, bounce, stocks, bans)
+    for item in rec.get("items") or []:
+        item["ready"] = False
+        if item.get("wait_price") is not None:
+            item["buy_price"] = item.get("wait_price")
+        kind = item.get("kind") or "stock"
+        item["role_label"] = "支线ETF盯回踩" if kind == "etf" else "支线个股盯回踩"
+    rec["buy"] = False
+    rec["title"] = f"观察支线 · {side_name}"
+    rec["size_note"] = _join_hint(
+        "仅观察回踩，不当现买主推；买卖仍跟实时主线",
+        f"分差 {side.get('score_gap')}" if side.get("score_gap") is not None else "",
+    )
+    if soft and vehicle.get("name"):
+        rec["size_note"] = _join_hint(
+            str(rec.get("size_note") or ""),
+            f"支线载体近似映射 {vehicle.get('name')}",
+        )
+    if not (rec.get("items") or []):
+        rec["text"] = f"观察支线 {side_name} · 暂无合格回踩票"
+        rec["size_note"] = _join_hint(
+            str(rec.get("size_note") or ""),
+            "可盯板块状态，先不定价",
+        )
+    life = classify_lifecycle(side)
+    info = {
+        "name": side_name,
+        "bk": side.get("bk"),
+        "kind": side.get("kind"),
+        "status": side.get("status"),
+        "pct": side.get("pct"),
+        "zt_n": side.get("zt_n"),
+        "leader_name": side.get("leader_name"),
+        "leader_code": side.get("leader_code"),
+        "lifecycle": life,
+        "score": side.get("score"),
+        "score_gap": side.get("score_gap"),
+        "etf_soft": soft,
+        "carrier_code": vehicle.get("code"),
+        "carrier_name": vehicle.get("name"),
+    }
+    return info, rec
 
 
 def _mainline_narrative(
@@ -854,7 +972,7 @@ def _score_stock(
         return None
     if pct is None:
         return None
-    min_mv = float(setting("min_stock_mv_yi", 100.0) or 0.0)
+    min_mv = float(setting("min_stock_mv_yi", 120.0) or 0.0)
     mv_yi = member.get("mv_yi")
     if min_mv > 0:
         if mv_yi is None:
@@ -1520,11 +1638,26 @@ def decorate_positions(
             pnl = day_realized
             pnl_pct = round((mark / buy - 1.0) * 100.0, 2) if mark and buy else None
             last = mark
+            day_pnl = day_realized if day_realized else None
         else:
             cost = round(buy * qty, 2)
             market = round(last * qty, 2) if last is not None else None
             pnl = round(market - cost, 2) if market is not None else None
             pnl_pct = round((last / buy - 1.0) * 100.0, 2) if last and buy else None
+            # Session P&L vs yesterday close (+ today realized from partial sells).
+            prev = q.get("prev")
+            day_mtm = None
+            try:
+                if last is not None and prev not in (None, 0) and qty > 0:
+                    day_mtm = (float(last) - float(prev)) * qty
+                elif q.get("pct") is not None and cost:
+                    day_mtm = float(cost) * float(q.get("pct")) / 100.0
+            except (TypeError, ValueError):
+                day_mtm = None
+            if day_mtm is not None or day_realized:
+                day_pnl = round((day_mtm or 0.0) + day_realized, 2)
+            else:
+                day_pnl = None
         item = dict(row)
         item["code"] = code
         item["name"] = row.get("name") or q.get("name") or code
@@ -1532,10 +1665,12 @@ def decorate_positions(
         item["last_pct"] = None if closed else q.get("pct")
         item["high"] = q.get("high")
         item["low"] = q.get("low")
+        item["prev"] = None if closed else q.get("prev")
         item["cost"] = cost
         item["market"] = market
         item["pnl"] = pnl
         item["pnl_pct"] = pnl_pct
+        item["day_pnl"] = day_pnl
         item["closed"] = closed
         item["closed_date"] = closed_date
         item["day_sold_qty"] = day_sold

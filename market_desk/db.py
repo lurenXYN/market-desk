@@ -11,9 +11,16 @@ from market_desk.config import DATA_DIR, DB_PATH
 
 
 def _connect() -> sqlite3.Connection:
+    """Open a short-lived SQLite connection with WAL and a busy timeout."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except sqlite3.Error:
+        pass
     return conn
 
 
@@ -214,6 +221,19 @@ def init_db() -> None:
             )
             """
         )
+        # Secondary indexes for hot read paths (refresh + review).
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON signals(trade_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mainline_switch_date ON mainline_switch(trade_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_board_daily_date ON board_daily(trade_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_positions_code ON positions(code)"
+        )
         conn.commit()
 
 
@@ -326,16 +346,35 @@ def save_board_daily(trade_date: str, rows: list[dict[str, Any]]) -> None:
 
 
 def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[str, Any]]]:
-    """Return prior-day sector stats keyed by board code, oldest first."""
+    """Return prior-day sector stats keyed by board code, oldest first.
+
+    Only scans a bounded recent window (``days + 4`` calendar cushion) so the
+    ``board_daily`` table does not grow into a full-history scan each refresh.
+    """
+    window = max(int(days) + 4, 8)
     with _connect() as conn:
-        rows = conn.execute(
+        date_rows = conn.execute(
             """
-            SELECT trade_date, bk, name, zt_n, dt_n, pct, leader_boards, status
+            SELECT DISTINCT trade_date
             FROM board_daily
             WHERE trade_date < ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (before_date, window),
+        ).fetchall()
+        dates = [str(r["trade_date"]) for r in date_rows]
+        if not dates:
+            return {}
+        placeholders = ",".join("?" for _ in dates)
+        rows = conn.execute(
+            f"""
+            SELECT trade_date, bk, name, zt_n, dt_n, pct, leader_boards, status
+            FROM board_daily
+            WHERE trade_date IN ({placeholders})
             ORDER BY trade_date ASC
             """,
-            (before_date,),
+            dates,
         ).fetchall()
     out: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
