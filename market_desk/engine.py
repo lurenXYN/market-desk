@@ -62,6 +62,7 @@ from market_desk.eastmoney import (
     fetch_daily_closes_many,
     fetch_daily_klines_many,
     fetch_holder_stats_many,
+    fetch_ytd_limit_up_stats_many,
     fetch_hot_boards,
     fetch_main_quotes,
     fetch_minute_trends,
@@ -455,6 +456,7 @@ class DeskEngine:
         pending = load_unscored_signals(today, limit=80)
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
+        ytd_limit_ups: dict[str, dict[str, Any]] = {}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 if pending:
@@ -465,12 +467,24 @@ class DeskEngine:
                 live_codes = [str(r.get("code") or "") for r in day_rows]
                 quotes = await fetch_quotes(client, live_codes)
                 note_quote_ticks(quotes)
-                stock_codes = [
-                    str(r.get("code") or "")
-                    for r in day_rows
-                    if str(r.get("kind") or "") != "etf"
+                stock_rows = [
+                    r for r in day_rows if str(r.get("kind") or "") != "etf"
                 ]
+                stock_codes = [str(r.get("code") or "") for r in stock_rows]
+                from market_desk.filters import normalize_code as _norm_code
+
+                names_by_code = {
+                    _norm_code(r.get("code")): str(r.get("name") or "")
+                    for r in stock_rows
+                    if r.get("code")
+                }
                 holders = await fetch_holder_stats_many(client, stock_codes)
+                ytd_limit_ups = await fetch_ytd_limit_up_stats_many(
+                    client,
+                    stock_codes,
+                    names=names_by_code,
+                    as_of=day,
+                )
         except Exception:
             log.exception("signal scoring / live marks failed")
         phase = None
@@ -488,6 +502,7 @@ class DeskEngine:
             ).get("name"),
             vs_mainline_mode=vs_mainline_mode,
             holders=holders,
+            ytd_limit_ups=ytd_limit_ups,
         )
 
     def _emit_toasts(
