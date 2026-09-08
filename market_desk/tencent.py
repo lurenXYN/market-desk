@@ -96,6 +96,12 @@ async def fetch_quotes(
         if len(fields) < 33:
             continue
         code = str(fields[2]).zfill(6)
+        # Tencent: ~6 volume(手), ~36 volume, ~37 amount(万元), ~38 turnover%.
+        volume = num(fields[6])
+        if volume is None and len(fields) > 36:
+            volume = num(fields[36])
+        amount_wan = num(fields[37]) if len(fields) > 37 else None
+        turnover = num(fields[38]) if len(fields) > 38 else None
         out[code] = {
             "code": code,
             "name": str(fields[1] or ""),
@@ -105,5 +111,9 @@ async def fetch_quotes(
             "high": num(fields[33]) if len(fields) > 33 else None,
             "low": num(fields[34]) if len(fields) > 34 else None,
             "prev": num(fields[4]),
+            "volume": volume,
+            # Convert 万元 → 元 so callers can share stock amount units.
+            "amount": None if amount_wan is None else float(amount_wan) * 1e4,
+            "turnover": turnover,
         }
     return out

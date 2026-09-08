@@ -35,6 +35,10 @@ def build_market_metrics(
     amount = sum(q.get("amount") or 0.0 for q in quotes)
     breadth = (ups / len(valid) * 100.0) if valid else 0.0
     big_drop = sum(1 for q in valid if (q["pct"] or 0) <= -5.0)
+    explode_vals = [int(x.get("explode_count") or 0) for x in zt_pool]
+    avg_explode = (sum(explode_vals) / len(explode_vals)) if explode_vals else 0.0
+    late_n = sum(1 for x in zt_pool if _is_late_first_seal(x.get("first_seal")))
+    late_seal_rate = (late_n / len(zt_pool) * 100.0) if zt_pool else 0.0
     return {
         "sample": len(valid),
         "ups": ups,
@@ -50,8 +54,56 @@ def build_market_metrics(
         "breadth": round(breadth, 1),
         "amount_yi": round(amount / 1e8, 1),
         "big_drop": big_drop,
+        "avg_explode": round(avg_explode, 2),
+        "late_seal_rate": round(late_seal_rate, 1),
         "leader": max(zt_pool, key=lambda x: int(x.get("boards") or 0), default=None),
     }
+
+
+def is_late_first_seal(fbt: Any) -> bool:
+    """Return True when first seal is after ~10:30 (weak open-seal quality)."""
+    minutes = _first_seal_minutes(fbt)
+    if minutes is None:
+        return False
+    # 10:30 = 630 minutes from midnight.
+    return minutes >= 10 * 60 + 30
+
+
+def _is_late_first_seal(fbt: Any) -> bool:
+    """Backward-compatible alias for is_late_first_seal."""
+    return is_late_first_seal(fbt)
+
+
+def _first_seal_minutes(fbt: Any) -> int | None:
+    """Parse East Money first-seal time into minutes from midnight."""
+    if fbt is None:
+        return None
+    raw = str(fbt).strip()
+    if not raw:
+        return None
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        if len(digits) >= 6:
+            hh = int(digits[:2])
+            mm = int(digits[2:4])
+        elif len(digits) == 5:
+            hh = int(digits[0])
+            mm = int(digits[1:3])
+        elif len(digits) <= 4:
+            # Seconds-from-midnight style.
+            total = int(digits)
+            hh = total // 3600
+            mm = (total % 3600) // 60
+        else:
+            hh = int(digits[:2])
+            mm = int(digits[2:4])
+    except ValueError:
+        return None
+    if hh > 23 or mm > 59:
+        return None
+    return hh * 60 + mm
 
 
 def enrich_market_context(
@@ -110,6 +162,8 @@ def enrich_market_context(
     )
     m["weak_index"] = weak
     m["strong_index"] = strong
+    m["style_weak"] = False
+    m["style_hot"] = False
     gates: list[str] = []
     if m["thin_volume"]:
         gates.append(f"成交额分位偏低({amt_pctile})")
@@ -119,6 +173,18 @@ def enrich_market_context(
         gates.append("指数偏弱")
     if strong:
         gates.append("指数偏强")
+    spread = m.get("index_spread")
+    if spread is not None:
+        if float(spread) <= -1.5:
+            m["style_weak"] = True
+            gates.append(f"成长风格偏弱({spread})")
+        elif float(spread) >= 2.0:
+            m["style_hot"] = True
+            gates.append(f"成长风格偏热({spread})")
+    if float(m.get("avg_explode") or 0) >= 1.5:
+        gates.append(f"涨停炸板偏多({m.get('avg_explode')})")
+    if float(m.get("late_seal_rate") or 0) >= 45:
+        gates.append(f"晚封占比高({m.get('late_seal_rate')}%)")
     if int(m.get("big_drop") or 0) >= 80:
         gates.append(f"大面{m.get('big_drop')}家")
     m["context_gates"] = gates
@@ -144,6 +210,19 @@ def score_temperature(m: dict[str, Any]) -> int:
         temp -= 5
     elif m.get("strong_index"):
         temp += 2
+    # Seal quality: repeated opens and late first seals cool the tape.
+    avg_explode = float(m.get("avg_explode") or 0)
+    if avg_explode >= 2.0:
+        temp -= 5
+    elif avg_explode >= 1.2:
+        temp -= 3
+    late_rate = float(m.get("late_seal_rate") or 0)
+    if late_rate >= 55:
+        temp -= 4
+    elif late_rate >= 40:
+        temp -= 2
+    if m.get("style_weak"):
+        temp -= 2
     big_drop = int(m.get("big_drop") or 0)
     if big_drop >= 120:
         temp -= 10

@@ -36,6 +36,7 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
             "ok": None,
             "label": "分时样本不足",
             "ma": None,
+            "ma_source": None,
             "pullback_pct": None,
             "at_tip": False,
             "vol_ratio": None,
@@ -43,21 +44,36 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
         }
 
     last = prices[-1]
-    window = prices[-20:]
-    ma = sum(window) / len(window)
+    # Prefer East Money official avg (VWAP-like) when present; else short MA.
+    avgs: list[float] = []
+    for row in rows:
+        try:
+            avg_px = float(row.get("avg"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if avg_px > 0:
+            avgs.append(avg_px)
+    if len(avgs) >= 15:
+        ma = avgs[-1]
+        ma_source = "avg"
+    else:
+        window = prices[-20:]
+        ma = sum(window) / len(window)
+        ma_source = "ma20"
     look_n = 40 if len(prices) >= 40 else len(prices)
     look = prices[-look_n:]
     hi = max(look)
     lo = min(look)
     pullback = (hi - last) / hi * 100.0 if hi > 0 else 0.0
     span = (hi - lo) / hi * 100.0 if hi > 0 else 0.0
-    tip_thr = 0.25 if span < 1.0 else 0.40
+    # Slightly deeper pullback than before to cut tip-chasing.
+    tip_thr = 0.35 if span < 1.0 else 0.50
     at_tip = pullback < tip_thr
     prior = look[:-5] if len(look) > 8 else look[:-2]
     prior_hi = max(prior) if prior else hi
-    grinding_high = bool(last >= prior_hi * 0.999 and pullback < 0.55)
+    grinding_high = bool(last >= prior_hi * 0.999 and pullback < 0.70)
     above_ma = last >= ma * 0.999
-    shallow = pullback < 0.30
+    shallow = pullback < 0.40
 
     vol_ratio: float | None = None
     vol_ok: bool | None = None
@@ -81,10 +97,10 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
     if grinding_high:
         fails.append("分时仍在抬高点")
     if not above_ma:
-        fails.append("分时仍在均线下方")
+        fails.append("分时仍在均价下方" if ma_source == "avg" else "分时仍在均线下方")
     if shallow and not at_tip:
         fails.append("分时回撤过浅")
-    if vol_ok is False and (at_tip or grinding_high or shallow or pullback < 0.6):
+    if vol_ok is False and (at_tip or grinding_high or shallow or pullback < 0.75):
         fails.append("分时回踩量能未缩")
     elif vol_ok is False and above_ma and not at_tip and not grinding_high:
         # Price looks OK but volume still expanding — treat as chase risk.
@@ -100,6 +116,7 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
         "ok": ok,
         "label": label,
         "ma": round(ma, 3),
+        "ma_source": ma_source,
         "pullback_pct": round(pullback, 2),
         "at_tip": at_tip,
         "vol_ratio": vol_ratio,

@@ -71,6 +71,7 @@ from market_desk.eastmoney import (
 from market_desk.filters import is_limit_down, is_main_board, normalize_code
 from market_desk.glossary import GLOSSARY
 from market_desk.minute_confirm import apply_minute_confirmations
+from market_desk.numbers import num
 from market_desk.notify import (
     build_toast_alerts,
     filter_alerts_for_policy,
@@ -316,6 +317,7 @@ class DeskEngine:
                 zt,
                 auction=auction,
                 similar=similar,
+                zb=zb,
             )
             await self._apply_recommend_trends(client, verdict, trade_date_dash)
             await self._apply_recommend_minutes(client, verdict)
@@ -372,6 +374,7 @@ class DeskEngine:
                         for w in watchlist
                         if normalize_code(w.get("code"))
                     },
+                    quotes=quotes,
                 ),
                 "filter": "个股只做主板 · 市值门槛 · 创业板/科创走 ETF",
                 "verdict": verdict,
@@ -443,6 +446,7 @@ class DeskEngine:
         self,
         limit: int = 180,
         view_date: str | None = None,
+        vs_mainline_mode: str | None = None,
     ) -> dict[str, Any]:
         """Score pending historical signals then return one trade-date review payload."""
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
@@ -474,6 +478,7 @@ class DeskEngine:
             live_mainline=(
                 ((self.snapshot or {}).get("verdict") or {}).get("mainline") or {}
             ).get("name"),
+            vs_mainline_mode=vs_mainline_mode,
         )
 
     def _emit_toasts(
@@ -846,11 +851,24 @@ async def _enrich_board(
         price = m.get("price")
         if high and price and high > 0 and (high - price) / high >= 0.05 and (m.get("pct") or 0) < 1:
             giveback += 1
+    zt_in_board = [zt_by_code[m["code"]] for m in members if m["code"] in zt_by_code]
+    zb_n = sum(1 for m in members if m["code"] in zb_codes)
+    explode_sum = sum(int(x.get("explode_count") or 0) for x in zt_in_board)
+    late_seal_n = 0
+    try:
+        from market_desk.sentiment import is_late_first_seal
+
+        late_seal_n = sum(1 for x in zt_in_board if is_late_first_seal(x.get("first_seal")))
+    except Exception:
+        late_seal_n = 0
     pct = board.get("pct") or 0
     card = dict(board)
     card["members"] = members[:5]
     card["pool"] = members
     card["zt_n"] = zt_n
+    card["zb_n"] = zb_n
+    card["explode_sum"] = explode_sum
+    card["late_seal_n"] = late_seal_n
     card["dt_n"] = dt_n
     card["leader_name"] = leader_name
     card["leader_code"] = leader_code
@@ -1212,16 +1230,58 @@ def _watch_pool(
     return rows[:24]
 
 
+def _rough_watch_band(
+    item: dict[str, Any],
+    quote: dict[str, Any] | None = None,
+) -> tuple[float | None, float | None, float | None]:
+    """Derive a coarse suggest / stop / chase band for anomaly → watchlist."""
+    q = quote or {}
+    last = num(item.get("price") or item.get("last") or q.get("price"))
+    if last is None or last <= 0:
+        return None, None, None
+    high = num(item.get("high") or q.get("high"))
+    low = num(item.get("low") or q.get("low"))
+    tag = str(item.get("tag") or "")
+    group = str(item.get("group") or "")
+    # Limit-up / chase tags: only watch a pullback; chase = last (do not chase).
+    if tag == "禁追" or group == "涨停":
+        suggest = round(last * 0.97, 2)
+        stop = round((low if low and low < last else last * 0.94), 2)
+        chase = round(last, 2)
+        return suggest, stop, chase
+    if group == "跌停":
+        # Do not treat limit-down as a buy band; stop near last, chase slightly above.
+        suggest = round(last * 1.01, 2)
+        stop = round(last * 0.97, 2)
+        chase = round(last * 1.03, 2)
+        return suggest, stop, chase
+    mid = (float(low) + float(last)) / 2.0 if low and low < last else last * 0.985
+    suggest = round(min(float(last) * 0.985, mid), 2)
+    stop = round(float(low) if low and low < last else last * 0.97, 2)
+    chase = round(float(high) if high and high > last else last * 1.02, 2)
+    if stop >= suggest:
+        stop = round(suggest * 0.98, 2)
+    if chase <= suggest:
+        chase = round(suggest * 1.02, 2)
+    return suggest, stop, chase
+
+
 def _decorate_watch_pool(
     rows: list[dict[str, Any]],
     boards: list[dict[str, Any]] | None,
     mainline: str | None,
     watchlist_codes: set[str] | None = None,
+    quotes: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach board / mainline hints and watchlist membership for the watch tab."""
+    """Attach board / mainline hints, rough price bands, and watchlist membership."""
     from market_desk.review import compare_boards_to_mainline, lookup_code_boards
 
     wl = watchlist_codes or set()
+    qmap = {
+        normalize_code(q.get("code")): q
+        for q in (quotes or [])
+        if normalize_code(q.get("code"))
+    }
     out: list[dict[str, Any]] = []
     for row in rows or []:
         item = dict(row)
@@ -1233,6 +1293,10 @@ def _decorate_watch_pool(
         item["vs_mainline"] = cmp["vs_mainline"] if names else None
         item["board_match"] = cmp["match"]
         item["in_watchlist"] = code in wl
+        suggest, stop, chase = _rough_watch_band(item, qmap.get(code))
+        item["suggest_price"] = suggest
+        item["stop_price"] = stop
+        item["chase_price"] = chase
         out.append(item)
     return out
 

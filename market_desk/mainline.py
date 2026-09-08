@@ -114,10 +114,17 @@ def mainline_score(board: dict[str, Any]) -> float:
     today_hot = int(board.get("zt_n") or 0) >= 2 or float(board.get("pct") or 0) >= 1.5
     if today_hot:
         persist += 1
+    # Penalize boards with many broken seals / late first seals (weaker quality).
+    zb_pen = float(board.get("zb_n") or 0) * 3.0
+    explode_pen = min(float(board.get("explode_sum") or 0), 8.0) * 1.5
+    late_pen = float(board.get("late_seal_n") or 0) * 2.0
     return (
         rank
         + float(board.get("zt_n") or 0) * 5.0
         + float(board.get("pct") or 0)
         + float(board.get("focus") or 0) * 0.15
         + min(persist, 6) * 3.0
+        - zb_pen
+        - explode_pen
+        - late_pen
     )

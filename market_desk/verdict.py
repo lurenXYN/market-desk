@@ -30,6 +30,7 @@ def build_verdict(
     zt: list[dict[str, Any]] | None = None,
     auction: dict[str, Any] | None = None,
     similar: dict[str, Any] | None = None,
+    zb: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Announce the live mainline and a matching vehicle, without a fixed ticker."""
     sticky = (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name")
@@ -87,8 +88,8 @@ def build_verdict(
         reason = f"{board_name} 已转弱，主线身份不稳"
     elif life_stage == "ending":
         action = "观察回踩"
-        reason = f"{board_name} 生命周期偏退潮（涨停衰减/走弱），先不追"
-        algo_notes.append("主线生命周期=快结束")
+        reason = f"{board_name} 生命周期偏衰退（涨停衰减/走弱），先不追"
+        algo_notes.append("主线生命周期=衰退")
     elif status == "尖峰禁追":
         action = "观察回踩"
         reason = f"{board_name} 是当前主线，但已到尖峰，先等回踩再下手"
@@ -114,6 +115,14 @@ def build_verdict(
         reason = f"{board_name} 暂无映射 ETF，改盯主板回踩票：{reason}"
         algo_notes.append("无ETF映射")
 
+    # Soft ETF is approximate only: never price a ready buy on it.
+    soft_size_note = ""
+    if soft_etf and action == "可买入":
+        action = "观察回踩"
+        reason = f"{board_name} 仅近似映射 {vehicle.get('name') or ''}，先观察回踩不直接定价买入"
+        algo_notes.append("软ETF仅观察")
+        soft_size_note = "近似映射宜更小仓或不做"
+
     if soft_etf and vehicle.get("name"):
         reason = f"{reason}（载体为近似映射 {vehicle.get('name')}）"
     action, reason, size_hint = apply_segment_bias(
@@ -125,6 +134,8 @@ def build_verdict(
         open_mute=bool(seg.get("open_mute")),
         open_mute_minutes=mute_m,
     )
+    if soft_size_note:
+        size_hint = _join_hint(size_hint or "", soft_size_note)
     action, reason, size_hint, gate_notes = apply_market_gates(
         action,
         reason,
@@ -155,7 +166,7 @@ def build_verdict(
     if not etf_mapped and board_name:
         meaning = f"{meaning} 当前主线无精确ETF映射，优先看主板回踩票。"
     elif soft_etf and board_name:
-        meaning = f"{meaning} 载体为近似行业ETF，仓位宜更小。"
+        meaning = f"{meaning} 载体为近似行业ETF，默认只观察回踩、仓位宜更小。"
     if vehicle.get("code"):
         detail = (
             f"[{seg.get('label')}] {board_name} · {vehicle.get('name')} {vehicle.get('code')} "
@@ -173,7 +184,7 @@ def build_verdict(
     # Without ETF mapping, still allow主板回踩观察票, but never as ready buys.
     allow_stocks = not stock_block and not _blocks_chi_star_stocks(board_name)
     if allow_stocks:
-        stocks = _stock_candidates(main, zt or [])
+        stocks = _stock_candidates(main, zt or [], zb or [])
     elif stock_block and action in ("可买入", "观察回踩"):
         algo_notes.append("复盘命中偏低，本轮禁个股只留 ETF")
     recommend = _build_recommend(action, main, vehicle, bounce, stocks, bans)
@@ -226,7 +237,7 @@ def build_verdict(
         size_hint=size_hint,
     )
     if life_stage:
-        narrative = narrative.rstrip("。") + f"；生命周期{ {'starting':'启动','ongoing':'进行中','ending':'退潮'}.get(life_stage, life_stage) }。"
+        narrative = narrative.rstrip("。") + f"；生命周期{ {'starting':'萌芽','ongoing':'主升','ending':'衰退'}.get(life_stage, life_stage) }。"
     if algo_notes:
         narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:4]) + "。"
     return {
@@ -252,6 +263,11 @@ def build_verdict(
             "lifecycle": life_stage,
             "etf_mapped": etf_mapped and not soft_etf,
             "etf_soft": soft_etf,
+            "pool_codes": [
+                normalize_code(m.get("code"))
+                for m in (main.get("pool") or main.get("members") or [])
+                if m.get("code")
+            ][:40],
         },
         "carrier": {
             "code": vehicle.get("code"),
@@ -260,6 +276,8 @@ def build_verdict(
             "pct": pct,
             "low": low,
             "high": vehicle.get("high"),
+            "amount": vehicle.get("amount"),
+            "volume": vehicle.get("volume"),
             "bounce": None if bounce is None else round(bounce, 2),
             "falling": falling,
             "mapped": etf_mapped,
@@ -347,6 +365,22 @@ def apply_market_gates(
         why = f"指数偏弱，降级观察回踩：{why}"
         notes.append("指数闸门")
         hint = _join_hint(hint, "指数偏弱宜更小仓")
+
+    if m.get("style_weak") and act == "可买入":
+        act = "观察回踩"
+        why = f"成长风格偏弱(创业−沪深300)，降级观察回踩：{why}"
+        notes.append("风格闸门")
+        hint = _join_hint(hint, "成长风格弱宜更小仓")
+    elif m.get("style_hot") and act == "可买入":
+        hint = _join_hint(hint, "成长风格偏热仍防追高")
+        notes.append("风格偏热防追")
+
+    if float(m.get("avg_explode") or 0) >= 2.0 and act == "可买入":
+        hint = _join_hint(hint, "涨停反复炸板，控仓")
+        notes.append("炸板质量偏弱")
+    if float(m.get("late_seal_rate") or 0) >= 50 and act == "可买入":
+        hint = _join_hint(hint, "晚封偏多，控仓")
+        notes.append("晚封偏多")
 
     if m.get("thin_volume") and act == "可买入":
         act = "观察回踩"
@@ -489,8 +523,8 @@ def _apply_ready_confirmations(
         try:
             if last is not None and high not in (None, 0) and float(high) > 0:
                 dist = (float(high) - float(last)) / float(high) * 100.0
-                # Stricter than priced near_high: ready buys need clearer room.
-                need = 0.50 if kind == "etf" else 0.90
+                # Slightly deeper room from day high before a ready buy.
+                need = 0.65 if kind == "etf" else 1.2
                 if dist < need:
                     flags.append("离日高过近")
         except (TypeError, ValueError):
@@ -503,6 +537,17 @@ def _apply_ready_confirmations(
                 pass
         if kind == "stock" and m.get("weak_index"):
             flags.append("指数弱禁个股现买")
+        if kind == "etf":
+            # Thin ETF amount while green = fake strength (amount in 元).
+            amt = item.get("amount")
+            if amt is None:
+                amt = vehicle.get("amount") if normalize_code(vehicle.get("code")) == normalize_code(item.get("code")) else None
+            try:
+                pct_i = float(item.get("pct")) if item.get("pct") is not None else None
+            except (TypeError, ValueError):
+                pct_i = None
+            if amt is not None and pct_i is not None and pct_i >= 0.8 and float(amt) < 8e7:
+                flags.append("ETF量能偏弱")
         if not flags:
             continue
         changed = True
@@ -528,8 +573,8 @@ def apply_stock_daily_trends(
     fetch_ok_by_code: dict[str, bool] | None = None,
     overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Attach daily-trend labels for display; do not gate recommendations."""
-    del overrides  # Manual overrides removed; trend is informational only.
+    """Attach daily-trend labels and gate non-uptrend ready buys."""
+    del overrides  # Manual overrides removed; trend is informational + ready gate.
     rec = dict(recommend or {})
     items = list(rec.get("items") or [])
     if not items:
@@ -537,6 +582,7 @@ def apply_stock_daily_trends(
     fetch_ok_by_code = fetch_ok_by_code or {}
 
     out_items: list[dict[str, Any]] = []
+    gated = False
     for item in items:
         if item.get("kind") != "stock":
             out_items.append(item)
@@ -578,6 +624,16 @@ def apply_stock_daily_trends(
                 f"【日线判断不出·{trend.get('label') or '行情不足'}】"
                 + str(marked.get("reason") or "")
             )
+            if marked.get("ready"):
+                gated = True
+                marked["ready"] = False
+                if marked.get("wait_price") is not None:
+                    marked["buy_price"] = marked.get("wait_price")
+                marked["role_label"] = "个股盯回踩"
+                fails = list(marked.get("confirm_fail") or [])
+                fails.append("日线样本不足")
+                marked["confirm_fail"] = fails
+                marked["reason"] = (str(marked.get("reason") or "") + "；确认失败：日线样本不足").strip("；")
         else:
             marked["trend"] = trend.get("label") or "非上升"
             marked["trend_ok"] = False
@@ -588,6 +644,16 @@ def apply_stock_daily_trends(
                 f"【日线非上升·{trend.get('label') or '偏弱'}】"
                 + str(marked.get("reason") or "")
             )
+            if marked.get("ready"):
+                gated = True
+                marked["ready"] = False
+                if marked.get("wait_price") is not None:
+                    marked["buy_price"] = marked.get("wait_price")
+                marked["role_label"] = "个股盯回踩"
+                fails = list(marked.get("confirm_fail") or [])
+                fails.append("日线非上升")
+                marked["confirm_fail"] = fails
+                marked["reason"] = (str(marked.get("reason") or "") + "；确认失败：日线非上升").strip("；")
         out_items.append(marked)
 
     # Keep ETF first, then stocks in original relative order.
@@ -619,6 +685,10 @@ def apply_stock_daily_trends(
         rec["code"] = primary.get("code")
         rec["name"] = primary.get("name")
         rec["price"] = primary.get("buy_price") or primary.get("last")
+    if gated and rec.get("buy") and not any(x.get("ready") for x in merged):
+        rec["buy"] = False
+        rec["title"] = "盯回踩价，先不追"
+        rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "日线未确认上升，先等回踩")
     return rec
 
 
@@ -718,11 +788,19 @@ def _build_recommend(
     }
 
 
-def _stock_candidates(main: dict[str, Any], zt: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _stock_candidates(
+    main: dict[str, Any],
+    zt: list[dict[str, Any]],
+    zb: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Pick unsealed main-board pullbacks from the live mainline constituent pool."""
     sealed = {normalize_code(x.get("code")) for x in zt}
+    broken = {normalize_code(x.get("code")) for x in (zb or [])}
     boards_by = {
         normalize_code(x.get("code")): int(x.get("boards") or 0) for x in zt
+    }
+    explode_by = {
+        normalize_code(x.get("code")): int(x.get("explode_count") or 0) for x in zt
     }
     skip = {
         normalize_code(main.get("leader_code")),
@@ -731,7 +809,9 @@ def _stock_candidates(main: dict[str, Any], zt: list[dict[str, Any]]) -> list[di
     pool = list(main.get("pool") or main.get("members") or [])
     scored: list[tuple[float, dict[str, Any]]] = []
     for member in pool:
-        item = _score_stock(member, sealed, boards_by, skip, strict=True)
+        item = _score_stock(
+            member, sealed, boards_by, skip, broken, explode_by, strict=True
+        )
         if item:
             scored.append(item)
     if len(scored) < 2:
@@ -739,7 +819,9 @@ def _stock_candidates(main: dict[str, Any], zt: list[dict[str, Any]]) -> list[di
             code = normalize_code(member.get("code"))
             if any(code == normalize_code(x[1].get("code")) for x in scored):
                 continue
-            item = _score_stock(member, sealed, boards_by, skip, strict=False)
+            item = _score_stock(
+                member, sealed, boards_by, skip, broken, explode_by, strict=False
+            )
             if item:
                 scored.append(item)
     scored.sort(key=lambda row: row[0], reverse=True)
@@ -751,6 +833,8 @@ def _score_stock(
     sealed: set[str],
     boards_by: dict[str, int],
     skip: set[str],
+    broken: set[str],
+    explode_by: dict[str, int],
     *,
     strict: bool,
 ) -> tuple[float, dict[str, Any]] | None:
@@ -764,7 +848,7 @@ def _score_stock(
     high = member.get("high")
     if not code or price in (None, 0) or not is_main_board(code) or is_st(name):
         return None
-    if code in skip or code in sealed:
+    if code in skip or code in sealed or code in broken:
         return None
     if is_limit_up(name, pct):
         return None
@@ -777,6 +861,13 @@ def _score_stock(
             return None
         if float(mv_yi) < min_mv:
             return None
+    try:
+        turnover = float(member.get("turnover")) if member.get("turnover") is not None else None
+    except (TypeError, ValueError):
+        turnover = None
+    # Overheated turnover: skip hard; elevated turnover: no ready buys.
+    if turnover is not None and turnover >= 25.0:
+        return None
     if strict and (pct < 0 or pct > 5.5):
         return None
     if not strict and (pct < -1.5 or pct > 7.0):
@@ -784,11 +875,12 @@ def _score_stock(
     pullback = None
     if high and high > 0:
         pullback = (float(high) - float(price)) / float(high) * 100.0
-    if strict and (pullback is None or pullback < 1.0 or pullback > 4.0):
+    # Slightly deeper pullback band for ready-quality names.
+    if strict and (pullback is None or pullback < 1.2 or pullback > 4.5):
         return None
     score = 20.0 - abs(float(pct) - 2.0) * 2.0
     if pullback is not None:
-        if 1.0 <= pullback <= 4.0:
+        if 1.2 <= pullback <= 4.0:
             score += 15.0
         elif pullback > 4.0:
             score += 4.0
@@ -797,15 +889,32 @@ def _score_stock(
     # Prefer larger caps slightly when scores are close.
     if mv_yi is not None:
         score += min(6.0, float(mv_yi) / 80.0)
+    if turnover is not None:
+        if 3.0 <= turnover <= 12.0:
+            score += 4.0
+        elif turnover > 18.0:
+            score -= 8.0
+        elif turnover > 15.0:
+            score -= 4.0
+    explode_n = int(explode_by.get(code) or 0)
+    if explode_n >= 2:
+        score -= 10.0
+    elif explode_n == 1:
+        score -= 4.0
     boards = int(boards_by.get(code) or 0)
     # Ready only after a clearer day-high pullback to cut chase entries.
-    ready = pullback is not None and pullback >= 1.0
-    reason = _stock_reason(pct, pullback, ready, mv_yi=mv_yi)
+    ready = pullback is not None and pullback >= 1.2
+    if turnover is not None and turnover >= 15.0:
+        ready = False
+    if explode_n >= 2:
+        ready = False
+    reason = _stock_reason(pct, pullback, ready, mv_yi=mv_yi, turnover=turnover)
     out = dict(member)
     out["code"] = code
     out["boards"] = boards
     out["mv_yi"] = None if mv_yi is None else round(float(mv_yi), 1)
     out["pullback"] = None if pullback is None else round(pullback, 2)
+    out["turnover"] = None if turnover is None else round(float(turnover), 2)
     out["ready"] = ready
     out["reason"] = reason
     return score, out
@@ -817,11 +926,14 @@ def _stock_reason(
     ready: bool,
     *,
     mv_yi: float | None = None,
+    turnover: float | None = None,
 ) -> str:
     """Describe why a stock is listed as a pullback alternative."""
     parts = [f"涨幅 {_fmt_pct(pct)}"]
     if mv_yi is not None:
         parts.append(f"市值 {float(mv_yi):.0f}亿")
+    if turnover is not None:
+        parts.append(f"换手 {float(turnover):.1f}%")
     if pullback is not None:
         parts.append(f"高点回撤 {pullback:.1f}%")
     parts.append("未封板")
@@ -873,7 +985,7 @@ def _recommend_item(
         last
         and high
         and high > 0
-        and (float(high) - float(last)) / float(high) * 100.0 < (0.40 if etf else 0.55)
+        and (float(high) - float(last)) / float(high) * 100.0 < (0.55 if etf else 0.70)
     )
     buy_now = bool(ready and last is not None and not near_high)
     wait = _wait_price(last, low, etf)
@@ -897,6 +1009,9 @@ def _recommend_item(
         "last": _px(last, digits),
         "pct": None if quote.get("pct") is None else round(float(quote["pct"]), 2),
         "mv_yi": None if quote.get("mv_yi") is None else round(float(quote["mv_yi"]), 1),
+        "amount": quote.get("amount"),
+        "volume": quote.get("volume"),
+        "turnover": quote.get("turnover"),
         "buy_price": _px(buy, digits),
         "wait_price": _px(wait, digits),
         "stop_price": _px(stop, digits),
@@ -974,7 +1089,8 @@ def _wait_price(last: float | None, low: float | None, etf: bool) -> float | Non
     """Return a better pullback entry below the last price."""
     if last is None:
         return None
-    gap = 0.996 if etf else 0.992
+    # Slightly deeper wait: ETF ~0.65%, stock ~1.2% below last.
+    gap = 0.9935 if etf else 0.988
     wait = float(last) * gap
     if low not in (None, 0) and float(low) < float(last):
         mid = (float(low) + float(last)) / 2.0
@@ -1048,6 +1164,31 @@ def _stop_line(primary: dict[str, Any] | None) -> str:
     return f"参考止损 {primary.get('stop_price')}（跌破日低视为回踩失败）"
 
 
+def _position_tied_to_mainline(row: dict[str, Any], verdict: dict[str, Any]) -> bool:
+    """Return True when a held name is the live carrier or in the mainline pool.
+
+    Soft mainline-fade sells should not fire on unrelated residual positions.
+    """
+    code = normalize_code(row.get("code"))
+    if not code:
+        return False
+    carrier = normalize_code((verdict.get("carrier") or {}).get("code"))
+    if carrier and code == carrier:
+        return True
+    main = verdict.get("mainline") or {}
+    pool = {normalize_code(c) for c in (main.get("pool_codes") or []) if c}
+    if code in pool:
+        return True
+    for item in ((verdict.get("recommend") or {}).get("items") or []):
+        if normalize_code(item.get("code")) == code:
+            return True
+    board = str(row.get("board") or row.get("sector") or row.get("industry") or "")
+    main_name = str(main.get("name") or "")
+    if board and main_name and (board in main_name or main_name in board):
+        return True
+    return False
+
+
 def build_sell_advice(
     positions: list[dict[str, Any]],
     verdict: dict[str, Any] | None,
@@ -1088,7 +1229,7 @@ def build_sell_advice(
             f"{primary.get('sell_price')} · {mode_zh}"
         )
         size_note = (
-            "止损→清仓；退潮/深回撤→清仓或先减一半。本地提示，不会下单。"
+            "止损→清仓；衰退/深回撤→清仓或先减一半。本地提示，不会下单。"
         )
     else:
         primary = items[0] if items else None
@@ -1157,13 +1298,12 @@ def _sell_item(
     main_status = mainline.get("status") or ""
     life_stage = mainline.get("lifecycle") or ""
     ending = life_stage == "ending"
-    soft_exit = (
-        action == "观望"
-        or main_status == "退潮"
-        or phase in ("恐慌", "高潮")
-        or ending
-    )
     carrier = verdict.get("carrier") or {}
+    on_mainline = _position_tied_to_mainline(row, verdict)
+    # Market-wide soft exits (panic/climax) vs mainline-fade exits (only tied names).
+    phase_soft = phase in ("恐慌", "高潮")
+    mainline_fade = action == "观望" or main_status == "退潮" or ending
+    soft_exit = phase_soft or (mainline_fade and on_mainline)
     t1_locked = is_t1_locked(row, trade_date)
     buy_day = position_buy_day(row)
     hold_qty = int(row.get("qty") or 0)
@@ -1178,8 +1318,8 @@ def _sell_item(
 
     pb_light = 0.8 if etf else 1.5
     pb_deep = 1.2 if etf else 2.5
-    # Lifecycle ending: trigger take-profit earlier and prefer clearer exits.
-    if ending:
+    # Lifecycle ending on the live mainline: trigger take-profit earlier.
+    if ending and on_mainline:
         pb_light *= 0.75
         pb_deep *= 0.85
 
@@ -1196,21 +1336,28 @@ def _sell_item(
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，触及止损带，建议清仓")
     elif (
         pnl_pct is not None
-        and pnl_pct >= (2.5 if etf else (4.0 if ending else 5.0))
+        and pnl_pct >= (2.5 if etf else (4.0 if (ending and on_mainline) else 5.0))
         and pullback is not None
         and pullback >= pb_light
     ):
         urgency = "take"
         ready = True
         sell_price = float(last)
-        deep = pullback >= pb_deep and pnl_pct >= (3.5 if etf else (5.0 if ending else 6.0))
-        if deep or (ending and pullback >= pb_light and pnl_pct >= (3.0 if etf else 5.0)):
+        deep = pullback >= pb_deep and pnl_pct >= (
+            3.5 if etf else (5.0 if (ending and on_mainline) else 6.0)
+        )
+        if deep or (
+            ending
+            and on_mainline
+            and pullback >= pb_light
+            and pnl_pct >= (3.0 if etf else 5.0)
+        ):
             exit_mode = "clear"
             role_label = "结构回撤清仓" if deep else "退潮兑现清仓"
             sell_pct = 100
             reason_parts.append(
                 f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%"
-                + ("，生命周期偏退潮" if ending else "")
+                + ("，生命周期偏衰退" if ending and on_mainline else "")
                 + "，建议清仓"
             )
         else:
@@ -1218,31 +1365,33 @@ def _sell_item(
             role_label = "冲高回落先减"
             sell_pct = 50
             reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%，先减一半")
-    elif pnl_pct is not None and pnl_pct >= (4.0 if etf else (6.0 if ending else 8.0)):
+    elif pnl_pct is not None and pnl_pct >= (
+        4.0 if etf else (6.0 if (ending and on_mainline) else 8.0)
+    ):
         urgency = "take"
         ready = True
         sell_price = float(last)
-        if ending:
+        if ending and on_mainline:
             exit_mode = "clear"
-            role_label = "退潮落袋清仓"
+            role_label = "衰退落袋清仓"
             sell_pct = 100
-            reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，主线生命周期偏退潮，建议清仓")
+            reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，主线生命周期偏衰退，建议清仓")
         else:
             exit_mode = "half"
             role_label = "落袋先减"
             sell_pct = 50
             reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，建议先减一半，余仓盯止损")
-    elif soft_exit and pnl_pct is not None and pnl_pct > (0.2 if ending else 0.5):
+    elif soft_exit and pnl_pct is not None and pnl_pct > (0.2 if (ending and on_mainline) else 0.5):
         urgency = "trim"
         ready = True
         sell_price = float(last)
-        deep_fade = ending and (
+        deep_fade = ending and on_mainline and (
             (pullback is not None and pullback >= pb_light)
             or pnl_pct >= (2.0 if etf else 3.0)
         )
         if deep_fade:
             exit_mode = "clear"
-            role_label = "退潮清仓"
+            role_label = "衰退清仓"
             sell_pct = 100
             reason_parts.append(
                 f"生命周期/主线偏弱，浮盈 {_fmt_pct(pnl_pct)}"
@@ -1251,14 +1400,15 @@ def _sell_item(
             )
         else:
             exit_mode = "half"
-            role_label = "退潮先减" if ending else "建议先减"
+            role_label = "衰退先减" if ending and on_mainline else "建议先减"
             sell_pct = 50
             reason_parts.append(
-                f"{'生命周期偏退潮' if ending else '主线转弱/相位偏热'}，"
+                f"{'生命周期偏衰退' if ending and on_mainline else '主线转弱/相位偏热'}，"
                 f"浮盈 {_fmt_pct(pnl_pct)}，先减一半"
             )
     elif (
         not etf
+        and on_mainline
         and carrier.get("falling")
         and pnl_pct is not None
         and pnl_pct > -1.0
@@ -1271,15 +1421,15 @@ def _sell_item(
         sell_price = float(last)
         sell_pct = 50
         reason_parts.append("主线 ETF/载体价格较上一轮回落，个股先减一半")
-    elif ending and pnl_pct is not None and pnl_pct <= 0.2 and last is not None:
+    elif ending and on_mainline and pnl_pct is not None and pnl_pct <= 0.2 and last is not None:
         # Ending + flat/small loss: warn trim before stop, but do not force clear.
         urgency = "trim"
         ready = True
         exit_mode = "half"
-        role_label = "退潮防守先减"
+        role_label = "衰退防守先减"
         sell_price = float(last)
         sell_pct = 50
-        reason_parts.append(f"生命周期偏退潮且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
+        reason_parts.append(f"生命周期偏衰退且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
     else:
         role_label = "继续持有"
         sell_price = target
@@ -1288,8 +1438,10 @@ def _sell_item(
         reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，未到卖点，盯目标价")
         if pullback is not None:
             reason_parts.append(f"高点回撤 {pullback:.1f}%")
-        if ending:
-            reason_parts.append("主线生命周期偏退潮，反抽优先减")
+        if ending and on_mainline:
+            reason_parts.append("主线生命周期偏衰退，反抽优先减")
+        elif mainline_fade and not on_mainline:
+            reason_parts.append("非当前主线持仓，主线转弱不自动减")
 
     if t1_locked and ready:
         ready = False
