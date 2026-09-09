@@ -2,10 +2,59 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from market_desk.filters import is_limit_down, is_limit_up
 from market_desk.numbers import median
+
+
+def _yesterday_boards(row: dict[str, Any]) -> int:
+    """Return yesterday's consecutive board count for a yesterday-ZT row."""
+    n = int(row.get("boards_yesterday") or row.get("boards") or 0)
+    return n if n > 0 else 1
+
+
+def rung_promotion_rates(
+    yesterday_zt: list[dict[str, Any]],
+    zt_pool: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute 1→2 and 2→3 promotion rates from yesterday board rungs."""
+    today_boards = {x["code"]: int(x.get("boards") or 0) for x in zt_pool}
+    out: dict[str, Any] = {}
+    for from_n, to_n, key in ((1, 2, "promo_1_2"), (2, 3, "promo_2_3")):
+        base = [x for x in yesterday_zt if _yesterday_boards(x) == from_n]
+        if not base:
+            out[key] = None
+            out[f"{key}_base"] = 0
+            out[f"{key}_ok"] = 0
+            continue
+        ok = sum(1 for x in base if today_boards.get(x["code"], 0) >= to_n)
+        out[key] = round(ok / len(base) * 100.0, 1)
+        out[f"{key}_base"] = len(base)
+        out[f"{key}_ok"] = ok
+    return out
+
+
+def ladder_stats(zt_pool: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize limit-up ladder completeness (fill / gap / ge2)."""
+    counts = Counter(max(1, int(x.get("boards") or 1)) for x in zt_pool)
+    height = max(counts) if counts else 0
+    ge2 = sum(n for b, n in counts.items() if b >= 2)
+    span = min(height, 8) if height else 0
+    filled = sum(1 for k in range(1, span + 1) if counts.get(k, 0) > 0) if span else 0
+    missing = sum(1 for k in range(1, span) if counts.get(k, 0) == 0) if span else 0
+    # High board with a missing mid rung = classic ladder break.
+    ladder_gap = bool(height >= 4 and missing >= 1)
+    ladder_fill = round(filled / span * 100.0, 1) if span else 0.0
+    return {
+        "ge2": ge2,
+        "rungs_filled": filled,
+        "rungs_span": span,
+        "ladder_missing": missing,
+        "ladder_gap": ladder_gap,
+        "ladder_fill": ladder_fill,
+    }
 
 
 def build_market_metrics(
@@ -39,6 +88,8 @@ def build_market_metrics(
     avg_explode = (sum(explode_vals) / len(explode_vals)) if explode_vals else 0.0
     late_n = sum(1 for x in zt_pool if _is_late_first_seal(x.get("first_seal")))
     late_seal_rate = (late_n / len(zt_pool) * 100.0) if zt_pool else 0.0
+    rungs = rung_promotion_rates(yesterday_zt, zt_pool)
+    ladder = ladder_stats(zt_pool)
     return {
         "sample": len(valid),
         "ups": ups,
@@ -50,12 +101,22 @@ def build_market_metrics(
         "zb_rate": round(zb_rate * 100.0, 1),
         "height": height,
         "promotion": round(promotion, 1),
+        "promo_1_2": rungs.get("promo_1_2"),
+        "promo_2_3": rungs.get("promo_2_3"),
+        "promo_1_2_base": rungs.get("promo_1_2_base", 0),
+        "promo_2_3_base": rungs.get("promo_2_3_base", 0),
         "premium": round(premium, 2),
         "breadth": round(breadth, 1),
         "amount_yi": round(amount / 1e8, 1),
         "big_drop": big_drop,
         "avg_explode": round(avg_explode, 2),
         "late_seal_rate": round(late_seal_rate, 1),
+        "ge2": ladder["ge2"],
+        "rungs_filled": ladder["rungs_filled"],
+        "rungs_span": ladder["rungs_span"],
+        "ladder_missing": ladder["ladder_missing"],
+        "ladder_gap": ladder["ladder_gap"],
+        "ladder_fill": ladder["ladder_fill"],
         "leader": max(zt_pool, key=lambda x: int(x.get("boards") or 0), default=None),
     }
 
@@ -195,10 +256,21 @@ def score_temperature(m: dict[str, Any]) -> int:
     """Map market metrics to a 0-100 sentiment temperature."""
     temp = 0.0
     temp += min((m["zt"] or 0) / 80.0, 1.0) * 25
-    temp += min((m["promotion"] or 0) / 50.0, 1.0) * 18
-    temp += min((m["height"] or 0) / 8.0, 1.0) * 18
+    # Overall promotion plus rung splits (1→2 / 2→3) when samples exist.
+    temp += min((m["promotion"] or 0) / 50.0, 1.0) * 14
+    p12 = m.get("promo_1_2")
+    p23 = m.get("promo_2_3")
+    if p12 is not None:
+        temp += min(float(p12) / 55.0, 1.0) * 4
+    if p23 is not None:
+        temp += min(float(p23) / 45.0, 1.0) * 4
+    temp += min((m["height"] or 0) / 8.0, 1.0) * 16
+    temp += min(float(m.get("ladder_fill") or 0) / 100.0, 1.0) * 3
     temp += min((m["breadth"] or 0) / 100.0, 1.0) * 14
-    temp += min(max(m["premium"] or 0, 0) / 8.0, 1.0) * 10
+    prem = float(m.get("premium") or 0)
+    temp += min(max(prem, 0) / 8.0, 1.0) * 10
+    if prem < 0:
+        temp -= min(abs(prem) / 4.0, 1.0) * 4
     temp += (1.0 - min((m["zb_rate"] or 0) / 100.0, 1.0)) * 8
     temp += (1.0 - min((m["dt"] or 0) / 40.0, 1.0)) * 7
     # Soft adjustments from volume / index / cascade sells.
@@ -210,6 +282,8 @@ def score_temperature(m: dict[str, Any]) -> int:
         temp -= 5
     elif m.get("strong_index"):
         temp += 2
+    if m.get("ladder_gap"):
+        temp -= 4
     # Seal quality: repeated opens and late first seals cool the tape.
     avg_explode = float(m.get("avg_explode") or 0)
     if avg_explode >= 2.0:
@@ -243,18 +317,25 @@ def classify_phase(m: dict[str, Any], temperature: int) -> str:
     ):
         return "恐慌"
 
+    promo = float(m.get("promotion") or 0)
+    p23 = m.get("promo_2_3")
+    # Strong overall promotion or solid 2→3 can support climax height path.
+    strong_promo = promo >= 28 or (p23 is not None and float(p23) >= 35)
     climax = False
-    if m["height"] >= 6 and m["promotion"] >= 28 and m["zt"] >= 35:
+    if m["height"] >= 6 and strong_promo and m["zt"] >= 35:
         climax = True
     if temperature >= 72 and m["height"] >= 5:
         climax = True
-    # Block fake climax on thin volume or collapsing indices.
-    if climax and (m.get("thin_volume") or m.get("weak_index")):
+    # Block fake climax on thin volume, weak index, or broken ladder.
+    if climax and (m.get("thin_volume") or m.get("weak_index") or m.get("ladder_gap")):
         return "发酵" if temperature >= 45 else "分歧"
     if climax:
         return "高潮"
 
-    if m["zb_rate"] >= 48 or (m["zt"] < 18 and m["promotion"] < 12):
+    if m["zb_rate"] >= 48 or (m["zt"] < 18 and promo < 12):
+        return "分歧"
+    # High board with ladder gap and soft promotion → treat as divergence.
+    if m.get("ladder_gap") and m["height"] >= 5 and promo < 22:
         return "分歧"
     if temperature >= 45:
         return "发酵"
@@ -266,10 +347,33 @@ def kpi_bars(m: dict[str, Any]) -> list[dict[str, Any]]:
     amt_fill = m.get("amount_pctile")
     if amt_fill is None:
         amt_fill = _clip(float(m.get("amount_yi") or 0), 0, 12000)
+    p12 = m.get("promo_1_2")
+    p23 = m.get("promo_2_3")
     return [
         {"key": "昨停溢价", "value": m["premium"], "unit": "%", "fill": _clip(m["premium"], 0, 8), "hue": "blue"},
         {"key": "晋级率", "value": m["promotion"], "unit": "%", "fill": _clip(m["promotion"], 0, 60), "hue": "green"},
+        {
+            "key": "晋级1→2",
+            "value": p12 if p12 is not None else "—",
+            "unit": "%" if p12 is not None else "",
+            "fill": _clip(float(p12), 0, 60) if p12 is not None else 0.0,
+            "hue": "green",
+        },
+        {
+            "key": "晋级2→3",
+            "value": p23 if p23 is not None else "—",
+            "unit": "%" if p23 is not None else "",
+            "fill": _clip(float(p23), 0, 55) if p23 is not None else 0.0,
+            "hue": "green",
+        },
         {"key": "高度", "value": m["height"], "unit": "板", "fill": _clip(m["height"], 0, 8), "hue": "orange"},
+        {
+            "key": "梯队",
+            "value": m.get("ladder_fill") or 0,
+            "unit": "%" + ("·断" if m.get("ladder_gap") else ""),
+            "fill": _clip(float(m.get("ladder_fill") or 0), 0, 100),
+            "hue": "orange",
+        },
         {"key": "广度", "value": m["breadth"], "unit": "%", "fill": _clip(m["breadth"], 0, 70), "hue": "cyan"},
         {
             "key": "成交分位",

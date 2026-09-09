@@ -71,6 +71,7 @@ from market_desk.eastmoney import (
     fetch_zt_pool,
 )
 from market_desk.filters import is_limit_down, is_main_board, normalize_code
+from market_desk.gap_fade import sync_gap_fade_blacklist
 from market_desk.glossary import GLOSSARY
 from market_desk.minute_confirm import apply_minute_confirmations
 from market_desk.numbers import num
@@ -319,6 +320,19 @@ class DeskEngine:
             note_quote_ticks(quotes)
             note_quote_ticks(etfs)
             note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
+            try:
+                blacklist_state = sync_gap_fade_blacklist(
+                    quotes, trade_date=trade_date_dash, now=now
+                )
+            except Exception:
+                log.exception("gap-fade blacklist sync failed")
+                from market_desk.db import load_stock_blacklist
+                rows = load_stock_blacklist()
+                blacklist_state = {
+                    "ok": False,
+                    "items": rows,
+                    "codes": [str(r.get("code") or "").zfill(6) for r in rows],
+                }
             contagion = _contagion(ice_cards)
             save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards + fav_cards)
             if not isinstance(pos_quote_map, dict):
@@ -346,7 +360,12 @@ class DeskEngine:
                     "zb_rate": metrics["zb_rate"],
                     "height": metrics["height"],
                     "promotion": metrics["promotion"],
+                    "promo_1_2": metrics.get("promo_1_2"),
+                    "promo_2_3": metrics.get("promo_2_3"),
                     "premium": metrics["premium"],
+                    "ladder_fill": metrics.get("ladder_fill"),
+                    "ladder_gap": metrics.get("ladder_gap"),
+                    "ge2": metrics.get("ge2"),
                     "amount_yi": metrics["amount_yi"],
                     "amount_pctile": metrics.get("amount_pctile"),
                     "big_drop": metrics.get("big_drop"),
@@ -451,6 +470,7 @@ class DeskEngine:
                 "position_summary": position_summary(positions),
                 "risk_overview": build_risk_overview(positions),
                 "watchlist": watchlist,
+                "stock_blacklist": blacklist_state,
                 "recent_toasts": list(self._toast_feed),
                 "sell_advice": build_sell_advice(
                     positions, verdict, phase, trade_date=trade_date_dash
@@ -1096,10 +1116,19 @@ async def _enrich_board(
     zb_n = sum(1 for m in members if m["code"] in zb_codes)
     explode_sum = sum(int(x.get("explode_count") or 0) for x in zt_in_board)
     late_seal_n = 0
+    ladder = {
+        "ge2": 0,
+        "ladder_fill": 0.0,
+        "ladder_gap": False,
+        "rungs_filled": 0,
+        "rungs_span": 0,
+        "ladder_missing": 0,
+    }
     try:
-        from market_desk.sentiment import is_late_first_seal
+        from market_desk.sentiment import is_late_first_seal, ladder_stats
 
         late_seal_n = sum(1 for x in zt_in_board if is_late_first_seal(x.get("first_seal")))
+        ladder = ladder_stats(zt_in_board)
     except Exception:
         late_seal_n = 0
     pct = board.get("pct") or 0
@@ -1110,6 +1139,11 @@ async def _enrich_board(
     card["zb_n"] = zb_n
     card["explode_sum"] = explode_sum
     card["late_seal_n"] = late_seal_n
+    card["ge2"] = ladder.get("ge2", 0)
+    card["ladder_fill"] = ladder.get("ladder_fill", 0.0)
+    card["ladder_gap"] = bool(ladder.get("ladder_gap"))
+    card["rungs_filled"] = ladder.get("rungs_filled", 0)
+    card["ladder_missing"] = ladder.get("ladder_missing", 0)
     card["dt_n"] = dt_n
     card["leader_name"] = leader_name
     card["leader_code"] = leader_code
@@ -1332,7 +1366,13 @@ def _today_events(
         },
         {
             "tone": "promo",
-            "text": f"昨停溢价 {metrics['premium']}% · 晋级率 {metrics['promotion']}% · 炸板 {metrics['zb_rate']}%",
+            "text": (
+                f"昨停溢价 {metrics['premium']}% · 晋级 {metrics['promotion']}% "
+                f"(1→2 {metrics.get('promo_1_2') if metrics.get('promo_1_2') is not None else '—'}% / "
+                f"2→3 {metrics.get('promo_2_3') if metrics.get('promo_2_3') is not None else '—'}%) · "
+                f"梯队 {metrics.get('ladder_fill') or 0}%"
+                f"{'·断' if metrics.get('ladder_gap') else ''} · 炸板 {metrics['zb_rate']}%"
+            ),
         },
     ]
     if contagion and contagion.get("on"):
@@ -1391,7 +1431,11 @@ def _cycle_view(history: list[dict[str, Any]], today: str) -> dict[str, Any]:
                 "zb_rate": row.get("zb_rate"),
                 "height": row.get("height"),
                 "promotion": row.get("promotion"),
+                "promo_1_2": row.get("promo_1_2"),
+                "promo_2_3": row.get("promo_2_3"),
                 "premium": row.get("premium"),
+                "ladder_fill": row.get("ladder_fill"),
+                "ladder_gap": row.get("ladder_gap"),
                 "event": row.get("event"),
                 "ups": row.get("ups"),
                 "downs": row.get("downs"),

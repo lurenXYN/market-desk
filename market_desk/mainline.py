@@ -165,12 +165,19 @@ def mainline_score(board: dict[str, Any]) -> float:
     zb_pen = float(board.get("zb_n") or 0) * 3.0
     explode_pen = min(float(board.get("explode_sum") or 0), 8.0) * 1.5
     late_pen = float(board.get("late_seal_n") or 0) * 2.0
+    # Ladder completeness inside the board: reward fill, cut broken high boards.
+    if board.get("ladder_gap"):
+        ladder_adj = -8.0
+    else:
+        ladder_adj = min(float(board.get("ladder_fill") or 0) / 100.0, 1.0) * 6.0
+    ladder_adj += min(int(board.get("ge2") or 0), 4) * 1.5
     return (
         rank
         + float(board.get("zt_n") or 0) * 5.0
         + float(board.get("pct") or 0)
         + float(board.get("focus") or 0) * 0.15
         + min(persist, 6) * 3.0
+        + ladder_adj
         - zb_pen
         - explode_pen
         - late_pen

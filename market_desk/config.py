@@ -155,3 +155,11 @@ SIDE_MAINLINE_GAP = 12.0
 
 # Mute buy/entry noise for this many minutes after 09:30 (0 = off).
 OPEN_MUTE_MINUTES = 5
+
+# Gap-and-fade blacklist: high open then fade from open.
+GAP_FADE_OPEN_PCT = 2.5          # open vs prev close
+GAP_FADE_DROP_PCT = 1.5          # last below open by at least this %
+GAP_FADE_STRIKE_WINDOW = 10      # lookback trading days
+GAP_FADE_STRIKE_NEED = 3         # strikes to auto-blacklist
+GAP_FADE_CLEAN_DAYS = 3          # consecutive normal days to auto-release
+GAP_FADE_MIN_HHMM = 1000         # only score after 10:00 to cut noise

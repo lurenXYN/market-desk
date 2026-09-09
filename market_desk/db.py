@@ -193,6 +193,35 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS gap_fade_strikes (
+                code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                name TEXT,
+                open_gap_pct REAL,
+                from_open_pct REAL,
+                flagged INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (code, trade_date)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stock_blacklist (
+                code TEXT PRIMARY KEY,
+                name TEXT,
+                reason TEXT,
+                source TEXT NOT NULL DEFAULT 'auto',
+                strike_n INTEGER DEFAULT 0,
+                clean_streak INTEGER DEFAULT 0,
+                blocked_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                note TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS session_segment (
                 trade_date TEXT NOT NULL,
                 segment TEXT NOT NULL,
@@ -1390,6 +1419,186 @@ def delete_favorite_board_by_bk(bk: str) -> bool:
         return cur.rowcount > 0
 
 
+def upsert_gap_fade_strike(
+    code: str,
+    trade_date: str,
+    *,
+    name: str = "",
+    open_gap_pct: float | None = None,
+    from_open_pct: float | None = None,
+    flagged: bool = True,
+) -> None:
+    """Upsert one code/day gap-fade observation."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    code = str(code or "").zfill(6)
+    day = str(trade_date or "")[:10]
+    if not code or not day:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO gap_fade_strikes(
+                code, trade_date, name, open_gap_pct, from_open_pct, flagged, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(code, trade_date) DO UPDATE SET
+                name = COALESCE(NULLIF(excluded.name, ''), gap_fade_strikes.name),
+                open_gap_pct = excluded.open_gap_pct,
+                from_open_pct = excluded.from_open_pct,
+                flagged = excluded.flagged,
+                updated_at = excluded.updated_at
+            """,
+            (
+                code,
+                day,
+                name,
+                open_gap_pct,
+                from_open_pct,
+                1 if flagged else 0,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def count_gap_fade_strikes(code: str, *, since_date: str) -> int:
+    """Count flagged gap-fade days for a code since a date (inclusive)."""
+    code = str(code or "").zfill(6)
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM gap_fade_strikes
+            WHERE code = ? AND trade_date >= ? AND flagged = 1
+            """,
+            (code, str(since_date)[:10]),
+        ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def load_gap_fade_strike_codes(trade_date: str) -> set[str]:
+    """Return codes flagged as gap-fade on a trade date."""
+    day = str(trade_date or "")[:10]
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT code FROM gap_fade_strikes
+            WHERE trade_date = ? AND flagged = 1
+            """,
+            (day,),
+        ).fetchall()
+    return {str(r["code"]).zfill(6) for r in rows}
+
+
+def add_stock_blacklist(
+    code: str,
+    name: str = "",
+    *,
+    reason: str = "",
+    source: str = "manual",
+    note: str = "",
+    strike_n: int = 0,
+) -> dict[str, Any]:
+    """Insert or refresh an active blacklist row."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    code = str(code or "").zfill(6)
+    if len(code) != 6 or not code.isdigit():
+        raise ValueError("code must be a 6-digit ticker")
+    source = str(source or "manual").strip() or "manual"
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT code, blocked_at, clean_streak, strike_n FROM stock_blacklist WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE stock_blacklist
+                SET name = COALESCE(NULLIF(?, ''), name),
+                    reason = COALESCE(NULLIF(?, ''), reason),
+                    source = ?,
+                    note = ?,
+                    strike_n = CASE WHEN ? > 0 THEN ? ELSE strike_n END,
+                    clean_streak = 0,
+                    updated_at = ?
+                WHERE code = ?
+                """,
+                (
+                    name,
+                    reason,
+                    source,
+                    note,
+                    int(strike_n),
+                    int(strike_n),
+                    now,
+                    code,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO stock_blacklist(
+                    code, name, reason, source, strike_n, clean_streak,
+                    blocked_at, updated_at, note
+                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+                """,
+                (code, name, reason, source, int(strike_n), now, now, note),
+            )
+        conn.commit()
+        row = conn.execute("SELECT * FROM stock_blacklist WHERE code = ?", (code,)).fetchone()
+        return dict(row)
+
+
+def load_stock_blacklist() -> list[dict[str, Any]]:
+    """Return active blacklist rows, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT code, name, reason, source, strike_n, clean_streak,
+                   blocked_at, updated_at, note
+            FROM stock_blacklist
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def load_blacklist_codes() -> set[str]:
+    """Return the set of blacklisted six-digit codes."""
+    return {str(r.get("code") or "").zfill(6) for r in load_stock_blacklist() if r.get("code")}
+
+
+def delete_stock_blacklist(code: str) -> bool:
+    """Remove one code from the blacklist."""
+    code = str(code or "").zfill(6)
+    if not code:
+        return False
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM stock_blacklist WHERE code = ?", (code,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def bump_blacklist_clean_streak(code: str, *, normal: bool) -> dict[str, Any] | None:
+    """Update clean-day streak for an active blacklist row; return row or None."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    code = str(code or "").zfill(6)
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM stock_blacklist WHERE code = ?", (code,)).fetchone()
+        if not row:
+            return None
+        streak = 0 if not normal else int(row["clean_streak"] or 0) + 1
+        conn.execute(
+            """
+            UPDATE stock_blacklist
+            SET clean_streak = ?, updated_at = ?
+            WHERE code = ?
+            """,
+            (streak, now, code),
+        )
+        conn.commit()
+        out = conn.execute("SELECT * FROM stock_blacklist WHERE code = ?", (code,)).fetchone()
+        return dict(out) if out else None
+
+
 def export_backup_payload() -> dict[str, Any]:
     """Export core local tables as a JSON-serializable backup dict."""
     with _connect() as conn:
@@ -1398,6 +1607,9 @@ def export_backup_payload() -> dict[str, Any]:
         watchlist = [dict(r) for r in conn.execute("SELECT * FROM watchlist ORDER BY id").fetchall()]
         favorite_boards = [
             dict(r) for r in conn.execute("SELECT * FROM favorite_boards ORDER BY id").fetchall()
+        ]
+        stock_blacklist = [
+            dict(r) for r in conn.execute("SELECT * FROM stock_blacklist ORDER BY code").fetchall()
         ]
         digests = [dict(r) for r in conn.execute("SELECT * FROM review_digest ORDER BY trade_date").fetchall()]
         settings = [dict(r) for r in conn.execute("SELECT * FROM settings").fetchall()]
@@ -1409,6 +1621,7 @@ def export_backup_payload() -> dict[str, Any]:
         "positions": positions,
         "watchlist": watchlist,
         "favorite_boards": favorite_boards,
+        "stock_blacklist": stock_blacklist,
         "review_digest": digests,
         "settings": settings,
         "trend_override": overrides,
@@ -1424,6 +1637,7 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
         "positions": 0,
         "watchlist": 0,
         "favorite_boards": 0,
+        "stock_blacklist": 0,
         "review_digest": 0,
         "settings": 0,
         "trend_override": 0,
@@ -1435,6 +1649,7 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
                 "positions",
                 "watchlist",
                 "favorite_boards",
+                "stock_blacklist",
                 "review_digest",
                 "settings",
                 "trend_override",
@@ -1517,6 +1732,40 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
                 ),
             )
             counts["favorite_boards"] += 1
+        for row in payload.get("stock_blacklist") or []:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code") or "").zfill(6)
+            if len(code) != 6 or not code.isdigit():
+                continue
+            conn.execute(
+                """
+                INSERT INTO stock_blacklist(
+                    code, name, reason, source, strike_n, clean_streak,
+                    blocked_at, updated_at, note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code) DO UPDATE SET
+                    name = excluded.name,
+                    reason = excluded.reason,
+                    source = excluded.source,
+                    strike_n = excluded.strike_n,
+                    clean_streak = excluded.clean_streak,
+                    note = excluded.note,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    code,
+                    row.get("name") or "",
+                    row.get("reason") or "",
+                    row.get("source") or "manual",
+                    int(row.get("strike_n") or 0),
+                    int(row.get("clean_streak") or 0),
+                    row.get("blocked_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    row.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    row.get("note") or "",
+                ),
+            )
+            counts["stock_blacklist"] += 1
         for row in payload.get("signals") or []:
             if not isinstance(row, dict):
                 continue

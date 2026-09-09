@@ -896,6 +896,22 @@ def apply_market_gates(
         hint = _join_hint(hint, "晚封偏多，控仓")
         notes.append("晚封偏多")
 
+    try:
+        prem = float(m.get("premium") or 0)
+    except (TypeError, ValueError):
+        prem = 0.0
+    if prem <= -1.0 and act == "可买入":
+        act = "观察回踩"
+        why = f"昨停溢价偏弱({prem:.2f}%)，降级观察回踩：{why}"
+        notes.append("负溢价闸门")
+        hint = _join_hint(hint, "负溢价控仓或不做")
+    elif prem <= 0 and act == "可买入":
+        hint = _join_hint(hint, "溢价偏弱控仓")
+        notes.append("溢价偏弱")
+    elif prem >= 3.0 and act == "可买入":
+        hint = _join_hint(hint, "溢价偏热仍防追")
+        notes.append("溢价偏热防追")
+
     if m.get("thin_volume") and act == "可买入":
         act = "观察回踩"
         why = f"成交额分位偏低，防缩量假强：{why}"
@@ -1297,6 +1313,8 @@ def _stock_candidates(
     zb: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Pick unsealed main-board pullbacks from the live mainline constituent pool."""
+    from market_desk.db import load_blacklist_codes
+
     sealed = {normalize_code(x.get("code")) for x in zt}
     broken = {normalize_code(x.get("code")) for x in (zb or [])}
     boards_by = {
@@ -1309,11 +1327,12 @@ def _stock_candidates(
         normalize_code(main.get("leader_code")),
         normalize_code(main.get("slot_code")),
     }
+    blocked = load_blacklist_codes()
     pool = list(main.get("pool") or main.get("members") or [])
     scored: list[tuple[float, dict[str, Any]]] = []
     for member in pool:
         item = _score_stock(
-            member, sealed, boards_by, skip, broken, explode_by, strict=True
+            member, sealed, boards_by, skip, broken, explode_by, blocked, strict=True
         )
         if item:
             scored.append(item)
@@ -1323,7 +1342,7 @@ def _stock_candidates(
             if any(code == normalize_code(x[1].get("code")) for x in scored):
                 continue
             item = _score_stock(
-                member, sealed, boards_by, skip, broken, explode_by, strict=False
+                member, sealed, boards_by, skip, broken, explode_by, blocked, strict=False
             )
             if item:
                 scored.append(item)
@@ -1338,6 +1357,7 @@ def _score_stock(
     skip: set[str],
     broken: set[str],
     explode_by: dict[str, int],
+    blocked: set[str] | None = None,
     *,
     strict: bool,
 ) -> tuple[float, dict[str, Any]] | None:
@@ -1350,6 +1370,8 @@ def _score_stock(
     price = member.get("price")
     high = member.get("high")
     if not code or price in (None, 0) or not is_main_board(code) or is_st(name):
+        return None
+    if blocked and code in blocked:
         return None
     if code in skip or code in sealed or code in broken:
         return None
@@ -2228,6 +2250,9 @@ def build_deltas(current: dict[str, Any], previous: dict[str, Any] | None) -> li
         _delta("跌停", cur_m.get("dt"), prev_m.get("dt"), 0, invert=True),
         _delta("炸板%", cur_m.get("zb_rate"), prev_m.get("zb_rate"), 1, invert=True),
         _delta("晋级%", cur_m.get("promotion"), prev_m.get("promotion"), 1),
+        _delta("1→2%", cur_m.get("promo_1_2"), prev_m.get("promo_1_2"), 1),
+        _delta("2→3%", cur_m.get("promo_2_3"), prev_m.get("promo_2_3"), 1),
+        _delta("溢价%", cur_m.get("premium"), prev_m.get("premium"), 2),
         _delta("主线", cur_ml.get("pct"), prev_ml.get("pct"), 2, unit="%"),
         _delta("载体", cur_c.get("pct"), prev_c.get("pct"), 2, unit="%"),
     ]

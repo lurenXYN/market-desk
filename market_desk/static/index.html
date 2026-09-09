@@ -1480,6 +1480,24 @@
           <tbody id="wlBody"></tbody>
         </table>
       </section>
+      <section class="card" style="margin-top:12px">
+        <h2 style="text-transform:none">高开低走黑名单<button type="button" class="q" data-term="高开低走黑名单">?</button></h2>
+        <p class="meta" id="blMeta">近10日多次高开低走会自动拉黑；连续正常约3日自动解除。也可手动加入/移除。黑名单票不进推荐。</p>
+        <form class="pos-form" id="blForm" style="grid-template-columns: 90px 140px 1fr auto;">
+          <label>代码<input name="code" placeholder="600519" maxlength="6" required /></label>
+          <label>名称<input name="name" placeholder="可空" /></label>
+          <label class="wide">备注<input name="note" placeholder="可选原因" /></label>
+          <button type="submit">加入黑名单</button>
+        </form>
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th><th>代码</th><th>来源</th><th>原因</th><th>打击</th><th>正常日</th><th>加入时间</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="blBody"></tbody>
+        </table>
+      </section>
       <section class="card watch-card" style="margin-top:12px">
         <h2>异动观察池<button type="button" class="q" data-term="异动">?</button></h2>
         <p class="meta">涨停 / 炸板 / 跌停 / 高换手分组展示，最多24只，一次展全。非买点；可一键加入自选。</p>
@@ -1760,7 +1778,13 @@
     };
     const termHtml = (name) => {
       if (!name) return "";
-      const key = ({ "炸板%": "炸板", "晋级%": "晋级率" })[name] || name;
+      const key = ({
+        "炸板%": "炸板",
+        "晋级%": "晋级率",
+        "1→2%": "晋级1→2",
+        "2→3%": "晋级2→3",
+        "溢价%": "昨停溢价",
+      })[name] || name;
       if (!GLOSSARY[key]) return name;
       return `${name}<button type="button" class="q" data-term="${key}">?</button>`;
     };
@@ -2281,6 +2305,33 @@
           <td><button type="button" class="pos-del wl-del" data-id="${w.id}">删除</button></td>
         </tr>`;
       }).join("") || `<tr><td colspan="9" class="meta">暂无自选。上方填代码加入。</td></tr>`;
+      const bl = d.stock_blacklist || {};
+      const blItems = bl.items || [];
+      const blMeta = document.getElementById("blMeta");
+      if (blMeta) {
+        const bits = [];
+        if (bl.flagged_today != null) bits.push(`今日高开低走 ${bl.flagged_today} 只`);
+        if (bl.scanned != null) bits.push(`已扫描 ${bl.scanned}`);
+        bits.push(`黑名单 ${blItems.length} 只 · 不进个股推荐`);
+        blMeta.textContent = bits.join(" · ")
+          + "。近10日多次自动拉黑；自动项连续正常约3日解除；手动项需点移除。";
+      }
+      const blBody = document.getElementById("blBody");
+      if (blBody) {
+        blBody.innerHTML = blItems.map((b) => {
+          const src = b.source === "manual" ? "手动" : "自动";
+          return `<tr>
+            <td>${tickerHtml(b.name, b.code)}</td>
+            <td>${b.code || ""}</td>
+            <td>${src}</td>
+            <td class="meta">${b.reason || b.note || "—"}</td>
+            <td>${b.strike_n ?? "—"}</td>
+            <td>${b.clean_streak ?? 0}</td>
+            <td class="meta">${(b.blocked_at || "").slice(0, 16) || "—"}</td>
+            <td><button type="button" class="pos-del bl-del" data-code="${b.code || ""}">移除</button></td>
+          </tr>`;
+        }).join("") || `<tr><td colspan="8" class="meta">暂无黑名单。可手动加入，或等系统识别常高开低走。</td></tr>`;
+      }
       const sum = d.position_summary || {};
       const risk = d.risk_overview || sum;
       const floatPnl = sum.floating_pnl != null ? sum.floating_pnl : sum.pnl;
@@ -3016,6 +3067,7 @@
         `<li>相位 ${det.phase || "—"} · 温度 ${det.temperature ?? "—"}</li>`,
         `<li class="hot">涨停 ${det.zt ?? "—"} / 跌停 ${det.dt ?? "—"} · 涨跌 ${det.ups ?? "—"}/${det.downs ?? "—"}</li>`,
         `<li>高度 ${det.height ?? "—"} · 晋级% ${det.promotion ?? "—"} · 炸板% ${det.zb_rate ?? "—"}</li>`,
+        `<li>1→2 ${det.promo_1_2 ?? "—"}% · 2→3 ${det.promo_2_3 ?? "—"}% · 梯队 ${det.ladder_fill ?? "—"}${det.ladder_gap ? "·断" : ""}</li>`,
         `<li>昨停溢价 ${det.premium ?? "—"} · 成交亿 ${det.amount_yi ?? "—"}</li>`,
         det.event ? `<li class="warn">${det.event}</li>` : "",
       ].filter(Boolean).join("");
@@ -3375,6 +3427,50 @@
       await fetch("/api/watchlist/" + id, { method: "DELETE" });
       await tick();
     });
+    const blForm = document.getElementById("blForm");
+    if (blForm) {
+      blForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        try {
+          const r = await fetch("/api/blacklist", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: f.code.value.trim(),
+              name: f.name.value.trim(),
+              note: f.note.value.trim(),
+              reason: "手动加入",
+            }),
+          });
+          if (!r.ok) {
+            alert("加入黑名单失败");
+            return;
+          }
+          f.reset();
+          await tick();
+          applyMain("watch");
+        } catch (e) {
+          alert("加入黑名单失败");
+        }
+      });
+    }
+    const blBodyEl = document.getElementById("blBody");
+    if (blBodyEl) {
+      blBodyEl.addEventListener("click", async (ev) => {
+        const del = ev.target.closest(".bl-del");
+        if (!del) return;
+        const code = (del.getAttribute("data-code") || "").trim();
+        if (!code) return;
+        if (!confirm("从黑名单移除 " + code + "？")) return;
+        const r = await fetch("/api/blacklist/" + code, { method: "DELETE" });
+        if (!r.ok) {
+          alert("移除失败");
+          return;
+        }
+        await tick();
+      });
+    }
     document.getElementById("panel-boards").addEventListener("click", async (ev) => {
       const btn = ev.target.closest(".fav-btn");
       if (!btn) return;
@@ -3654,10 +3750,10 @@
       ] },
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "对照主线", "股东户数", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
-        "相似日", "分时确认", "健康度",
+        "相似日", "分时确认", "健康度", "高开低走黑名单",
       ] },
       { id: "market", label: "大盘指标", keys: [
-        "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "昨停溢价",
+        "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "晋级1→2", "晋级2→3", "梯队", "昨停溢价",
         "成交分位", "周期位置", "竞价基调",
       ] },
     ];

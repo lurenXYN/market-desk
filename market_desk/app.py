@@ -17,11 +17,13 @@ from market_desk.config import STATIC_DIR
 from market_desk.db import (
     add_position,
     add_favorite_board,
+    add_stock_blacklist,
     add_watchlist,
     delete_favorite_board,
     delete_favorite_board_by_bk,
     delete_position,
     delete_signal,
+    delete_stock_blacklist,
     delete_watchlist,
     export_backup_payload,
     import_backup_payload,
@@ -30,6 +32,7 @@ from market_desk.db import (
     load_positions,
     load_signal,
     load_signals,
+    load_stock_blacklist,
     load_watchlist,
     trim_position,
     update_signal_meta,
@@ -129,6 +132,15 @@ class FavoriteBoardIn(BaseModel):
     name: str = ""
     kind: str = ""
     note: str = ""
+
+
+class BlacklistIn(BaseModel):
+    """Payload for manually adding a stock blacklist ticker."""
+
+    code: str
+    name: str = ""
+    note: str = ""
+    reason: str = ""
 
 
 class BackupIn(BaseModel):
@@ -560,6 +572,61 @@ def remove_favorite_board(item_id: int) -> dict:
     if not delete_favorite_board(item_id):
         raise HTTPException(404, "favorite board not found")
     return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
+
+
+@app.get("/api/blacklist")
+def list_blacklist() -> dict:
+    """Return the active stock blacklist."""
+    rows = load_stock_blacklist()
+    snap = (engine.snapshot or {}).get("stock_blacklist") or {}
+    return {
+        "ok": True,
+        "items": rows,
+        "flagged_today": snap.get("flagged_today"),
+        "scanned": snap.get("scanned"),
+    }
+
+
+@app.post("/api/blacklist")
+def create_blacklist(body: BlacklistIn) -> dict:
+    """Manually add one ticker to the blacklist."""
+    code = normalize_code(body.code)
+    if len(code) != 6 or not code.isdigit():
+        raise HTTPException(400, "code must be a 6-digit ticker")
+    try:
+        row = add_stock_blacklist(
+            code,
+            body.name.strip(),
+            reason=body.reason.strip() or "手动加入",
+            source="manual",
+            note=body.note.strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    rows = load_stock_blacklist()
+    if isinstance(engine.snapshot, dict):
+        engine.snapshot["stock_blacklist"] = {
+            **(engine.snapshot.get("stock_blacklist") or {}),
+            "items": rows,
+            "codes": [str(r.get("code") or "").zfill(6) for r in rows],
+        }
+    return {"ok": True, "item": row, "items": rows}
+
+
+@app.delete("/api/blacklist/{code}")
+def remove_blacklist(code: str) -> dict:
+    """Remove one ticker from the blacklist."""
+    c = normalize_code(code)
+    if not delete_stock_blacklist(c):
+        raise HTTPException(404, "blacklist item not found")
+    rows = load_stock_blacklist()
+    if isinstance(engine.snapshot, dict):
+        engine.snapshot["stock_blacklist"] = {
+            **(engine.snapshot.get("stock_blacklist") or {}),
+            "items": rows,
+            "codes": [str(r.get("code") or "").zfill(6) for r in rows],
+        }
+    return {"ok": True, "items": rows}
 
 
 @app.get("/api/report/today")
