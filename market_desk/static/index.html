@@ -2416,7 +2416,6 @@
       { id: "holder_n", label: "股东户数" },
       { id: "holder_chg", label: "户数增减%" },
       { id: "holder_avg", label: "户均市值" },
-      { id: "ytd_zt", label: "今年涨停" },
       { id: "day1", label: "次日%" },
       { id: "day3", label: "三日%" },
       { id: "result", label: "结果" },
@@ -2557,19 +2556,6 @@
       if (col === "holder_avg") {
         const tip = r.holder_end ? `统计截止 ${r.holder_end}` : "户均持股市值";
         return `<span title="${tip}">${fmtHolderAvgWan(r.holder_avg_wan)}</span>`;
-      }
-      if (col === "ytd_zt") {
-        const n = r.ytd_zt_n;
-        if (n == null) return "—";
-        const yr = r.ytd_zt_year || "";
-        const asOf = r.ytd_zt_as_of || "";
-        const streak = r.ytd_zt_max_streak;
-        const tip = [
-          yr ? `${yr}年截至 ${asOf || "—"}` : (asOf ? `截至 ${asOf}` : "日历年累计涨停日"),
-          streak != null ? `最长连板 ${streak}` : "",
-          "日涨幅达涨停阈值计1次；ETF无",
-        ].filter(Boolean).join(" · ");
-        return `<span title="${tip}">${n}</span>`;
       }
       if (col === "day1") {
         const d1 = r.outcome_day1_pct;
@@ -2849,7 +2835,7 @@
         const r = await fetch("/api/review" + q);
         const d = await r.json();
         paintReview(d);
-        reviewLoadedAt = now;
+        reviewLoadedAt = Date.now();
       } catch (e) {
         const n = Math.max(visibleRevCols().length, 1);
         document.getElementById("revBody").innerHTML =
@@ -3507,7 +3493,7 @@
         "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
       ] },
       { id: "review", label: "复盘/观察", keys: [
-        "信号复盘", "对照主线", "股东户数", "今年涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
+        "信号复盘", "对照主线", "股东户数", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度",
       ] },
       { id: "market", label: "大盘指标", keys: [
@@ -3704,7 +3690,6 @@
         if (id === "holder_n") return r.holder_num ?? "";
         if (id === "holder_chg") return r.holder_chg_pct ?? "";
         if (id === "holder_avg") return r.holder_avg_wan ?? "";
-        if (id === "ytd_zt") return r.ytd_zt_n ?? "";
         if (id === "day1") return r.outcome_day1_pct;
         if (id === "day3") return r.outcome_day3_pct;
         if (id === "result") return r.outcome_label;

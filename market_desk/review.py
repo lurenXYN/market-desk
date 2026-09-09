@@ -236,29 +236,6 @@ def enrich_signals_with_holders(
     return out
 
 
-def enrich_signals_with_ytd_limit_ups(
-    rows: list[dict[str, Any]],
-    ytd_by_code: dict[str, dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """Attach year-to-date limit-up counts onto review signal rows."""
-    by_code = ytd_by_code or {}
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        code = normalize_code(item.get("code"))
-        kind = str(item.get("kind") or "")
-        if kind == "etf" or not code:
-            out.append(item)
-            continue
-        y = by_code.get(code) or {}
-        item["ytd_zt_n"] = y.get("ytd_zt_n")
-        item["ytd_zt_max_streak"] = y.get("ytd_zt_max_streak")
-        item["ytd_zt_as_of"] = y.get("ytd_zt_as_of")
-        item["ytd_zt_year"] = y.get("ytd_zt_year")
-        out.append(item)
-    return out
-
-
 def enrich_signals_with_boards(
     rows: list[dict[str, Any]],
     boards: list[dict[str, Any]] | None,
@@ -1027,7 +1004,6 @@ def build_review_payload(
     live_mainline: str | None = None,
     vs_mainline_mode: str | None = None,
     holders: dict[str, dict[str, Any]] | None = None,
-    ytd_limit_ups: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Load one trade-date's signals plus global summary for the review tab."""
     calendar_today = datetime.now().strftime("%Y-%m-%d")
@@ -1057,8 +1033,6 @@ def build_review_payload(
     )
     if holders:
         day_rows = enrich_signals_with_holders(day_rows, holders)
-    if ytd_limit_ups:
-        day_rows = enrich_signals_with_ytd_limit_ups(day_rows, ytd_limit_ups)
     day_phase = phase
     if not day_phase and day_rows:
         day_phase = str(day_rows[0].get("phase") or "") or None

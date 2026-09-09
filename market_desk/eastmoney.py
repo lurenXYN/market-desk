@@ -14,7 +14,7 @@ from market_desk.config import (
     HTTP_HEADERS,
     ZT_UT,
 )
-from market_desk.filters import is_limit_up, is_main_board, normalize_code
+from market_desk.filters import is_main_board, normalize_code
 from market_desk.numbers import num
 
 
@@ -317,22 +317,28 @@ async def fetch_daily_bars(
     limit: int = 60,
     *,
     adjust: int = 1,
+    beg: str | None = None,
+    end: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch daily OHLCV bars (oldest → newest).
 
     ``adjust`` maps to East Money ``fqt``: 0=none, 1=forward, 2=backward.
     When present, the exchange daily percent change is parsed into ``pct``.
+    Optional ``beg`` / ``end`` (YYYY-MM-DD or YYYYMMDD) shrink the window.
     """
     c = normalize_code(code)
     if not c:
         return []
     fqt = 0 if int(adjust) <= 0 else (2 if int(adjust) >= 2 else 1)
+    end_s = str(end or "20500101").replace("-", "")[:8] or "20500101"
+    beg_s = str(beg or "").replace("-", "")[:8]
+    beg_q = f"&beg={beg_s}" if len(beg_s) == 8 else ""
     url = (
         "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
         "&fields1=f1,f2,f3,f4,f5,f6"
         "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-        f"&klt=101&fqt={fqt}&end=20500101&lmt={limit}"
+        f"&klt=101&fqt={fqt}{beg_q}&end={end_s}&lmt={limit}"
     )
     try:
         payload = await _get_json(client, url)
@@ -464,123 +470,6 @@ async def fetch_daily_klines_many(
 # Shareholder counts move quarterly; cache aggressively to keep review snappy.
 _HOLDER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _HOLDER_CACHE_TTL_SEC = 6 * 3600
-
-# YTD limit-up counts change at most once per session day.
-_YTD_ZT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_YTD_ZT_CACHE_TTL_SEC = 6 * 3600
-
-
-def _ytd_zt_cache_key(code: str, as_of: str) -> str:
-    """Build a cache key scoped to code + as-of date (year-to-date window)."""
-    return f"{normalize_code(code)}:{str(as_of or '')[:10]}"
-
-
-def count_ytd_limit_ups(
-    bars: list[dict[str, Any]] | None,
-    *,
-    name: str | None = None,
-    as_of: str | None = None,
-) -> dict[str, Any]:
-    """Count calendar-year limit-up days from daily bars through ``as_of``.
-
-    A day counts when the bar's percent change clears the ST-aware limit-up
-    threshold. Also tracks the longest consecutive limit-up streak in-window.
-    """
-    day = str(as_of or "").strip()[:10]
-    if len(day) < 4:
-        from datetime import date as _date
-
-        day = _date.today().isoformat()
-    year = day[:4]
-    year_start = f"{year}-01-01"
-    count = 0
-    streak = 0
-    max_streak = 0
-    sample_n = 0
-    for bar in bars or []:
-        d = str(bar.get("date") or "")[:10]
-        if not d or d < year_start or d > day:
-            continue
-        sample_n += 1
-        pct = bar.get("pct")
-        if pct is None:
-            continue
-        if is_limit_up(name, float(pct)):
-            count += 1
-            streak += 1
-            if streak > max_streak:
-                max_streak = streak
-        else:
-            streak = 0
-    return {
-        "ytd_zt_n": None if sample_n <= 0 else count,
-        "ytd_zt_max_streak": None if sample_n <= 0 else max_streak,
-        "ytd_zt_as_of": day,
-        "ytd_zt_year": year,
-        "ytd_zt_bars": sample_n,
-    }
-
-
-async def fetch_ytd_limit_up_stats_many(
-    client: httpx.AsyncClient,
-    codes: list[str],
-    *,
-    names: dict[str, str] | None = None,
-    as_of: str | None = None,
-    limit: int = 280,
-) -> dict[str, dict[str, Any]]:
-    """Fetch year-to-date limit-up counts for equities, keyed by code.
-
-    Uses unadjusted daily bars so the percent change matches the trading day.
-    ETF / fund codes are skipped. Results are cached for several hours.
-    """
-    import time
-    from datetime import date as _date
-
-    day = str(as_of or _date.today().isoformat()).strip()[:10]
-    name_map = names or {}
-    now = time.time()
-    want: list[str] = []
-    out: dict[str, dict[str, Any]] = {}
-    for raw in codes:
-        code = normalize_code(raw)
-        if not code or not _is_equity_code(code):
-            continue
-        key = _ytd_zt_cache_key(code, day)
-        hit = _YTD_ZT_CACHE.get(key)
-        if hit and now - hit[0] < _YTD_ZT_CACHE_TTL_SEC:
-            out[code] = dict(hit[1])
-            continue
-        want.append(code)
-    if not want:
-        return out
-
-    async def _one(code: str) -> tuple[str, dict[str, Any]]:
-        bars = await fetch_daily_bars(client, code, limit=limit, adjust=0)
-        stats = count_ytd_limit_ups(
-            bars, name=name_map.get(code) or "", as_of=day
-        )
-        stats["code"] = code
-        return code, stats
-
-    # Bound concurrency to avoid East Money disconnects on large review days.
-    sem = asyncio.Semaphore(6)
-
-    async def _guarded(code: str) -> tuple[str, dict[str, Any]]:
-        async with sem:
-            try:
-                return await _one(code)
-            except Exception:
-                empty = count_ytd_limit_ups([], name="", as_of=day)
-                empty["code"] = code
-                empty["ytd_zt_n"] = None
-                return code, empty
-
-    pairs = await asyncio.gather(*[_guarded(c) for c in want])
-    for code, stats in pairs:
-        _YTD_ZT_CACHE[_ytd_zt_cache_key(code, day)] = (now, dict(stats))
-        out[code] = stats
-    return out
 
 
 def _is_equity_code(code: str) -> bool:
