@@ -265,7 +265,7 @@ def build_verdict(
         )
     if algo_notes:
         narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:5]) + "。"
-    return {
+    out = {
         "action": action,
         "headline": headline,
         "meaning": meaning,
@@ -318,6 +318,203 @@ def build_verdict(
         "stock_block": stock_block,
         "similar": similar or {},
     }
+    out["recommend"] = mark_pullback_entries(out.get("recommend"))
+    out["side_recommend"] = mark_pullback_entries(
+        out.get("side_recommend"), observe_only=True
+    )
+    return align_action_with_ready(out)
+
+
+def _is_near_buy_price(
+    last: Any,
+    buy: Any,
+    *,
+    chase: Any = None,
+    stop: Any = None,
+    etf: bool = False,
+) -> bool:
+    """Return True when last trades near the suggested buy level."""
+    if last is None or buy is None:
+        return False
+    try:
+        last_f = float(last)
+        buy_f = float(buy)
+    except (TypeError, ValueError):
+        return False
+    if last_f <= 0 or buy_f <= 0:
+        return False
+    if chase is not None:
+        try:
+            if last_f >= float(chase):
+                return False
+        except (TypeError, ValueError):
+            pass
+    # ETF ~0.4% / stock ~0.6% above buy still counts as "near".
+    up = 0.004 if etf else 0.006
+    # Allow a deeper print through the wait band before calling it missed.
+    down = 0.008 if etf else 0.012
+    rel = (last_f - buy_f) / buy_f
+    if rel > up:
+        return False
+    if rel < -down:
+        if stop is not None:
+            try:
+                if last_f <= float(stop):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        if rel < (-0.015 if etf else -0.02):
+            return False
+    return True
+
+
+def mark_pullback_entries(
+    recommend: dict[str, Any] | None,
+    *,
+    observe_only: bool = False,
+) -> dict[str, Any]:
+    """Flag cards whose last price sits near suggested buy; optionally arm ready.
+
+    observe_only keeps side-branch cards as watch-only even when price tags the wait.
+    """
+    rec = dict(recommend or {})
+    items: list[dict[str, Any]] = []
+    hit_ready = False
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        etf = (item.get("kind") or "stock") == "etf"
+        near = _is_near_buy_price(
+            item.get("last"),
+            item.get("buy_price"),
+            chase=item.get("chase_price"),
+            stop=item.get("stop_price"),
+            etf=etf,
+        )
+        item["near_entry"] = near
+        if near:
+            try:
+                last_f = float(item["last"])
+                buy_f = float(item["buy_price"])
+                item["near_entry_pct"] = round((last_f - buy_f) / buy_f * 100.0, 2)
+            except (TypeError, ValueError, ZeroDivisionError):
+                item["near_entry_pct"] = None
+        else:
+            item["near_entry_pct"] = None
+
+        can_arm = (
+            near
+            and not observe_only
+            and not item.get("trend_down")
+        )
+        if can_arm:
+            was_ready = bool(item.get("ready"))
+            item["ready"] = True
+            hit_ready = True
+            kind_label = "ETF" if etf else "个股"
+            if not was_ready:
+                item["role_label"] = f"{kind_label} 回踩到位"
+                item["reason"] = _join_hint(
+                    str(item.get("reason") or ""),
+                    "现价贴近建议买，回踩到位可买",
+                )
+            elif "回踩到位" not in str(item.get("role_label") or ""):
+                # Keep primary/alt labels; UI badge carries the near-entry cue.
+                pass
+        hit_ready = hit_ready or bool(item.get("ready"))
+        items.append(item)
+
+    rec["items"] = items
+    if hit_ready and not observe_only:
+        rec["buy"] = True
+        if any(x.get("near_entry") and x.get("ready") for x in items):
+            title = str(rec.get("title") or "")
+            if (not title) or ("盯回踩" in title) or ("先不追" in title) or ("暂不" in title):
+                rec["title"] = "回踩到位，可买"
+            rec["size_note"] = _join_hint(
+                str(rec.get("size_note") or ""),
+                "现价已到建议买附近",
+            )
+            # Prefer a clearer headline when wait cards just armed.
+            if "回踩到位" not in str(rec.get("text") or ""):
+                primary = next((x for x in items if x.get("near_entry") and x.get("ready")), None)
+                if primary and primary.get("name"):
+                    rec["text"] = (
+                        f"回踩到位 · {primary.get('name')} {primary.get('code') or ''} "
+                        f"现价贴近建议买 {primary.get('buy_price')}"
+                    ).strip()
+    return rec
+
+
+def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep hero action aligned with card-level ready / pullback-entry state.
+
+    - Buyable with no ready cards → 观察回踩.
+    - 观察回踩 with a near-entry ready card → 可买入.
+    """
+    v = dict(verdict or {})
+    action = str(v.get("action") or "")
+    rec = dict(v.get("recommend") or {})
+    items = list(rec.get("items") or [])
+    any_ready = any(bool(x.get("ready")) for x in items)
+    any_entry = any(bool(x.get("near_entry")) and bool(x.get("ready")) for x in items)
+
+    if action in ("观察回踩", "观察") and any_entry:
+        note = "现价贴近建议买，回踩到位可买"
+        v["action"] = "可买入"
+        v["reason"] = _join_hint(str(v.get("reason") or ""), note)
+        v["meaning"] = "回踩已到建议买附近，可按卡片建议价试探（仍避开不追价）。"
+        size_hint = _join_hint(str(v.get("segment_size_hint") or ""), "回踩到位宜小仓试探")
+        v["segment_size_hint"] = size_hint
+        rec["buy"] = True
+        if not str(rec.get("title") or "").strip() or "盯回踩" in str(rec.get("title") or "") or "先不追" in str(rec.get("title") or ""):
+            rec["title"] = "回踩到位，可买"
+        rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "现价已到建议买附近")
+        v["recommend"] = rec
+        notes = list(v.get("algo_notes") or [])
+        if "回踩到位可买" not in notes:
+            notes.append("回踩到位可买")
+        v["algo_notes"] = notes
+        phase = str(v.get("phase") or "")
+        v["playbook"] = build_playbook(phase, action="可买入", size_hint=size_hint)
+        narrative = str(v.get("narrative") or "")
+        if note not in narrative:
+            v["narrative"] = (narrative.rstrip("。") + f"；{note}。") if narrative else f"{note}。"
+        return v
+
+    if action not in ("可买入", "可小仓"):
+        return v
+    if any_ready and rec.get("buy"):
+        return v
+    # No ready path left → treat as pullback watch, not a live buy.
+    note = "卡片未通过现买确认，改观察回踩防追高"
+    v["action"] = "观察回踩"
+    v["reason"] = _join_hint(str(v.get("reason") or ""), note)
+    v["meaning"] = "主线已认出来，但现买确认未过（贴尖/日线/分时等），等回踩再动手。"
+    size_hint = str(v.get("segment_size_hint") or "")
+    size_hint = _join_hint(size_hint, "先盯回踩价，不追尖")
+    v["segment_size_hint"] = size_hint
+    rec["buy"] = False
+    if not str(rec.get("title") or "").strip() or "可买" in str(rec.get("title") or ""):
+        rec["title"] = "盯回踩价，先不追"
+    rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "现买确认未过")
+    for item in items:
+        if item.get("ready"):
+            continue
+        if not item.get("role_label"):
+            kind = item.get("kind") or "stock"
+            item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
+    rec["items"] = items
+    v["recommend"] = rec
+    notes = list(v.get("algo_notes") or [])
+    if "ready对齐观察回踩" not in notes:
+        notes.append("ready对齐观察回踩")
+    v["algo_notes"] = notes
+    phase = str(v.get("phase") or "")
+    v["playbook"] = build_playbook(phase, action="观察回踩", size_hint=size_hint)
+    narrative = str(v.get("narrative") or "")
+    if note not in narrative:
+        v["narrative"] = (narrative.rstrip("。") + f"；{note}。") if narrative else f"{note}。"
+    return v
 
 
 def _build_side_branch(
@@ -411,6 +608,199 @@ def _build_side_branch(
     return info, rec
 
 
+def _resolve_board_vehicle(
+    board_name: str,
+    etfs: list[dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    """Map a board name to an ETF vehicle; soft fallback when no exact rule."""
+    if not board_name:
+        return {}, False
+    exact = etf_spec_for_name(board_name)
+    vehicle = match_mainline_etf(board_name, etfs) if exact else None
+    soft = False
+    if not vehicle:
+        soft_spec = etf_spec_soft_fallback(board_name)
+        if soft_spec:
+            _, code, name = soft_spec
+            quote = next((x for x in (etfs or []) if x.get("code") == code), None)
+            vehicle = (
+                dict(quote)
+                if quote
+                else {
+                    "code": code,
+                    "name": name,
+                    "price": None,
+                    "pct": None,
+                    "low": None,
+                    "high": None,
+                }
+            )
+            soft = True
+    return vehicle or {}, soft
+
+
+def _position_tied_to_board(
+    row: dict[str, Any],
+    board: dict[str, Any],
+    vehicle: dict[str, Any],
+    recommend: dict[str, Any] | None = None,
+) -> bool:
+    """Return True when a held name belongs to a favored board plan."""
+    code = normalize_code(row.get("code"))
+    if not code:
+        return False
+    carrier = normalize_code(vehicle.get("code"))
+    if carrier and code == carrier:
+        return True
+    pool = {
+        normalize_code(m.get("code"))
+        for m in (board.get("pool") or board.get("members") or [])
+        if m.get("code")
+    }
+    if code in pool:
+        return True
+    for item in ((recommend or {}).get("items") or []):
+        if normalize_code(item.get("code")) == code:
+            return True
+    board_name = str(board.get("name") or "")
+    held_board = str(row.get("board") or row.get("sector") or row.get("industry") or "")
+    if board_name and held_board and (board_name in held_board or held_board in board_name):
+        return True
+    return False
+
+
+def build_favorite_desk_plans(
+    *,
+    favorite_boards: list[dict[str, Any]] | None,
+    etfs: list[dict[str, Any]] | None,
+    zt: list[dict[str, Any]] | None,
+    zb: list[dict[str, Any]] | None,
+    positions: list[dict[str, Any]] | None,
+    phase: str,
+    bans: list[str] | None = None,
+    stock_block: bool = False,
+    mainline_name: str = "",
+    trade_date: str | None = None,
+) -> dict[str, Any]:
+    """Build buy/sell plans for personally favored boards on the battle desk.
+
+    Plans stay secondary to the live mainline: default to pullback watch pricing,
+    but near-entry cards can light ready inside this box only.
+    """
+    boards = list(favorite_boards or [])[:4]
+    if not boards:
+        return {"ok": True, "empty": True, "boards": [], "title": "暂无看好板块"}
+    bans = list(bans or [])
+    etfs = list(etfs or [])
+    zt = list(zt or [])
+    zb = list(zb or [])
+    positions = list(positions or [])
+    out_boards: list[dict[str, Any]] = []
+    for board in boards:
+        name = str(board.get("name") or "").strip()
+        if not name:
+            continue
+        vehicle, soft = _resolve_board_vehicle(name, etfs)
+        bounce = None
+        price = vehicle.get("price")
+        low = vehicle.get("low")
+        if price is not None and low not in (None, 0):
+            bounce = (float(price) / float(low) - 1.0) * 100.0
+        allow_stocks = not stock_block and not _blocks_chi_star_stocks(name)
+        stocks = _stock_candidates(board, zt, zb) if allow_stocks else []
+        buy = _build_recommend("观察回踩", board, vehicle, bounce, stocks, bans)
+        for item in buy.get("items") or []:
+            kind = item.get("kind") or "stock"
+            item["role_label"] = "看好ETF盯回踩" if kind == "etf" else "看好个股盯回踩"
+            item["ready"] = False
+            if item.get("wait_price") is not None:
+                item["buy_price"] = item.get("wait_price")
+        buy["buy"] = False
+        buy["title"] = f"看好 · {name}"
+        overlap = bool(mainline_name and name == mainline_name)
+        note = "看好板块回踩计划；不替代上方实时主线"
+        if overlap:
+            note = "与实时主线重合，买卖优先看上方主推"
+        if soft and vehicle.get("name"):
+            note = _join_hint(note, f"载体近似映射 {vehicle.get('name')}")
+        buy["size_note"] = _join_hint(str(buy.get("size_note") or ""), note)
+        if not (buy.get("items") or []):
+            buy["text"] = f"看好 {name} · 暂无合格回踩票，先盯板块"
+        buy = mark_pullback_entries(buy, observe_only=False)
+        buy = _attach_risk_sizing(buy)
+
+        life = classify_lifecycle(board) if board.get("name") else None
+        fake_verdict = {
+            "mainline": {
+                "name": name,
+                "bk": board.get("bk"),
+                "status": board.get("status"),
+                "lifecycle": life,
+                "pool_codes": [
+                    normalize_code(m.get("code"))
+                    for m in (board.get("pool") or board.get("members") or [])
+                    if m.get("code")
+                ][:40],
+            },
+            "carrier": {
+                "code": vehicle.get("code"),
+                "name": vehicle.get("name"),
+                "price": vehicle.get("price"),
+            },
+            "recommend": buy,
+        }
+        tied = [
+            p
+            for p in positions
+            if int(p.get("qty") or 0) > 0
+            and _position_tied_to_board(p, board, vehicle, buy)
+        ]
+        sell = build_sell_advice(tied, fake_verdict, phase, trade_date=trade_date)
+        if tied and not sell.get("items"):
+            sell = {
+                "sell": False,
+                "title": "相关持仓观望",
+                "text": f"看好 {name} 有持仓，暂无卖点",
+                "size_note": "按浮盈/回撤与板块强弱再评估",
+                "items": [],
+            }
+        elif not tied:
+            sell = {
+                "sell": False,
+                "empty": True,
+                "title": "无相关持仓",
+                "text": f"看好 {name} · 本地仓位暂无该板块票",
+                "size_note": "",
+                "items": [],
+            }
+
+        out_boards.append(
+            {
+                "name": name,
+                "bk": board.get("bk"),
+                "kind": board.get("kind"),
+                "status": board.get("status"),
+                "pct": board.get("pct"),
+                "zt_n": board.get("zt_n"),
+                "lifecycle": life,
+                "overlap_mainline": overlap,
+                "etf_soft": soft,
+                "carrier_code": vehicle.get("code"),
+                "carrier_name": vehicle.get("name"),
+                "favorite_id": board.get("favorite_id"),
+                "buy": buy,
+                "sell": sell,
+            }
+        )
+    return {
+        "ok": True,
+        "empty": not out_boards,
+        "title": "看好板块 · 推荐买卖",
+        "size_note": "默认盯回踩；现价贴近建议买时可试探。卖点只覆盖相关本地持仓。",
+        "boards": out_boards,
+    }
+
+
 def _mainline_narrative(
     *,
     board_name: str,
@@ -477,6 +867,12 @@ def apply_market_gates(
         act = "观望"
         why = f"相位恐慌，新开仓关闭：{why}"
         notes.append("恐慌禁开仓")
+
+    if phase == "高潮" and act == "可买入":
+        act = "观察回踩"
+        why = f"相位高潮，防冲高回落，先等回踩：{why}"
+        notes.append("高潮降级")
+        hint = _join_hint(hint, "高潮只兑现/等回踩，不追尖")
 
     if m.get("weak_index") and act == "可买入":
         act = "观察回踩"
@@ -733,35 +1129,22 @@ def apply_stock_daily_trends(
                 + str(marked.get("reason") or "")
             )
         elif quality in ("fetch_fail", "thin"):
-            marked["trend"] = "日线判断不出"
+            # Missing/thin kline: do not annotate or gate — data is often unavailable.
+            marked["trend"] = None
             marked["trend_ok"] = False
             marked["trend_down"] = False
-            marked["trend_unknown"] = True
+            marked["trend_unknown"] = False
             marked["trend_warn"] = None
-            marked["reason"] = (
-                f"【日线判断不出·{trend.get('label') or '行情不足'}】"
-                + str(marked.get("reason") or "")
-            )
-            if marked.get("ready"):
-                gated = True
-                marked["ready"] = False
-                if marked.get("wait_price") is not None:
-                    marked["buy_price"] = marked.get("wait_price")
-                marked["role_label"] = "个股盯回踩"
-                fails = list(marked.get("confirm_fail") or [])
-                fails.append("日线样本不足")
-                marked["confirm_fail"] = fails
-                marked["reason"] = (str(marked.get("reason") or "") + "；确认失败：日线样本不足").strip("；")
+            marked["ma5"] = None
+            marked["ma10"] = None
+            marked["ma20"] = None
         else:
-            marked["trend"] = trend.get("label") or "非上升"
+            # Confirmed non-uptrend: silent on UI, but block ready buys.
+            marked["trend"] = None
             marked["trend_ok"] = False
             marked["trend_down"] = True
             marked["trend_unknown"] = False
             marked["trend_warn"] = None
-            marked["reason"] = (
-                f"【日线非上升·{trend.get('label') or '偏弱'}】"
-                + str(marked.get("reason") or "")
-            )
             if marked.get("ready"):
                 gated = True
                 marked["ready"] = False
@@ -771,7 +1154,9 @@ def apply_stock_daily_trends(
                 fails = list(marked.get("confirm_fail") or [])
                 fails.append("日线非上升")
                 marked["confirm_fail"] = fails
-                marked["reason"] = (str(marked.get("reason") or "") + "；确认失败：日线非上升").strip("；")
+                marked["reason"] = (
+                    str(marked.get("reason") or "") + "；确认失败：日线非上升"
+                ).strip("；")
         out_items.append(marked)
 
     # Keep ETF first, then stocks in original relative order.

@@ -181,6 +181,18 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS favorite_boards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bk TEXT NOT NULL UNIQUE,
+                name TEXT,
+                kind TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS session_segment (
                 trade_date TEXT NOT NULL,
                 segment TEXT NOT NULL,
@@ -1303,12 +1315,90 @@ def delete_watchlist(item_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def add_favorite_board(
+    bk: str,
+    name: str = "",
+    *,
+    kind: str = "",
+    note: str = "",
+) -> dict[str, Any]:
+    """Insert or refresh a personally favored sector board."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    bk = str(bk or "").strip().upper()
+    if not bk.startswith("BK"):
+        raise ValueError("bk must look like BKXXXX")
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM favorite_boards WHERE bk = ?",
+            (bk,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE favorite_boards
+                SET name = COALESCE(NULLIF(?, ''), name),
+                    kind = COALESCE(NULLIF(?, ''), kind),
+                    note = ?
+                WHERE bk = ?
+                """,
+                (name, kind, note, bk),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM favorite_boards WHERE bk = ?", (bk,)).fetchone()
+            return dict(row)
+        conn.execute(
+            """
+            INSERT INTO favorite_boards(bk, name, kind, note, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (bk, name, kind, note, now),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM favorite_boards WHERE bk = ?", (bk,)).fetchone()
+        return dict(row)
+
+
+def load_favorite_boards() -> list[dict[str, Any]]:
+    """Return personally favored boards, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, bk, name, kind, note, created_at
+            FROM favorite_boards
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_favorite_board(item_id: int) -> bool:
+    """Delete one favored board by id."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM favorite_boards WHERE id = ?", (int(item_id),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def delete_favorite_board_by_bk(bk: str) -> bool:
+    """Delete one favored board by East Money board code."""
+    bk = str(bk or "").strip().upper()
+    if not bk:
+        return False
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM favorite_boards WHERE bk = ?", (bk,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def export_backup_payload() -> dict[str, Any]:
     """Export core local tables as a JSON-serializable backup dict."""
     with _connect() as conn:
         signals = [dict(r) for r in conn.execute("SELECT * FROM signals ORDER BY id").fetchall()]
         positions = [dict(r) for r in conn.execute("SELECT * FROM positions ORDER BY id").fetchall()]
         watchlist = [dict(r) for r in conn.execute("SELECT * FROM watchlist ORDER BY id").fetchall()]
+        favorite_boards = [
+            dict(r) for r in conn.execute("SELECT * FROM favorite_boards ORDER BY id").fetchall()
+        ]
         digests = [dict(r) for r in conn.execute("SELECT * FROM review_digest ORDER BY trade_date").fetchall()]
         settings = [dict(r) for r in conn.execute("SELECT * FROM settings").fetchall()]
         overrides = [dict(r) for r in conn.execute("SELECT * FROM trend_override").fetchall()]
@@ -1318,6 +1408,7 @@ def export_backup_payload() -> dict[str, Any]:
         "signals": signals,
         "positions": positions,
         "watchlist": watchlist,
+        "favorite_boards": favorite_boards,
         "review_digest": digests,
         "settings": settings,
         "trend_override": overrides,
@@ -1332,6 +1423,7 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
         "signals": 0,
         "positions": 0,
         "watchlist": 0,
+        "favorite_boards": 0,
         "review_digest": 0,
         "settings": 0,
         "trend_override": 0,
@@ -1342,6 +1434,7 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
                 "signals",
                 "positions",
                 "watchlist",
+                "favorite_boards",
                 "review_digest",
                 "settings",
                 "trend_override",
@@ -1400,6 +1493,30 @@ def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> 
                 ),
             )
             counts["watchlist"] += 1
+        for row in payload.get("favorite_boards") or []:
+            if not isinstance(row, dict):
+                continue
+            bk = str(row.get("bk") or "").strip().upper()
+            if not bk.startswith("BK"):
+                continue
+            conn.execute(
+                """
+                INSERT INTO favorite_boards(bk, name, kind, note, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(bk) DO UPDATE SET
+                    name = excluded.name,
+                    kind = excluded.kind,
+                    note = excluded.note
+                """,
+                (
+                    bk,
+                    row.get("name") or "",
+                    row.get("kind") or "",
+                    row.get("note") or "",
+                    row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["favorite_boards"] += 1
         for row in payload.get("signals") or []:
             if not isinstance(row, dict):
                 continue

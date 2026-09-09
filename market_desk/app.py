@@ -16,13 +16,17 @@ from pydantic import BaseModel, Field
 from market_desk.config import STATIC_DIR
 from market_desk.db import (
     add_position,
+    add_favorite_board,
     add_watchlist,
+    delete_favorite_board,
+    delete_favorite_board_by_bk,
     delete_position,
     delete_signal,
     delete_watchlist,
     export_backup_payload,
     import_backup_payload,
     is_t1_locked,
+    load_favorite_boards,
     load_positions,
     load_signal,
     load_signals,
@@ -116,6 +120,15 @@ class WatchlistIn(BaseModel):
     suggest_price: float | None = Field(default=None, gt=0)
     stop_price: float | None = Field(default=None, gt=0)
     chase_price: float | None = Field(default=None, gt=0)
+
+
+class FavoriteBoardIn(BaseModel):
+    """Payload for adding a personally favored sector board."""
+
+    bk: str
+    name: str = ""
+    kind: str = ""
+    note: str = ""
 
 
 class BackupIn(BaseModel):
@@ -506,6 +519,47 @@ def remove_watchlist(item_id: int) -> dict:
     if not delete_watchlist(item_id):
         raise HTTPException(404, "watchlist item not found")
     return {"ok": True, "watchlist": engine.sync_watchlist()}
+
+
+@app.get("/api/favorite-boards")
+def list_favorite_boards() -> dict:
+    """Return personally favored boards from the live snapshot."""
+    rows = engine.sync_favorite_boards()
+    return {"ok": True, "favorite_boards": rows, "stored": load_favorite_boards()}
+
+
+@app.post("/api/favorite-boards")
+def create_favorite_board(body: FavoriteBoardIn) -> dict:
+    """Add or refresh one favored sector board."""
+    bk = str(body.bk or "").strip().upper()
+    if not bk.startswith("BK") or len(bk) < 4:
+        raise HTTPException(400, "bk must look like BKXXXX")
+    try:
+        add_favorite_board(
+            bk,
+            body.name.strip(),
+            kind=body.kind.strip(),
+            note=body.note.strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
+
+
+@app.delete("/api/favorite-boards/by-bk/{bk}")
+def remove_favorite_board_bk(bk: str) -> dict:
+    """Delete one favored board by East Money board code."""
+    if not delete_favorite_board_by_bk(bk):
+        raise HTTPException(404, "favorite board not found")
+    return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
+
+
+@app.delete("/api/favorite-boards/{item_id}")
+def remove_favorite_board(item_id: int) -> dict:
+    """Delete one favored board by id."""
+    if not delete_favorite_board(item_id):
+        raise HTTPException(404, "favorite board not found")
+    return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
 
 
 @app.get("/api/report/today")

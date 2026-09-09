@@ -144,6 +144,7 @@ def apply_minute_confirmations(
         item["minute"] = verdict
         if not item.get("ready"):
             continue
+        # Only explicit fails clear ready. None = thin sample / fetch miss → skip gate.
         if verdict.get("ok") is False:
             changed = True
             item["ready"] = False

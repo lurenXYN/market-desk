@@ -31,6 +31,7 @@ from market_desk.db import (
     load_auction,
     load_board_hist_map,
     load_daily,
+    load_favorite_boards,
     load_mainline_switches,
     load_positions,
     load_session_segments,
@@ -98,12 +99,15 @@ from market_desk.sentiment import (
 )
 from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
 from market_desk.verdict import (
+    align_action_with_ready,
     apply_stock_daily_trends,
     build_deltas,
+    build_favorite_desk_plans,
     build_risk_overview,
     build_sell_advice,
     build_verdict,
     decorate_positions,
+    mark_pullback_entries,
     position_summary,
 )
 
@@ -181,6 +185,55 @@ class DeskEngine:
         self.snapshot["watchlist"] = rows
         return rows
 
+    def sync_favorite_boards(self) -> list[dict[str, Any]]:
+        """Reload favored boards into the live snapshot without a full refresh."""
+        rows = load_favorite_boards()
+        cards = list(self.snapshot.get("favorite_boards") or [])
+        by_bk = {str(c.get("bk") or "").upper(): c for c in cards if c.get("bk")}
+        for pool in ("hot_boards", "pin_boards", "ice_boards"):
+            for c in self.snapshot.get(pool) or []:
+                bk = str(c.get("bk") or "").upper()
+                if bk and bk not in by_bk:
+                    by_bk[bk] = c
+        out: list[dict[str, Any]] = []
+        fav_bks = {str(r.get("bk") or "").upper() for r in rows if r.get("bk")}
+        for row in rows:
+            bk = str(row.get("bk") or "").upper()
+            hit = by_bk.get(bk)
+            if hit:
+                card = dict(hit)
+            else:
+                card = {
+                    "bk": bk,
+                    "name": row.get("name") or bk,
+                    "kind": row.get("kind") or "",
+                    "pct": None,
+                    "status": "观察",
+                    "headline": "已加入看好，下一轮刷新后补全行情",
+                    "tone": "slate",
+                    "members": [],
+                    "tags": [],
+                    "spark": [],
+                    "note": row.get("note") or "",
+                }
+            card["favorite_id"] = row.get("id")
+            card["favorite_note"] = row.get("note") or ""
+            card["in_favorite"] = True
+            out.append(card)
+        self.snapshot["favorite_boards"] = out
+        for pool in ("hot_boards", "pin_boards", "ice_boards", "favorite_boards"):
+            for card in self.snapshot.get(pool) or []:
+                bk = str(card.get("bk") or "").upper()
+                card["in_favorite"] = bk in fav_bks
+                if card["in_favorite"]:
+                    match = next(
+                        (r for r in rows if str(r.get("bk") or "").upper() == bk),
+                        None,
+                    )
+                    if match:
+                        card["favorite_id"] = match.get("id")
+        return out
+
     async def _loop(self) -> None:
         first = True
         while True:
@@ -247,6 +300,9 @@ class DeskEngine:
                 hot_cards = await self._hot_cards(client, boards, ctx)
                 pin_cards = await self._pin_cards(client, boards, hot_cards, ctx)
                 ice_cards = await self._ice_cards(client, boards, hot_cards, ctx)
+                fav_rows = load_favorite_boards()
+                fav_cards = await self._favorite_cards(client, boards, fav_rows, ctx)
+                _mark_favorite_flags(hot_cards + pin_cards + ice_cards + fav_cards, fav_rows)
                 purge_stale_closed_positions(trade_date_dash)
                 pos_rows = load_positions()
                 wl_rows = load_watchlist()
@@ -264,7 +320,7 @@ class DeskEngine:
             note_quote_ticks(etfs)
             note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
             contagion = _contagion(ice_cards)
-            save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards)
+            save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards + fav_cards)
             if not isinstance(pos_quote_map, dict):
                 pos_quote_map = {}
             positions = decorate_positions(pos_rows, pos_quote_map, trade_date=trade_date_dash)
@@ -322,6 +378,14 @@ class DeskEngine:
             )
             await self._apply_recommend_trends(client, verdict, trade_date_dash)
             await self._apply_recommend_minutes(client, verdict)
+            # Tag cards near suggested buy; day/minute gates may clear ready first.
+            verdict["recommend"] = mark_pullback_entries(verdict.get("recommend"))
+            verdict["side_recommend"] = mark_pullback_entries(
+                verdict.get("side_recommend"), observe_only=True
+            )
+            aligned = align_action_with_ready(verdict)
+            verdict.clear()
+            verdict.update(aligned)
             updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
             try:
                 self._persist_session_context(
@@ -361,6 +425,7 @@ class DeskEngine:
                 "hot_boards": hot_cards,
                 "pin_boards": pin_cards,
                 "ice_boards": ice_cards,
+                "favorite_boards": fav_cards,
                 "contagion": contagion,
                 "history": history,
                 "cycle": cycle,
@@ -368,7 +433,7 @@ class DeskEngine:
                 "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
                 "watch": _decorate_watch_pool(
                     _watch_pool(zt, zb, quotes),
-                    list(hot_cards) + list(pin_cards),
+                    list(hot_cards) + list(pin_cards) + list(fav_cards),
                     ((verdict.get("mainline") or {}).get("name")) or "",
                     {
                         normalize_code(w.get("code"))
@@ -392,6 +457,20 @@ class DeskEngine:
                 ),
                 "glossary": GLOSSARY,
             }
+            fav_desk = build_favorite_desk_plans(
+                favorite_boards=fav_cards,
+                etfs=etfs,
+                zt=zt,
+                zb=zb,
+                positions=positions,
+                phase=phase,
+                bans=list((verdict.get("bans") or [])),
+                stock_block=bool(verdict.get("stock_block")),
+                mainline_name=str(((verdict.get("mainline") or {}).get("name")) or ""),
+                trade_date=trade_date_dash,
+            )
+            await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
+            payload["favorite_desk"] = fav_desk
             payload["health"] = _build_health(now, errors, updated_at, payload)
             payload["deltas"] = build_deltas(payload, prev)
             payload["morning_brief"] = build_morning_brief(payload)
@@ -614,6 +693,55 @@ class DeskEngine:
                     item["buy_price"] = item.get("wait_price")
             verdict["side_recommend"]["buy"] = False
 
+    async def _apply_favorite_desk_trends(
+        self,
+        client: httpx.AsyncClient,
+        fav_desk: dict[str, Any],
+        trade_date: str,
+    ) -> None:
+        """Apply daily-trend gates to favorite-desk stock buy cards."""
+        boards = list((fav_desk or {}).get("boards") or [])
+        if not boards:
+            return
+        codes: list[str] = []
+        for board in boards:
+            buy = board.get("buy") or {}
+            for item in buy.get("items") or []:
+                if item.get("kind") == "stock" and item.get("code"):
+                    codes.append(str(item.get("code") or ""))
+        codes = list(dict.fromkeys(codes))
+        if not codes:
+            for board in boards:
+                board["buy"] = mark_pullback_entries(board.get("buy"), observe_only=False)
+            return
+        now_ts = datetime.now(CN_TZ).timestamp()
+        need: list[str] = []
+        closes_by_code: dict[str, list[float]] = {}
+        fetch_ok_by_code: dict[str, bool] = {}
+        for code in codes:
+            hit = self._kline_cache.get(code)
+            if hit and now_ts - hit[0] < 300:
+                closes_by_code[code] = hit[1]
+                fetch_ok_by_code[code] = bool(hit[1])
+            else:
+                need.append(code)
+        if need:
+            fetched = await fetch_daily_closes_many(client, need, limit=60)
+            for code in need:
+                closes = fetched.get(code) or []
+                self._kline_cache[code] = (now_ts, closes)
+                closes_by_code[code] = closes
+                fetch_ok_by_code[code] = bool(closes)
+        overrides = load_trend_overrides(trade_date)
+        for board in boards:
+            buy = apply_stock_daily_trends(
+                board.get("buy") or {},
+                closes_by_code,
+                fetch_ok_by_code,
+                overrides,
+            )
+            board["buy"] = mark_pullback_entries(buy, observe_only=False)
+
     async def _apply_recommend_minutes(
         self,
         client: httpx.AsyncClient,
@@ -684,7 +812,8 @@ class DeskEngine:
                 rec, closes_by_code, fetch_ok_by_code, overrides
             )
             if self.snapshot.get("verdict"):
-                self.snapshot["verdict"]["recommend"] = new_rec
+                self.snapshot["verdict"]["recommend"] = mark_pullback_entries(new_rec)
+                self.snapshot["verdict"] = align_action_with_ready(self.snapshot["verdict"])
             try:
                 record_session_signals(self.snapshot)
             except Exception:
@@ -770,6 +899,53 @@ class DeskEngine:
             out.append(card)
         return out
 
+    async def _favorite_cards(
+        self,
+        client: httpx.AsyncClient,
+        boards: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+        ctx: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Enrich personally favored boards from the live board universe."""
+        if not rows:
+            return []
+        by_bk = {
+            str(b.get("bk") or "").upper(): b
+            for b in boards
+            if b.get("bk")
+        }
+        # Cap enrich fan-out; keep newest favorites first (rows already DESC).
+        picked = rows[:12]
+        out: list[dict[str, Any]] = []
+        for row in picked:
+            bk = str(row.get("bk") or "").upper()
+            if not bk:
+                continue
+            match = by_bk.get(bk)
+            if not match:
+                match = {
+                    "bk": bk,
+                    "name": row.get("name") or bk,
+                    "kind": row.get("kind") or "industry",
+                    "pct": None,
+                    "amount": None,
+                    "up_count": 0,
+                    "down_count": 0,
+                    "leader_name": "",
+                    "leader_code": "",
+                    "leader_pct": None,
+                }
+            card = await _enrich_board(client, dict(match), ctx)
+            if not card:
+                continue
+            card["favorite_id"] = row.get("id")
+            card["favorite_note"] = row.get("note") or ""
+            card["in_favorite"] = True
+            if row.get("note"):
+                card["note"] = _join_board_note(card.get("note"), f"看好备注：{row.get('note')}")
+            out.append(card)
+        return out
+
     async def _ice_cards(
         self,
         client: httpx.AsyncClient,
@@ -815,6 +991,37 @@ def _pick_pin_board(
     if contains:
         return max(contains, key=lambda b: b.get("pct") or 0)
     return None
+
+
+def _mark_favorite_flags(
+    cards: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> None:
+    """Stamp in_favorite / favorite_id onto board cards."""
+    by_bk = {
+        str(r.get("bk") or "").upper(): r
+        for r in rows
+        if r.get("bk")
+    }
+    for card in cards:
+        bk = str(card.get("bk") or "").upper()
+        row = by_bk.get(bk)
+        card["in_favorite"] = bool(row)
+        if row:
+            card["favorite_id"] = row.get("id")
+            if row.get("note") and not card.get("favorite_note"):
+                card["favorite_note"] = row.get("note")
+
+
+def _join_board_note(base: Any, extra: str) -> str:
+    """Append a short note fragment without duplicating text."""
+    text = str(base or "").strip()
+    bit = str(extra or "").strip()
+    if not bit:
+        return text
+    if bit in text:
+        return text
+    return f"{text}；{bit}" if text else bit
 
 
 def _rank_ice_boards(
