@@ -1137,11 +1137,12 @@ def delete_mainline_switch(switch_id: int) -> None:
         conn.commit()
 
 
-def try_add_mainline_switch(row: dict[str, Any], min_seconds: int = 180) -> bool:
+def try_add_mainline_switch(row: dict[str, Any], min_seconds: int = 300) -> bool:
     """Append a switch unless it is rapid noise or an immediate flip-flop.
 
-    Returns True when a row was inserted. Flip-flops inside ``min_seconds``
-    remove the prior noisy switch instead of recording the rebound.
+    Returns True when a row was inserted. Inside ``min_seconds``:
+    - A→B then B→A (flip) deletes the noisy prior switch.
+    - A→B then B→C coalesces into a single A→C row (no intermediate spam).
     """
     trade_date = row.get("trade_date")
     from_name = (row.get("from_name") or "").strip()
@@ -1173,6 +1174,24 @@ def try_add_mainline_switch(row: dict[str, Any], min_seconds: int = 180) -> bool
                         (int(last["id"]),),
                     )
                     conn.commit()
+                    return False
+                # Coalesce A→B→C into A→C inside the debounce window.
+                conn.execute(
+                    """
+                    UPDATE mainline_switch
+                    SET switched_at = ?, to_name = ?, action = ?, phase = ?, temperature = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        switched_at,
+                        to_name,
+                        row.get("action"),
+                        row.get("phase"),
+                        row.get("temperature"),
+                        int(last["id"]),
+                    ),
+                )
+                conn.commit()
                 return False
         conn.execute(
             """

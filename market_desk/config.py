@@ -15,10 +15,44 @@ BROWSER_HOST = "127.0.0.1"
 SESSION_REFRESH_SECONDS = 20
 IDLE_CHECK_SECONDS = 60
 # Sticky mainline: challenger must beat incumbent by this score margin.
-MAINLINE_STICKY_MARGIN = 8.0
+MAINLINE_STICKY_MARGIN = 12.0
 # Persist a switch only after this gap; flip-flops inside the window are dropped.
-MAINLINE_SWITCH_MIN_SECONDS = 180
-# Windows bottom-right toasts for buy / sell / phase / mainline changes.
+MAINLINE_SWITCH_MIN_SECONDS = 300
+# Same-theme boards (煤炭↔动力煤) need a larger margin to displace each other.
+MAINLINE_THEME_SWITCH_MULT = 2.0
+# During the hold window, live sticky needs this extra multiple to flip.
+MAINLINE_HOLD_SWITCH_MULT = 1.5
+
+# Sibling industry/concept names that should not ping-pong as "mainline changes".
+MAINLINE_THEME_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("煤炭", "动力煤", "焦煤", "焦炭", "煤化工", "煤炭开采"),
+    (
+        "半导体",
+        "芯片",
+        "集成电路",
+        "电子元件",
+        "电路板",
+        "覆铜",
+        "PCB",
+        "印制电路",
+        "消费电子",
+        "电子",
+    ),
+    ("通信", "5G", "光通信", "通信线缆", "通信设备", "通信服务"),
+    ("医药", "制药", "医疗", "中药", "生物", "器械", "CXO"),
+    ("白酒", "酿酒", "啤酒", "酒类"),
+    ("军工", "航天", "航空", "船舶", "国防"),
+    ("新能源", "光伏", "锂电", "电池", "储能", "风电"),
+    ("有色", "稀土", "黄金", "铜", "铝"),
+    ("传媒", "游戏", "影视", "广告"),
+    ("银行",),
+    ("证券", "券商"),
+    ("房地产", "地产", "物业"),
+    ("物流", "快递", "航运", "港口"),
+    ("电力", "火电", "水电", "电网", "公用"),
+    ("农业", "种植", "养殖", "饲料", "农产品", "果蔬", "农药", "化肥", "氮肥", "钾肥"),
+    ("教育", "培训"),
+)
 TOAST_ENABLED = True
 TOAST_COOLDOWN_SECONDS = 180
 
@@ -84,7 +118,7 @@ MAINLINE_ETF_RULES: list[tuple[tuple[str, ...], tuple[str, str, str]]] = [
     (("有色", "稀土", "黄金", "铜", "铝"), ("sh512400", "512400", "有色ETF")),
     (("传媒", "游戏", "影视", "广告", "互联网"), ("sh512980", "512980", "传媒ETF")),
     (("银行",), ("sh512800", "512800", "银行ETF")),
-    (("煤炭", "焦煤"), ("sh515220", "515220", "煤炭ETF")),
+    (("煤炭", "焦煤", "动力煤", "焦炭"), ("sh515220", "515220", "煤炭ETF")),
     (("房地产", "地产", "物业"), ("sh512200", "512200", "房地产ETF")),
     (("创新药", "港股"), ("sh513120", "513120", "港股创新药ETF")),
     (("物流", "快递", "航运", "港口", "交运"), ("sh516910", "516910", "物流ETF")),
@@ -155,6 +189,31 @@ SIDE_MAINLINE_GAP = 12.0
 
 # Mute buy/entry noise for this many minutes after 09:30 (0 = off).
 OPEN_MUTE_MINUTES = 5
+
+# Buy-side day-high pullback / tip gates (percent). Lower = easier「可买入」/ready.
+# Tuned looser than the prior anti-chase set so pullback entries light more often.
+STOCK_READY_PULLBACK_MIN = 0.8
+STOCK_PULLBACK_BAND_MAX = 5.0
+STOCK_PULLBACK_SWEET_MAX = 4.2
+ETF_OFF_HIGH_MIN = 0.40
+STOCK_OFF_HIGH_MIN = 0.80
+ETF_NEAR_HIGH_PCT = 0.40
+STOCK_NEAR_HIGH_PCT = 0.50
+# Wait price as a fraction of last (shallower wait → nearer entry tags).
+ETF_WAIT_GAP = 0.9955   # ~0.45% below last
+STOCK_WAIT_GAP = 0.9915  # ~0.85% below last
+# Relative band around suggested buy for「回踩到位」.
+ETF_NEAR_ENTRY_UP = 0.0055
+STOCK_NEAR_ENTRY_UP = 0.0085
+ETF_NEAR_ENTRY_DOWN = 0.010
+STOCK_NEAR_ENTRY_DOWN = 0.015
+
+# Minute-structure tip / shallow pullback (percent of recent minute high).
+MINUTE_TIP_THR_NARROW = 0.25
+MINUTE_TIP_THR_WIDE = 0.35
+MINUTE_GRIND_PULLBACK = 0.55
+MINUTE_SHALLOW = 0.28
+MINUTE_VOL_PULLBACK = 0.55
 
 # Gap-and-fade blacklist: high open then fade from open.
 GAP_FADE_OPEN_PCT = 2.5          # open vs prev close

@@ -49,6 +49,20 @@ def get_settings(*, refresh: bool = False) -> dict[str, Any]:
         for key, value in raw.items():
             if key in DEFAULTS:
                 out[key] = value
+        # One-shot bump when still on the previous factory defaults (8 / 180).
+        # Custom values are left alone.
+        migrated = False
+        try:
+            if float(raw.get("sticky_margin", -1)) == 8.0:
+                out["sticky_margin"] = float(DEFAULTS["sticky_margin"])
+                migrated = True
+            if int(raw.get("switch_min_seconds", -1)) == 180:
+                out["switch_min_seconds"] = int(DEFAULTS["switch_min_seconds"])
+                migrated = True
+        except (TypeError, ValueError):
+            migrated = False
+        if migrated:
+            save_setting(_SETTINGS_KEY, _normalize(out))
     out = _normalize(out)
     _CACHE = out
     return dict(out)

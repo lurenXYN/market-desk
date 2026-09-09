@@ -529,6 +529,11 @@ class DeskEngine:
             or ""
         ).strip()
         if cur_name and prev_name and cur_name != prev_name:
+            # Sibling boards in the same theme are sticky continuity, not a switch event.
+            from market_desk.mainline import same_theme
+
+            if same_theme(prev_name, cur_name):
+                return
             try_add_mainline_switch(
                 {
                     "trade_date": trade_date,
@@ -539,7 +544,7 @@ class DeskEngine:
                     "phase": phase,
                     "temperature": temperature,
                 },
-                min_seconds=int(setting("switch_min_seconds", 180)),
+                min_seconds=int(setting("switch_min_seconds", 300)),
             )
 
     async def build_review(

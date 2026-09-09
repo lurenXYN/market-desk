@@ -64,16 +64,24 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
     look = prices[-look_n:]
     hi = max(look)
     lo = min(look)
+    from market_desk.config import (
+        MINUTE_GRIND_PULLBACK,
+        MINUTE_SHALLOW,
+        MINUTE_TIP_THR_NARROW,
+        MINUTE_TIP_THR_WIDE,
+        MINUTE_VOL_PULLBACK,
+    )
+
     pullback = (hi - last) / hi * 100.0 if hi > 0 else 0.0
     span = (hi - lo) / hi * 100.0 if hi > 0 else 0.0
-    # Slightly deeper pullback than before to cut tip-chasing.
-    tip_thr = 0.35 if span < 1.0 else 0.50
+    tip_thr = MINUTE_TIP_THR_NARROW if span < 1.0 else MINUTE_TIP_THR_WIDE
     at_tip = pullback < tip_thr
     prior = look[:-5] if len(look) > 8 else look[:-2]
     prior_hi = max(prior) if prior else hi
-    grinding_high = bool(last >= prior_hi * 0.999 and pullback < 0.70)
+    grinding_high = bool(last >= prior_hi * 0.999 and pullback < MINUTE_GRIND_PULLBACK)
     above_ma = last >= ma * 0.999
-    shallow = pullback < 0.40
+    shallow = pullback < MINUTE_SHALLOW
+    vol_pb = float(MINUTE_VOL_PULLBACK)
 
     vol_ratio: float | None = None
     vol_ok: bool | None = None
@@ -100,7 +108,7 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
         fails.append("分时仍在均价下方" if ma_source == "avg" else "分时仍在均线下方")
     if shallow and not at_tip:
         fails.append("分时回撤过浅")
-    if vol_ok is False and (at_tip or grinding_high or shallow or pullback < 0.75):
+    if vol_ok is False and (at_tip or grinding_high or shallow or pullback < vol_pb):
         fails.append("分时回踩量能未缩")
     elif vol_ok is False and above_ma and not at_tip and not grinding_high:
         # Price looks OK but volume still expanding — treat as chase risk.

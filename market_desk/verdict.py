@@ -14,6 +14,7 @@ from market_desk.mainline import (
     match_mainline_etf,
     pick_mainline,
     pick_side_mainline,
+    theme_key,
 )
 from market_desk.playbook import build_playbook, suggest_risk_qty
 from market_desk.session import apply_segment_bias, session_segment
@@ -34,9 +35,30 @@ def build_verdict(
     zb: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Announce the live mainline and a matching vehicle, without a fixed ticker."""
-    sticky = (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name")
-    main = pick_mainline(hot, sticky_name=sticky) or {}
+    prev_ml = ((prev or {}).get("verdict") or {}).get("mainline") or {}
+    sticky = prev_ml.get("name")
+    sticky_held: float | None = None
+    sticky_since_prev = str(prev_ml.get("sticky_since") or "").strip()
+    if sticky_since_prev:
+        try:
+            from datetime import datetime as _dt
+
+            since_dt = _dt.strptime(sticky_since_prev[:19], "%Y-%m-%d %H:%M:%S")
+            # ``now`` may be timezone-aware; compare naive wall clocks.
+            now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+            sticky_held = max(0.0, (now_naive - since_dt).total_seconds())
+        except (TypeError, ValueError):
+            sticky_held = None
+    main = pick_mainline(
+        hot,
+        sticky_name=sticky,
+        sticky_held_seconds=sticky_held,
+    ) or {}
     board_name = main.get("name") or ""
+    if board_name and sticky and board_name == sticky and sticky_since_prev:
+        sticky_since = sticky_since_prev
+    else:
+        sticky_since = now.strftime("%Y-%m-%d %H:%M:%S")
     exact_spec = etf_spec_for_name(board_name) if board_name else None
     etf_mapped = bool(exact_spec)
     soft_etf = False
@@ -288,6 +310,8 @@ def build_verdict(
             "leader_code": main.get("leader_code"),
             "leader_boards": main.get("leader_boards"),
             "lifecycle": life_stage,
+            "sticky_since": sticky_since,
+            "theme": theme_key(board_name),
             "etf_mapped": etf_mapped and not soft_etf,
             "etf_soft": soft_etf,
             "pool_codes": [
@@ -349,10 +373,16 @@ def _is_near_buy_price(
                 return False
         except (TypeError, ValueError):
             pass
-    # ETF ~0.4% / stock ~0.6% above buy still counts as "near".
-    up = 0.004 if etf else 0.006
-    # Allow a deeper print through the wait band before calling it missed.
-    down = 0.008 if etf else 0.012
+    from market_desk.config import (
+        ETF_NEAR_ENTRY_DOWN,
+        ETF_NEAR_ENTRY_UP,
+        STOCK_NEAR_ENTRY_DOWN,
+        STOCK_NEAR_ENTRY_UP,
+    )
+
+    # Soft band around suggested buy counts as「回踩到位」.
+    up = ETF_NEAR_ENTRY_UP if etf else STOCK_NEAR_ENTRY_UP
+    down = ETF_NEAR_ENTRY_DOWN if etf else STOCK_NEAR_ENTRY_DOWN
     rel = (last_f - buy_f) / buy_f
     if rel > up:
         return False
@@ -363,7 +393,7 @@ def _is_near_buy_price(
                     return False
             except (TypeError, ValueError):
                 return False
-        if rel < (-0.015 if etf else -0.02):
+        if rel < (-0.018 if etf else -0.025):
             return False
     return True
 
@@ -1052,9 +1082,10 @@ def _apply_ready_confirmations(
         kind = item.get("kind") or "stock"
         try:
             if last is not None and high not in (None, 0) and float(high) > 0:
+                from market_desk.config import ETF_OFF_HIGH_MIN, STOCK_OFF_HIGH_MIN
+
                 dist = (float(high) - float(last)) / float(high) * 100.0
-                # Slightly deeper room from day high before a ready buy.
-                need = 0.65 if kind == "etf" else 1.2
+                need = ETF_OFF_HIGH_MIN if kind == "etf" else STOCK_OFF_HIGH_MIN
                 if dist < need:
                     flags.append("离日高过近")
         except (TypeError, ValueError):
@@ -1397,17 +1428,26 @@ def _score_stock(
         return None
     if not strict and (pct < -1.5 or pct > 7.0):
         return None
+    from market_desk.config import (
+        STOCK_PULLBACK_BAND_MAX,
+        STOCK_PULLBACK_SWEET_MAX,
+        STOCK_READY_PULLBACK_MIN,
+    )
+
+    pb_min = float(STOCK_READY_PULLBACK_MIN)
+    pb_max = float(STOCK_PULLBACK_BAND_MAX)
+    pb_sweet = float(STOCK_PULLBACK_SWEET_MAX)
     pullback = None
     if high and high > 0:
         pullback = (float(high) - float(price)) / float(high) * 100.0
-    # Slightly deeper pullback band for ready-quality names.
-    if strict and (pullback is None or pullback < 1.2 or pullback > 4.5):
+    # Require a modest day-high pullback before listing as ready-quality.
+    if strict and (pullback is None or pullback < pb_min or pullback > pb_max):
         return None
     score = 20.0 - abs(float(pct) - 2.0) * 2.0
     if pullback is not None:
-        if 1.2 <= pullback <= 4.0:
+        if pb_min <= pullback <= pb_sweet:
             score += 15.0
-        elif pullback > 4.0:
+        elif pullback > pb_sweet:
             score += 4.0
         else:
             score -= 6.0
@@ -1427,8 +1467,8 @@ def _score_stock(
     elif explode_n == 1:
         score -= 4.0
     boards = int(boards_by.get(code) or 0)
-    # Ready only after a clearer day-high pullback to cut chase entries.
-    ready = pullback is not None and pullback >= 1.2
+    # Ready after enough day-high pullback; still blocks tip-chase names.
+    ready = pullback is not None and pullback >= pb_min
     if turnover is not None and turnover >= 15.0:
         ready = False
     if explode_n >= 2:
@@ -1501,16 +1541,19 @@ def _recommend_item(
     reason: str,
 ) -> dict[str, Any]:
     """Attach a buy / wait / stop / chase plan onto a quote."""
+    from market_desk.config import ETF_NEAR_HIGH_PCT, STOCK_NEAR_HIGH_PCT
+
     etf = kind == "etf" or _is_etf_code(str(quote.get("code") or ""))
     digits = 3 if etf else 2
     last = quote.get("price")
     low = quote.get("low")
     high = quote.get("high")
+    tip_need = ETF_NEAR_HIGH_PCT if etf else STOCK_NEAR_HIGH_PCT
     near_high = bool(
         last
         and high
         and high > 0
-        and (float(high) - float(last)) / float(high) * 100.0 < (0.55 if etf else 0.70)
+        and (float(high) - float(last)) / float(high) * 100.0 < tip_need
     )
     buy_now = bool(ready and last is not None and not near_high)
     wait = _wait_price(last, low, etf)
@@ -1612,10 +1655,11 @@ def _batch_plan_lots(buy: float | None, *, etf: bool) -> list[dict[str, Any]] | 
 
 def _wait_price(last: float | None, low: float | None, etf: bool) -> float | None:
     """Return a better pullback entry below the last price."""
+    from market_desk.config import ETF_WAIT_GAP, STOCK_WAIT_GAP
+
     if last is None:
         return None
-    # Slightly deeper wait: ETF ~0.65%, stock ~1.2% below last.
-    gap = 0.9935 if etf else 0.988
+    gap = ETF_WAIT_GAP if etf else STOCK_WAIT_GAP
     wait = float(last) * gap
     if low not in (None, 0) and float(low) < float(last):
         mid = (float(low) + float(last)) / 2.0

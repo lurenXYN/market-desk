@@ -3676,8 +3676,8 @@
         const s = d.settings || {};
         document.getElementById("setRefresh").value = s.refresh_seconds ?? 20;
         document.getElementById("setIdle").value = s.idle_seconds ?? 60;
-        document.getElementById("setSticky").value = s.sticky_margin ?? 8;
-        document.getElementById("setSwitch").value = s.switch_min_seconds ?? 180;
+        document.getElementById("setSticky").value = s.sticky_margin ?? 12;
+        document.getElementById("setSwitch").value = s.switch_min_seconds ?? 300;
         document.getElementById("setToastCd").value = s.toast_cooldown ?? 180;
         document.getElementById("setToastOn").checked = !!s.toast_enabled;
         document.getElementById("setDecisionOn").checked = s.decision_alerts !== false;
