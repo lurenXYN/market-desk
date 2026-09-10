@@ -65,6 +65,31 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS fund_flow_daily (
+                trade_date TEXT NOT NULL,
+                bk TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                name TEXT,
+                pct REAL,
+                main_net REAL,
+                main_pct REAL,
+                super_net REAL,
+                large_net REAL,
+                leader_name TEXT,
+                leader_code TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (trade_date, bk, kind)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_fund_flow_daily_date
+            ON fund_flow_daily(trade_date)
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT NOT NULL,
@@ -385,6 +410,112 @@ def save_board_daily(trade_date: str, rows: list[dict[str, Any]]) -> None:
             ],
         )
         conn.commit()
+
+
+def save_fund_flow_daily(trade_date: str, rows: list[dict[str, Any]]) -> int:
+    """Upsert one trade day's board money-flow prints for local week/month sums."""
+    day = str(trade_date or "")[:10]
+    if not day or not rows:
+        return 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    payload = []
+    for r in rows:
+        bk = str(r.get("bk") or "").strip()
+        kind = str(r.get("kind") or "").strip() or "industry"
+        if not bk:
+            continue
+        payload.append(
+            (
+                day,
+                bk,
+                kind,
+                str(r.get("name") or ""),
+                r.get("pct"),
+                r.get("main_net"),
+                r.get("main_pct"),
+                r.get("super_net"),
+                r.get("large_net"),
+                str(r.get("leader_name") or ""),
+                str(r.get("leader_code") or ""),
+                now,
+            )
+        )
+    if not payload:
+        return 0
+    with _connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO fund_flow_daily(
+                trade_date, bk, kind, name, pct, main_net, main_pct,
+                super_net, large_net, leader_name, leader_code, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_date, bk, kind) DO UPDATE SET
+                name = excluded.name,
+                pct = excluded.pct,
+                main_net = excluded.main_net,
+                main_pct = excluded.main_pct,
+                super_net = excluded.super_net,
+                large_net = excluded.large_net,
+                leader_name = excluded.leader_name,
+                leader_code = excluded.leader_code,
+                updated_at = excluded.updated_at
+            """,
+            payload,
+        )
+        conn.commit()
+    return len(payload)
+
+
+def list_fund_flow_dates(through: str, limit: int = 40) -> list[str]:
+    """Return recent trade dates that have fund-flow rows (newest first)."""
+    day = str(through or "")[:10]
+    lim = max(1, min(int(limit or 40), 120))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT trade_date
+            FROM fund_flow_daily
+            WHERE trade_date <= ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (day, lim),
+        ).fetchall()
+    return [str(r["trade_date"]) for r in rows]
+
+
+def load_fund_flow_for_dates(dates: list[str]) -> list[dict[str, Any]]:
+    """Load raw daily fund-flow rows for the given trade dates."""
+    days = [str(d)[:10] for d in dates if str(d or "").strip()]
+    if not days:
+        return []
+    placeholders = ",".join("?" for _ in days)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT trade_date, bk, kind, name, pct, main_net, main_pct,
+                   super_net, large_net, leader_name, leader_code
+            FROM fund_flow_daily
+            WHERE trade_date IN ({placeholders})
+            """,
+            days,
+        ).fetchall()
+    return [
+        {
+            "trade_date": str(r["trade_date"]),
+            "bk": str(r["bk"] or ""),
+            "kind": str(r["kind"] or ""),
+            "name": str(r["name"] or ""),
+            "pct": r["pct"],
+            "main_net": r["main_net"],
+            "main_pct": r["main_pct"],
+            "super_net": r["super_net"],
+            "large_net": r["large_net"],
+            "leader_name": str(r["leader_name"] or ""),
+            "leader_code": str(r["leader_code"] or ""),
+        }
+        for r in rows
+    ]
 
 
 def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[str, Any]]]:

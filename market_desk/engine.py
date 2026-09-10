@@ -32,6 +32,8 @@ from market_desk.db import (
     load_board_hist_map,
     load_daily,
     load_favorite_boards,
+    load_fund_flow_for_dates,
+    list_fund_flow_dates,
     load_mainline_switches,
     load_positions,
     load_session_segments,
@@ -43,6 +45,7 @@ from market_desk.db import (
     save_auction,
     save_board_daily,
     save_daily,
+    save_fund_flow_daily,
     touch_position_peaks,
     try_add_mainline_switch,
     upsert_session_segment,
@@ -318,29 +321,24 @@ class DeskEngine:
             trade_date_dash = now.strftime("%Y-%m-%d")
             errors: list[str] = []
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                zt, zb, quotes, boards, etfs, indices, flow_ind, flow_con = await asyncio.gather(
+                (
+                    zt, zb, quotes, boards, etfs, indices,
+                    flow_ind_d, flow_con_d,
+                    flow_ind_w, flow_con_w,
+                    flow_ind_m, flow_con_m,
+                ) = await asyncio.gather(
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
                     _safe(fetch_zb_pool, client, trade_date, errors=errors, label="zb"),
                     _safe(fetch_main_quotes, client, errors=errors, label="quotes"),
                     _safe(fetch_hot_boards, client, errors=errors, label="boards"),
                     _safe(fetch_etfs, client, errors=errors, label="etf"),
                     _safe(fetch_indices, client, errors=errors, label="index"),
-                    _safe(
-                        fetch_board_fund_flow,
-                        client,
-                        "industry",
-                        80,
-                        errors=errors,
-                        label="flow-hy",
-                    ),
-                    _safe(
-                        fetch_board_fund_flow,
-                        client,
-                        "concept",
-                        80,
-                        errors=errors,
-                        label="flow-gn",
-                    ),
+                    _safe(fetch_board_fund_flow, client, "industry", 80, "day", errors=errors, label="flow-hy-d"),
+                    _safe(fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"),
+                    _safe(fetch_board_fund_flow, client, "industry", 80, "week", errors=errors, label="flow-hy-w"),
+                    _safe(fetch_board_fund_flow, client, "concept", 80, "week", errors=errors, label="flow-gn-w"),
+                    _safe(fetch_board_fund_flow, client, "industry", 80, "month", errors=errors, label="flow-hy-m"),
+                    _safe(fetch_board_fund_flow, client, "concept", 80, "month", errors=errors, label="flow-gn-m"),
                 )
                 yesterday_zt = await self._yesterday(client, now, errors)
                 zt = zt or []
@@ -350,9 +348,42 @@ class DeskEngine:
                 etfs = etfs or []
                 indices = indices or []
                 yesterday_zt = yesterday_zt or []
-                flow_ind = flow_ind or []
-                flow_con = flow_con or []
-                fund_flow = build_fund_flow_board(flow_ind, flow_con)
+                try:
+                    save_fund_flow_daily(
+                        trade_date_dash,
+                        list(flow_ind_d or []) + list(flow_con_d or []),
+                    )
+                except Exception:
+                    log.exception("save fund_flow_daily failed")
+                stored_dates = list_fund_flow_dates(trade_date_dash, limit=40)
+                # Ensure today's fetch is visible even if save raced / failed.
+                if trade_date_dash not in stored_dates and (flow_ind_d or flow_con_d):
+                    stored_dates = [trade_date_dash] + stored_dates
+                stored_rows = load_fund_flow_for_dates(stored_dates)
+                if trade_date_dash not in {str(r.get("trade_date")) for r in stored_rows}:
+                    for r in list(flow_ind_d or []) + list(flow_con_d or []):
+                        row = dict(r)
+                        row["trade_date"] = trade_date_dash
+                        stored_rows.append(row)
+                fund_flow = build_fund_flow_board(
+                    {
+                        "day": {
+                            "industry": flow_ind_d or [],
+                            "concept": flow_con_d or [],
+                        },
+                        "week": {
+                            "industry": flow_ind_w or [],
+                            "concept": flow_con_w or [],
+                        },
+                        "month": {
+                            "industry": flow_ind_m or [],
+                            "concept": flow_con_m or [],
+                        },
+                    },
+                    trade_date=trade_date_dash,
+                    stored_dates=stored_dates,
+                    stored_rows=stored_rows,
+                )
                 ctx = {
                     "zt": zt,
                     "zb": zb,
@@ -1066,13 +1097,18 @@ class DeskEngine:
     ) -> None:
         """Load 上证指数 daily OHLCV once per trade day for Elliott scenarios."""
         day = str(trade_date or "")[:10]
-        if day and day == self._index_bars_day and len(self._index_bars) >= 30:
+        want = 320  # Tencent fq kline soft cap; ~1.3y sessions
+        if (
+            day
+            and day == self._index_bars_day
+            and len(self._index_bars) >= max(80, want - 40)
+        ):
             return
         bars = await _safe(
             fetch_daily_bars_symbol,
             client,
             "sh000001",
-            120,
+            want,
             errors=errors,
             label="index-k",
         )

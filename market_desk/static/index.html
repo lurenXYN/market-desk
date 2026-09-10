@@ -635,6 +635,20 @@
       background: #121820; font-size: 12.5px;
     }
     .fund-spot .chip b { margin-right: 6px; }
+    .fund-src {
+      display: inline-block; margin-left: 4px; padding: 0 5px;
+      border-radius: 3px; font-size: 10px; vertical-align: middle;
+    }
+    .fund-src.api { background: #0c3040; color: var(--ice); border: 1px solid #1a5a6a; }
+    .fund-src.local { background: #2a2210; color: #e0b341; border: 1px solid #5a4820; }
+    .fund-diff {
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 10px; background: #10161f; margin-bottom: 8px;
+    }
+    .fund-diff h3 {
+      margin: 0 0 6px; font-size: 13px; font-weight: 650;
+      text-transform: none; letter-spacing: 0.02em;
+    }
     .emo-strip {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1720,8 +1734,11 @@
           <button type="button" class="q" data-term="大资金流向">?</button>
         </h2>
         <p class="meta" id="fundNote">东财主力/超大单净流入作「国家队口径」大资金代理；仅观察，不改买卖闸门。</p>
-        <div class="pos-sum" id="fundSum" style="margin-bottom:10px"></div>
+        <div class="g-chips" id="fundPeriodChips" style="margin:8px 0 10px"></div>
+        <div class="pos-sum" id="fundSum" style="margin-bottom:8px"></div>
+        <div class="pos-sum" id="fundStats" style="margin-bottom:10px"></div>
         <div class="fund-spot" id="fundSpot"></div>
+        <div id="fundDiff" style="margin-bottom:12px"></div>
         <div class="fund-grid" id="fundBody">
           <div class="meta">等待资金流…</div>
         </div>
@@ -2844,7 +2861,11 @@
       const rsi = ind.rsi || {};
       sum.innerHTML =
         `<span>现价 <b>${box.last ?? "—"}</b></span>`
-        + `<span>样本 <b>${box.bars ?? "—"}</b> 日</span>`
+        + `<span>样本 <b>${box.bars ?? "—"}</b> 日`
+        + (box.bar_from || box.bar_to
+          ? ` <span class="meta">（${box.bar_from || "?"} → ${box.bar_to || "?"}）</span>`
+          : "")
+        + `</span>`
         + `<span>枢轴 <b>${box.pivot_n ?? "—"}</b></span>`
         + `<span class="meta">趋势 ${({ up: "偏多", down: "偏空", side: "震荡" })[st.trend] || "—"}</span>`
         + `<span>MACD <b>${macd.cross || "—"}</b> DIF ${macd.dif ?? "—"}</span>`
@@ -2876,21 +2897,36 @@
           ? ` <button type="button" class="q" data-term="${wTerm}">?</button>`
           : "";
         const turns = sc.turns || [];
+        const levels = sc.levels || [];
         const timing = sc.timing || {};
         const turnHtml = turns.length
-          ? `<div class="ew-turns"><div class="meta" style="margin-bottom:2px">变盘窗 · 斐波那契交易日
+          ? `<div class="ew-turns"><div class="meta" style="margin-bottom:2px">变盘时间窗（仅日期，按本浪时钟）
               <button type="button" class="q" data-term="斐波那契变盘窗">?</button></div>`
             + turns.map((t) => `
               <div class="ew-turn">
                 <b>${t.date || "—"}</b>
                 <div>
-                  点位 <b>${t.price ?? "—"}</b>（${t.price_tag || ""}）· ${t.fib || ""}
-                  <div class="meta">MACD ${t.macd_hint || "—"} · ${t.rsi_hint || "—"} · 置信 ${t.confidence ?? "—"}
+                  ${t.fib || ""} <span class="meta">· ${t.source || ""}</span>
+                  <div class="meta">置信 ${t.confidence ?? "—"}
                   ${t.note ? " · " + t.note : ""}</div>
                 </div>
               </div>`).join("")
             + `</div>`
-          : `<div class="meta" style="margin-top:6px">暂无变盘窗</div>`;
+          : `<div class="meta" style="margin-top:6px">暂无未来变盘窗</div>`;
+        const lvlHtml = levels.length
+          ? `<div class="ew-turns"><div class="meta" style="margin-bottom:2px">结构点位（上=阻力 · 下=支撑，非该日必达）</div>`
+            + levels.map((lv) => {
+              const vs = lv.vs_last_pct;
+              const vsTxt = vs == null ? "" : ` · 距现价 ${(vs > 0 ? "+" : "") + vs}%`;
+              const vsCls = vs == null ? "" : (vs >= 0 ? "up" : "down");
+              const side = vs == null ? "" : (vs > 0 ? "↑" : (vs < 0 ? "↓" : "·"));
+              return `<div class="ew-turn">
+                <b class="${vsCls}">${side} ${lv.price ?? "—"}</b>
+                <div>${lv.tag || ""} · ${lv.role || ""}<span class="meta">${vsTxt}</span></div>
+              </div>`;
+            }).join("")
+            + `<div class="meta">${sc.levels_note || ""}</div></div>`
+          : "";
         const timingHtml = `<div class="ew-timing">指标：${(timing.notes || []).join("；") || "—"}</div>`;
         return `<article class="ew-card${isPri ? " primary" : ""}">
           <div class="ew-top">
@@ -2902,25 +2938,93 @@
           <div class="ew-risk"><b>否决/风险：</b>${sc.invalidation || "—"}</div>
           ${timingHtml}
           ${turnHtml}
+          ${lvlHtml}
         </article>`;
       }).join("") + `</div>`;
     }
 
+    let fundPeriod = "em_day";
+    let lastFundFlow = null;
+
     function paintFundFlow(d) {
       const box = d.fund_flow || {};
+      lastFundFlow = box;
       const note = document.getElementById("fundNote");
+      const chips = document.getElementById("fundPeriodChips");
       const sum = document.getElementById("fundSum");
+      const statsEl = document.getElementById("fundStats");
       const spot = document.getElementById("fundSpot");
+      const diffEl = document.getElementById("fundDiff");
       const body = document.getElementById("fundBody");
       if (!note || !sum || !spot || !body) return;
       note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
-      const tot = box.totals || {};
+      const meta = box.period_meta || [];
+      if (!meta.some((m) => m.id === fundPeriod)) fundPeriod = box.default_period || "em_day";
+      if (chips) {
+        chips.innerHTML = meta.map((m) => {
+          const src = m.source === "local" ? "local" : "api";
+          const tag = m.source === "local" ? "本地" : "东财";
+          return `<button type="button" class="g-chip${m.id === fundPeriod ? " on" : ""}" data-fund-period="${m.id}" title="${m.hint || ""}">${m.label}<span class="fund-src ${src}">${tag}</span></button>`;
+        }).join("");
+      }
+      const periodBox = ((box.periods || {})[fundPeriod]) || box;
+      const tot = periodBox.totals || {};
+      const st = periodBox.stats || {};
+      const cmp = box.compare || {};
+      const storage = box.storage || {};
+      const srcTag = periodBox.source === "local"
+        ? `<span class="fund-src local">本地累加</span>`
+        : `<span class="fund-src api">东财接口</span>`;
       sum.innerHTML =
-        `<span>行业样本 <b>${tot.industry_n ?? "—"}</b></span>`
-        + `<span>概念样本 <b>${tot.concept_n ?? "—"}</b></span>`
-        + `<span>行业流入前部合计 <b class="up">${tot.industry_in_yi ?? "—"}</b> 亿</span>`
-        + `<span>行业流出尾部合计 <b class="down">${tot.industry_out_yi ?? "—"}</b> 亿</span>`;
-      const lights = box.spotlight || [];
+        `<span>周期 <b>${periodBox.label || fundPeriod}</b> ${srcTag}</span>`
+        + `<span class="meta">${periodBox.hint || ""}</span>`
+        + (periodBox.range ? `<span>区间 <b>${periodBox.range}</b>（${periodBox.day_n ?? "—"} 日）</span>` : "")
+        + `<span>行业 <b>${tot.industry_n ?? "—"}</b></span>`
+        + `<span>概念 <b>${tot.concept_n ?? "—"}</b></span>`
+        + `<span>流入前部 <b class="up">${tot.industry_in_yi ?? "—"}</b> 亿</span>`
+        + `<span>流出尾部 <b class="down">${tot.industry_out_yi ?? "—"}</b> 亿</span>`
+        + `<span class="meta">本地库 ${storage.stored_n ?? 0} 日`
+        + (storage.stored_from ? `（${storage.stored_from} → ${storage.stored_to}）` : "")
+        + `</span>`;
+      if (statsEl) {
+        statsEl.innerHTML =
+          `<span>净额(前+尾) <b class="${(st.industry_net_yi || 0) >= 0 ? "up" : "down"}">${st.industry_net_yi ?? "—"}</b> 亿</span>`
+          + `<span>多空 <b class="up">${st.pos_n ?? "—"}</b>/<b class="down">${st.neg_n ?? "—"}</b></span>`
+          + `<span>广度 <b>${st.breadth ?? "—"}%</b></span>`
+          + `<span>Top5 占正流入 <b>${st.top5_share_pct ?? "—"}%</b></span>`
+          + `<span>大资金 行业${st.big_money_industry_n ?? "—"} / 概念${st.big_money_concept_n ?? "—"}</span>`
+          + `<span class="meta">${cmp.note || ""}</span>`;
+      }
+      if (diffEl) {
+        const diffs = box.diffs || [];
+        diffEl.innerHTML = diffs.length
+          ? diffs.map((df) => {
+            const rows = (df.rows || []).slice(0, 12);
+            const tr = rows.map((r) => {
+              const dlt = r.delta_yi;
+              const dCls = dlt == null ? "" : (dlt >= 0 ? "up" : "down");
+              return `<tr>
+                <td>${r.name || ""}${r.only ? ` <span class="meta">${r.only}</span>` : ""}</td>
+                <td class="${(Number(r.api_yi) || 0) >= 0 ? "up" : "down"}">${r.api_yi ?? "—"}</td>
+                <td class="${(Number(r.local_yi) || 0) >= 0 ? "up" : "down"}">${r.local_yi ?? "—"}</td>
+                <td class="${dCls}">${dlt == null ? "—" : ((dlt > 0 ? "+" : "") + dlt)}</td>
+              </tr>`;
+            }).join("") || `<tr><td colspan="4" class="meta">本地样本不足，差异暂空（多跑几日会有）</td></tr>`;
+            return `<div class="fund-diff">
+              <h3>${df.title || ""} <button type="button" class="q" data-term="大资金流向">?</button></h3>
+              <div class="meta" style="margin-bottom:6px">${df.note || ""}
+                · 东财Top5：${(df.api_top5 || []).join("、") || "—"}
+                · 本地Top5：${(df.local_top5 || []).join("、") || "—"}
+              </div>
+              <table class="fund-table">
+                <thead><tr><th>行业</th><th>东财亿</th><th>本地亿</th><th>本地−东财</th></tr></thead>
+                <tbody>${tr}</tbody>
+              </table>
+            </div>`;
+          }).join("")
+          : "";
+      }
+      const lights = periodBox.spotlight || [];
       spot.innerHTML = lights.length
         ? lights.map((r) => {
           const yi = r.super_yi != null ? r.super_yi : r.main_yi;
@@ -2935,7 +3039,7 @@
         const list = rows || [];
         if (!list.length) {
           return `<section class="card mid" style="margin:0"><h2 style="text-transform:none">${title}</h2>
-            <div class="meta">暂无数据</div></section>`;
+            <div class="meta">${periodBox.source === "local" && !(periodBox.day_n > 0) ? "本地尚无该窗口样本" : "暂无数据"}</div></section>`;
         }
         const head = `<tr><th>#</th><th>板块</th><th>涨跌%</th><th>主力亿</th><th>超大亿</th><th>主力%</th><th>龙头</th></tr>`;
         const bodyRows = list.map((r, i) => {
@@ -2957,11 +3061,19 @@
         </section>`;
       };
       body.innerHTML =
-        table("行业 · 主力流入 Top", box.industry_in, "in")
-        + table("行业 · 主力流出 Top", box.industry_out, "out")
-        + table("概念 · 主力流入 Top", box.concept_in, "in")
-        + table("概念 · 主力流出 Top", box.concept_out, "out");
+        table("行业 · 主力流入 Top", periodBox.industry_in, "in")
+        + table("行业 · 主力流出 Top", periodBox.industry_out, "out")
+        + table("概念 · 主力流入 Top", periodBox.concept_in, "in")
+        + table("概念 · 主力流出 Top", periodBox.concept_out, "out");
     }
+
+    document.getElementById("fundPeriodChips")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-fund-period]");
+      if (!btn) return;
+      fundPeriod = btn.getAttribute("data-fund-period") || "em_day";
+      if (lastFundFlow) paintFundFlow({ fund_flow: lastFundFlow });
+      else if (typeof lastData !== "undefined" && lastData) paintFundFlow(lastData);
+    });
 
     function paintAuctionStrategy(d) {
       const box = d.auction_strategy || {};

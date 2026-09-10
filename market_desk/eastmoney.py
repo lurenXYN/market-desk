@@ -273,24 +273,84 @@ _FLOW_FIELDS = (
     ",f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f204,f205"
 )
 
+# East Money period configs: sort fid + field map for main / share / size buckets.
+_FLOW_PERIODS: dict[str, dict[str, Any]] = {
+    "day": {
+        "fid": "f62",
+        "fields": (
+            "f12,f13,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,"
+            "f128,f140,f136,f204,f205"
+        ),
+        "main": "f62",
+        "main_pct": "f184",
+        "super": "f66",
+        "large": "f72",
+        "mid": "f78",
+        "small": "f84",
+        "pct": "f3",
+    },
+    "week": {  # ≈5 trading days
+        "fid": "f164",
+        "fields": (
+            "f12,f13,f14,f2,f3,f109,f164,f165,f166,f167,f168,f169,f170,f171,f172,f173,"
+            "f128,f140,f136,f204,f205,f257,f258"
+        ),
+        "main": "f164",
+        "main_pct": "f165",
+        "super": "f166",
+        "large": "f168",
+        "mid": "f170",
+        "small": "f172",
+        "pct": "f109",  # 5-day pct when available
+    },
+    "month": {  # ≈10 trading days (旬 proxy)
+        "fid": "f174",
+        "fields": (
+            "f12,f13,f14,f2,f3,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,"
+            "f128,f140,f136,f204,f205,f260,f261"
+        ),
+        "main": "f174",
+        "main_pct": "f175",
+        "super": "f176",
+        "large": "f178",
+        "mid": "f180",
+        "small": "f182",
+        "pct": "f160",  # 10-day pct when available
+    },
+}
+
 
 async def fetch_board_fund_flow(
     client: httpx.AsyncClient,
     kind: str = "industry",
     limit: int = 80,
+    period: str = "day",
 ) -> list[dict[str, Any]]:
-    """Fetch board money-flow ranked by main-force net inflow (f62)."""
+    """Fetch board money-flow ranked by main-force net inflow for one period."""
+    cfg = _FLOW_PERIODS.get(period) or _FLOW_PERIODS["day"]
     fs = "m:90+t:2" if kind == "industry" else "m:90+t:3"
-    # Prefer live push2 host for fund-flow boards; fall back to delay mirror.
+    fid = cfg["fid"]
+    fields = cfg["fields"]
     urls = [
         (
             "https://push2.eastmoney.com/api/qt/clist/get"
-            f"?pn=1&pz={limit}&po=1&np=1&fltt=2&invt=2&fid=f62"
-            f"&ut={EASTMONEY_UT}&fs={fs}"
-            f"&fields=f12,f13,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,"
-            f"f128,f140,f136,f204,f205"
+            f"?pn=1&pz={limit}&po=1&np=1&fltt=2&invt=2&fid={fid}"
+            f"&ut={EASTMONEY_UT}&fs={fs}&fields={fields}"
         ),
-        _clist_url(fs, pz=limit, pn=1, po=1, fid="f62", extra_fields=_FLOW_FIELDS),
+        _clist_url(
+            fs,
+            pz=limit,
+            pn=1,
+            po=1,
+            fid=fid,
+            extra_fields="," + ",".join(
+                x for x in fields.split(",") if x and x not in (
+                    "f12", "f13", "f14", "f2", "f3", "f4", "f5", "f6", "f8",
+                    "f15", "f16", "f17", "f18", "f9", "f20",
+                    "f104", "f105", "f128", "f140", "f141", "f136",
+                )
+            ),
+        ),
     ]
     payload: dict[str, Any] = {}
     for url in urls:
@@ -302,33 +362,47 @@ async def fetch_board_fund_flow(
             continue
     out: list[dict[str, Any]] = []
     for item in _diff_rows(payload):
-        mapped = _board_flow_from_diff(item, kind)
+        mapped = _board_flow_from_diff(item, kind, cfg=cfg, period=period)
         if mapped:
             out.append(mapped)
     return out
 
 
-def _board_flow_from_diff(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
+def _board_flow_from_diff(
+    item: dict[str, Any],
+    kind: str,
+    *,
+    cfg: dict[str, Any] | None = None,
+    period: str = "day",
+) -> dict[str, Any] | None:
     """Map a clist money-flow row into a normalized board flow dict."""
+    conf = cfg or _FLOW_PERIODS["day"]
     name = str(item.get("f14") or "")
     if not name or _is_junk_board(name):
         return None
     code = str(item.get("f12") or "")
     if not code.startswith("BK"):
         return None
-    leader = str(item.get("f204") or item.get("f128") or "")
-    leader_code = normalize_code(item.get("f205") or item.get("f140"))
+    leader = str(item.get("f204") or item.get("f257") or item.get("f128") or "")
+    leader_code = normalize_code(
+        item.get("f205") or item.get("f258") or item.get("f140")
+    )
+    pct_key = conf.get("pct") or "f3"
+    pct_val = num(item.get(pct_key))
+    if pct_val is None:
+        pct_val = num(item.get("f3"), 0.0) or 0.0
     return {
         "bk": code,
         "name": name,
         "kind": kind,
-        "pct": round(num(item.get("f3"), 0.0) or 0.0, 2),
-        "main_net": num(item.get("f62")),
-        "main_pct": num(item.get("f184")),
-        "super_net": num(item.get("f66")),
-        "large_net": num(item.get("f72")),
-        "mid_net": num(item.get("f78")),
-        "small_net": num(item.get("f84")),
+        "period": period,
+        "pct": round(float(pct_val), 2),
+        "main_net": num(item.get(conf["main"])),
+        "main_pct": num(item.get(conf["main_pct"])),
+        "super_net": num(item.get(conf["super"])),
+        "large_net": num(item.get(conf["large"])),
+        "mid_net": num(item.get(conf["mid"])),
+        "small_net": num(item.get(conf["small"])),
         "leader_name": leader,
         "leader_code": leader_code,
         "leader_pct": round(num(item.get("f136"), 0.0) or 0.0, 2),
