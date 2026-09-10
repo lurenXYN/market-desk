@@ -73,7 +73,7 @@ def build_verdict(
     else:
         sticky_since = now.strftime("%Y-%m-%d %H:%M:%S")
     exact_spec = etf_spec_for_name(board_name) if board_name else None
-    etf_mapped = bool(exact_spec)
+    exact_etf = bool(exact_spec)
     soft_etf = False
     etf = match_mainline_etf(board_name, etfs) if board_name else None
     algo_notes: list[str] = []
@@ -96,8 +96,9 @@ def build_verdict(
                 }
             )
             soft_etf = True
-            etf_mapped = True
             algo_notes.append(f"ETF软映射→{name}")
+    # Exact map only; soft never counts as mapped for orphan / 可买入 pricing.
+    etf_mapped = exact_etf
     vehicle = etf or {}
     price = vehicle.get("price")
     pct = vehicle.get("pct") if vehicle else main.get("pct")
@@ -145,8 +146,8 @@ def build_verdict(
         action = "观察回踩"
         reason = f"实时主线倾向 {board_name}，结构未完全确认"
 
-    # No mapped ETF: still surface主板回踩观察票 as the concrete path.
-    if board_name and not etf_mapped and action == "可买入":
+    # No exact ETF map: still surface主板回踩观察票 (soft map is handled below).
+    if board_name and not exact_etf and not soft_etf and action == "可买入":
         action = "观察回踩"
         reason = f"{board_name} 暂无映射 ETF，改盯主板回踩票：{reason}"
         algo_notes.append("无ETF映射")
@@ -199,10 +200,10 @@ def build_verdict(
     }.get(action, "")
     if size_hint:
         meaning = f"{meaning}（{size_hint}）"
-    if not etf_mapped and board_name:
-        meaning = f"{meaning} 当前主线无精确ETF映射，优先看主板回踩票。"
-    elif soft_etf and board_name:
-        meaning = f"{meaning} 载体为近似行业ETF，默认只观察回踩、仓位宜更小。"
+    if soft_etf and board_name:
+        meaning = f"{meaning} 载体为近似行业ETF，个股按无精确映射严筛，默认只观察回踩。"
+    elif not exact_etf and board_name:
+        meaning = f"{meaning} 当前主线无精确ETF映射，优先看主板回踩票（严筛选）。"
     if vehicle.get("code"):
         detail = (
             f"[{seg.get('label')}] {board_name} · {vehicle.get('name')} {vehicle.get('code')} "
@@ -225,12 +226,12 @@ def build_verdict(
             zt or [],
             zb or [],
             boards=hot or [],
-            orphan=not etf_mapped,
+            orphan=not exact_etf,
         )
     elif stock_block and action in ("可买入", "观察回踩"):
         algo_notes.append("复盘命中偏低，本轮禁个股只留 ETF")
     recommend = _build_recommend(action, main, vehicle, bounce, stocks, bans)
-    if not etf_mapped and board_name:
+    if not exact_etf and board_name:
         stock_n = sum(1 for x in (recommend.get("items") or []) if x.get("kind") == "stock")
         for item in recommend.get("items") or []:
             item["block_ready"] = True
@@ -240,11 +241,17 @@ def build_verdict(
             if item.get("kind") == "stock":
                 item["role_label"] = "个股盯回踩"
         recommend["buy"] = False
-        if stock_n:
+        if soft_etf:
+            recommend["title"] = "近似ETF · 盯回踩"
+            recommend["size_note"] = _join_hint(
+                str(recommend.get("size_note") or ""),
+                f"近似映射 {vehicle.get('name') or ''}，个股更严筛选且禁现买",
+            )
+        elif stock_n:
             recommend["title"] = "无映射ETF · 盯主板回踩票"
             recommend["size_note"] = _join_hint(
                 str(recommend.get("size_note") or ""),
-                "无载体定价，以下为主板回踩观察票，到价再考虑",
+                "无载体定价，以下为主板回踩观察票（严筛选），到价再考虑",
             )
         else:
             recommend["title"] = "暂无映射ETF，只观察"
@@ -253,6 +260,7 @@ def build_verdict(
                 "主线无ETF映射，且暂无合格回踩票",
             )
     elif soft_etf:
+        # Defensive: exact map path should not also be soft; keep observe block.
         for item in recommend.get("items") or []:
             item["block_ready"] = True
             item["ready"] = False
@@ -1148,7 +1156,11 @@ def _apply_ready_confirmations(
     main: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Downgrade ready cards that fail relative-strength or day-high checks."""
-    from market_desk.config import THIN_CONFIRM_ZT_MAX, THIN_CROSS_BOARD_MIN
+    from market_desk.config import (
+        THIN_CONFIRM_ZT_MAX,
+        THIN_CROSS_BOARD_MIN,
+        THIN_CROSS_THEME_MIN,
+    )
 
     rec = dict(recommend or {})
     items = [dict(x) for x in (rec.get("items") or [])]
@@ -1189,7 +1201,10 @@ def _apply_ready_confirmations(
             flags.append("指数弱禁个股现买")
         if kind == "stock" and thin_confirm:
             cross_n = int(item.get("cross_n") or 0)
-            if cross_n < int(THIN_CROSS_BOARD_MIN):
+            theme_n = int(item.get("cross_theme_n") or 0)
+            ok_cross = cross_n >= int(THIN_CROSS_BOARD_MIN)
+            ok_theme = theme_n >= int(THIN_CROSS_THEME_MIN)
+            if not (ok_cross or ok_theme):
                 flags.append("薄确认缺跨板块共振")
         if kind == "etf":
             # Thin ETF amount while green = fake strength (amount in 元).
@@ -2008,16 +2023,28 @@ def apply_size_cap_gate(
         except (TypeError, ValueError):
             pass
     used_pct = open_cost / equity * 100.0
+    equity_default = abs(equity - 50000.0) < 0.5
     v["size_cap"] = {
         "cap_pct": cap,
         "used_pct": round(used_pct, 1),
         "open_cost": round(open_cost, 2),
         "equity": equity,
         "hit": used_pct >= cap,
+        "equity_default": equity_default,
     }
+    if equity_default and open_cost > 0:
+        warn = "账户资金仍为默认5万，总仓占比可能失真，请在参数里改真实资金"
+        for key in ("recommend", "side_recommend"):
+            rec = dict(v.get(key) or {})
+            if rec:
+                rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), warn)
+                v[key] = rec
+        v["size_cap"]["note"] = warn
     if used_pct < cap:
         return v
     note = f"总仓已约 {used_pct:.0f}%≥相位上限 {cap:.0f}%，先减不加"
+    if equity_default:
+        note = f"{note}；账户资金仍为默认5万，请核对"
     for key in ("recommend", "side_recommend"):
         rec = dict(v.get(key) or {})
         items = []
@@ -2186,19 +2213,45 @@ def build_sell_advice(
     day = str(trade_date or "").strip()[:10]
     trends = trends_by_code or {}
     items: list[dict[str, Any]] = []
+    try:
+        from market_desk.review import cached_sell_bias_bundle
+
+        sell_bundle = cached_sell_bias_bundle()
+    except Exception:
+        sell_bundle = {
+            "all": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
+            "etf": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
+            "stock": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
+        }
     for row in positions or []:
         if int(row.get("qty") or 0) <= 0:
             continue
         code = normalize_code(row.get("code"))
+        is_etf = _is_etf_code(code) if code else False
+        kind_bias = (sell_bundle.get("etf") if is_etf else sell_bundle.get("stock")) or {}
+        if not kind_bias.get("ok"):
+            kind_bias = sell_bundle.get("all") or {}
         item = _sell_item(
             row,
             verdict,
             phase,
             trade_date=day,
             trend=trends.get(code) if code else None,
+            sell_bias=kind_bias,
         )
         if item:
             items.append(item)
+    sell_bias = sell_bundle.get("all") or {}
+    sell_bias_out = {
+        "hit_rate": sell_bias.get("hit_rate"),
+        "n": sell_bias.get("n"),
+        "widen": bool(sell_bias.get("widen")),
+        "tighten": bool(sell_bias.get("tighten")),
+        "note": sell_bias.get("note") or sell_bundle.get("note"),
+        "etf": sell_bundle.get("etf"),
+        "stock": sell_bundle.get("stock"),
+        "all": sell_bias,
+    }
     rank = {"stop": 0, "take": 1, "trim": 2, "hold": 3}
     items.sort(key=lambda x: (rank.get(str(x.get("urgency") or "hold"), 9), -(x.get("pnl_pct") or 0)))
     items = items[:4]
@@ -2212,6 +2265,7 @@ def build_sell_advice(
             "text": "暂无仓位 · 买入记账后这里给出卖出建议",
             "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。当日买入受 T+1 限制，隔日才可卖。今日已平不计入卖点。",
             "items": [],
+            "sell_bias": sell_bias_out,
         }
     if sell_now:
         primary = sell_now[0]
@@ -2222,7 +2276,7 @@ def build_sell_advice(
             f"{primary.get('sell_price')} · {mode_zh}"
         )
         size_note = (
-            "止损默认清仓；日线仍升且站上MA20则先减一半。衰退/深回撤→清仓或先减。本地提示，不会下单。"
+            "止损默认清仓；站上MA20且非下降则先减一半。衰退/深回撤→清仓或先减。本地提示，不会下单。"
         )
     else:
         primary = items[0] if items else None
@@ -2243,6 +2297,7 @@ def build_sell_advice(
         "size_note": size_note,
         "items": items,
         "primary": primary if items else None,
+        "sell_bias": sell_bias_out,
     }
 
 
@@ -2257,6 +2312,7 @@ def _exit_band_params(
     soft_exit: bool,
     trend: dict[str, Any] | None,
     carrier_falling: bool,
+    sell_bias: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pick stop / pullback / take-profit bands from multi-module context.
 
@@ -2265,12 +2321,14 @@ def _exit_band_params(
       and not in soft-exit — wider stop, tolerate deeper pullback.
     - tight: fade/ending/panic/climax/daily down/carrier falling — tighter.
     - neutral: default fixed bands.
+
+    Optional ``sell_bias`` from review sell outcomes scales pb/take/pocket.
     """
     from market_desk.config import SELL_BAND_ETF, SELL_BAND_STOCK
 
     trend = trend or {}
     # Lifecycle keys: starting | ongoing | ending (see lifecycle.py).
-    rising_life = life_stage in ("starting", "ongoing", "萌芽", "主升")
+    rising_life = life_stage in ("starting", "ongoing")
     confirming = main_status == "确认中"
     strong_hold = bool(
         on_mainline
@@ -2299,8 +2357,28 @@ def _exit_band_params(
         mode_zh = "标准"
     table = SELL_BAND_ETF if etf else SELL_BAND_STOCK
     band = dict(table[mode])
+    bias = sell_bias or {}
+    mult = float(bias.get("mult") or 1.0)
+    if bias.get("widen") and mult > 1.0:
+        for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+            band[key] = float(band[key]) * mult
+        # Slightly wider stop floor when historically selling too early.
+        band["pnl_stop"] = float(band["pnl_stop"]) * (1.0 + (mult - 1.0) * 0.5)
+        mode_zh = f"{mode_zh}·卖早放宽"
+    elif bias.get("tighten") and 0 < mult < 1.0:
+        for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+            band[key] = float(band[key]) * mult
+        mode_zh = f"{mode_zh}·卖准收紧"
     band["mode"] = mode
     band["mode_zh"] = mode_zh
+    band["sell_bias"] = {
+        "widen": bool(bias.get("widen")),
+        "tighten": bool(bias.get("tighten")),
+        "mult": mult,
+        "hit_rate": bias.get("hit_rate"),
+        "n": bias.get("n"),
+        "note": bias.get("note"),
+    }
     return band
 
 
@@ -2311,6 +2389,7 @@ def _sell_item(
     *,
     trade_date: str | None = None,
     trend: dict[str, Any] | None = None,
+    sell_bias: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Decide whether a held name should be sold, trimmed, or held.
 
@@ -2380,6 +2459,7 @@ def _sell_item(
         soft_exit=soft_exit,
         trend=trend,
         carrier_falling=bool(carrier.get("falling")),
+        sell_bias=sell_bias,
     )
     stop = buy * float(band["stop_buy"])
     if low not in (None, 0) and float(low) < buy:

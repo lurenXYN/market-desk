@@ -11,6 +11,7 @@ from market_desk.config import (
     MAINLINE_LEADER_MAINBOARD_BONUS,
     MAINLINE_LEADER_PAIR_BONUS,
     MAINLINE_LEADER_STRUCT_BONUS,
+    MAINLINE_THEME_FADE_SKIP,
     MAINLINE_THEME_GROUPS,
     MAINLINE_THEME_SWITCH_MULT,
 )
@@ -180,7 +181,11 @@ def pick_mainline(
     if same_theme(sticky, leader.get("name")):
         if inc_status == "退潮" and (leader.get("status") or "") != "退潮":
             return leader
-        theme_need = need * float(MAINLINE_THEME_SWITCH_MULT)
+        # Ending sticky: do not inflate same-theme margin (identity should catch sell bias).
+        if inc_ending and MAINLINE_THEME_FADE_SKIP:
+            theme_need = need
+        else:
+            theme_need = need * float(MAINLINE_THEME_SWITCH_MULT)
         if lead_s >= hold_s + theme_need:
             return leader
         return incumbent

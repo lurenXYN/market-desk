@@ -136,10 +136,11 @@ def _review_lifecycle_bias() -> dict[str, Any]:
         summary = summarize_signals(rows)
         rate = summary.get("buy_hit_rate")
         scored_n = int(summary.get("buy_scored") or 0)
-        if rate is None or scored_n < 8:
+        # Align with buy-side review gates (n≥5, cool below ~35%).
+        if rate is None or scored_n < 5:
             return {"strict": False, "hit_rate": rate, "n": scored_n}
         return {
-            "strict": bool(float(rate) < 40),
+            "strict": bool(float(rate) < 35),
             "hit_rate": float(rate),
             "n": scored_n,
         }

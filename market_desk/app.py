@@ -34,6 +34,7 @@ from market_desk.db import (
     load_signals,
     load_stock_blacklist,
     load_watchlist,
+    sync_sell_fill_from_trim,
     trim_position,
     update_signal_meta,
 )
@@ -294,7 +295,11 @@ def remove_position(pid: int) -> dict:
 
 @app.post("/api/positions/{pid}/trim")
 def trim_position_api(pid: int, body: TrimIn) -> dict:
-    """Sell/reduce shares on a recorded position (local book only)."""
+    """Sell/reduce shares on a recorded position (local book only).
+
+    When a same-day sell signal exists in review, auto-mark it traded and fill
+    the sale price/qty (desk clear/half stays in sync with the review table).
+    """
     trade_day = str(engine.snapshot.get("trade_date") or "")
     if len(trade_day) == 8:
         trade_day = f"{trade_day[:4]}-{trade_day[4:6]}-{trade_day[6:8]}"
@@ -308,10 +313,21 @@ def trim_position_api(pid: int, body: TrimIn) -> dict:
     )
     if row is None:
         raise HTTPException(404, "position not found")
+    left = int(row.get("qty") or 0)
+    trimmed = int(row.get("trimmed") or body.qty or 0)
+    note = "作战台清仓" if left <= 0 else "作战台减仓"
+    signal_fill = sync_sell_fill_from_trim(
+        code=str(row.get("code") or ""),
+        trade_date=trade_day,
+        fill_price=row.get("sell_price") if row.get("sell_price") is not None else body.sell_price,
+        fill_qty=trimmed,
+        note=note,
+    )
     rows = engine.sync_positions()
     return {
         "ok": True,
         "trimmed": row,
+        "signal_fill": signal_fill,
         "positions": rows,
         "summary": engine.snapshot.get("position_summary"),
     }

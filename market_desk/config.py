@@ -20,6 +20,8 @@ MAINLINE_STICKY_MARGIN = 12.0
 MAINLINE_SWITCH_MIN_SECONDS = 300
 # Same-theme boards (煤炭↔动力煤) need a larger margin to displace each other.
 MAINLINE_THEME_SWITCH_MULT = 2.0
+# When sticky is ending/退潮, same-theme challengers skip the theme multiplier.
+MAINLINE_THEME_FADE_SKIP = True
 # During the hold window, live sticky needs this extra multiple to flip.
 MAINLINE_HOLD_SWITCH_MULT = 1.5
 
@@ -190,13 +192,13 @@ SIDE_MAINLINE_GAP = 12.0
 # Mute buy/entry noise for this many minutes after 09:30 (0 = off).
 OPEN_MUTE_MINUTES = 5
 
-# Buy-side day-high pullback / tip gates (percent). Lower = easier「可买入」/ready.
-# Tuned looser than the prior anti-chase set so pullback entries light more often.
-STOCK_READY_PULLBACK_MIN = 0.8
+# Buy-side day-high pullback / tip gates (percent).
+# Listing band (入池) vs tip distance (ready 确认) are intentionally split.
+STOCK_READY_PULLBACK_MIN = 1.0
 STOCK_PULLBACK_BAND_MAX = 5.0
 STOCK_PULLBACK_SWEET_MAX = 4.2
 ETF_OFF_HIGH_MIN = 0.40
-STOCK_OFF_HIGH_MIN = 0.80
+STOCK_OFF_HIGH_MIN = 0.75
 ETF_NEAR_HIGH_PCT = 0.40
 STOCK_NEAR_HIGH_PCT = 0.50
 # Wait price as a fraction of last (shallower wait → nearer entry tags).
@@ -244,12 +246,20 @@ MAINLINE_SOFT_ETF_TREND_DOWN = 3.0
 # Ending / 退潮 incumbent: easier for challenger to take sticky mainline.
 MAINLINE_FADE_SWITCH_MULT = 0.55
 
+# Sell-review feedback: adjust pb/pocket from historical sell outcomes.
+SELL_REVIEW_MIN_N = 10
+SELL_REVIEW_WIDEN_BELOW = 40.0   # hit% of 卖后回落 → sold too early → widen
+SELL_REVIEW_TIGHTEN_ABOVE = 60.0  # sells working → slightly earlier take
+SELL_REVIEW_WIDEN_MULT = 1.12
+SELL_REVIEW_TIGHTEN_MULT = 0.92
+
 # Orphan mainline (no exact ETF): stricter stock pullback / cap filters.
 ORPHAN_STOCK_PB_MIN = 1.2
 ORPHAN_STOCK_MV_MULT = 1.25
-# Thin「确认中」(zt<3): stock ready needs cross-board resonance.
+# Thin「确认中」(zt<=2): stock ready needs cross-board OR same-theme resonance.
 THIN_CONFIRM_ZT_MAX = 2
-THIN_CROSS_BOARD_MIN = 1
+THIN_CROSS_BOARD_MIN = 2
+THIN_CROSS_THEME_MIN = 1
 
 # Sell-band regimes: widen on strong mainline+uptrend, tighten on fade/down.
 # Multipliers are vs cost: stop_buy=0.97 → −3% from cost.

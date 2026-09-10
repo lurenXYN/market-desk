@@ -461,7 +461,10 @@ class DeskEngine:
                 )
                 await self._apply_recommend_trends(client, verdict, trade_date_dash)
                 # Arm near-entry first, then minute-gate ready cards (never re-arm after).
-                verdict["recommend"] = mark_pullback_entries(verdict.get("recommend"))
+                soft_main = bool((verdict.get("mainline") or {}).get("etf_soft"))
+                verdict["recommend"] = mark_pullback_entries(
+                    verdict.get("recommend"), observe_only=soft_main
+                )
                 verdict["side_recommend"] = mark_pullback_entries(
                     verdict.get("side_recommend"), observe_only=True
                 )

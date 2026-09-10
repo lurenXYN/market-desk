@@ -2184,6 +2184,16 @@
       sellBox.className = "sellbox " + (sell.sell ? "on" : "off");
       document.getElementById("sellline").textContent = sell.text || sell.title || "暂无仓位";
       document.getElementById("sellmeta").textContent = sell.size_note || "";
+      const sb = sell.sell_bias || {};
+      if (sb.note || (sb.etf && sb.etf.note) || (sb.stock && sb.stock.note)) {
+        const parts = [];
+        if (sb.etf && sb.etf.ok) parts.push(`ETF闭环 ${sb.etf.hit_rate}%`);
+        if (sb.stock && sb.stock.ok) parts.push(`个股闭环 ${sb.stock.hit_rate}%`);
+        if (parts.length) {
+          const el = document.getElementById("sellmeta");
+          el.textContent = (el.textContent ? el.textContent + " · " : "") + parts.join(" · ");
+        }
+      }
       document.getElementById("sellItems").innerHTML = (sell.items || []).map(sellCard).join("");
       document.getElementById("dataTime").textContent = (d.updated_at || "").slice(11) || "--:--:--";
       document.getElementById("dataAge").textContent = dataAgeText(d.updated_at);
@@ -2956,6 +2966,8 @@
       const ph = sum.phase_hits || [];
       const kh = sum.kind_hits || [];
       const pkh = sum.phase_kind_hits || [];
+      const gates = sum.gate_kills || [];
+      const sellBias = sum.sell_bias || {};
       const hints = sum.tune_hints || [];
       const kindLine = kh.length
         ? ("品种 " + kh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
@@ -2965,16 +2977,35 @@
             `${p.phase}·${p.label} ${p.hit_rate}%（${p.scored_n}）`
           ).join(" · "))
         : "";
+      const gateLine = gates.length
+        ? ("闸门·终态假杀 " + gates.slice(0, 6).map((g) => {
+            const fk = g.false_kill_n != null ? `假杀${g.false_kill_n}` : "";
+            const note = g.note ? `·${g.note}` : "";
+            return `${g.gate}×${g.kill_n}${fk ? `(${fk})` : ""}${note}`;
+          }).join(" · "))
+        : "";
+      const sellParts = [];
+      if (sellBias.etf && sellBias.etf.note) sellParts.push(`ETF ${sellBias.etf.note}`);
+      if (sellBias.stock && sellBias.stock.note) sellParts.push(`个股 ${sellBias.stock.note}`);
+      if (!sellParts.length && sellBias.note) sellParts.push(sellBias.note);
+      else if (sellBias.all && sellBias.all.note && sellParts.length) {
+        /* keep ETF/stock lines primary */
+      }
+      const sellLine = sellParts.length
+        ? (`卖点闭环 ${sellParts.join(" · ")}`)
+        : "";
       const hintHtml = hints.length
         ? (`<ul class="tune-hints">` + hints.map((h) => `<li>${h}</li>`).join("") + `</ul>`)
         : "";
-      document.getElementById("revPhase").innerHTML = (ph.length || kh.length)
+      document.getElementById("revPhase").innerHTML = (ph.length || kh.length || gates.length || sellLine)
         ? (`<div class="hd">命中率分桶（跨日）<button type="button" class="q" data-term="相位命中">?</button></div>`
           + (ph.length
             ? `<div>相位 ${ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · ")}</div>`
             : "")
           + (kindLine ? `<div class="meta" style="margin-top:4px">${kindLine}</div>` : "")
           + (crossLine ? `<div class="meta" style="margin-top:4px">${crossLine}</div>` : "")
+          + (gateLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="闸门归因">?</button> ${gateLine}</div>` : "")
+          + (sellLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="卖点闭环">?</button> ${sellLine}</div>` : "")
           + hintHtml)
         : `<div class="hd">命中率分桶（跨日）</div><span class="meta">有隔日打分后按相位 / ETF·个股汇总</span>`;
       const hist = sum.history || [];
@@ -2987,7 +3018,7 @@
       document.getElementById("revSum").innerHTML = [
         cell("买入信号（近窗）", sum.buy_total ?? 0),
         cell(`买入命中率·${hitMode}`, sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
-        cell("已交易 / 未交易", `${sum.traded ?? 0} / ${sum.skipped ?? 0}`),
+        cell("卖出命中率", sum.sell_hit_rate == null ? "—" : (sum.sell_hit_rate + "%"), "up"),
         cell("待隔日打分", sum.pending ?? 0),
       ].join("");
       const type = (document.getElementById("revType") || {}).value || "";
@@ -3477,9 +3508,14 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         alert(label + "失败");
         return;
+      }
+      reviewLoadedAt = 0;
+      if (d.signal_fill && d.signal_fill.fill_price != null) {
+        alert(`${label}完成 · 复盘已填成交 ${d.signal_fill.fill_price}×${d.signal_fill.fill_qty || ""}`);
       }
       await tick();
     }
@@ -3498,9 +3534,14 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         alert(label + "失败");
         return false;
+      }
+      reviewLoadedAt = 0;
+      if (d.signal_fill && d.signal_fill.fill_price != null) {
+        alert(`${label}完成 · 复盘已填成交 ${d.signal_fill.fill_price}×${d.signal_fill.fill_qty || ""}`);
       }
       return true;
     }

@@ -301,10 +301,12 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
             ready = bool(item.get("ready"))
             near = bool(item.get("near_entry"))
             buyable = action in ("可买入", "可小仓") or bool(rec.get("buy"))
-            if not (buyable or ready or near):
+            gated = bool(item.get("confirm_fail"))
+            # Log gated cards too so review can attribute which confirm gate killed ready.
+            if not (buyable or ready or near or gated):
                 continue
             kind = item.get("kind") or "stock"
-            if kind == "etf" and not ready and not buyable and not near:
+            if kind == "etf" and not ready and not buyable and not near and not gated:
                 continue
             price = num(item.get("buy_price"))
             if price is None:
@@ -336,10 +338,14 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "pct": item.get("pct"),
                         "trend": item.get("trend"),
                         "trend_quality": item.get("trend_quality"),
-                        "trend_pending": False,
+                        "trend_pending": bool(item.get("trend_pending")),
                         "trend_unknown": bool(item.get("trend_unknown")),
                         "trend_ok": bool(item.get("trend_ok")),
                         "trend_down": bool(item.get("trend_down")),
+                        "confirm_fail": list(item.get("confirm_fail") or []),
+                        "block_ready": bool(item.get("block_ready")),
+                        "near_entry": bool(item.get("near_entry")),
+                        "size_cap_block": bool(item.get("size_cap_block")),
                         "board_names": board_cmp["boards"],
                         "vs_mainline": board_cmp["vs_mainline"],
                         "board_match": board_cmp["match"],
@@ -383,6 +389,11 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "stop_price": item.get("stop_price"),
                     "pnl_pct": item.get("pnl_pct"),
                     "qty": item.get("qty"),
+                    "exit_mode": item.get("exit_mode"),
+                    "urgency": item.get("urgency"),
+                    "band_mode": item.get("band_mode"),
+                    "band_mode_zh": item.get("band_mode_zh"),
+                    "daily_trend": item.get("daily_trend"),
                     "board_names": board_cmp["boards"],
                     "vs_mainline": board_cmp["vs_mainline"],
                     "board_match": board_cmp["match"],
@@ -787,6 +798,8 @@ def build_tune_hints(
     missed: list[dict[str, Any]] | None,
     phase_hits: list[dict[str, Any]] | None,
     kind_hits: list[dict[str, Any]] | None,
+    gate_kills: list[dict[str, Any]] | None = None,
+    sell_bias: dict[str, Any] | None = None,
 ) -> list[str]:
     """Return short threshold-tuning hints from review buckets (not orders)."""
     hints: list[str] = []
@@ -813,7 +826,237 @@ def build_tune_hints(
             hints.append(f"高潮相位命中 {rate}%：继续默认降观察回踩，勿追尖")
         if phase == "恐慌" and float(rate) < 30:
             hints.append(f"恐慌相位命中 {rate}%：维持禁开仓")
-    return hints[:5]
+    for row in (gate_kills or [])[:3]:
+        fk = int(row.get("false_kill_n") or 0)
+        kn = int(row.get("kill_n") or 0)
+        gate = row.get("gate") or ""
+        if fk >= 3 and kn >= 5:
+            hints.append(
+                f"闸门「{gate}」误杀偏多（假杀 {fk}/{kn}）：可复查该确认条件是否过严"
+            )
+    sb = sell_bias or {}
+    if sb.get("widen") and int(sb.get("n") or 0) >= 6:
+        hints.append(
+            f"卖点偏早（卖后回落命中 {sb.get('hit_rate')}%，n={sb.get('n')}）："
+            f"已自动放宽回撤/落袋阈值"
+        )
+    elif sb.get("tighten") and int(sb.get("n") or 0) >= 6:
+        hints.append(
+            f"卖点偏准（卖后回落命中 {sb.get('hit_rate')}%，n={sb.get('n')}）："
+            f"已略收紧止盈回撤"
+        )
+    return hints[:6]
+
+
+def _gate_bucket(flag: str) -> str:
+    """Map a confirm_fail string to a stable attribution bucket."""
+    text = str(flag or "").strip()
+    if not text:
+        return "其它"
+    if text.startswith("日线") or "日线" in text:
+        return "日线"
+    if text.startswith("分时") or "分时" in text:
+        return "分时"
+    if "薄确认" in text or "跨板块" in text:
+        return "薄确认/共振"
+    if "总仓" in text or "相位上限" in text:
+        return "总仓上限"
+    if "离日高" in text:
+        return "离日高"
+    if "弱于" in text:
+        return "相对强弱"
+    if "量能" in text:
+        return "ETF量能"
+    if "指数" in text:
+        return "指数弱"
+    return text[:12]
+
+
+def build_gate_kill_stats(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Attribute ready kills to confirm_fail history; flag false kills via outcomes.
+
+    Kill counts use confirm_fail_hist (same-day gate evolution). False/true kill
+    only when the final same-day state stayed ready=0.
+    """
+    del hit_mode  # Paper outcomes OK for gated cards; final ready state still required.
+    kills: dict[str, int] = {}
+    false_kills: dict[str, int] = {}
+    true_kills: dict[str, int] = {}
+    for row in rows or []:
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        fails = [
+            str(x)
+            for x in (
+                payload.get("confirm_fail_hist")
+                or payload.get("final_fail")
+                or payload.get("confirm_fail")
+                or []
+            )
+            if str(x).strip()
+        ]
+        if not fails:
+            continue
+        label = str(row.get("outcome_label") or "")
+        ready_now = int(row.get("ready") or 0)
+        buckets = {_gate_bucket(f) for f in fails}
+        for bucket in buckets:
+            kills[bucket] = kills.get(bucket, 0) + 1
+            if ready_now or not label:
+                continue
+            if label in {"次日红", "三日红"}:
+                false_kills[bucket] = false_kills.get(bucket, 0) + 1
+            elif label in {"次日绿", "三日绿"}:
+                true_kills[bucket] = true_kills.get(bucket, 0) + 1
+    out: list[dict[str, Any]] = []
+    for gate, kn in sorted(kills.items(), key=lambda x: (-x[1], x[0])):
+        fk = int(false_kills.get(gate) or 0)
+        tk = int(true_kills.get(gate) or 0)
+        scored_n = fk + tk
+        false_rate = round(100.0 * fk / scored_n, 1) if scored_n else None
+        out.append(
+            {
+                "gate": gate,
+                "kill_n": kn,
+                "false_kill_n": fk,
+                "true_kill_n": tk,
+                "false_kill_rate": false_rate,
+                "note": (
+                    f"误杀偏多" if fk >= 3 and (false_rate or 0) >= 50 else
+                    ("挡得住" if tk >= 3 and fk == 0 else "")
+                ),
+            }
+        )
+    return out[:8]
+
+
+def build_sell_review_bias(
+    rows: list[dict[str, Any]] | None = None,
+    *,
+    hit_mode: str | None = None,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    """Derive sell-band widen/tighten from historical sell outcomes.
+
+    ``kind`` = etf | stock filters the sample. Low 卖后回落 hit-rate → widen;
+    high hit-rate → slightly tighten take-profit pullback.
+    """
+    from market_desk.config import (
+        SELL_REVIEW_MIN_N,
+        SELL_REVIEW_TIGHTEN_ABOVE,
+        SELL_REVIEW_TIGHTEN_MULT,
+        SELL_REVIEW_WIDEN_BELOW,
+        SELL_REVIEW_WIDEN_MULT,
+    )
+
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    kind_f = str(kind or "").strip().lower() or None
+    try:
+        src = rows if rows is not None else load_signals(limit=240)
+    except Exception:
+        src = []
+    sells = [
+        r for r in src
+        if str(r.get("signal_type") or "") == "sell"
+        and not int(r.get("skipped") or 0)
+        and r.get("outcome_label")
+    ]
+    if mode == "traded":
+        sells = [r for r in sells if int(r.get("traded") or 0)]
+    if kind_f in ("etf", "stock"):
+        sells = [r for r in sells if str(r.get("kind") or "stock") == kind_f]
+    n = len(sells)
+    label = {"etf": "ETF", "stock": "个股"}.get(kind_f or "", "合计")
+    if n < int(SELL_REVIEW_MIN_N):
+        return {
+            "ok": False,
+            "kind": kind_f,
+            "n": n,
+            "hit_rate": None,
+            "widen": False,
+            "tighten": False,
+            "mult": 1.0,
+            "note": f"{label}卖点样本不足（n={n}，需≥{SELL_REVIEW_MIN_N}）",
+        }
+    hit = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后回落")
+    early = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后继续涨")
+    rate = round(100.0 * hit / n, 1)
+    widen = rate < float(SELL_REVIEW_WIDEN_BELOW)
+    tighten = rate >= float(SELL_REVIEW_TIGHTEN_ABOVE)
+    mult = 1.0
+    note = f"{label}卖后回落命中 {rate}%（n={n}，继续涨 {early}）"
+    if widen:
+        mult = float(SELL_REVIEW_WIDEN_MULT)
+        note += "·偏早→放宽回撤/落袋"
+    elif tighten:
+        mult = float(SELL_REVIEW_TIGHTEN_MULT)
+        note += "·偏准→略收紧止盈回撤"
+    return {
+        "ok": True,
+        "kind": kind_f,
+        "n": n,
+        "hit_rate": rate,
+        "early_n": early,
+        "hit_n": hit,
+        "widen": widen,
+        "tighten": tighten,
+        "mult": mult,
+        "note": note,
+    }
+
+
+def build_sell_review_bias_bundle(
+    rows: list[dict[str, Any]] | None = None,
+    *,
+    hit_mode: str | None = None,
+) -> dict[str, Any]:
+    """Return all / etf / stock sell biases for review UI and exit bands."""
+    try:
+        src = rows if rows is not None else load_signals(limit=240)
+    except Exception:
+        src = []
+    overall = build_sell_review_bias(src, hit_mode=hit_mode, kind=None)
+    etf = build_sell_review_bias(src, hit_mode=hit_mode, kind="etf")
+    stock = build_sell_review_bias(src, hit_mode=hit_mode, kind="stock")
+    return {
+        "all": overall,
+        "etf": etf,
+        "stock": stock,
+        "note": " · ".join(
+            n for n in (etf.get("note"), stock.get("note"), overall.get("note")) if n
+        ),
+        "hit_rate": overall.get("hit_rate"),
+        "n": overall.get("n"),
+        "widen": overall.get("widen"),
+        "tighten": overall.get("tighten"),
+    }
+
+
+_REVIEW_BIAS_CACHE: dict[str, Any] = {"day": "", "sell": None}
+
+
+def cached_sell_bias_bundle() -> dict[str, Any]:
+    """Day-scoped cache for sell-review bias (avoid per-refresh full scans)."""
+    day = datetime.now().strftime("%Y-%m-%d")
+    if _REVIEW_BIAS_CACHE.get("day") != day or _REVIEW_BIAS_CACHE.get("sell") is None:
+        _REVIEW_BIAS_CACHE["day"] = day
+        try:
+            _REVIEW_BIAS_CACHE["sell"] = build_sell_review_bias_bundle()
+        except Exception:
+            _REVIEW_BIAS_CACHE["sell"] = {
+                "all": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
+                "etf": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
+                "stock": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
+                "note": "卖点闭环暂不可用",
+            }
+    return dict(_REVIEW_BIAS_CACHE["sell"] or {})
 
 
 def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
@@ -1205,10 +1448,14 @@ def build_review_payload(
     summary["kind_hits"] = build_kind_hit_rates(global_rows)
     summary["phase_kind_hits"] = build_phase_kind_hit_rates(global_rows)
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
+    summary["gate_kills"] = build_gate_kill_stats(global_rows)
+    summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     summary["tune_hints"] = build_tune_hints(
         missed=summary["missed_buys"],
         phase_hits=summary["phase_hits"],
         kind_hits=summary["kind_hits"],
+        gate_kills=summary["gate_kills"],
+        sell_bias=summary["sell_bias"].get("all") or summary["sell_bias"],
     )
     return {
         "ok": True,

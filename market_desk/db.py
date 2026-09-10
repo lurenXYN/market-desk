@@ -769,6 +769,44 @@ def upsert_signal(row: dict[str, Any]) -> None:
         elif old_boards and new_boards and old_boards != new_boards:
             # Prefer richer first capture; only replace when newly resolved from empty.
             pass
+
+        # Gate evolution: keep first_ready / fail history across same-day upserts.
+        ready_now = 1 if row.get("ready") else 0
+        signaled = str(row.get("signaled_at") or "")
+        if ready_now:
+            merged["ever_ready"] = True
+            if not old_payload.get("first_ready_at"):
+                merged["first_ready_at"] = signaled or old_payload.get("first_ready_at")
+            else:
+                merged["first_ready_at"] = old_payload.get("first_ready_at")
+        else:
+            if old_payload.get("ever_ready"):
+                merged["ever_ready"] = True
+            if old_payload.get("first_ready_at"):
+                merged["first_ready_at"] = old_payload.get("first_ready_at")
+        new_fails = [
+            str(x).strip()
+            for x in (incoming.get("confirm_fail") or [])
+            if str(x).strip()
+        ]
+        hist = [
+            str(x).strip()
+            for x in (old_payload.get("confirm_fail_hist") or [])
+            if str(x).strip()
+        ]
+        for flag in new_fails:
+            if flag not in hist:
+                hist.append(flag)
+        if hist:
+            merged["confirm_fail_hist"] = hist[:24]
+        if new_fails:
+            merged["final_fail"] = new_fails
+        elif old_payload.get("final_fail") and not ready_now:
+            merged["final_fail"] = old_payload.get("final_fail")
+        elif old_payload.get("final_fail") and ready_now:
+            # Recovered to ready: keep last gated fail for attribution.
+            merged["final_fail"] = old_payload.get("final_fail")
+
         now_payload = json.dumps(merged, ensure_ascii=False)
         conn.execute(
             """
@@ -894,6 +932,87 @@ def load_signals_for_date(trade_date: str) -> list[dict[str, Any]]:
             (day,),
         ).fetchall()
     return _decode_signal_rows(rows)
+
+
+def find_signal(
+    trade_date: str,
+    code: str,
+    signal_type: str,
+) -> dict[str, Any] | None:
+    """Return the unique same-day signal for code + type, or None."""
+    day = str(trade_date or "").strip()[:10]
+    c = str(code or "").strip().zfill(6)
+    typ = str(signal_type or "").strip().lower()
+    if not day or len(c) != 6 or not c.isdigit() or typ not in ("buy", "sell"):
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            _SIGNAL_SELECT
+            + """
+            WHERE trade_date = ? AND code = ? AND signal_type = ?
+            LIMIT 1
+            """,
+            (day, c, typ),
+        ).fetchone()
+    rows = _decode_signal_rows([row] if row else [])
+    return rows[0] if rows else None
+
+
+def sync_sell_fill_from_trim(
+    *,
+    code: str,
+    trade_date: str | None,
+    fill_price: float | None,
+    fill_qty: int,
+    note: str | None = None,
+) -> dict[str, Any] | None:
+    """Mark today's sell signal traded and fill price/qty after a desk trim.
+
+    No-op when there is no same-day sell signal yet. Returns the updated signal
+    row summary, or None.
+    """
+    day = str(trade_date or "").strip()[:10]
+    if not day:
+        day = datetime.now().strftime("%Y-%m-%d")
+    c = str(code or "").strip().zfill(6)
+    qty = int(fill_qty or 0)
+    if len(c) != 6 or not c.isdigit() or qty <= 0:
+        return None
+    row = find_signal(day, c, "sell")
+    if not row:
+        return None
+    px = float(fill_price) if fill_price is not None and float(fill_price) > 0 else None
+    if px is None:
+        try:
+            px = float(row.get("price") or row.get("last") or 0) or None
+        except (TypeError, ValueError):
+            px = None
+    prev_note = str(row.get("note") or "").strip()
+    note_to_set = None
+    if not prev_note and note:
+        note_to_set = note
+    elif not int(row.get("traded") or 0) and note:
+        note_to_set = note
+    prev_qty = int(row.get("fill_qty") or 0) if int(row.get("traded") or 0) else 0
+    # Accumulate same-day partials (half then clear) into one fill qty.
+    total_qty = prev_qty + qty if prev_qty > 0 else qty
+    ok = update_signal_meta(
+        int(row["id"]),
+        traded=1,
+        skipped=0,
+        note=note_to_set,
+        fill_price=px,
+        fill_qty=total_qty,
+    )
+    if not ok:
+        return None
+    return {
+        "id": int(row["id"]),
+        "code": c,
+        "trade_date": day,
+        "fill_price": px,
+        "fill_qty": total_qty,
+    }
 
 
 def list_signal_trade_dates(limit: int = 40) -> list[str]:

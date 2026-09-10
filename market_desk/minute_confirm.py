@@ -31,7 +31,10 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
             vol = 0.0
         volumes.append(max(0.0, vol))
 
-    if len(prices) < 25:
+    from market_desk.config import MINUTE_SAMPLE_MIN
+
+    sample_min = int(MINUTE_SAMPLE_MIN)
+    if len(prices) < sample_min:
         return {
             "ok": None,
             "label": "分时样本不足",
