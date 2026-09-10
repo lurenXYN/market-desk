@@ -72,6 +72,21 @@ def build_morning_brief(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     elif sim.get("note"):
         bullets.append(f"相似日：{sim.get('note')}")
 
+    season = snap.get("seasonality") or {}
+    desk_season = season.get("desk") or {}
+    if desk_season.get("brief"):
+        bullets.append(str(desk_season["brief"]))
+    elif desk_season.get("line"):
+        bullets.append(str(desk_season["line"]))
+    elif season.get("active"):
+        titles = [
+            str(w.get("title") or "")
+            for w in (season.get("active") or [])
+            if w.get("title")
+        ]
+        if titles:
+            bullets.append("日历：" + " · ".join(titles[:3]))
+
     if risk.get("count"):
         bullets.append(
             f"仓位：{risk.get('count')} 只 · 浮盈 "

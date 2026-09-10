@@ -18,6 +18,7 @@ from market_desk.db import (
     upsert_signal,
 )
 from market_desk.filters import normalize_code
+from market_desk.zt_stats import enrich_signals_with_zt_ytd
 from market_desk.numbers import num
 from market_desk.settings import setting
 
@@ -1388,6 +1389,7 @@ def build_review_payload(
     live_mainline: str | None = None,
     vs_mainline_mode: str | None = None,
     holders: dict[str, dict[str, Any]] | None = None,
+    zt_ytd: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Load one trade-date's signals plus global summary for the review tab."""
     calendar_today = datetime.now().strftime("%Y-%m-%d")
@@ -1417,6 +1419,8 @@ def build_review_payload(
     )
     if holders:
         day_rows = enrich_signals_with_holders(day_rows, holders)
+    if zt_ytd:
+        day_rows = enrich_signals_with_zt_ytd(day_rows, zt_ytd)
     day_phase = phase
     if not day_phase and day_rows:
         day_phase = str(day_rows[0].get("phase") or "") or None

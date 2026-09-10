@@ -205,6 +205,31 @@
       color: var(--muted); font-size: 12px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
     }
     .morning-brief .copy-btn:hover { color: var(--text); border-color: #5a6a80; }
+    .season-desk {
+      margin: 8px 0 0;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #121820;
+    }
+    .season-desk .k {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      letter-spacing: 0.04em;
+    }
+    .season-desk .txt {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--text);
+    }
+    .season-desk .detail {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
     .eod-brief {
       margin: 0 0 12px; padding: 10px 12px;
       border: 1px solid var(--line); border-radius: 8px; background: #0c1218;
@@ -1539,6 +1564,13 @@
             <div class="pb dont"><div class="lab">不做</div><div class="txt" id="pbDont">—</div></div>
             <div class="pb size"><div class="lab">仓位</div><div class="txt" id="pbSize">—</div></div>
           </div>
+          <div class="season-desk" id="seasonDesk" hidden>
+            <div class="k">日历提醒 <button type="button" class="q" data-term="季节性日历">?</button>
+              <span class="meta">仅观察</span>
+            </div>
+            <div class="txt" id="seasonDeskLine"></div>
+            <div class="detail" id="seasonDeskDetail"></div>
+          </div>
           <details class="morning-brief" id="morningBrief">
             <summary>
               早决策摘要 <button type="button" class="q" data-term="早决策摘要">?</button>
@@ -2283,6 +2315,16 @@
       document.getElementById("pbDo").textContent = pb.do || (pb.lines && pb.lines[0]) || "—";
       document.getElementById("pbDont").textContent = pb.dont || (pb.lines && pb.lines[1]) || "—";
       document.getElementById("pbSize").textContent = pb.size || (pb.lines && pb.lines[2]) || "—";
+      const seasonDesk = document.getElementById("seasonDesk");
+      const seasonHint = ((d.seasonality || {}).desk) || {};
+      if (seasonDesk) {
+        const show = !!seasonHint.show && !!(seasonHint.line || seasonHint.detail);
+        seasonDesk.hidden = !show;
+        if (show) {
+          document.getElementById("seasonDeskLine").textContent = seasonHint.line || "";
+          document.getElementById("seasonDeskDetail").textContent = seasonHint.detail || "";
+        }
+      }
       const brief = d.morning_brief || {};
       document.getElementById("morningFocus").textContent = brief.focus || "等待数据";
       document.getElementById("morningSeg").textContent = brief.segment
@@ -3134,6 +3176,8 @@
     let currentMain = "desk";
     let cycleSel = null;
     let reviewLoadedAt = 0;
+    let reviewZtLoading = false;
+    let reviewZtSeq = 0;
     let chartCode = "";
     let chartSignalAt = "";
 
@@ -3301,6 +3345,7 @@
       { id: "holder_n", label: "股东户数" },
       { id: "holder_chg", label: "户数增减%" },
       { id: "holder_avg", label: "户均市值" },
+      { id: "zt_ytd", label: "年内涨停" },
       { id: "day1", label: "次日%" },
       { id: "day3", label: "三日%" },
       { id: "result", label: "结果" },
@@ -3441,6 +3486,18 @@
       if (col === "holder_avg") {
         const tip = r.holder_end ? `统计截止 ${r.holder_end}` : "户均持股市值";
         return `<span title="${tip}">${fmtHolderAvgWan(r.holder_avg_wan)}</span>`;
+      }
+      if (col === "zt_ytd") {
+        const n = r.zt_ytd;
+        if (n == null || Number.isNaN(Number(n))) {
+          if (reviewZtLoading && r.kind !== "etf") {
+            return `<span class="meta" title="年内涨停加载中">…</span>`;
+          }
+          return "—";
+        }
+        const tip = r.zt_ytd_note
+          || (r.zt_ytd_year ? `${r.zt_ytd_year}年日线涨停次数（未复权阈值）` : "年内日线涨停次数");
+        return `<span title="${tip}">${Number(n)}</span>`;
       }
       if (col === "day1") {
         const d1 = r.outcome_day1_pct;
@@ -3749,6 +3806,49 @@
       return !!(view && cal && view === cal);
     }
 
+    async function loadReviewZtYtd(date, seq) {
+      const want = String(date || "").trim();
+      if (!want) {
+        if (seq === reviewZtSeq) reviewZtLoading = false;
+        return;
+      }
+      try {
+        const r = await fetch("/api/review/zt-ytd?date=" + encodeURIComponent(want));
+        const d = await r.json();
+        if (seq !== reviewZtSeq) return;
+        const view = lastReview.view_date
+          || (lastReview.summary || {}).view_date
+          || reviewViewDate
+          || "";
+        if (view && d.trade_date && view !== d.trade_date) return;
+        const by = d.by_code || {};
+        const rows = lastReview.signals || [];
+        for (const row of rows) {
+          if (row.kind === "etf") {
+            row.zt_ytd = null;
+            continue;
+          }
+          const code = String(row.code || "");
+          const hit = by[code.padStart(6, "0")] || by[code];
+          if (!hit) {
+            row.zt_ytd = null;
+            continue;
+          }
+          row.zt_ytd = hit.count;
+          row.zt_ytd_year = hit.year;
+          row.zt_ytd_note = hit.note;
+        }
+        reviewZtLoading = false;
+        paintReview(lastReview);
+      } catch (e) {
+        if (seq !== reviewZtSeq) return;
+        reviewZtLoading = false;
+        if (lastReview && (lastReview.signals || []).length) {
+          paintReview(lastReview);
+        }
+      }
+    }
+
     async function loadReview(force, date) {
       const now = Date.now();
       const want = (date !== undefined && date !== null)
@@ -3762,8 +3862,12 @@
         const q = params.toString() ? ("?" + params.toString()) : "";
         const r = await fetch("/api/review" + q);
         const d = await r.json();
+        const day = d.view_date || (d.summary || {}).view_date || want;
+        const seq = ++reviewZtSeq;
+        reviewZtLoading = true;
         paintReview(d);
         reviewLoadedAt = Date.now();
+        loadReviewZtYtd(day, seq);
       } catch (e) {
         const n = Math.max(visibleRevCols().length, 1);
         document.getElementById("revBody").innerHTML =
@@ -4564,7 +4668,7 @@
         "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
       ] },
       { id: "review", label: "复盘/观察", keys: [
-        "信号复盘", "对照主线", "股东户数", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
+        "信号复盘", "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
       ] },
       { id: "market", label: "大盘指标", keys: [
@@ -4788,6 +4892,7 @@
         if (id === "holder_n") return r.holder_num ?? "";
         if (id === "holder_chg") return r.holder_chg_pct ?? "";
         if (id === "holder_avg") return r.holder_avg_wan ?? "";
+        if (id === "zt_ytd") return r.zt_ytd ?? "";
         if (id === "day1") return r.outcome_day1_pct;
         if (id === "day3") return r.outcome_day3_pct;
         if (id === "result") return r.outcome_label;

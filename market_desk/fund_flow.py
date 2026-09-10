@@ -152,8 +152,9 @@ def build_fund_flow_board(
 
 def _local_windows(trade_date: str, dates_desc: list[str]) -> dict[str, list[str]]:
     """Build local aggregation date lists (newest-first, matching dates_desc order)."""
+    day = str(trade_date or "")[:10]
     try:
-        today = date.fromisoformat(trade_date[:10])
+        today = date.fromisoformat(day) if day else date.today()
     except ValueError:
         today = date.today()
     monday = today - timedelta(days=today.weekday())
@@ -174,9 +175,7 @@ def _local_windows(trade_date: str, dates_desc: list[str]) -> dict[str, list[str
         return out
 
     return {
-        "loc_day": [day] if day in dates_desc or dates_desc[:1] == [day] else (
-            [day] if day else []
-        ),
+        "loc_day": [day] if day else [],
         "loc_5d": take_n(5),
         "loc_10d": take_n(10),
         "loc_week": in_range(monday, today),

@@ -63,6 +63,7 @@ from market_desk.review import (
     note_quote_ticks,
     record_session_signals,
 )
+from market_desk.zt_stats import count_limit_ups_ytd_from_bars
 from market_desk.similar import build_similar_days
 from market_desk.report import build_morning_brief
 from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_segment
@@ -70,6 +71,7 @@ from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_seg
 from market_desk.eastmoney import (
     fetch_board_fund_flow,
     fetch_board_members,
+    fetch_daily_bars,
     fetch_daily_closes_many,
     fetch_daily_klines_many,
     fetch_holder_stats_many,
@@ -155,6 +157,8 @@ class DeskEngine:
         # Index OHLCV for Elliott scenarios (once per trade day).
         self._index_bars_day: str | None = None
         self._index_bars: list[dict[str, Any]] = []
+        # code -> {"day": trade_date, "year": int, "count": int}
+        self._zt_ytd_cache: dict[str, dict[str, Any]] = {}
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -743,6 +747,7 @@ class DeskEngine:
                 async def _holders() -> dict[str, dict[str, Any]]:
                     return await fetch_holder_stats_many(client, stock_codes)
 
+                # zt_ytd is heavy (per-code daily bars); load via /api/review/zt-ytd.
                 _, quotes, holders = await asyncio.gather(
                     _score_pending(),
                     _quotes(),
@@ -767,6 +772,84 @@ class DeskEngine:
             vs_mainline_mode=vs_mainline_mode,
             holders=holders,
         )
+
+    async def build_review_zt_ytd(
+        self,
+        view_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch calendar-year limit-up counts for one review day (async column)."""
+        today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        day = str(view_date or today).strip()[:10] or today
+        day_rows = load_signals_for_date(day)
+        stock_rows = [r for r in day_rows if str(r.get("kind") or "") != "etf"]
+        stock_codes = [str(r.get("code") or "") for r in stock_rows]
+        name_by_code = {
+            normalize_code(r.get("code")): str(r.get("name") or "")
+            for r in stock_rows
+        }
+        by_code: dict[str, dict[str, Any]] = {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as client:
+                by_code = await self._zt_ytd_for_codes(
+                    client, stock_codes, name_by_code, trade_date=day
+                )
+        except Exception:
+            log.exception("review zt_ytd fetch failed")
+        return {"trade_date": day, "by_code": by_code}
+
+    async def _zt_ytd_for_codes(
+        self,
+        client: httpx.AsyncClient,
+        codes: list[str],
+        names: dict[str, str],
+        *,
+        trade_date: str,
+        concurrency: int = 5,
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve calendar-year limit-up counts (cached once per code per day)."""
+        year = int(str(trade_date or "")[:4] or datetime.now(CN_TZ).year)
+        day = str(trade_date or "")[:10]
+        uniq = []
+        seen: set[str] = set()
+        for raw in codes:
+            c = normalize_code(raw)
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            uniq.append(c)
+        out: dict[str, dict[str, Any]] = {}
+        need: list[str] = []
+        for c in uniq:
+            hit = self._zt_ytd_cache.get(c)
+            if hit and hit.get("day") == day and hit.get("year") == year:
+                out[c] = hit
+            else:
+                need.append(c)
+        if need:
+            # Prefer unadjusted EM history (beg/end disables Tencent-qfq shortcut).
+            beg = f"{year - 1}-12-01"
+            sem = asyncio.Semaphore(max(1, int(concurrency or 5)))
+
+            async def _one(code: str) -> list[dict[str, Any]]:
+                async with sem:
+                    return await fetch_daily_bars(
+                        client, code, limit=320, adjust=0, beg=beg, end=day
+                    )
+
+            bar_lists = await asyncio.gather(*[_one(c) for c in need])
+            for c, bars in zip(need, bar_lists):
+                cnt = count_limit_ups_ytd_from_bars(
+                    bars, name=names.get(c) or "", year=year
+                )
+                row = {
+                    "day": day,
+                    "year": year,
+                    "count": cnt,
+                    "note": f"{year}年日线涨停次数（未复权收盘涨幅阈值，非官方字段）",
+                }
+                self._zt_ytd_cache[c] = row
+                out[c] = row
+        return out
 
     def _emit_toasts(
         self,

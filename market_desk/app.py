@@ -199,6 +199,12 @@ async def review(
     return await engine.build_review(view_date=date, vs_mainline_mode=vs_ml)
 
 
+@app.get("/api/review/zt-ytd")
+async def review_zt_ytd(date: str | None = Query(default=None)) -> dict:
+    """Return calendar-year limit-up counts for the review day's equities."""
+    return await engine.build_review_zt_ytd(view_date=date)
+
+
 @app.get("/api/chart/{code}")
 async def chart(code: str, signal_at: str | None = Query(default=None)) -> dict:
     """Return intraday + daily series and a Xueqiu deep-link for one ticker."""

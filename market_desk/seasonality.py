@@ -28,6 +28,7 @@ def build_seasonality(
     catalog = _full_catalog(today, windows)
     active = [w for w in catalog if w.get("active")]
     hist_note = _history_hint(history)
+    desk = _desk_hint(active, weekday_note, hist_note)
     return {
         "ok": True,
         "standalone": True,
@@ -38,6 +39,7 @@ def build_seasonality(
         "active": active,
         "windows": catalog,
         "history_note": hist_note,
+        "desk": desk,
         "note": (
             f"{today.isoformat()} · 激活 {len(active)} 个日历窗"
             + (f" · {weekday_note}" if weekday_note else "")
@@ -285,3 +287,73 @@ def _history_hint(history: list[dict[str, Any]] | None) -> str:
     if panic_n >= 3:
         return "近端日级偏恐慌，月初/假后修复窗才更有意义"
     return ""
+
+
+# Prefer rarer / higher-stakes windows when picking the desk one-liner.
+_DESK_PRIORITY = (
+    "holiday_eve",
+    "holiday_reopen",
+    "spring_festival",
+    "month_end",
+    "month_start",
+    "report_q3",
+    "report_mid",
+    "report_q1",
+    "friday",
+    "monday",
+)
+
+
+def _desk_hint(
+    active: list[dict[str, Any]],
+    weekday_note: str,
+    hist_note: str,
+) -> dict[str, Any]:
+    """Build a short observe-only reminder for the desk tab / morning brief.
+
+    Only surfaces when at least one calendar window is active — plain weekday
+    labels stay on the market tab and do not clutter the desk.
+    """
+    rows = [w for w in (active or []) if w.get("title")]
+    if not rows:
+        return {
+            "show": False,
+            "line": "",
+            "detail": "",
+            "brief": "",
+            "titles": [],
+            "primary_id": None,
+        }
+    by_id = {str(w.get("id") or ""): w for w in rows}
+    primary = None
+    for wid in _DESK_PRIORITY:
+        if wid in by_id:
+            primary = by_id[wid]
+            break
+    if primary is None:
+        primary = rows[0]
+    titles = [str(w.get("title") or "") for w in rows]
+    line = "日历：" + " · ".join(titles[:3])
+    if len(titles) > 3:
+        line += f" 等{len(titles)}窗"
+    detail_parts: list[str] = []
+    path = str(primary.get("path") or "").strip()
+    watch = str(primary.get("watch") or "").strip()
+    if path:
+        detail_parts.append(path)
+    if watch:
+        detail_parts.append(f"注意：{watch}")
+    if hist_note:
+        detail_parts.append(hist_note)
+    elif weekday_note:
+        detail_parts.append(weekday_note)
+    detail = " ".join(detail_parts)
+    brief = f"{line} — {path}" if path else line
+    return {
+        "show": True,
+        "line": line,
+        "detail": detail,
+        "brief": brief,
+        "titles": titles,
+        "primary_id": primary.get("id"),
+    }
