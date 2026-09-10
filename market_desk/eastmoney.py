@@ -77,6 +77,7 @@ def _map_zt_row(row: dict[str, Any], kind: str) -> dict[str, Any] | None:
         "name": name,
         "pct": round(pct, 2),
         "amount": num(row.get("amount"), 0.0) or 0.0,
+        "seal_fund": num(row.get("fund")),
         "turnover": num(row.get("hs"), 0.0) or 0.0,
         "boards": days or lbc,
         "explode_count": int(num(row.get("zbc"), 0) or 0),

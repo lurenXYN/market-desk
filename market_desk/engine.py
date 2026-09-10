@@ -47,6 +47,7 @@ from market_desk.db import (
     try_add_mainline_switch,
     upsert_session_segment,
 )
+from market_desk.auction_scan import build_auction_strategy
 from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
@@ -507,6 +508,14 @@ class DeskEngine:
                     "metrics": metrics,
                     "kpis": kpi_bars(metrics),
                     "auction": auction,
+                    "auction_strategy": build_auction_strategy(
+                        yesterday_zt=yesterday_zt,
+                        quotes=quotes,
+                        zt_today=zt,
+                        zb_today=zb,
+                        now=now,
+                        trading_day=is_trading_day(now),
+                    ),
                     "etfs": etfs,
                     "indices": indices,
                     "hot_boards": hot_cards,

@@ -528,6 +528,40 @@
       margin-left: 6px; color: var(--muted); font-weight: 500; font-size: 11px;
     }
     .tab-panel[hidden] { display: none !important; }
+    .auc-tier {
+      margin: 12px 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card2);
+      overflow: hidden;
+    }
+    .auc-tier .auc-hd {
+      display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+      padding: 10px 12px; border-bottom: 1px solid var(--line);
+      background: #10161f;
+    }
+    .auc-tier .auc-hd b { font-size: 14px; letter-spacing: 0.04em; }
+    .auc-tier .auc-hd .cnt {
+      min-width: 22px; text-align: center;
+      border-radius: 4px; padding: 1px 7px;
+      background: #1e3a5f; color: #9ec5ff; font-size: 12px; font-weight: 700;
+    }
+    .auc-tier table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .auc-tier th, .auc-tier td {
+      padding: 8px 10px; border-bottom: 1px solid #1c2430;
+      text-align: left; white-space: nowrap;
+    }
+    .auc-tier th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    .auc-tier tr:last-child td { border-bottom: none; }
+    .auc-adv-grab { color: var(--up); font-weight: 700; }
+    .auc-adv-watch { color: var(--warn); font-weight: 650; }
+    .auc-adv-no { color: var(--muted); }
+    .auc-run {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 2px 8px; border-radius: 4px;
+      border: 1px solid var(--line); font-size: 12px;
+    }
+    .auc-run.on { border-color: #2f5a3a; color: var(--live); }
     .grid-top {
       display: grid;
       grid-template-columns: 1.15fr 1fr 0.95fr;
@@ -1268,6 +1302,7 @@
       <button type="button" data-main="market">大盘<span class="hint">相位</span></button>
       <button type="button" data-main="boards">板块<span class="hint">热点</span></button>
       <button type="button" data-main="watch">观察<span class="hint">异动</span></button>
+      <button type="button" data-main="auction">竞价<span class="hint">策略</span></button>
       <button type="button" data-main="pos">仓位</button>
       <button type="button" data-main="review">复盘<span class="hint">信号</span></button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
@@ -1336,7 +1371,7 @@
           <input id="setAutoBackup" type="checkbox" /> 收盘自动备份
         </label>
       </div>
-      <div class="meta" style="margin-top:8px">快捷键：1–6 切页 · 复盘页 T 确认首条未交易 · Esc 关图</div>
+      <div class="meta" style="margin-top:8px">快捷键：1–7 切页 · 复盘页 T 确认首条未交易 · Esc 关图</div>
       <div class="ft" style="margin-top:10px">
         <button type="button" class="rev-col-btn" id="settingsSave">保存</button>
       </div>
@@ -1580,6 +1615,19 @@
         <ul class="watch-list" id="watchList">
           <li class="hdrow"><span>名称</span><span>代码</span><span>涨跌</span><span>标签</span><span>原因</span><span>板块</span><span></span></li>
         </ul>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="panel-auction" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">集合竞价策略
+          <button type="button" class="q" data-term="集合竞价策略">?</button>
+        </h2>
+        <p class="meta" id="aucStratNote">独立页：只观察昨停竞价分档，不改作战台买卖结论。</p>
+        <div class="pos-sum" id="aucStratSum" style="margin-bottom:10px"></div>
+        <div id="aucStratBody">
+          <div class="meta">等待快照…</div>
+        </div>
       </section>
     </section>
 
@@ -2552,6 +2600,61 @@
           <td>${actions}</td>
         </tr>`;
       }).join("") || `<tr><td colspan="12" class="meta">暂无仓位，先记账</td></tr>`;
+      paintAuctionStrategy(d);
+    }
+
+    function paintAuctionStrategy(d) {
+      const box = d.auction_strategy || {};
+      const note = document.getElementById("aucStratNote");
+      const sum = document.getElementById("aucStratSum");
+      const body = document.getElementById("aucStratBody");
+      if (!note || !sum || !body) return;
+      const running = box.run_state === "竞价中" || box.run_state === "已开盘";
+      note.textContent = (box.disclaimer || "独立页：不改作战台买卖结论。")
+        + (box.run_note ? (" " + box.run_note) : "");
+      sum.innerHTML =
+        `<span class="auc-run${running ? " on" : ""}">${box.run_state || "未运行"}</span>`
+        + `<span>昨停 <b>${box.yzt_n ?? "—"}</b></span>`
+        + `<span>入选 <b>${box.scan_n ?? 0}</b></span>`
+        + `<span class="meta">时段 ${box.segment || "—"}</span>`;
+      const tiers = box.tiers || [];
+      if (!tiers.length) {
+        body.innerHTML = `<div class="meta">暂无竞价策略数据（等昨停池与开盘价）</div>`;
+        return;
+      }
+      body.innerHTML = tiers.map((tier) => {
+        const items = tier.items || [];
+        const rows = items.map((it) => {
+          const adv = it.advice || "";
+          const advCls = adv === "抢筹" ? "auc-adv-grab"
+            : (adv === "关注" ? "auc-adv-watch" : "auc-adv-no");
+          const seal = it.seal_ratio == null ? "—" : it.seal_ratio;
+          const openPct = it.open_pct == null ? "—" : ((it.open_pct > 0 ? "+" : "") + it.open_pct + "%");
+          return `<tr>
+            <td>${tickerHtml(it.name, it.code)}</td>
+            <td class="${(it.open_pct || 0) >= 0 ? "up" : "down"}">${openPct}</td>
+            <td>${it.open_type || "—"}</td>
+            <td class="down">${seal}</td>
+            <td class="${advCls}">${adv}</td>
+            <td>${it.judge || "—"}</td>
+            <td class="meta">${it.boards_yesterday ?? "—"}板${it.in_zt_today ? " ·今封" : ""}</td>
+            <td><button type="button" class="rev-col-btn auc-pin" data-code="${it.code || ""}" data-name="${it.name || ""}">钉自选</button></td>
+          </tr>`;
+        }).join("") || `<tr><td colspan="8" class="meta">本档暂无</td></tr>`;
+        return `<div class="auc-tier" data-tier="${tier.id || ""}">
+          <div class="auc-hd">
+            <b>${tier.label || ""}</b>
+            <span class="cnt">${items.length}</span>
+            <span class="meta">${tier.hint || ""}</span>
+          </div>
+          <table>
+            <thead><tr>
+              <th>名称</th><th>开幅%</th><th>开盘型</th><th>封成比</th><th>建议</th><th>判</th><th>昨连</th><th></th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      }).join("");
     }
 
     let lastData = null;
@@ -3264,7 +3367,7 @@
       document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
         el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
       );
-      ["desk", "market", "boards", "watch", "pos", "review"].forEach((name) => {
+      ["desk", "market", "boards", "watch", "auction", "pos", "review"].forEach((name) => {
         const el = document.getElementById("panel-" + name);
         if (el) el.hidden = name !== currentMain;
       });
@@ -3316,6 +3419,29 @@
       const hit = ev.target.closest("button[data-main]");
       if (!hit) return;
       applyMain(hit.getAttribute("data-main"));
+    });
+    document.getElementById("panel-auction").addEventListener("click", async (ev) => {
+      const pin = ev.target.closest(".auc-pin");
+      if (!pin) return;
+      const code = (pin.getAttribute("data-code") || "").trim();
+      const name = (pin.getAttribute("data-name") || "").trim();
+      if (!code) return;
+      try {
+        const r = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, name, note: "竞价策略钉入" }),
+        });
+        if (!r.ok) {
+          alert("钉自选失败");
+          return;
+        }
+        pin.textContent = "已钉";
+        pin.disabled = true;
+        await tick();
+      } catch (e) {
+        alert("钉自选失败");
+      }
     });
     document.getElementById("timeline").addEventListener("click", (ev) => {
       const btn = ev.target.closest(".node");
@@ -3822,7 +3948,7 @@
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (ev.target && ev.target.isContentEditable)) {
         return;
       }
-      const tabMap = { "1": "desk", "2": "market", "3": "boards", "4": "watch", "5": "pos", "6": "review" };
+      const tabMap = { "1": "desk", "2": "market", "3": "boards", "4": "watch", "5": "auction", "6": "pos", "7": "review" };
       if (tabMap[ev.key]) {
         applyMain(tabMap[ev.key]);
         return;
@@ -3966,11 +4092,11 @@
       ] },
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "对照主线", "股东户数", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
-        "相似日", "分时确认", "健康度", "高开低走黑名单",
+        "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
       ] },
       { id: "market", label: "大盘指标", keys: [
         "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "晋级1→2", "晋级2→3", "梯队", "昨停溢价",
-        "成交分位", "周期位置", "竞价基调", "主线透明",
+        "成交分位", "周期位置", "竞价基调", "主线透明", "集合竞价策略",
       ] },
     ];
     let glossaryGroup = "phase";
