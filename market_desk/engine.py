@@ -48,6 +48,7 @@ from market_desk.db import (
     upsert_session_segment,
 )
 from market_desk.auction_scan import build_auction_strategy
+from market_desk.elliott import build_elliott_scenarios
 from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
@@ -101,7 +102,7 @@ from market_desk.sentiment import (
     spark_values,
 )
 from market_desk.mainline import etf_spec_for_name, etf_spec_soft_fallback
-from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
+from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes, fetch_daily_bars_symbol
 from market_desk.trend import classify_many
 from market_desk.verdict import (
     align_action_with_ready,
@@ -144,6 +145,9 @@ class DeskEngine:
         self._kline_cache: dict[str, list[float]] = {}
         self._kline_ok: dict[str, bool] = {}
         self._minute_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        # Index OHLCV for Elliott scenarios (once per trade day).
+        self._index_bars_day: str | None = None
+        self._index_bars: list[dict[str, Any]] = []
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -351,6 +355,7 @@ class DeskEngine:
                     errors=errors,
                     label="pos",
                 )
+                await self._ensure_index_bars(client, trade_date_dash, errors=errors)
             note_quote_ticks(quotes)
             note_quote_ticks(etfs)
             note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
@@ -518,6 +523,7 @@ class DeskEngine:
                     ),
                     "etfs": etfs,
                     "indices": indices,
+                    "elliott": self._build_elliott(indices),
                     "hot_boards": hot_cards,
                     "pin_boards": pin_cards,
                     "ice_boards": ice_cards,
@@ -1015,6 +1021,58 @@ class DeskEngine:
                 return rows
             cursor -= timedelta(days=1)
         return []
+
+    async def _ensure_index_bars(
+        self,
+        client: httpx.AsyncClient,
+        trade_date: str,
+        *,
+        errors: list[str] | None = None,
+    ) -> None:
+        """Load 上证指数 daily OHLCV once per trade day for Elliott scenarios."""
+        day = str(trade_date or "")[:10]
+        if day and day == self._index_bars_day and len(self._index_bars) >= 30:
+            return
+        bars = await _safe(
+            fetch_daily_bars_symbol,
+            client,
+            "sh000001",
+            120,
+            errors=errors,
+            label="index-k",
+        )
+        if bars and len(bars) >= 30:
+            self._index_bars = list(bars)
+            self._index_bars_day = day
+        elif not self._index_bars:
+            self._index_bars = list(bars or [])
+            self._index_bars_day = day
+
+    def _build_elliott(self, indices: list[dict[str, Any]] | None) -> dict[str, Any]:
+        """Attach multi-scenario Elliott readout for 上证指数."""
+        last = None
+        for row in indices or []:
+            name = str(row.get("name") or "")
+            code = str(row.get("code") or "")
+            if code == "000001" or "上证" in name:
+                last = row.get("price")
+                break
+        try:
+            return build_elliott_scenarios(
+                self._index_bars,
+                index_name="上证指数",
+                index_code="000001",
+                last_price=float(last) if last not in (None, "") else None,
+            )
+        except Exception:
+            log.exception("elliott scenarios failed")
+            return {
+                "ok": False,
+                "standalone": True,
+                "scenarios": [],
+                "note": "波浪情景计算失败",
+                "disclaimer": "波浪计数多解，仅观察；不改作战台买卖结论。",
+            }
 
     def _auction(
         self, trade_date: str, now: datetime, quotes: list[dict[str, Any]]

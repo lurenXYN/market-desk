@@ -132,7 +132,21 @@ async def fetch_daily_bars(
     c = str(code or "").strip().zfill(6)
     if len(c) != 6 or not c.isdigit():
         return []
-    sym = tencent_symbol(c)
+    return await fetch_daily_bars_symbol(client, tencent_symbol(c), limit=limit)
+
+
+async def fetch_daily_bars_symbol(
+    client: httpx.AsyncClient,
+    symbol: str,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """Fetch daily bars for an explicit Tencent symbol (e.g. ``sh000001``).
+
+    Prefer this for indices — six-digit ``000001`` alone maps to 平安银行 on SZ.
+    """
+    sym = str(symbol or "").strip().lower()
+    if not sym or not sym[:2] in ("sh", "sz") or len(sym) < 8:
+        return []
     n = max(5, min(int(limit or 60), 320))
     url = (
         "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
@@ -154,7 +168,6 @@ async def fetch_daily_bars(
     data = payload.get("data") or {}
     node = data.get(sym) or {}
     if not node and data:
-        # Some responses nest under an unexpected key; take the first dict.
         first = next(iter(data.values()), None)
         node = first if isinstance(first, dict) else {}
     rows = node.get("qfqday") or node.get("day") or []
@@ -163,7 +176,6 @@ async def fetch_daily_bars(
     for row in rows:
         if not isinstance(row, (list, tuple)) or len(row) < 5:
             continue
-        # Tencent: date, open, close, high, low, volume
         o, cl, h, lo = num(row[1]), num(row[2]), num(row[3]), num(row[4])
         if cl is None:
             continue

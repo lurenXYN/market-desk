@@ -562,6 +562,35 @@
       border: 1px solid var(--line); font-size: 12px;
     }
     .auc-run.on { border-color: #2f5a3a; color: var(--live); }
+    .ew-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .ew-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #10161f;
+      padding: 10px 12px;
+    }
+    .ew-card.primary { border-color: #3a6a4a; background: #0f1a14; }
+    .ew-card .ew-top {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 8px; flex-wrap: wrap; margin-bottom: 6px;
+    }
+    .ew-card .ew-top b { font-size: 13px; letter-spacing: 0.02em; }
+    .ew-fit {
+      font-size: 12px; font-weight: 700;
+      padding: 1px 7px; border-radius: 4px;
+      background: #1e3a5f; color: #9ec5ff;
+    }
+    .ew-fit.hi { background: #1e3a2a; color: #7dcea0; }
+    .ew-fit.mid { background: #3a2e1a; color: #e0b341; }
+    .ew-card .ew-path { margin-top: 6px; font-size: 12.5px; line-height: 1.45; }
+    .ew-card .ew-risk { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .ew-bias-bull { color: var(--up); }
+    .ew-bias-bear { color: var(--down); }
+    .ew-bias-neutral { color: var(--warn); }
     .grid-top {
       display: grid;
       grid-template-columns: 1.15fr 1fr 0.95fr;
@@ -1484,6 +1513,15 @@
     <section class="card mid" style="margin-top:0">
       <h2 style="text-transform:none;letter-spacing:0.04em">主要指数</h2>
       <div class="idx-strip" id="idxStrip"></div>
+    </section>
+    <section class="card mid" id="elliottCard">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        大盘波浪情景（上证）
+        <button type="button" class="q" data-term="波浪情景">?</button>
+      </h2>
+      <p class="meta" id="elliottNote">规则多假设并列；不改作战台买卖结论。</p>
+      <div class="pos-sum" id="elliottSum" style="margin-bottom:10px"></div>
+      <div id="elliottBody"><div class="meta">等待日线…</div></div>
     </section>
     <section class="grid-top">
       <article class="card">
@@ -2601,6 +2639,49 @@
         </tr>`;
       }).join("") || `<tr><td colspan="12" class="meta">暂无仓位，先记账</td></tr>`;
       paintAuctionStrategy(d);
+      paintElliott(d);
+    }
+
+    function paintElliott(d) {
+      const box = d.elliott || {};
+      const note = document.getElementById("elliottNote");
+      const sum = document.getElementById("elliottSum");
+      const body = document.getElementById("elliottBody");
+      if (!note || !sum || !body) return;
+      note.textContent = (box.disclaimer || "波浪多解，仅观察。")
+        + (box.note ? (" " + box.note) : "");
+      const primary = box.primary || {};
+      const st = box.structure || {};
+      sum.innerHTML =
+        `<span>现价 <b>${box.last ?? "—"}</b></span>`
+        + `<span>样本 <b>${box.bars ?? "—"}</b> 日</span>`
+        + `<span>枢轴 <b>${box.pivot_n ?? "—"}</b></span>`
+        + `<span class="meta">趋势 ${({ up: "偏多", down: "偏空", side: "震荡" })[st.trend] || "—"}</span>`
+        + (primary.title
+          ? `<span>最高契合 <b>${primary.title}</b>（${primary.fit ?? "—"}）</span>`
+          : "");
+      const rows = box.scenarios || [];
+      if (!rows.length) {
+        body.innerHTML = `<div class="meta">${box.note || "暂无波浪情景"}</div>`;
+        return;
+      }
+      const topId = primary.id;
+      body.innerHTML = `<div class="ew-grid">` + rows.map((sc) => {
+        const fit = Number(sc.fit || 0);
+        const fitCls = fit >= 60 ? "hi" : (fit >= 40 ? "mid" : "");
+        const bias = sc.bias || "neutral";
+        const isPri = sc.id === topId;
+        return `<article class="ew-card${isPri ? " primary" : ""}">
+          <div class="ew-top">
+            <b class="ew-bias-${bias}">${sc.title || ""}</b>
+            <span class="ew-fit ${fitCls}">契合 ${fit}</span>
+          </div>
+          <div class="meta">${sc.family || ""} · ${sc.wave || ""} · ${sc.fit_note || ""}</div>
+          <div class="ew-path"><b>后市路径：</b>${sc.path || sc.next || "—"}</div>
+          <div class="ew-risk"><b>否决/风险：</b>${sc.invalidation || "—"}</div>
+          <div class="ew-risk">${sc.watch || sc.risk || ""}</div>
+        </article>`;
+      }).join("") + `</div>`;
     }
 
     function paintAuctionStrategy(d) {
@@ -4096,7 +4177,7 @@
       ] },
       { id: "market", label: "大盘指标", keys: [
         "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "晋级1→2", "晋级2→3", "梯队", "昨停溢价",
-        "成交分位", "周期位置", "竞价基调", "主线透明", "集合竞价策略",
+        "成交分位", "周期位置", "竞价基调", "主线透明", "集合竞价策略", "波浪情景",
       ] },
     ];
     let glossaryGroup = "phase";
