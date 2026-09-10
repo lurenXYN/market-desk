@@ -2957,7 +2957,8 @@
       const diffEl = document.getElementById("fundDiff");
       const body = document.getElementById("fundBody");
       if (!note || !sum || !spot || !body) return;
-      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
+      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "")
+        + (box.day_skew_note ? (" " + box.day_skew_note) : "");
       const meta = box.period_meta || [];
       if (!meta.some((m) => m.id === fundPeriod)) fundPeriod = box.default_period || "em_day";
       if (chips) {
