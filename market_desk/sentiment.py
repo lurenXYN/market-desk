@@ -305,14 +305,33 @@ def score_temperature(m: dict[str, Any]) -> int:
     return int(round(max(0.0, min(temp, 100.0))))
 
 
-def classify_phase(m: dict[str, Any], temperature: int) -> str:
-    """Classify the session into panic / divergence / ferment / climax."""
+def classify_phase(
+    m: dict[str, Any],
+    temperature: int,
+    *,
+    panic_temp: int | None = None,
+    ferment_temp: int | None = None,
+    climax_temp: int | None = None,
+) -> str:
+    """Classify the session into panic / divergence / ferment / climax.
+
+    Temperature cutoffs default to config and may be overridden by runtime settings.
+    """
+    from market_desk import config as cfg
+
+    panic_t = int(panic_temp if panic_temp is not None else cfg.PHASE_PANIC_TEMP)
+    ferment_t = int(ferment_temp if ferment_temp is not None else cfg.PHASE_FERMENT_TEMP)
+    climax_t = int(climax_temp if climax_temp is not None else cfg.PHASE_CLIMAX_TEMP)
+    # Keep ordering panic < ferment <= climax.
+    ferment_t = max(ferment_t, panic_t + 1)
+    climax_t = max(climax_t, ferment_t)
+
     big_drop = int(m.get("big_drop") or 0)
     if (
         m["dt"] >= 40
-        or temperature < 28
+        or temperature < panic_t
         or (m["zt"] <= 8 and m["dt"] >= 15)
-        or (big_drop >= 120 and temperature < 40)
+        or (big_drop >= 120 and temperature < max(panic_t + 12, 40))
         or (m.get("weak_index") and m["dt"] >= 25)
     ):
         return "恐慌"
@@ -324,11 +343,11 @@ def classify_phase(m: dict[str, Any], temperature: int) -> str:
     climax = False
     if m["height"] >= 6 and strong_promo and m["zt"] >= 35:
         climax = True
-    if temperature >= 72 and m["height"] >= 5:
+    if temperature >= climax_t and m["height"] >= 5:
         climax = True
     # Block fake climax on thin volume, weak index, or broken ladder.
     if climax and (m.get("thin_volume") or m.get("weak_index") or m.get("ladder_gap")):
-        return "发酵" if temperature >= 45 else "分歧"
+        return "发酵" if temperature >= ferment_t else "分歧"
     if climax:
         return "高潮"
 
@@ -337,7 +356,7 @@ def classify_phase(m: dict[str, Any], temperature: int) -> str:
     # High board with ladder gap and soft promotion → treat as divergence.
     if m.get("ladder_gap") and m["height"] >= 5 and promo < 22:
         return "分歧"
-    if temperature >= 45:
+    if temperature >= ferment_t:
         return "发酵"
     return "分歧"
 

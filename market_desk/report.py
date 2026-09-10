@@ -53,7 +53,12 @@ def build_morning_brief(snapshot: dict[str, Any] | None) -> dict[str, Any]:
 
     etf_note = ""
     if board and board != "未明":
-        if etf_mapped is False:
+        if ml.get("etf_soft"):
+            etf_note = (
+                f" · 近似ETF {carrier.get('name') or ''} {carrier.get('code') or ''}".rstrip()
+                + "（只观察回踩）"
+            )
+        elif etf_mapped is False:
             etf_note = " · 无ETF映射只观察"
         elif carrier.get("code"):
             etf_note = f" · 载体 {carrier.get('name') or ''} {carrier.get('code')}"

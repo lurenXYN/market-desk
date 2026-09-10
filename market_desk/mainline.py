@@ -92,6 +92,9 @@ def pick_mainline(
         and sticky_held_seconds < hold_min
     ):
         need = need * float(MAINLINE_HOLD_SWITCH_MULT)
+    # Easier to adopt a challenger that has an exact ETF map when sticky does not.
+    if etf_spec_for_name(str(leader.get("name") or "")) and not etf_spec_for_name(sticky):
+        need = need * 0.75
 
     if lead_s >= hold_s + need:
         return leader
@@ -183,7 +186,7 @@ def etf_spec_for_name(board_name: str) -> tuple[str, str, str] | None:
 
 
 def etf_spec_soft_fallback(board_name: str) -> tuple[str, str, str] | None:
-    """Looser map when exact keyword miss: prefer 3-char stems, else 2-char overlap."""
+    """Looser map when exact keyword miss: only 3-char stem overlaps (no 2-char)."""
     text = board_name or ""
     if not text:
         return None
@@ -192,13 +195,13 @@ def etf_spec_soft_fallback(board_name: str) -> tuple[str, str, str] | None:
     best: tuple[int, tuple[str, str, str]] | None = None
     for keys, spec in MAINLINE_ETF_RULES:
         for key in keys:
-            if len(key) < 2:
+            if len(key) < 3:
                 continue
             score = 0
-            if len(key) >= 3 and (key[:3] in text or (len(text) >= 3 and text[:3] in key)):
+            if key[:3] in text or (len(text) >= 3 and text[:3] in key):
                 score = 3
-            elif text[:2] in key or key[:2] in text:
-                score = 2
+            if len(key) >= 4 and (key[:4] in text or (len(text) >= 4 and text[:4] in key)):
+                score = 4
             if score and (best is None or score > best[0]):
                 best = (score, spec)
     return best[1] if best else None
@@ -238,6 +241,14 @@ def mainline_score(board: dict[str, Any]) -> float:
     else:
         ladder_adj = min(float(board.get("ladder_fill") or 0) / 100.0, 1.0) * 6.0
     ladder_adj += min(int(board.get("ge2") or 0), 4) * 1.5
+    # Prefer exact ETF maps so the desk can price a vehicle (soft/orphan lag a bit).
+    name = str(board.get("name") or "")
+    if etf_spec_for_name(name):
+        etf_adj = 5.0
+    elif etf_spec_soft_fallback(name):
+        etf_adj = 0.0
+    else:
+        etf_adj = -3.0
     return (
         rank
         + float(zt_n) * 6.0
@@ -245,7 +256,133 @@ def mainline_score(board: dict[str, Any]) -> float:
         + float(board.get("focus") or 0) * 0.15
         + min(persist, 6) * 3.0
         + ladder_adj
+        + etf_adj
         - zb_pen
         - explode_pen
         - late_pen
     )
+
+
+def explain_mainline(
+    hot: list[dict[str, Any]] | None,
+    chosen: dict[str, Any] | None,
+    *,
+    sticky_name: str | None = None,
+    sticky_held_seconds: float | None = None,
+    margin: float | None = None,
+) -> dict[str, Any]:
+    """Explain why the live mainline is kept or switched (for the desk strip)."""
+    boards = list(hot or [])
+    industries = [b for b in boards if b.get("kind") == "industry"]
+    pool = industries or boards
+    chosen = chosen or {}
+    name = str(chosen.get("name") or "").strip()
+    sticky = (sticky_name or "").strip()
+    need = float(margin) if margin is not None else float(setting("sticky_margin", 12.0))
+    hold_min = float(setting("switch_min_seconds", 300) or 0)
+    held = float(sticky_held_seconds) if sticky_held_seconds is not None else None
+
+    leader = max(pool, key=mainline_score) if pool else None
+    incumbent = next((b for b in pool if (b.get("name") or "") == sticky), None) if sticky else None
+    lead_name = str((leader or {}).get("name") or "")
+    lead_s = round(mainline_score(leader), 1) if leader else None
+    hold_s = round(mainline_score(incumbent), 1) if incumbent else None
+    chosen_s = round(mainline_score(chosen), 1) if name else None
+    gap = None
+    if lead_s is not None and hold_s is not None:
+        gap = round(lead_s - hold_s, 1)
+
+    effective_need = need
+    same = bool(sticky and lead_name and same_theme(sticky, lead_name))
+    in_hold = bool(held is not None and hold_min > 0 and held < hold_min)
+    if same:
+        effective_need = need * float(MAINLINE_THEME_SWITCH_MULT)
+    elif in_hold:
+        effective_need = need * float(MAINLINE_HOLD_SWITCH_MULT)
+    if (
+        lead_name
+        and sticky
+        and etf_spec_for_name(lead_name)
+        and not etf_spec_for_name(sticky)
+        and not same
+    ):
+        effective_need = float(effective_need) * 0.75
+    effective_need = round(float(effective_need), 1)
+
+    if not name:
+        reason = "热点池为空，主线未明"
+        kept = False
+    elif not sticky:
+        reason = "首任主线（无粘性前任）"
+        kept = False
+    elif name == sticky:
+        if same and lead_name and lead_name != sticky:
+            reason = (
+                f"同主题粘滞：挑战者 {lead_name} 分差 {gap if gap is not None else '—'} "
+                f"< 需 {effective_need}"
+            )
+        elif in_hold and lead_name and lead_name != sticky:
+            reason = (
+                f"持有期内未换防：挑战者 {lead_name} 分差 {gap if gap is not None else '—'} "
+                f"< 需 {effective_need}（已持 {int(held or 0)}s / {int(hold_min)}s）"
+            )
+        elif lead_name and lead_name != sticky:
+            reason = (
+                f"迟滞保留：挑战者 {lead_name} 分差 {gap if gap is not None else '—'} "
+                f"< 需 {effective_need}"
+            )
+        else:
+            reason = "仍为池内最高分（或并列领先）"
+        kept = True
+    elif not incumbent and sticky:
+        if same_theme(sticky, name):
+            reason = f"前任 {sticky} 离开热点池，同主题接任 {name}"
+        else:
+            reason = f"前任 {sticky} 离开热点池，改认 {name}"
+        kept = False
+    elif same and name != sticky:
+        reason = (
+            f"同主题换板：{sticky} → {name}，分差 {gap if gap is not None else '—'} "
+            f"≥ 需 {effective_need}"
+        )
+        kept = False
+    else:
+        reason = (
+            f"分差达标换防：{sticky} → {name}，分差 {gap if gap is not None else '—'} "
+            f"≥ 需 {effective_need}"
+        )
+        kept = False
+
+    runners = sorted(pool, key=mainline_score, reverse=True)[:3]
+    return {
+        "name": name or None,
+        "theme": theme_key(name) if name else None,
+        "score": chosen_s,
+        "zt_n": chosen.get("zt_n"),
+        "status": chosen.get("status"),
+        "etf_exact": bool(etf_spec_for_name(name)) if name else False,
+        "sticky_name": sticky or None,
+        "sticky_score": hold_s,
+        "challenger_name": lead_name or None,
+        "challenger_score": lead_s,
+        "gap": gap,
+        "need": effective_need,
+        "base_need": round(need, 1),
+        "held_seconds": None if held is None else int(held),
+        "hold_min_seconds": int(hold_min) if hold_min else 0,
+        "in_hold": in_hold,
+        "same_theme_challenge": same and bool(lead_name and lead_name != sticky),
+        "kept": kept,
+        "reason": reason,
+        "top": [
+            {
+                "name": str(b.get("name") or ""),
+                "score": round(mainline_score(b), 1),
+                "zt_n": b.get("zt_n"),
+                "status": b.get("status"),
+                "theme": theme_key(str(b.get("name") or "")),
+            }
+            for b in runners
+            if b.get("name")
+        ],
+    }

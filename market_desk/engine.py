@@ -255,10 +255,15 @@ class DeskEngine:
                                 log.info("auto backup written %s", path)
                             except Exception:
                                 log.exception("auto backup failed")
-                except Exception:
+                except Exception as exc:
                     log.exception("refresh failed")
                     self.snapshot["ok"] = False
-                    self.snapshot["error"] = "refresh failed"
+                    msg = f"{type(exc).__name__}: {exc}"
+                    self.snapshot["error"] = f"refresh failed · {msg}"
+                    warns = list(self.snapshot.get("warnings") or [])
+                    if msg not in warns:
+                        warns.append(msg)
+                    self.snapshot["warnings"] = warns[-12:]
                 first = False
             elif self.snapshot.get("ok"):
                 self.snapshot["live"] = False
@@ -346,7 +351,13 @@ class DeskEngine:
                 metrics, indices=indices, history=history_prev
             )
             temperature = score_temperature(metrics)
-            phase = classify_phase(metrics, temperature)
+            phase = classify_phase(
+                metrics,
+                temperature,
+                panic_temp=int(setting("phase_panic_temp", 28)),
+                ferment_temp=int(setting("phase_ferment_temp", 45)),
+                climax_temp=int(setting("phase_climax_temp", 72)),
+            )
             auction = self._auction(trade_date, now, quotes)
             save_daily(
                 trade_date_dash,
@@ -396,12 +407,12 @@ class DeskEngine:
                 zb=zb,
             )
             await self._apply_recommend_trends(client, verdict, trade_date_dash)
-            await self._apply_recommend_minutes(client, verdict)
-            # Tag cards near suggested buy; day/minute gates may clear ready first.
+            # Arm near-entry first, then minute-gate ready cards (never re-arm after).
             verdict["recommend"] = mark_pullback_entries(verdict.get("recommend"))
             verdict["side_recommend"] = mark_pullback_entries(
                 verdict.get("side_recommend"), observe_only=True
             )
+            await self._apply_recommend_minutes(client, verdict)
             aligned = align_action_with_ready(verdict)
             verdict.clear()
             verdict.update(aligned)
@@ -488,8 +499,10 @@ class DeskEngine:
                 stock_block=bool(verdict.get("stock_block")),
                 mainline_name=str(((verdict.get("mainline") or {}).get("name")) or ""),
                 trade_date=trade_date_dash,
+                metrics=metrics,
             )
             await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
+            await self._apply_favorite_desk_minutes(client, fav_desk)
             payload["favorite_desk"] = fav_desk
             payload["health"] = _build_health(now, errors, updated_at, payload)
             payload["deltas"] = build_deltas(payload, prev)
@@ -737,7 +750,10 @@ class DeskEngine:
         codes = list(dict.fromkeys(codes))
         if not codes:
             for board in boards:
-                board["buy"] = mark_pullback_entries(board.get("buy"), observe_only=False)
+                soft = bool(board.get("etf_soft"))
+                board["buy"] = mark_pullback_entries(
+                    board.get("buy"), observe_only=soft
+                )
             return
         now_ts = datetime.now(CN_TZ).timestamp()
         need: list[str] = []
@@ -759,13 +775,61 @@ class DeskEngine:
                 fetch_ok_by_code[code] = bool(closes)
         overrides = load_trend_overrides(trade_date)
         for board in boards:
+            soft = bool(board.get("etf_soft"))
             buy = apply_stock_daily_trends(
                 board.get("buy") or {},
                 closes_by_code,
                 fetch_ok_by_code,
                 overrides,
             )
-            board["buy"] = mark_pullback_entries(buy, observe_only=False)
+            board["buy"] = mark_pullback_entries(buy, observe_only=soft)
+
+    async def _apply_favorite_desk_minutes(
+        self,
+        client: httpx.AsyncClient,
+        fav_desk: dict[str, Any],
+    ) -> None:
+        """Minute-gate ready cards inside favorite-desk buy boxes."""
+        boards = list((fav_desk or {}).get("boards") or [])
+        if not boards:
+            return
+        codes: list[str] = []
+        for board in boards:
+            if board.get("etf_soft"):
+                continue
+            buy = board.get("buy") or {}
+            for item in buy.get("items") or []:
+                if item.get("ready") and item.get("code"):
+                    codes.append(str(item.get("code") or "").zfill(6))
+        codes = sorted(set(c for c in codes if c))
+        if not codes:
+            return
+        now_ts = datetime.now(CN_TZ).timestamp()
+        minutes_by_code: dict[str, list[dict[str, Any]]] = {}
+        need: list[str] = []
+        for code in codes:
+            hit = self._minute_cache.get(code)
+            if hit and now_ts - hit[0] < 45:
+                minutes_by_code[code] = hit[1]
+            else:
+                need.append(code)
+        if need:
+            fetched = await asyncio.gather(
+                *[fetch_minute_trends(client, c) for c in need],
+                return_exceptions=True,
+            )
+            for code, rows in zip(need, fetched):
+                if isinstance(rows, Exception):
+                    minutes_by_code[code] = []
+                    continue
+                series = list(rows or [])
+                self._minute_cache[code] = (now_ts, series)
+                minutes_by_code[code] = series
+        for board in boards:
+            if board.get("etf_soft"):
+                continue
+            buy = apply_minute_confirmations(board.get("buy") or {}, minutes_by_code)
+            board["buy"] = buy
 
     async def _apply_recommend_minutes(
         self,

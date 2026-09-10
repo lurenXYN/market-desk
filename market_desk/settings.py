@@ -35,6 +35,12 @@ DEFAULTS: dict[str, Any] = {
     "side_mainline_gap": float(cfg.SIDE_MAINLINE_GAP),
     # Mute buy pricing / buy toasts for N minutes after 09:30; 0 = off.
     "open_mute_minutes": int(cfg.OPEN_MUTE_MINUTES),
+    # Review hit-rate: traded (executed only) | all (paper signals too).
+    "hit_rate_mode": "traded",
+    # Phase temperature cutoffs (see classify_phase).
+    "phase_panic_temp": int(cfg.PHASE_PANIC_TEMP),
+    "phase_ferment_temp": int(cfg.PHASE_FERMENT_TEMP),
+    "phase_climax_temp": int(cfg.PHASE_CLIMAX_TEMP),
 }
 
 
@@ -115,4 +121,14 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
     out["side_mainline_gap"] = max(0.0, min(40.0, float(out.get("side_mainline_gap") or 0.0)))
     out["open_mute_minutes"] = max(0, min(30, int(out["open_mute_minutes"])))
+    hit_mode = str(out.get("hit_rate_mode") or "traded").strip().lower()
+    if hit_mode not in ("traded", "all"):
+        hit_mode = "traded"
+    out["hit_rate_mode"] = hit_mode
+    panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))
+    ferment_t = max(panic_t + 1, min(80, int(out.get("phase_ferment_temp") or cfg.PHASE_FERMENT_TEMP)))
+    climax_t = max(ferment_t, min(95, int(out.get("phase_climax_temp") or cfg.PHASE_CLIMAX_TEMP)))
+    out["phase_panic_temp"] = panic_t
+    out["phase_ferment_temp"] = ferment_t
+    out["phase_climax_temp"] = climax_t
     return out

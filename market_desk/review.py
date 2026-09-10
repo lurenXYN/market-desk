@@ -291,17 +291,21 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     n = 0
 
     rec = verdict.get("recommend") or {}
-    # Record buyable names, plus pending/manual stock cards for user review.
-    record_items = bool(action in ("可买入", "可小仓", "观察回踩") or rec.get("buy") or rec.get("items"))
-    if record_items:
+    # Log buys that matter for review: 可买入 always; 观察回踩 only near-entry/ready
+    # (full wait-list dumps make the review panel too noisy).
+    if rec.get("items"):
         for item in rec.get("items") or []:
             code = normalize_code(item.get("code"))
             if not code:
                 continue
+            ready = bool(item.get("ready"))
+            near = bool(item.get("near_entry"))
+            buyable = action in ("可买入", "可小仓") or bool(rec.get("buy"))
+            if not (buyable or ready or near):
+                continue
             kind = item.get("kind") or "stock"
-            if kind == "etf" and not item.get("ready") and not rec.get("buy"):
-                if action not in ("可买入", "可小仓", "观察回踩"):
-                    continue
+            if kind == "etf" and not ready and not buyable and not near:
+                continue
             price = num(item.get("buy_price"))
             if price is None:
                 price = num(item.get("last"))
@@ -458,13 +462,32 @@ def score_signal_with_closes(
     }
 
 
-def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate hit-rate style stats for the review panel."""
+def summarize_signals(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+) -> dict[str, Any]:
+    """Aggregate hit-rate style stats for the review panel.
+
+    hit_mode:
+      - traded: only rows marked traded (default, cleaner feedback loop)
+      - all: any non-skipped scored row (paper signals)
+    """
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    if mode not in ("traded", "all"):
+        mode = "traded"
     active = [r for r in rows if not int(r.get("skipped") or 0)]
     buys = [r for r in active if r.get("signal_type") == "buy"]
     sells = [r for r in active if r.get("signal_type") == "sell"]
-    scored_buys = [r for r in buys if r.get("outcome_label")]
+    scored_buys_all = [r for r in buys if r.get("outcome_label")]
+    scored_buys = (
+        [r for r in scored_buys_all if int(r.get("traded") or 0)]
+        if mode == "traded"
+        else scored_buys_all
+    )
     scored_sells = [r for r in sells if r.get("outcome_label")]
+    if mode == "traded":
+        scored_sells = [r for r in scored_sells if int(r.get("traded") or 0)]
 
     def _rate(items: list[dict[str, Any]], good: set[str]) -> float | None:
         if not items:
@@ -479,20 +502,22 @@ def summarize_signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round(sum(vals) / len(vals), 2)
 
-    # Simple paper P&L: assume buy at signal price, mark day3 close move.
-    paper = [r for r in scored_buys if num(r.get("outcome_day3_pct")) is not None]
+    paper = [r for r in scored_buys_all if num(r.get("outcome_day3_pct")) is not None]
     paper_pnl = _avg(paper, "outcome_day3_pct")
 
     return {
         "buy_total": len(buys),
         "buy_scored": len(scored_buys),
+        "buy_scored_all": len(scored_buys_all),
         "sell_total": len(sells),
         "sell_scored": len(scored_sells),
         "buy_hit_rate": _rate(scored_buys, {"次日红", "三日红"}),
+        "buy_hit_rate_all": _rate(scored_buys_all, {"次日红", "三日红"}),
         "sell_hit_rate": _rate(scored_sells, {"卖后回落"}),
         "buy_avg_day1": _avg(scored_buys, "outcome_day1_pct"),
         "buy_avg_day3": _avg(scored_buys, "outcome_day3_pct"),
         "paper_avg_day3": paper_pnl,
+        "hit_rate_mode": mode,
         "skipped": sum(1 for r in rows if int(r.get("skipped") or 0)),
         "traded": sum(1 for r in rows if int(r.get("traded") or 0)),
         "pending": sum(1 for r in active if not r.get("outcome_label")),
@@ -649,13 +674,20 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
     return out
 
 
-def build_phase_hit_rates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_phase_hit_rates(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+) -> list[dict[str, Any]]:
     """Aggregate buy hit-rate by market phase label on the signal row."""
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
     buckets: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         if str(row.get("signal_type") or "") != "buy":
             continue
         if int(row.get("skipped") or 0):
+            continue
+        if mode == "traded" and not int(row.get("traded") or 0):
             continue
         if not row.get("outcome_label"):
             continue
@@ -673,6 +705,115 @@ def build_phase_hit_rates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def build_kind_hit_rates(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate buy hit-rate by instrument kind (etf / stock)."""
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    buckets: dict[str, list[dict[str, Any]]] = {"etf": [], "stock": []}
+    for row in rows:
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        if mode == "traded" and not int(row.get("traded") or 0):
+            continue
+        if not row.get("outcome_label"):
+            continue
+        kind = "etf" if str(row.get("kind") or "") == "etf" else "stock"
+        buckets[kind].append(row)
+    out: list[dict[str, Any]] = []
+    for kind in ("etf", "stock"):
+        items = buckets[kind]
+        if not items:
+            continue
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        out.append(
+            {
+                "kind": kind,
+                "label": "ETF" if kind == "etf" else "个股",
+                "scored_n": len(items),
+                "hit_n": hit,
+                "hit_rate": round(100.0 * hit / len(items), 1),
+            }
+        )
+    return out
+
+
+def build_phase_kind_hit_rates(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate buy hit-rate by phase × kind for the review strip."""
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        if mode == "traded" and not int(row.get("traded") or 0):
+            continue
+        if not row.get("outcome_label"):
+            continue
+        phase = str(row.get("phase") or "未标").strip() or "未标"
+        kind = "etf" if str(row.get("kind") or "") == "etf" else "stock"
+        buckets.setdefault((phase, kind), []).append(row)
+    out: list[dict[str, Any]] = []
+    for (phase, kind), items in sorted(
+        buckets.items(), key=lambda x: (-len(x[1]), x[0][0], x[0][1])
+    ):
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        out.append(
+            {
+                "phase": phase,
+                "kind": kind,
+                "label": "ETF" if kind == "etf" else "个股",
+                "scored_n": len(items),
+                "hit_n": hit,
+                "hit_rate": round(100.0 * hit / len(items), 1),
+            }
+        )
+    return out
+
+
+def build_tune_hints(
+    *,
+    missed: list[dict[str, Any]] | None,
+    phase_hits: list[dict[str, Any]] | None,
+    kind_hits: list[dict[str, Any]] | None,
+) -> list[str]:
+    """Return short threshold-tuning hints from review buckets (not orders)."""
+    hints: list[str] = []
+    missed_n = len(missed or [])
+    if missed_n >= 3:
+        hints.append(f"漏买 {missed_n} 笔：可略放宽回撤/到位容差，或检查是否总在追不追价")
+    for row in kind_hits or []:
+        rate = row.get("hit_rate")
+        n = int(row.get("scored_n") or 0)
+        if rate is None or n < 5:
+            continue
+        label = row.get("label") or row.get("kind")
+        if float(rate) < 35:
+            hints.append(f"{label}命中 {rate}%（n={n}）偏低：该品种宜更小仓或更严 ready")
+        elif float(rate) >= 55 and n >= 8:
+            hints.append(f"{label}命中 {rate}%（n={n}）尚可：可维持当前回撤门槛")
+    for row in phase_hits or []:
+        rate = row.get("hit_rate")
+        n = int(row.get("scored_n") or 0)
+        phase = str(row.get("phase") or "")
+        if rate is None or n < 5:
+            continue
+        if phase == "高潮" and float(rate) < 40:
+            hints.append(f"高潮相位命中 {rate}%：继续默认降观察回踩，勿追尖")
+        if phase == "恐慌" and float(rate) < 30:
+            hints.append(f"恐慌相位命中 {rate}%：维持禁开仓")
+    return hints[:5]
 
 
 def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
@@ -1061,7 +1202,14 @@ def build_review_payload(
     summary["history"] = load_review_digests(limit=20)
     summary["exec"] = digest.get("exec") or build_exec_score(day_rows)
     summary["phase_hits"] = build_phase_hit_rates(global_rows)
+    summary["kind_hits"] = build_kind_hit_rates(global_rows)
+    summary["phase_kind_hits"] = build_phase_kind_hit_rates(global_rows)
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
+    summary["tune_hints"] = build_tune_hints(
+        missed=summary["missed_buys"],
+        phase_hits=summary["phase_hits"],
+        kind_hits=summary["kind_hits"],
+    )
     return {
         "ok": True,
         "signals": day_rows,

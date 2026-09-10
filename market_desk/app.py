@@ -105,6 +105,11 @@ class SettingsIn(BaseModel):
     account_equity: float | None = None
     risk_pct_per_trade: float | None = None
     min_stock_mv_yi: float | None = None
+    # Review hit-rate: traded (executed only) | all (paper signals too).
+    hit_rate_mode: str | None = None
+    phase_panic_temp: int | None = None
+    phase_ferment_temp: int | None = None
+    phase_climax_temp: int | None = None
 
 
 class TrendOverrideIn(BaseModel):

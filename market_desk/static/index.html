@@ -106,6 +106,26 @@
       border-color: #3b5a8b; background: #0c1520; color: #93c5fd;
     }
     .no-etf-banner[hidden] { display: none; }
+    .ml-why {
+      margin: 8px 0 10px; padding: 8px 12px;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0a1016;
+      font-size: 13px; line-height: 1.45; color: var(--muted);
+    }
+    .ml-why b { color: var(--text); font-weight: 650; }
+    .ml-why .chip {
+      display: inline-block; margin: 0 6px 0 0; padding: 1px 7px;
+      border-radius: 4px; border: 1px solid var(--line);
+      font-size: 12px; color: #cbd5e1; background: #111827;
+    }
+    .ml-why .top { margin-top: 4px; font-size: 12px; color: #94a3b8; }
+    .tune-hints {
+      margin: 8px 0 0; padding: 8px 10px;
+      border: 1px dashed #3b5a8b; border-radius: 6px;
+      background: #0c1520; color: #93c5fd;
+      font-size: 13px; line-height: 1.45;
+    }
+    .tune-hints li { margin: 2px 0 2px 1.1em; }
     .today-trio {
       display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
       margin: 0 0 10px; padding: 8px 12px;
@@ -124,8 +144,18 @@
     .today-trio .w.stage.life-start { color: var(--ferm); }
     .today-trio .w.stage.life-run { color: #93c5fd; }
     .today-trio .w.stage.life-end { color: #fdba74; }
+    .rec-gate { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+    .rec-gate .gate-chip {
+      font-size: 11px; padding: 1px 6px; border-radius: 4px;
+      border: 1px solid #5b4a2a; color: #fbbf24; background: #1a1508;
+    }
+    .morning-brief summary {
+      cursor: pointer; list-style: none; font-weight: 700; color: var(--text);
+    }
+    .morning-brief summary::-webkit-details-marker { display: none; }
+    .morning-brief[open] summary { margin-bottom: 6px; }
     .pos-btn.exit-pref {
-      border-color: #b45309; background: #2a1810; color: #fdba74; font-weight: 700;
+      border-color: #b45309; background: #1a1508; color: #fdba74;
     }
     .pos-btn.exit-pref.clear {
       border-color: #b91c1c; background: #2a1212; color: #fca5a5;
@@ -1180,7 +1210,44 @@
       .rec-prices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .rev-sum, .grid-top, .boards, .pin-row, .life-grid, .idx-strip, .rev-today { grid-template-columns: 1fr; }
       .pos-form { grid-template-columns: 1fr 1fr; }
+      .hdr { flex-direction: column; align-items: flex-start; gap: 6px; }
+      .hdr h1 { font-size: 18px; }
+      .clock { min-width: 0; text-align: left; }
+      .clock .t { font-size: 22px; }
+      .nav-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        gap: 4px;
+        padding: 4px;
+      }
+      .nav-tabs button {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .nav-tabs button .hint { display: none; }
+      .nav-tabs #glossaryBtn,
+      .nav-tabs #settingsBtn { margin-left: 0 !important; }
+      .rev-table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 0 -4px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .rev-table { min-width: 720px; }
+      .rev-toolbar { align-items: stretch; }
+      .rev-toolbar .pos-form { grid-template-columns: 1fr 1fr !important; width: 100%; }
+      .settings-panel {
+        left: 8px; right: 8px; top: 48px; width: auto !important;
+        max-height: calc(100vh - 64px); overflow: auto;
+      }
+      .chart-drawer { width: 100%; }
     }
+    .rev-table-wrap { width: 100%; }
   </style>
 </head>
 <body>
@@ -1238,6 +1305,15 @@
             <option value="off">关闭价带提醒</option>
           </select>
         </label>
+        <label>复盘命中口径
+          <select id="setHitMode" title="默认只统计已点「已交易」的信号，反馈更干净">
+            <option value="traded">仅已交易（推荐）</option>
+            <option value="all">全部已打分（含纸面）</option>
+          </select>
+        </label>
+        <label>恐慌温度&lt;<input id="setPanicT" type="number" min="5" max="50" step="1" title="温度低于此判恐慌" /></label>
+        <label>发酵温度≥<input id="setFermentT" type="number" min="10" max="80" step="1" title="温度达此判发酵（须高于恐慌）" /></label>
+        <label>高潮温度≥<input id="setClimaxT" type="number" min="20" max="95" step="1" title="温度达此且高度够可判高潮" /></label>
         <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
           <input id="setToastOn" type="checkbox" /> Windows通知
         </label>
@@ -1285,6 +1361,7 @@
             <span class="w stage" id="trioStage">—</span>
           </div>
           <h1 class="mainline-title" id="headline">等待数据</h1>
+          <div class="ml-why" id="mlWhy" hidden></div>
           <div class="no-etf-banner" id="noEtfBanner" hidden>
             主线暂无映射 ETF：优先盯下方主板回踩票；创业板/科创个股仍不推荐。
           </div>
@@ -1294,17 +1371,16 @@
             <div class="pb dont"><div class="lab">不做</div><div class="txt" id="pbDont">—</div></div>
             <div class="pb size"><div class="lab">仓位</div><div class="txt" id="pbSize">—</div></div>
           </div>
-          <div class="morning-brief" id="morningBrief">
-            <div class="hd">
-              <b>早决策摘要</b>
-              <button type="button" class="q" data-term="早决策摘要">?</button>
+          <details class="morning-brief" id="morningBrief">
+            <summary>
+              早决策摘要 <button type="button" class="q" data-term="早决策摘要">?</button>
               <span class="meta" id="morningSeg"></span>
               <button type="button" class="copy-btn" id="morningCopy">复制</button>
-            </div>
+            </summary>
             <p class="focus" id="morningFocus">等待数据</p>
             <ul id="morningBullets"></ul>
             <div class="chk" id="morningChk"></div>
-          </div>
+          </details>
           <details class="desk-more" id="deskMore">
             <summary>展开原因 / 算法细节</summary>
             <div class="body">
@@ -1569,7 +1645,7 @@
         <div class="rev-hist" id="revHist"></div>
         <div class="rev-sum" id="revSum"></div>
         <div class="rev-toolbar">
-          <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px auto auto auto auto; margin:0; flex:1;">
+          <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px 120px auto auto auto auto; margin:0; flex:1;">
             <label>类型
               <select id="revType">
                 <option value="">全部</option>
@@ -1585,6 +1661,12 @@
               </select>
             </label>
             <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
+            <label>命中口径
+              <select id="revHitMode" title="与运行参数同步；改后立即生效">
+                <option value="traded">仅已交易</option>
+                <option value="all">全部已打分</option>
+              </select>
+            </label>
             <button type="button" id="revApply">筛选</button>
             <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
             <button type="button" id="revReport" class="rev-col-btn">导出日报</button>
@@ -1602,12 +1684,14 @@
             </div>
           </div>
         </div>
-        <table class="rev-table">
-          <thead>
-            <tr id="revHead"></tr>
-          </thead>
-          <tbody id="revBody"></tbody>
-        </table>
+        <div class="rev-table-wrap">
+          <table class="rev-table">
+            <thead>
+              <tr id="revHead"></tr>
+            </thead>
+            <tbody id="revBody"></tbody>
+          </table>
+        </div>
       </section>
     </section>
   </div>
@@ -1724,10 +1808,26 @@
           ? `<span class="entry-badge entry-badge-soft">触及建议价</span>`
           : `<span class="entry-badge">建议价附近·可买</span>`)
         : "";
+      const fails = (it.confirm_fail || []).filter(Boolean);
+      const minute = it.minute || {};
+      const gateBits = [];
+      if (it.minute_pending || minute.ok == null && it.ready) {
+        gateBits.push("分时未验");
+      } else if (minute.label && minute.ok === false) {
+        gateBits.push(minute.label);
+      } else if (minute.label && minute.ok === true) {
+        gateBits.push(minute.label);
+      }
+      if (it.block_ready) gateBits.push("禁现买");
+      fails.forEach((f) => { if (!gateBits.includes(f)) gateBits.push(f); });
+      const gateHtml = gateBits.length
+        ? `<div class="rec-gate">${gateBits.map((g) => `<span class="gate-chip">${g}</span>`).join("")}</div>`
+        : "";
       return `<article class="${cardCls}">
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${trendHtml}
+        ${gateHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
           <div class="buy"><div class="lab">${near && !wait ? "建议买·到位" : "建议买"}</div><div class="val">${fmtPx(buy, kind)}</div></div>
@@ -1902,6 +2002,34 @@
         + (softEtf
           ? `<span class="soft-etf-badge">近似ETF</span>`
           : (noExactEtf ? `<span class="no-etf-badge">无ETF映射</span>` : ""));
+      const whyEl = document.getElementById("mlWhy");
+      if (whyEl) {
+        const why = (v.mainline && v.mainline.why) || {};
+        if (why.reason) {
+          whyEl.hidden = false;
+          const held = why.held_seconds != null
+            ? `${why.held_seconds}s/${why.hold_min_seconds || 0}s`
+            : "—";
+          const gapTxt = why.gap == null ? "—" : ((why.gap > 0 ? "+" : "") + why.gap);
+          const top = (why.top || []).slice(0, 3).map((t) =>
+            `${t.name} ${t.score}${t.zt_n != null ? "(" + t.zt_n + "停)" : ""}`
+          ).join(" · ");
+          whyEl.innerHTML =
+            `<div><b>主线为什么是它</b> <button type="button" class="q" data-term="主线透明">?</button></div>`
+            + `<div style="margin-top:4px">${why.reason}</div>`
+            + `<div style="margin-top:6px">`
+            + `<span class="chip">主题 ${why.theme || "—"}</span>`
+            + `<span class="chip">分 ${why.score ?? "—"}</span>`
+            + `<span class="chip">分差 ${gapTxt} / 需 ${why.need ?? "—"}</span>`
+            + `<span class="chip">持有 ${held}</span>`
+            + (why.etf_exact ? `<span class="chip">精确ETF</span>` : `<span class="chip">无精确ETF</span>`)
+            + `</div>`
+            + (top ? `<div class="top">池内前三：${top}</div>` : "");
+        } else {
+          whyEl.hidden = true;
+          whyEl.innerHTML = "";
+        }
+      }
       const noEtf = document.getElementById("noEtfBanner");
       if (noEtf) {
         if (softEtf && ml && ml !== "未明") {
@@ -2820,17 +2948,39 @@
           : `实时主线「${liveN}」· 现对照「${of}」（当日=${dayN}）`;
       }
       const ph = sum.phase_hits || [];
-      document.getElementById("revPhase").innerHTML = ph.length
-        ? (`<div class="hd">相位 × 命中率（跨日）<button type="button" class="q" data-term="相位命中">?</button></div>`
-          + ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · "))
-        : `<div class="hd">相位 × 命中率（跨日）</div><span class="meta">有隔日打分后按相位汇总</span>`;
+      const kh = sum.kind_hits || [];
+      const pkh = sum.phase_kind_hits || [];
+      const hints = sum.tune_hints || [];
+      const kindLine = kh.length
+        ? ("品种 " + kh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
+        : "";
+      const crossLine = pkh.length
+        ? ("交叉 " + pkh.slice(0, 8).map((p) =>
+            `${p.phase}·${p.label} ${p.hit_rate}%（${p.scored_n}）`
+          ).join(" · "))
+        : "";
+      const hintHtml = hints.length
+        ? (`<ul class="tune-hints">` + hints.map((h) => `<li>${h}</li>`).join("") + `</ul>`)
+        : "";
+      document.getElementById("revPhase").innerHTML = (ph.length || kh.length)
+        ? (`<div class="hd">命中率分桶（跨日）<button type="button" class="q" data-term="相位命中">?</button></div>`
+          + (ph.length
+            ? `<div>相位 ${ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · ")}</div>`
+            : "")
+          + (kindLine ? `<div class="meta" style="margin-top:4px">${kindLine}</div>` : "")
+          + (crossLine ? `<div class="meta" style="margin-top:4px">${crossLine}</div>` : "")
+          + hintHtml)
+        : `<div class="hd">命中率分桶（跨日）</div><span class="meta">有隔日打分后按相位 / ETF·个股汇总</span>`;
       const hist = sum.history || [];
       document.getElementById("revHist").innerHTML = hist.length
         ? `<div class="hd">近 ${hist.length} 日命中率（有打分日）</div>${hitRateSpark(hist, viewDate)}`
         : `<div class="hd">历史日摘要会在每日复盘后累计</div>`;
+      const hitMode = sum.hit_rate_mode === "all" ? "全部已打分" : "仅已交易";
+      const revHitSel = document.getElementById("revHitMode");
+      if (revHitSel && sum.hit_rate_mode) revHitSel.value = sum.hit_rate_mode;
       document.getElementById("revSum").innerHTML = [
         cell("买入信号（近窗）", sum.buy_total ?? 0),
-        cell("买入命中率", sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
+        cell(`买入命中率·${hitMode}`, sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
         cell("已交易 / 未交易", `${sum.traded ?? 0} / ${sum.skipped ?? 0}`),
         cell("待隔日打分", sum.pending ?? 0),
       ].join("");
@@ -3645,6 +3795,17 @@
       return String(d).replace(/[^\d-]/g, "") || new Date().toISOString().slice(0, 10);
     }
     document.getElementById("revApply").addEventListener("click", () => paintReview(lastReview));
+    document.getElementById("revHitMode").addEventListener("change", async () => {
+      const mode = document.getElementById("revHitMode").value || "traded";
+      try {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hit_rate_mode: mode }),
+        });
+      } catch (e) {}
+      loadReview(true, reviewViewDate || "");
+    });
     document.getElementById("revDayPrev").addEventListener("click", () => shiftReviewDay(1));
     document.getElementById("revDayNext").addEventListener("click", () => shiftReviewDay(-1));
     document.getElementById("revDayToday").addEventListener("click", () => {
@@ -3682,6 +3843,10 @@
         document.getElementById("setToastOn").checked = !!s.toast_enabled;
         document.getElementById("setDecisionOn").checked = s.decision_alerts !== false;
         document.getElementById("setAlertMode").value = s.alert_mode || "traded_watch";
+        document.getElementById("setHitMode").value = s.hit_rate_mode || "traded";
+        document.getElementById("setPanicT").value = s.phase_panic_temp ?? 28;
+        document.getElementById("setFermentT").value = s.phase_ferment_temp ?? 45;
+        document.getElementById("setClimaxT").value = s.phase_climax_temp ?? 72;
         document.getElementById("setOpenMute").value = s.open_mute_minutes ?? 5;
         document.getElementById("setLossCap").value = s.daily_loss_cap_pct ?? -3;
         document.getElementById("setCoolN").value = s.cool_after_losses ?? 3;
@@ -3712,6 +3877,10 @@
         toast_enabled: !!document.getElementById("setToastOn").checked,
         decision_alerts: !!document.getElementById("setDecisionOn").checked,
         alert_mode: document.getElementById("setAlertMode").value,
+        hit_rate_mode: document.getElementById("setHitMode").value,
+        phase_panic_temp: Number(document.getElementById("setPanicT").value),
+        phase_ferment_temp: Number(document.getElementById("setFermentT").value),
+        phase_climax_temp: Number(document.getElementById("setClimaxT").value),
         open_mute_minutes: Number(document.getElementById("setOpenMute").value),
         daily_loss_cap_pct: Number(document.getElementById("setLossCap").value),
         cool_after_losses: Number(document.getElementById("setCoolN").value),
@@ -3740,7 +3909,7 @@
       { id: "phase", label: "相位", keys: ["相位", "恐慌", "分歧", "发酵", "高潮", "温度"] },
       { id: "action", label: "结论", keys: ["现金", "可小仓", "可买入", "观望", "观察回踩", "回踩到位", "禁追", "观察"] },
       { id: "board", label: "板块", keys: [
-        "实时主线", "观察支线", "主线切换", "主线生命周期", "确认中", "尖峰禁追", "退潮",
+        "实时主线", "观察支线", "主线切换", "主线透明", "主线生命周期", "确认中", "尖峰禁追", "退潮",
         "点火", "一波", "二波", "加速", "滞涨", "A杀", "修复", "反包", "天地",
         "聚集度", "总龙头", "卡位龙", "冰点", "冷冻", "相对最冷", "传染", "传染预警", "看好板块", "看好板块买卖",
       ] },
@@ -3754,7 +3923,7 @@
       ] },
       { id: "market", label: "大盘指标", keys: [
         "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "晋级1→2", "晋级2→3", "梯队", "昨停溢价",
-        "成交分位", "周期位置", "竞价基调",
+        "成交分位", "周期位置", "竞价基调", "主线透明",
       ] },
     ];
     let glossaryGroup = "phase";
@@ -4010,7 +4179,9 @@
         alert("已下载早决策摘要");
       }
     }
-    document.getElementById("morningCopy").addEventListener("click", () => {
+    document.getElementById("morningCopy").addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
       copyMorningBrief();
     });
     document.getElementById("eodCopy").addEventListener("click", async () => {

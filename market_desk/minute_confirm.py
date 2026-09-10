@@ -152,9 +152,13 @@ def apply_minute_confirmations(
         item["minute"] = verdict
         if not item.get("ready"):
             continue
-        # Only explicit fails clear ready. None = thin sample / fetch miss → skip gate.
-        if verdict.get("ok") is False:
+        # Only explicit fails clear ready. None = thin sample / fetch miss → keep ready
+        # but mark pending so the UI shows「分时未验」.
+        if verdict.get("ok") is None and item.get("ready"):
+            item["minute_pending"] = True
+        elif verdict.get("ok") is False:
             changed = True
+            item["minute_pending"] = False
             item["ready"] = False
             if item.get("wait_price") is not None:
                 item["buy_price"] = item.get("wait_price")
@@ -165,6 +169,8 @@ def apply_minute_confirmations(
             fails.append(flag)
             item["confirm_fail"] = fails
             item["reason"] = (str(item.get("reason") or "") + f"；确认失败：{flag}").strip("；")
+        else:
+            item["minute_pending"] = False
     if not changed:
         rec["items"] = items
         return rec

@@ -215,6 +215,17 @@ MINUTE_GRIND_PULLBACK = 0.55
 MINUTE_SHALLOW = 0.28
 MINUTE_VOL_PULLBACK = 0.55
 
+# Ready / structure gates (centralized; was scattered magic numbers).
+ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可买入
+STOCK_WEAK_VS_ETF_PCT = 1.5        # stock pct must not lag mapped ETF by more than this
+ETF_THIN_AMOUNT = 8e7              # yuan; green ETF below this → volume fail
+MINUTE_SAMPLE_MIN = 25
+
+# Phase classification temperature thresholds (overridable via settings).
+PHASE_PANIC_TEMP = 28
+PHASE_FERMENT_TEMP = 45
+PHASE_CLIMAX_TEMP = 72
+
 # Gap-and-fade blacklist: high open then fade from open.
 GAP_FADE_OPEN_PCT = 2.5          # open vs prev close
 GAP_FADE_DROP_PCT = 1.5          # last below open by at least this %

@@ -5,12 +5,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from market_desk.config import CHINEXT_STAR_ETFS
+from market_desk.config import (
+    CHINEXT_STAR_ETFS,
+    ETF_BOUNCE_BUY_MIN,
+    ETF_THIN_AMOUNT,
+    STOCK_WEAK_VS_ETF_PCT,
+)
 from market_desk.filters import is_limit_up, is_main_board, is_st, normalize_code
 from market_desk.lifecycle import classify_lifecycle
 from market_desk.mainline import (
     etf_spec_for_name,
     etf_spec_soft_fallback,
+    explain_mainline,
     match_mainline_etf,
     pick_mainline,
     pick_side_mainline,
@@ -55,6 +61,12 @@ def build_verdict(
         sticky_held_seconds=sticky_held,
     ) or {}
     board_name = main.get("name") or ""
+    ml_why = explain_mainline(
+        hot,
+        main,
+        sticky_name=sticky,
+        sticky_held_seconds=sticky_held,
+    )
     if board_name and sticky and board_name == sticky and sticky_since_prev:
         sticky_since = sticky_since_prev
     else:
@@ -119,7 +131,7 @@ def build_verdict(
     elif (
         vehicle.get("price")
         and pct is not None
-        and (bounce or 0) >= 0.35
+        and (bounce or 0) >= float(ETF_BOUNCE_BUY_MIN)
         and not falling
         and status in ("确认中", "观察")
     ):
@@ -214,10 +226,11 @@ def build_verdict(
     if not etf_mapped and board_name:
         stock_n = sum(1 for x in (recommend.get("items") or []) if x.get("kind") == "stock")
         for item in recommend.get("items") or []:
+            item["block_ready"] = True
+            item["ready"] = False
+            if item.get("wait_price") is not None:
+                item["buy_price"] = item.get("wait_price")
             if item.get("kind") == "stock":
-                item["ready"] = False
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item.get("wait_price")
                 item["role_label"] = "个股盯回踩"
         recommend["buy"] = False
         if stock_n:
@@ -233,9 +246,18 @@ def build_verdict(
                 "主线无ETF映射，且暂无合格回踩票",
             )
     elif soft_etf:
+        for item in recommend.get("items") or []:
+            item["block_ready"] = True
+            item["ready"] = False
+            if item.get("wait_price") is not None:
+                item["buy_price"] = item.get("wait_price")
+            kind = item.get("kind") or "stock"
+            item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
+        recommend["buy"] = False
+        recommend["title"] = "近似ETF · 盯回踩"
         recommend["size_note"] = _join_hint(
             str(recommend.get("size_note") or ""),
-            f"近似映射 {vehicle.get('name') or ''}，仓位宜更小",
+            f"近似映射 {vehicle.get('name') or ''}，到位只提示、不点亮可买",
         )
     recommend = _apply_ready_confirmations(recommend, vehicle, metrics)
     if size_hint and recommend.get("size_note"):
@@ -312,6 +334,8 @@ def build_verdict(
             "lifecycle": life_stage,
             "sticky_since": sticky_since,
             "theme": theme_key(board_name),
+            "score": ml_why.get("score"),
+            "why": ml_why,
             "etf_mapped": etf_mapped and not soft_etf,
             "etf_soft": soft_etf,
             "pool_codes": [
@@ -435,7 +459,13 @@ def mark_pullback_entries(
             near
             and not observe_only
             and not item.get("trend_down")
+            and not item.get("block_ready")
+            and item.get("minute", {}).get("ok") is not False
         )
+        # Do not revive cards already failed by day-high / minute / trend gates.
+        fails = item.get("confirm_fail") or []
+        if fails:
+            can_arm = False
         if can_arm:
             was_ready = bool(item.get("ready"))
             item["ready"] = True
@@ -480,13 +510,48 @@ def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
 
     - Buyable with no ready cards → 观察回踩.
     - 观察回踩 with a near-entry ready card → 可买入.
+    - Soft / unmapped ETF never upgrades to 可买入 (near-entry is watch-only).
     """
     v = dict(verdict or {})
     action = str(v.get("action") or "")
     rec = dict(v.get("recommend") or {})
     items = list(rec.get("items") or [])
-    any_ready = any(bool(x.get("ready")) for x in items)
-    any_entry = any(bool(x.get("near_entry")) and bool(x.get("ready")) for x in items)
+    soft = bool((v.get("mainline") or {}).get("etf_soft"))
+    no_etf = (v.get("mainline") or {}).get("etf_mapped") is False and not soft
+    any_ready = any(bool(x.get("ready")) and not x.get("block_ready") for x in items)
+    any_entry = any(
+        bool(x.get("near_entry")) and bool(x.get("ready")) and not x.get("block_ready")
+        for x in items
+    )
+
+    if soft or no_etf:
+        # Near-entry may still badge cards, but never keep ready / never upgrade hero.
+        demoted = action in ("可买入", "可小仓")
+        note = "近似/无映射ETF，不升可买入"
+        if demoted:
+            v["action"] = "观察回踩"
+            v["reason"] = _join_hint(str(v.get("reason") or ""), note)
+            v["meaning"] = "主线已认，但载体为近似或无映射，只盯回踩不到位买卖。"
+            size_hint = _join_hint(str(v.get("segment_size_hint") or ""), "近似映射宜更小仓或不做")
+            v["segment_size_hint"] = size_hint
+            phase = str(v.get("phase") or "")
+            v["playbook"] = build_playbook(phase, action="观察回踩", size_hint=size_hint)
+        for item in items:
+            item["block_ready"] = True
+            if item.get("ready"):
+                item["ready"] = False
+                if item.get("wait_price") is not None:
+                    item["buy_price"] = item.get("wait_price")
+        rec["items"] = items
+        rec["buy"] = False
+        if "盯回踩" not in str(rec.get("title") or ""):
+            rec["title"] = "近似ETF · 盯回踩" if soft else "无映射ETF · 盯回踩"
+        v["recommend"] = rec
+        notes = list(v.get("algo_notes") or [])
+        if "soft禁升可买入" not in notes:
+            notes.append("soft禁升可买入")
+        v["algo_notes"] = notes
+        return v
 
     if action in ("观察回踩", "观察") and any_entry:
         note = "现价贴近建议买，回踩到位可买"
@@ -711,11 +776,13 @@ def build_favorite_desk_plans(
     stock_block: bool = False,
     mainline_name: str = "",
     trade_date: str | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build buy/sell plans for personally favored boards on the battle desk.
 
     Plans stay secondary to the live mainline: default to pullback watch pricing,
-    but near-entry cards can light ready inside this box only.
+    but near-entry cards can light ready inside this box only when gates pass.
+    Soft ETF maps never arm ready.
     """
     boards = list(favorite_boards or [])[:4]
     if not boards:
@@ -725,6 +792,7 @@ def build_favorite_desk_plans(
     zt = list(zt or [])
     zb = list(zb or [])
     positions = list(positions or [])
+    metrics = metrics or {}
     out_boards: list[dict[str, Any]] = []
     for board in boards:
         name = str(board.get("name") or "").strip()
@@ -743,6 +811,8 @@ def build_favorite_desk_plans(
             kind = item.get("kind") or "stock"
             item["role_label"] = "看好ETF盯回踩" if kind == "etf" else "看好个股盯回踩"
             item["ready"] = False
+            if soft:
+                item["block_ready"] = True
             if item.get("wait_price") is not None:
                 item["buy_price"] = item.get("wait_price")
         buy["buy"] = False
@@ -752,11 +822,12 @@ def build_favorite_desk_plans(
         if overlap:
             note = "与实时主线重合，买卖优先看上方主推"
         if soft and vehicle.get("name"):
-            note = _join_hint(note, f"载体近似映射 {vehicle.get('name')}")
+            note = _join_hint(note, f"载体近似映射 {vehicle.get('name')}，到位只提示")
         buy["size_note"] = _join_hint(str(buy.get("size_note") or ""), note)
         if not (buy.get("items") or []):
             buy["text"] = f"看好 {name} · 暂无合格回踩票，先盯板块"
-        buy = mark_pullback_entries(buy, observe_only=False)
+        buy = _apply_ready_confirmations(buy, vehicle, metrics)
+        buy = mark_pullback_entries(buy, observe_only=bool(soft))
         buy = _attach_risk_sizing(buy)
 
         life = classify_lifecycle(board) if board.get("name") else None
@@ -1008,8 +1079,8 @@ def apply_review_bias(
         hint = _join_hint(hint, f"相位{phase}命中{rate}%（n={scored}）偏低，仅ETF小仓")
         notes.append(f"复盘命中{rate}%")
         if act == "可买入":
-            # Keep ETF path but mark size; do not fully close unless panic-like.
-            pass
+            act = "观察回踩"
+            why = f"相位{phase}历史命中偏低({rate}%)，降级观察回踩：{why}"
     elif rate < 45:
         hint = _join_hint(hint, f"相位{phase}命中{rate}%一般，偏小仓")
         notes.append(f"复盘命中{rate}%偏弱")
@@ -1092,7 +1163,7 @@ def _apply_ready_confirmations(
             pass
         if kind == "stock" and v_pct is not None and item.get("pct") is not None:
             try:
-                if float(item["pct"]) < float(v_pct) - 1.5:
+                if float(item["pct"]) < float(v_pct) - float(STOCK_WEAK_VS_ETF_PCT):
                     flags.append("弱于主线ETF")
             except (TypeError, ValueError):
                 pass
@@ -1107,7 +1178,7 @@ def _apply_ready_confirmations(
                 pct_i = float(item.get("pct")) if item.get("pct") is not None else None
             except (TypeError, ValueError):
                 pct_i = None
-            if amt is not None and pct_i is not None and pct_i >= 0.8 and float(amt) < 8e7:
+            if amt is not None and pct_i is not None and pct_i >= 0.8 and float(amt) < float(ETF_THIN_AMOUNT):
                 flags.append("ETF量能偏弱")
         if not flags:
             continue
