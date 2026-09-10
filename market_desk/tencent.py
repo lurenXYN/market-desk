@@ -117,3 +117,70 @@ async def fetch_quotes(
             "turnover": turnover,
         }
     return out
+
+
+async def fetch_daily_bars(
+    client: httpx.AsyncClient,
+    code: str,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """Fetch forward-adjusted daily OHLCV from Tencent (oldest → newest).
+
+    Used when East Money history hosts fail or return empty klines.
+    Row shape matches ``eastmoney.fetch_daily_bars``.
+    """
+    c = str(code or "").strip().zfill(6)
+    if len(c) != 6 or not c.isdigit():
+        return []
+    sym = tencent_symbol(c)
+    n = max(5, min(int(limit or 60), 320))
+    url = (
+        "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+        f"?param={sym},day,,,{n},qfq"
+    )
+    try:
+        resp = await client.get(
+            url,
+            headers={
+                **HTTP_HEADERS,
+                "Referer": "https://gu.qq.com/",
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return []
+    data = payload.get("data") or {}
+    node = data.get(sym) or {}
+    if not node and data:
+        # Some responses nest under an unexpected key; take the first dict.
+        first = next(iter(data.values()), None)
+        node = first if isinstance(first, dict) else {}
+    rows = node.get("qfqday") or node.get("day") or []
+    out: list[dict[str, Any]] = []
+    prev_close: float | None = None
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 5:
+            continue
+        # Tencent: date, open, close, high, low, volume
+        o, cl, h, lo = num(row[1]), num(row[2]), num(row[3]), num(row[4])
+        if cl is None:
+            continue
+        pct = None
+        if prev_close not in (None, 0):
+            pct = (float(cl) / float(prev_close) - 1.0) * 100.0
+        out.append(
+            {
+                "date": str(row[0]),
+                "open": o,
+                "close": float(cl),
+                "high": h,
+                "low": lo,
+                "volume": num(row[5]) if len(row) > 5 else None,
+                "pct": None if pct is None else round(float(pct), 2),
+                "source": "tencent",
+            }
+        )
+        prev_close = float(cl)
+    return out[-n:] if len(out) > n else out

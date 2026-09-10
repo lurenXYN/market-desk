@@ -221,6 +221,103 @@ STOCK_WEAK_VS_ETF_PCT = 1.5        # stock pct must not lag mapped ETF by more t
 ETF_THIN_AMOUNT = 8e7              # yuan; green ETF below this → volume fail
 MINUTE_SAMPLE_MIN = 25
 
+# Prefer boards with a clear low-height leader + followers (not tip height).
+MAINLINE_LEADER_STRUCT_BONUS = 4.0   # 1–2板龙 + 跟风结构
+MAINLINE_LEADER_PAIR_BONUS = 2.0     # extra when 二板龙 + 卡位/跟风
+MAINLINE_LEADER_MAINBOARD_BONUS = 1.5
+
+# Stock recommend: cross-board membership resonance (cap keeps pullback quality first).
+STOCK_CROSS_BOARD_BASE = 2.0       # per extra hot board beyond the scoring board
+STOCK_CROSS_THEME_BONUS = 3.0      # extra when that board shares mainline theme
+STOCK_CROSS_CONFIRM_BONUS = 2.0    # extra when that board status is 确认中
+STOCK_CROSS_BOARD_CAP = 12.0
+
+# Daily trend score nudge after kline classify (unclear / missing → 0).
+STOCK_TREND_UP_BONUS = 8.0
+STOCK_TREND_DOWN_PENALTY = 8.0
+# Mainline carrier ETF daily-trend nudge (same once-per-day closes).
+MAINLINE_ETF_TREND_UP = 6.0
+MAINLINE_ETF_TREND_DOWN = 6.0
+# Soft-mapped carrier: smaller adj only; never unlocks ready buys.
+MAINLINE_SOFT_ETF_TREND_UP = 2.5
+MAINLINE_SOFT_ETF_TREND_DOWN = 3.0
+# Ending / 退潮 incumbent: easier for challenger to take sticky mainline.
+MAINLINE_FADE_SWITCH_MULT = 0.55
+
+# Orphan mainline (no exact ETF): stricter stock pullback / cap filters.
+ORPHAN_STOCK_PB_MIN = 1.2
+ORPHAN_STOCK_MV_MULT = 1.25
+# Thin「确认中」(zt<3): stock ready needs cross-board resonance.
+THIN_CONFIRM_ZT_MAX = 2
+THIN_CROSS_BOARD_MIN = 1
+
+# Sell-band regimes: widen on strong mainline+uptrend, tighten on fade/down.
+# Multipliers are vs cost: stop_buy=0.97 → −3% from cost.
+SELL_BAND_STOCK = {
+    "neutral": {
+        "stop_buy": 0.97,
+        "stop_floor": 0.96,
+        "pnl_stop": -3.0,
+        "pb_light": 1.5,
+        "pb_deep": 2.5,
+        "take_pnl": 5.0,
+        "take_deep_pnl": 6.0,
+        "pocket_pnl": 8.0,
+    },
+    "give": {
+        "stop_buy": 0.96,
+        "stop_floor": 0.955,
+        "pnl_stop": -4.0,
+        "pb_light": 2.0,
+        "pb_deep": 3.2,
+        "take_pnl": 6.0,
+        "take_deep_pnl": 7.5,
+        "pocket_pnl": 10.0,
+    },
+    "tight": {
+        "stop_buy": 0.98,
+        "stop_floor": 0.97,
+        "pnl_stop": -2.0,
+        "pb_light": 1.1,
+        "pb_deep": 2.0,
+        "take_pnl": 4.0,
+        "take_deep_pnl": 5.0,
+        "pocket_pnl": 6.0,
+    },
+}
+SELL_BAND_ETF = {
+    "neutral": {
+        "stop_buy": 0.985,
+        "stop_floor": 0.98,
+        "pnl_stop": -1.5,
+        "pb_light": 0.8,
+        "pb_deep": 1.2,
+        "take_pnl": 2.5,
+        "take_deep_pnl": 3.5,
+        "pocket_pnl": 4.0,
+    },
+    "give": {
+        "stop_buy": 0.98,
+        "stop_floor": 0.975,
+        "pnl_stop": -2.0,
+        "pb_light": 1.1,
+        "pb_deep": 1.6,
+        "take_pnl": 3.0,
+        "take_deep_pnl": 4.0,
+        "pocket_pnl": 5.0,
+    },
+    "tight": {
+        "stop_buy": 0.99,
+        "stop_floor": 0.985,
+        "pnl_stop": -1.0,
+        "pb_light": 0.6,
+        "pb_deep": 0.9,
+        "take_pnl": 2.0,
+        "take_deep_pnl": 2.8,
+        "pocket_pnl": 3.0,
+    },
+}
+
 # Phase classification temperature thresholds (overridable via settings).
 PHASE_PANIC_TEMP = 28
 PHASE_FERMENT_TEMP = 45

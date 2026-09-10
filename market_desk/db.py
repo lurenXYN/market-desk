@@ -96,6 +96,7 @@ def init_db() -> None:
             ("last_sell_price", "REAL"),
             ("day_sold_qty", "INTEGER DEFAULT 0"),
             ("day_realized_pnl", "REAL DEFAULT 0"),
+            ("peak_price", "REAL"),
         ):
             if col not in pos_cols:
                 conn.execute(f"ALTER TABLE positions ADD COLUMN {col} {decl}")
@@ -428,7 +429,8 @@ def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[
 
 _POS_SELECT = """
     id, code, name, buy_price, qty, note, created_at, last_buy_date,
-    closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl
+    closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
+    peak_price
 """
 
 
@@ -441,7 +443,37 @@ def _position_item(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     item["day_realized_pnl"] = float(item.get("day_realized_pnl") or 0)
     qty = int(item.get("qty") or 0)
     item["closed"] = qty <= 0 and bool(str(item.get("closed_date") or "").strip())
+    peak = item.get("peak_price")
+    item["peak_price"] = float(peak) if peak not in (None, "") else None
     return item
+
+
+def touch_position_peaks(peaks: dict[int, float]) -> int:
+    """Persist updated hold-peak prices keyed by position id. Returns rows touched."""
+    if not peaks:
+        return 0
+    n = 0
+    with _connect() as conn:
+        for pid, peak in peaks.items():
+            try:
+                pid_i = int(pid)
+                peak_f = float(peak)
+            except (TypeError, ValueError):
+                continue
+            if peak_f <= 0:
+                continue
+            cur = conn.execute(
+                """
+                UPDATE positions
+                SET peak_price = ?
+                WHERE id = ? AND qty > 0
+                  AND (peak_price IS NULL OR peak_price < ?)
+                """,
+                (peak_f, pid_i, peak_f),
+            )
+            n += int(cur.rowcount or 0)
+        conn.commit()
+    return n
 
 
 def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "") -> dict[str, Any]:
@@ -466,7 +498,7 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
                     """
                     UPDATE positions
                     SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
-                        closed_date = NULL, created_at = ?
+                        closed_date = NULL, created_at = ?, peak_price = ?
                     WHERE id = ?
                     """,
                     (
@@ -476,6 +508,7 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
                         note or existing["note"] or "",
                         buy_day,
                         now,
+                        float(buy_price),
                         int(existing["id"]),
                     ),
                 )
@@ -532,11 +565,12 @@ def add_position(code: str, name: str, buy_price: float, qty: int, note: str = "
             """
             INSERT INTO positions(
                 code, name, buy_price, qty, note, created_at, last_buy_date,
-                closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl
+                closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
+                peak_price
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?)
             """,
-            (code, name, buy_price, qty, note, now, buy_day),
+            (code, name, buy_price, qty, note, now, buy_day, float(buy_price)),
         )
         pid = int(cur.lastrowid)
         conn.commit()

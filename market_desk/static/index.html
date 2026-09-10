@@ -1762,8 +1762,14 @@
       const near = !!it.near_entry;
       const buy = it.buy_price != null ? it.buy_price : it.last;
       let trendHtml = "";
-      if (kind === "stock" && it.trend_ok) {
+      if (it.trend_ok) {
         trendHtml = `<div class="trend-ok">日线 · 上升趋势（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>`;
+      } else if (it.trend_pending) {
+        trendHtml = `<div class="trend-warn">日线 · ${it.trend || "暂未取到"}（不据此否决）</div>`;
+      } else if (it.trend_down) {
+        trendHtml = `<div class="trend-warn">日线 · 下降趋势</div>`;
+      } else if (it.trend) {
+        trendHtml = `<div class="trend-warn">日线 · ${it.trend}</div>`;
       }
       const batch = (it.batch_plan || []).map((b) =>
         `${b.lot}·${b.label}${b.qty}股${b.approx_cost != null ? "≈" + b.approx_cost : ""}`

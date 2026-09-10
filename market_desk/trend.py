@@ -80,3 +80,36 @@ def classify_daily_trend(
         "bars": len(series),
         "quality": "ok",
     }
+
+
+def trend_score_adj(
+    trend: dict[str, Any] | None,
+    *,
+    up_bonus: float,
+    down_penalty: float,
+) -> float:
+    """Return score nudge: up +, down −, unclear/missing 0."""
+    t = trend or {}
+    if t.get("up"):
+        return float(up_bonus)
+    if t.get("down"):
+        return -float(down_penalty)
+    return 0.0
+
+
+def classify_many(
+    closes_by_code: dict[str, list[float]],
+    fetch_ok_by_code: dict[str, bool] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Classify daily trends for a code→closes map."""
+    ok_map = fetch_ok_by_code or {}
+    out: dict[str, dict[str, Any]] = {}
+    for code, closes in (closes_by_code or {}).items():
+        c = str(code or "").zfill(6)
+        if not c:
+            continue
+        out[c] = classify_daily_trend(
+            closes,
+            fetch_ok=ok_map.get(c, bool(closes)),
+        )
+    return out

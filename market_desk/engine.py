@@ -43,6 +43,7 @@ from market_desk.db import (
     save_auction,
     save_board_daily,
     save_daily,
+    touch_position_peaks,
     try_add_mainline_switch,
     upsert_session_segment,
 )
@@ -98,10 +99,14 @@ from market_desk.sentiment import (
     score_temperature,
     spark_values,
 )
+from market_desk.mainline import etf_spec_for_name, etf_spec_soft_fallback
 from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
+from market_desk.trend import classify_many
 from market_desk.verdict import (
     align_action_with_ready,
+    apply_size_cap_gate,
     apply_stock_daily_trends,
+    attach_board_etf_trends,
     build_deltas,
     build_favorite_desk_plans,
     build_risk_overview,
@@ -133,7 +138,10 @@ class DeskEngine:
         self._toast_latched: set[str] = set()
         self._toast_latch_date: str | None = None
         self._toast_feed: list[dict[str, Any]] = []
-        self._kline_cache: dict[str, tuple[float, list[float]]] = {}
+        # Daily closes by trade date: one fetch per code per session day.
+        self._kline_day: str | None = None
+        self._kline_cache: dict[str, list[float]] = {}
+        self._kline_ok: dict[str, bool] = {}
         self._minute_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     def start(self) -> None:
@@ -165,12 +173,32 @@ class DeskEngine:
         positions = decorate_positions(load_positions(), quotes, trade_date=trade_dash)
         self.snapshot["positions"] = positions
         self.snapshot["position_summary"] = position_summary(positions)
-        self.snapshot["risk_overview"] = build_risk_overview(positions)
+        cap = float(
+            ((self.snapshot.get("verdict") or {}).get("playbook") or {}).get("size_cap_pct")
+            or 100
+        )
+        self.snapshot["risk_overview"] = build_risk_overview(
+            positions, size_cap_pct=cap
+        )
+        peaks = {
+            int(r["id"]): float(r["peak_price"])
+            for r in positions
+            if r.get("peak_dirty") and r.get("id") and r.get("peak_price")
+        }
+        if peaks:
+            try:
+                touch_position_peaks(peaks)
+            except Exception:
+                log.exception("touch position peaks failed")
+        trends = self._cached_trends_for(
+            [normalize_code(r.get("code")) for r in positions if r.get("code")]
+        )
         self.snapshot["sell_advice"] = build_sell_advice(
             positions,
             self.snapshot.get("verdict") or {},
             self.snapshot.get("phase") or "",
             trade_date=trade_dash,
+            trends_by_code=trends,
         )
         return positions
 
@@ -343,6 +371,16 @@ class DeskEngine:
             if not isinstance(pos_quote_map, dict):
                 pos_quote_map = {}
             positions = decorate_positions(pos_rows, pos_quote_map, trade_date=trade_date_dash)
+            peaks = {
+                int(r["id"]): float(r["peak_price"])
+                for r in positions
+                if r.get("peak_dirty") and r.get("id") and r.get("peak_price")
+            }
+            if peaks:
+                try:
+                    touch_position_peaks(peaks)
+                except Exception:
+                    log.exception("touch position peaks failed")
             watchlist = _decorate_watchlist(wl_rows, pos_quote_map)
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
@@ -394,115 +432,141 @@ class DeskEngine:
                 history=history_prev,
             )
             prev = self.snapshot if self.snapshot.get("ok") else None
-            verdict = build_verdict(
-                now,
-                phase,
-                metrics,
-                etfs,
-                hot_cards,
-                prev,
-                zt,
-                auction=auction,
-                similar=similar,
-                zb=zb,
-            )
-            await self._apply_recommend_trends(client, verdict, trade_date_dash)
-            # Arm near-entry first, then minute-gate ready cards (never re-arm after).
-            verdict["recommend"] = mark_pullback_entries(verdict.get("recommend"))
-            verdict["side_recommend"] = mark_pullback_entries(
-                verdict.get("side_recommend"), observe_only=True
-            )
-            await self._apply_recommend_minutes(client, verdict)
-            aligned = align_action_with_ready(verdict)
-            verdict.clear()
-            verdict.update(aligned)
-            updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                self._persist_session_context(
-                    trade_date_dash,
-                    updated_at,
-                    verdict,
-                    phase,
-                    temperature,
-                    prev,
+            # Day-once daily closes: carrier ETFs + open positions before mainline pick.
+            etf_codes = _board_etf_codes(hot_cards + pin_cards + fav_cards)
+            pos_codes = [
+                normalize_code(r.get("code"))
+                for r in positions
+                if normalize_code(r.get("code"))
+            ]
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                await self._resolve_daily_closes(
+                    client, list(dict.fromkeys(etf_codes + pos_codes)), trade_date_dash
                 )
-            except Exception:
-                log.exception("session context persist failed")
-            segments = _decorate_segments(
-                load_session_segments(trade_date_dash),
-                (verdict.get("segment") or {}).get("display_key")
-                or (verdict.get("segment") or {}).get("key"),
-            )
-            switches = load_mainline_switches(trade_date_dash)
-            payload = {
-                "ok": True,
-                "error": None,
-                "warnings": errors,
-                "updated_at": updated_at,
-                "prev_updated_at": (prev or {}).get("updated_at"),
-                "trade_date": trade_date_dash,
-                "live": _is_session(now),
-                "polling": _is_session(now),
-                "trading_day": is_trading_day(now),
-                "refresh_seconds": int(setting("refresh_seconds", 20)),
-                "phase": phase,
-                "temperature": temperature,
-                "metrics": metrics,
-                "kpis": kpi_bars(metrics),
-                "auction": auction,
-                "etfs": etfs,
-                "indices": indices,
-                "hot_boards": hot_cards,
-                "pin_boards": pin_cards,
-                "ice_boards": ice_cards,
-                "favorite_boards": fav_cards,
-                "contagion": contagion,
-                "history": history,
-                "cycle": cycle,
-                "similar_days": similar,
-                "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
-                "watch": _decorate_watch_pool(
-                    _watch_pool(zt, zb, quotes),
-                    list(hot_cards) + list(pin_cards) + list(fav_cards),
-                    ((verdict.get("mainline") or {}).get("name")) or "",
-                    {
-                        normalize_code(w.get("code"))
-                        for w in watchlist
-                        if normalize_code(w.get("code"))
-                    },
-                    quotes=quotes,
-                ),
-                "filter": "个股只做主板 · 市值门槛 · 创业板/科创走 ETF",
-                "verdict": verdict,
-                "session_segments": segments,
-                "mainline_switches": switches,
-                "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
-                "positions": positions,
-                "position_summary": position_summary(positions),
-                "risk_overview": build_risk_overview(positions),
-                "watchlist": watchlist,
-                "stock_blacklist": blacklist_state,
-                "recent_toasts": list(self._toast_feed),
-                "sell_advice": build_sell_advice(
-                    positions, verdict, phase, trade_date=trade_date_dash
-                ),
-                "glossary": GLOSSARY,
-            }
-            fav_desk = build_favorite_desk_plans(
-                favorite_boards=fav_cards,
-                etfs=etfs,
-                zt=zt,
-                zb=zb,
-                positions=positions,
-                phase=phase,
-                bans=list((verdict.get("bans") or [])),
-                stock_block=bool(verdict.get("stock_block")),
-                mainline_name=str(((verdict.get("mainline") or {}).get("name")) or ""),
-                trade_date=trade_date_dash,
-                metrics=metrics,
-            )
-            await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
-            await self._apply_favorite_desk_minutes(client, fav_desk)
+                board_trends = self._cached_trends_for(etf_codes)
+                hot_cards = attach_board_etf_trends(hot_cards, board_trends)
+                pin_cards = attach_board_etf_trends(pin_cards, board_trends)
+                fav_cards = attach_board_etf_trends(fav_cards, board_trends)
+                verdict = build_verdict(
+                    now,
+                    phase,
+                    metrics,
+                    etfs,
+                    hot_cards,
+                    prev,
+                    zt,
+                    auction=auction,
+                    similar=similar,
+                    zb=zb,
+                )
+                await self._apply_recommend_trends(client, verdict, trade_date_dash)
+                # Arm near-entry first, then minute-gate ready cards (never re-arm after).
+                verdict["recommend"] = mark_pullback_entries(verdict.get("recommend"))
+                verdict["side_recommend"] = mark_pullback_entries(
+                    verdict.get("side_recommend"), observe_only=True
+                )
+                await self._apply_recommend_minutes(client, verdict)
+                verdict = apply_size_cap_gate(verdict, positions)
+                aligned = align_action_with_ready(verdict)
+                verdict.clear()
+                verdict.update(aligned)
+                updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    self._persist_session_context(
+                        trade_date_dash,
+                        updated_at,
+                        verdict,
+                        phase,
+                        temperature,
+                        prev,
+                    )
+                except Exception:
+                    log.exception("session context persist failed")
+                segments = _decorate_segments(
+                    load_session_segments(trade_date_dash),
+                    (verdict.get("segment") or {}).get("display_key")
+                    or (verdict.get("segment") or {}).get("key"),
+                )
+                switches = load_mainline_switches(trade_date_dash)
+                payload = {
+                    "ok": True,
+                    "error": None,
+                    "warnings": errors,
+                    "updated_at": updated_at,
+                    "prev_updated_at": (prev or {}).get("updated_at"),
+                    "trade_date": trade_date_dash,
+                    "live": _is_session(now),
+                    "polling": _is_session(now),
+                    "trading_day": is_trading_day(now),
+                    "refresh_seconds": int(setting("refresh_seconds", 20)),
+                    "phase": phase,
+                    "temperature": temperature,
+                    "metrics": metrics,
+                    "kpis": kpi_bars(metrics),
+                    "auction": auction,
+                    "etfs": etfs,
+                    "indices": indices,
+                    "hot_boards": hot_cards,
+                    "pin_boards": pin_cards,
+                    "ice_boards": ice_cards,
+                    "favorite_boards": fav_cards,
+                    "contagion": contagion,
+                    "history": history,
+                    "cycle": cycle,
+                    "similar_days": similar,
+                    "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
+                    "watch": _decorate_watch_pool(
+                        _watch_pool(zt, zb, quotes),
+                        list(hot_cards) + list(pin_cards) + list(fav_cards),
+                        ((verdict.get("mainline") or {}).get("name")) or "",
+                        {
+                            normalize_code(w.get("code"))
+                            for w in watchlist
+                            if normalize_code(w.get("code"))
+                        },
+                        quotes=quotes,
+                    ),
+                    "filter": "个股只做主板 · 市值门槛 · 创业板/科创走 ETF",
+                    "verdict": verdict,
+                    "session_segments": segments,
+                    "mainline_switches": switches,
+                    "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
+                    "positions": positions,
+                    "position_summary": position_summary(positions),
+                    "risk_overview": build_risk_overview(
+                        positions,
+                        size_cap_pct=float(
+                            ((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
+                        ),
+                    ),
+                    "watchlist": watchlist,
+                    "stock_blacklist": blacklist_state,
+                    "recent_toasts": list(self._toast_feed),
+                    "sell_advice": build_sell_advice(
+                        positions,
+                        verdict,
+                        phase,
+                        trade_date=trade_date_dash,
+                        trends_by_code=self._cached_trends_for(pos_codes),
+                    ),
+                    "glossary": GLOSSARY,
+                }
+                fav_desk = build_favorite_desk_plans(
+                    favorite_boards=fav_cards,
+                    etfs=etfs,
+                    zt=zt,
+                    zb=zb,
+                    positions=positions,
+                    phase=phase,
+                    bans=list((verdict.get("bans") or [])),
+                    stock_block=bool(verdict.get("stock_block")),
+                    mainline_name=str(((verdict.get("mainline") or {}).get("name")) or ""),
+                    trade_date=trade_date_dash,
+                    metrics=metrics,
+                    hot_boards=hot_cards,
+                )
+                await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
+                await self._apply_favorite_desk_minutes(client, fav_desk)
             payload["favorite_desk"] = fav_desk
             payload["health"] = _build_health(now, errors, updated_at, payload)
             payload["deltas"] = build_deltas(payload, prev)
@@ -681,41 +745,66 @@ class DeskEngine:
         if chosen:
             current["recent_toasts"] = list(self._toast_feed)
 
+    async def _resolve_daily_closes(
+        self,
+        client: httpx.AsyncClient,
+        codes: list[str],
+        trade_date: str,
+    ) -> tuple[dict[str, list[float]], dict[str, bool]]:
+        """Resolve daily closes once per code per trade date (shared day cache)."""
+        day = str(trade_date or "")[:10]
+        if day and day != self._kline_day:
+            self._kline_day = day
+            self._kline_cache.clear()
+            self._kline_ok.clear()
+        uniq = list(
+            dict.fromkeys(
+                normalize_code(c) for c in codes if normalize_code(c)
+            )
+        )
+        need = [c for c in uniq if c not in self._kline_cache]
+        if need:
+            fetched = await fetch_daily_closes_many(client, need, limit=60)
+            for code in need:
+                closes = list(fetched.get(code) or [])
+                self._kline_cache[code] = closes
+                self._kline_ok[code] = bool(closes)
+        closes_by_code = {c: list(self._kline_cache.get(c) or []) for c in uniq}
+        ok_by_code = {c: bool(self._kline_ok.get(c, bool(closes_by_code.get(c)))) for c in uniq}
+        return closes_by_code, ok_by_code
+
+    def _cached_trends_for(self, codes: list[str]) -> dict[str, dict[str, Any]]:
+        """Classify trends from day-cached closes without network I/O."""
+        closes: dict[str, list[float]] = {}
+        ok: dict[str, bool] = {}
+        for raw in codes:
+            code = normalize_code(raw)
+            if not code or code not in self._kline_cache:
+                continue
+            closes[code] = list(self._kline_cache.get(code) or [])
+            ok[code] = bool(self._kline_ok.get(code, bool(closes[code])))
+        return classify_many(closes, ok)
+
     async def _apply_recommend_trends(
         self,
         client: httpx.AsyncClient,
         verdict: dict[str, Any],
         trade_date: str,
     ) -> None:
-        """Fetch daily closes for recommended stocks and mark non-uptrends."""
+        """Fetch daily closes for recommended stocks/ETFs and mark non-uptrends."""
         rec = verdict.get("recommend") or {}
         side_rec = verdict.get("side_recommend") or {}
         codes = [
             str(x.get("code") or "")
             for x in list(rec.get("items") or []) + list(side_rec.get("items") or [])
-            if x.get("kind") == "stock" and x.get("code")
+            if x.get("kind") in ("stock", "etf") and x.get("code")
         ]
         codes = list(dict.fromkeys(codes))
         if not codes:
             return
-        now_ts = datetime.now(CN_TZ).timestamp()
-        need: list[str] = []
-        closes_by_code: dict[str, list[float]] = {}
-        fetch_ok_by_code: dict[str, bool] = {}
-        for code in codes:
-            hit = self._kline_cache.get(code)
-            if hit and now_ts - hit[0] < 300:
-                closes_by_code[code] = hit[1]
-                fetch_ok_by_code[code] = bool(hit[1])
-            else:
-                need.append(code)
-        if need:
-            fetched = await fetch_daily_closes_many(client, need, limit=60)
-            for code in need:
-                closes = fetched.get(code) or []
-                self._kline_cache[code] = (now_ts, closes)
-                closes_by_code[code] = closes
-                fetch_ok_by_code[code] = bool(closes)
+        closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
+            client, codes, trade_date
+        )
         overrides = load_trend_overrides(trade_date)
         verdict["recommend"] = apply_stock_daily_trends(
             rec, closes_by_code, fetch_ok_by_code, overrides
@@ -745,7 +834,7 @@ class DeskEngine:
         for board in boards:
             buy = board.get("buy") or {}
             for item in buy.get("items") or []:
-                if item.get("kind") == "stock" and item.get("code"):
+                if item.get("kind") in ("stock", "etf") and item.get("code"):
                     codes.append(str(item.get("code") or ""))
         codes = list(dict.fromkeys(codes))
         if not codes:
@@ -755,24 +844,9 @@ class DeskEngine:
                     board.get("buy"), observe_only=soft
                 )
             return
-        now_ts = datetime.now(CN_TZ).timestamp()
-        need: list[str] = []
-        closes_by_code: dict[str, list[float]] = {}
-        fetch_ok_by_code: dict[str, bool] = {}
-        for code in codes:
-            hit = self._kline_cache.get(code)
-            if hit and now_ts - hit[0] < 300:
-                closes_by_code[code] = hit[1]
-                fetch_ok_by_code[code] = bool(hit[1])
-            else:
-                need.append(code)
-        if need:
-            fetched = await fetch_daily_closes_many(client, need, limit=60)
-            for code in need:
-                closes = fetched.get(code) or []
-                self._kline_cache[code] = (now_ts, closes)
-                closes_by_code[code] = closes
-                fetch_ok_by_code[code] = bool(closes)
+        closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
+            client, codes, trade_date
+        )
         overrides = load_trend_overrides(trade_date)
         for board in boards:
             soft = bool(board.get("etf_soft"))
@@ -890,10 +964,11 @@ class DeskEngine:
                 if item.get("kind") != "stock":
                     continue
                 code_i = normalize_code(item.get("code"))
-                hit = self._kline_cache.get(code_i)
-                if hit:
-                    closes_by_code[code_i] = hit[1]
-                    fetch_ok_by_code[code_i] = bool(hit[1])
+                if code_i in self._kline_cache:
+                    closes_by_code[code_i] = list(self._kline_cache.get(code_i) or [])
+                    fetch_ok_by_code[code_i] = bool(
+                        self._kline_ok.get(code_i, bool(closes_by_code[code_i]))
+                    )
                 else:
                     closes_by_code[code_i] = []
                     fetch_ok_by_code[code_i] = False
@@ -1251,6 +1326,20 @@ async def _enrich_board(
     card["note"] = board_note(flags, leader_name, leader_boards, card.get("slot_name"), ice)
     card["focus"] = round(zt_n / max(len(zt), 1) * 100.0, 1) if zt else 0.0
     return card
+
+
+def _board_etf_codes(boards: list[dict[str, Any]] | None) -> list[str]:
+    """Collect exact + soft-mapped carrier ETF codes from board cards."""
+    out: list[str] = []
+    for board in boards or []:
+        name = str(board.get("name") or "")
+        spec = etf_spec_for_name(name) or etf_spec_soft_fallback(name)
+        if not spec:
+            continue
+        code = normalize_code(spec[1])
+        if code:
+            out.append(code)
+    return list(dict.fromkeys(out))
 
 
 async def _safe(fn, *args, errors: list[str], label: str):

@@ -6,11 +6,105 @@ from typing import Any
 
 from market_desk.config import (
     MAINLINE_ETF_RULES,
+    MAINLINE_FADE_SWITCH_MULT,
     MAINLINE_HOLD_SWITCH_MULT,
+    MAINLINE_LEADER_MAINBOARD_BONUS,
+    MAINLINE_LEADER_PAIR_BONUS,
+    MAINLINE_LEADER_STRUCT_BONUS,
     MAINLINE_THEME_GROUPS,
     MAINLINE_THEME_SWITCH_MULT,
 )
+from market_desk.filters import is_main_board
 from market_desk.settings import setting
+
+
+def leader_structure_adj(board: dict[str, Any] | None) -> float:
+    """Reward leader+follower structure; never reward tip-height dragons.
+
+    - 尖峰 / leader_boards≥3 → 0 (identity only; status already soft-penalizes)
+    - 1–2板龙且有卡位龙 / 二板家数≥2 / 涨停≥3 → structure bonus
+    - 二板龙 + 跟风额外加分；主板龙再小幅加分
+    """
+    b = board or {}
+    status = str(b.get("status") or "")
+    lb = int(b.get("leader_boards") or 0)
+    if status == "尖峰禁追" or lb >= 3:
+        return 0.0
+    if lb < 1:
+        return 0.0
+    has_slot = bool(b.get("slot_name") or b.get("slot_code"))
+    ge2 = int(b.get("ge2") or 0)
+    zt_n = int(b.get("zt_n") or 0)
+    if not (has_slot or ge2 >= 2 or zt_n >= 3):
+        return 0.0
+    adj = float(MAINLINE_LEADER_STRUCT_BONUS)
+    if lb == 2 and (has_slot or ge2 >= 2):
+        adj += float(MAINLINE_LEADER_PAIR_BONUS)
+    code = str(b.get("leader_code") or "")
+    if code and is_main_board(code):
+        adj += float(MAINLINE_LEADER_MAINBOARD_BONUS)
+    return adj
+
+
+def mainline_score(board: dict[str, Any]) -> float:
+    """Score a hot board for mainline ranking, with multi-day persistence."""
+    status = board.get("status") or ""
+    zt_n = int(board.get("zt_n") or 0)
+    rank = {
+        "确认中": 50.0,
+        "尖峰禁追": 28.0,
+        "观察": 12.0,
+        "退潮": -25.0,
+    }.get(status, 0.0)
+    # Thin「确认中」(only 2 limit-ups) is fragile — dampen so niche spikes lose to real themes.
+    if status == "确认中" and zt_n < 3:
+        rank = 36.0
+    hist = list(board.get("hist") or [])
+    # Reward boards that stayed hot across recent sessions (anti one-day wonder).
+    persist = 0
+    for row in hist[-5:]:
+        zt_h = int(row.get("zt_n") or 0)
+        pct = float(row.get("pct") or 0)
+        if zt_h >= 2 or pct >= 1.5:
+            persist += 1
+    today_hot = zt_n >= 2 or float(board.get("pct") or 0) >= 1.5
+    if today_hot:
+        persist += 1
+    # Penalize boards with many broken seals / late first seals (weaker quality).
+    zb_pen = float(board.get("zb_n") or 0) * 3.0
+    explode_pen = min(float(board.get("explode_sum") or 0), 8.0) * 1.5
+    late_pen = float(board.get("late_seal_n") or 0) * 2.0
+    # Ladder completeness inside the board: reward fill, cut broken high boards.
+    if board.get("ladder_gap"):
+        ladder_adj = -8.0
+    else:
+        ladder_adj = min(float(board.get("ladder_fill") or 0) / 100.0, 1.0) * 6.0
+    ladder_adj += min(int(board.get("ge2") or 0), 4) * 1.5
+    # Prefer exact ETF maps so the desk can price a vehicle (soft/orphan lag a bit).
+    name = str(board.get("name") or "")
+    if etf_spec_for_name(name):
+        etf_adj = 5.0
+    elif etf_spec_soft_fallback(name):
+        etf_adj = 0.0
+    else:
+        etf_adj = -3.0
+    leader_adj = leader_structure_adj(board)
+    # Carrier ETF daily trend (attached once per session day); unclear → 0.
+    etf_trend_adj = float(board.get("etf_trend_adj") or 0.0)
+    return (
+        rank
+        + float(zt_n) * 6.0
+        + float(board.get("pct") or 0)
+        + float(board.get("focus") or 0) * 0.15
+        + min(persist, 6) * 3.0
+        + ladder_adj
+        + etf_adj
+        + leader_adj
+        + etf_trend_adj
+        - zb_pen
+        - explode_pen
+        - late_pen
+    )
 
 
 def theme_key(board_name: str | None) -> str:
@@ -74,10 +168,17 @@ def pick_mainline(
     need = float(margin) if margin is not None else float(setting("sticky_margin", 12.0))
     lead_s = mainline_score(leader)
     hold_s = mainline_score(incumbent)
+    # Ending / 退潮 sticky: lower the bar so identity catches up with sell bias.
+    from market_desk.lifecycle import classify_lifecycle
+
+    inc_status = str(incumbent.get("status") or "")
+    inc_ending = classify_lifecycle(incumbent) == "ending" or inc_status == "退潮"
+    if inc_ending:
+        need = need * float(MAINLINE_FADE_SWITCH_MULT)
     # Same theme: treat as continuity, not a "mainline change", unless clearly stronger
     # or the incumbent is already fading.
     if same_theme(sticky, leader.get("name")):
-        if (incumbent.get("status") or "") == "退潮" and (leader.get("status") or "") != "退潮":
+        if inc_status == "退潮" and (leader.get("status") or "") != "退潮":
             return leader
         theme_need = need * float(MAINLINE_THEME_SWITCH_MULT)
         if lead_s >= hold_s + theme_need:
@@ -90,6 +191,7 @@ def pick_mainline(
         sticky_held_seconds is not None
         and hold_min > 0
         and sticky_held_seconds < hold_min
+        and not inc_ending
     ):
         need = need * float(MAINLINE_HOLD_SWITCH_MULT)
     # Easier to adopt a challenger that has an exact ETF map when sticky does not.
@@ -207,62 +309,6 @@ def etf_spec_soft_fallback(board_name: str) -> tuple[str, str, str] | None:
     return best[1] if best else None
 
 
-def mainline_score(board: dict[str, Any]) -> float:
-    """Score a hot board for mainline ranking, with multi-day persistence."""
-    status = board.get("status") or ""
-    zt_n = int(board.get("zt_n") or 0)
-    rank = {
-        "确认中": 50.0,
-        "尖峰禁追": 28.0,
-        "观察": 12.0,
-        "退潮": -25.0,
-    }.get(status, 0.0)
-    # Thin「确认中」(only 2 limit-ups) is fragile — dampen so niche spikes lose to real themes.
-    if status == "确认中" and zt_n < 3:
-        rank = 36.0
-    hist = list(board.get("hist") or [])
-    # Reward boards that stayed hot across recent sessions (anti one-day wonder).
-    persist = 0
-    for row in hist[-5:]:
-        zt_h = int(row.get("zt_n") or 0)
-        pct = float(row.get("pct") or 0)
-        if zt_h >= 2 or pct >= 1.5:
-            persist += 1
-    today_hot = zt_n >= 2 or float(board.get("pct") or 0) >= 1.5
-    if today_hot:
-        persist += 1
-    # Penalize boards with many broken seals / late first seals (weaker quality).
-    zb_pen = float(board.get("zb_n") or 0) * 3.0
-    explode_pen = min(float(board.get("explode_sum") or 0), 8.0) * 1.5
-    late_pen = float(board.get("late_seal_n") or 0) * 2.0
-    # Ladder completeness inside the board: reward fill, cut broken high boards.
-    if board.get("ladder_gap"):
-        ladder_adj = -8.0
-    else:
-        ladder_adj = min(float(board.get("ladder_fill") or 0) / 100.0, 1.0) * 6.0
-    ladder_adj += min(int(board.get("ge2") or 0), 4) * 1.5
-    # Prefer exact ETF maps so the desk can price a vehicle (soft/orphan lag a bit).
-    name = str(board.get("name") or "")
-    if etf_spec_for_name(name):
-        etf_adj = 5.0
-    elif etf_spec_soft_fallback(name):
-        etf_adj = 0.0
-    else:
-        etf_adj = -3.0
-    return (
-        rank
-        + float(zt_n) * 6.0
-        + float(board.get("pct") or 0)
-        + float(board.get("focus") or 0) * 0.15
-        + min(persist, 6) * 3.0
-        + ladder_adj
-        + etf_adj
-        - zb_pen
-        - explode_pen
-        - late_pen
-    )
-
-
 def explain_mainline(
     hot: list[dict[str, Any]] | None,
     chosen: dict[str, Any] | None,
@@ -360,6 +406,8 @@ def explain_mainline(
         "score": chosen_s,
         "zt_n": chosen.get("zt_n"),
         "status": chosen.get("status"),
+        "leader_boards": chosen.get("leader_boards"),
+        "leader_adj": round(leader_structure_adj(chosen), 1) if name else 0.0,
         "etf_exact": bool(etf_spec_for_name(name)) if name else False,
         "sticky_name": sticky or None,
         "sticky_score": hold_s,
@@ -380,6 +428,8 @@ def explain_mainline(
                 "score": round(mainline_score(b), 1),
                 "zt_n": b.get("zt_n"),
                 "status": b.get("status"),
+                "leader_boards": b.get("leader_boards"),
+                "leader_adj": round(leader_structure_adj(b), 1),
                 "theme": theme_key(str(b.get("name") or "")),
             }
             for b in runners
