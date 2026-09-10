@@ -196,7 +196,12 @@ def build_elliott_scenarios(
             }
         )
     scored.sort(key=lambda x: (-int(x.get("fit") or 0), str(x.get("id") or "")))
-    primary = scored[0] if scored else None
+    indicators = _build_indicators(series)
+    top = scored[:5]
+    for row in top:
+        row["turns"] = _scenario_turns(row["id"], structure, pivots, series, last, indicators)
+        row["timing"] = _timing_summary(row["id"], indicators, structure)
+    primary = top[0] if top else None
     return {
         "ok": True,
         "standalone": True,
@@ -207,7 +212,13 @@ def build_elliott_scenarios(
         "pivot_n": len(pivots),
         "structure": structure,
         "pivots": pivots[-8:],
-        "scenarios": scored,
+        "indicators": {
+            "macd": indicators.get("macd_snap"),
+            "rsi": indicators.get("rsi_snap"),
+            "divergence": indicators.get("divergence"),
+        },
+        "scenarios": top,
+        "catalog_n": len(scored),
         "primary": {
             "id": primary.get("id"),
             "title": primary.get("title"),
@@ -219,11 +230,11 @@ def build_elliott_scenarios(
         else None,
         "note": (
             f"{index_name} 近 {len(series)} 日 · 枢轴 {len(pivots)} 个 · "
-            f"当前价 {round(last, 2)}；下列为全部浪型情景（按契合度排序）"
+            f"当前价 {round(last, 2)}；仅展示契合度最高的 5 个浪型情景"
         ),
         "disclaimer": (
-            "艾略特波浪天然多解。本页列出全部经典情景并打契合度，"
-            "不表示唯一正确答案；不改作战台可买入/ready。"
+            "艾略特波浪天然多解。本页只列 Top5 情景，并用斐波那契交易日窗口 + "
+            "MACD 背离 / RSI 超买超卖做变盘日与点位参考；不改作战台可买入/ready。"
         ),
     }
 
@@ -585,3 +596,363 @@ def _key_levels(st: dict[str, Any], last: float) -> dict[str, Any]:
         "prev_low": st.get("prev_low"),
         "ma20": st.get("ma20"),
     }
+
+
+def _ema(values: list[float], span: int) -> list[float | None]:
+    """Compute exponential moving average; leading bars stay None until warm."""
+    out: list[float | None] = [None] * len(values)
+    if span <= 0 or not values:
+        return out
+    alpha = 2.0 / (span + 1.0)
+    prev: float | None = None
+    for i, v in enumerate(values):
+        if prev is None:
+            if i + 1 < span:
+                out[i] = None
+                continue
+            prev = sum(values[i + 1 - span : i + 1]) / float(span)
+            out[i] = prev
+            continue
+        prev = alpha * v + (1.0 - alpha) * prev
+        out[i] = prev
+    return out
+
+
+def _rsi(closes: list[float], period: int = 14) -> list[float | None]:
+    """Wilder RSI series aligned with ``closes``."""
+    n = len(closes)
+    out: list[float | None] = [None] * n
+    if n <= period:
+        return out
+    gains = 0.0
+    losses = 0.0
+    for i in range(1, period + 1):
+        d = closes[i] - closes[i - 1]
+        if d >= 0:
+            gains += d
+        else:
+            losses -= d
+    avg_gain = gains / period
+    avg_loss = losses / period
+    out[period] = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+    for i in range(period + 1, n):
+        d = closes[i] - closes[i - 1]
+        gain = d if d > 0 else 0.0
+        loss = -d if d < 0 else 0.0
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+        out[i] = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+    return out
+
+
+def _build_indicators(series: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute MACD/RSI snapshots and soft divergence hints on index closes."""
+    closes = [float(x["close"]) for x in series]
+    ema12 = _ema(closes, 12)
+    ema26 = _ema(closes, 26)
+    dif: list[float | None] = [None] * len(closes)
+    for i in range(len(closes)):
+        if ema12[i] is not None and ema26[i] is not None:
+            dif[i] = float(ema12[i]) - float(ema26[i])
+    # DEA = EMA of DIF (skip None gaps by only feeding valid DIF values in place).
+    dif_filled = [d if d is not None else 0.0 for d in dif]
+    dea_raw = _ema(dif_filled, 9)
+    dea: list[float | None] = []
+    for i, d in enumerate(dif):
+        dea.append(dea_raw[i] if d is not None and dea_raw[i] is not None else None)
+    hist: list[float | None] = []
+    for i in range(len(closes)):
+        if dif[i] is not None and dea[i] is not None:
+            hist.append(float(dif[i]) - float(dea[i]))
+        else:
+            hist.append(None)
+    rsi = _rsi(closes, 14)
+    div = _detect_divergence(series, closes, dif, rsi)
+    last_i = len(closes) - 1
+    rsi_v = rsi[last_i]
+    rsi_zone = "中性"
+    if rsi_v is not None:
+        if rsi_v >= 70:
+            rsi_zone = "超买"
+        elif rsi_v <= 30:
+            rsi_zone = "超卖"
+        elif rsi_v >= 60:
+            rsi_zone = "偏强"
+        elif rsi_v <= 40:
+            rsi_zone = "偏弱"
+    macd_snap = {
+        "dif": round(dif[last_i], 3) if dif[last_i] is not None else None,
+        "dea": round(dea[last_i], 3) if dea[last_i] is not None else None,
+        "hist": round(hist[last_i], 3) if hist[last_i] is not None else None,
+        "cross": _macd_cross(dif, dea),
+    }
+    return {
+        "dif": dif,
+        "dea": dea,
+        "hist": hist,
+        "rsi": rsi,
+        "macd_snap": macd_snap,
+        "rsi_snap": {
+            "value": round(rsi_v, 1) if rsi_v is not None else None,
+            "zone": rsi_zone,
+        },
+        "divergence": div,
+    }
+
+
+def _macd_cross(dif: list[float | None], dea: list[float | None]) -> str | None:
+    """Detect a fresh DIF/DEA cross on the last two valid bars."""
+    pairs = [(d, e) for d, e in zip(dif, dea) if d is not None and e is not None]
+    if len(pairs) < 2:
+        return None
+    a, b = pairs[-2], pairs[-1]
+    if a[0] <= a[1] and b[0] > b[1]:
+        return "金叉"
+    if a[0] >= a[1] and b[0] < b[1]:
+        return "死叉"
+    return None
+
+
+def _detect_divergence(
+    series: list[dict[str, Any]],
+    closes: list[float],
+    dif: list[float | None],
+    rsi: list[float | None],
+) -> dict[str, Any]:
+    """Soft local MACD/RSI divergence vs price swings over the last ~40 bars."""
+    n = len(closes)
+    if n < 25:
+        return {"macd": None, "rsi": None, "note": "样本偏短，背离检测降权"}
+    window = closes[-40:]
+    off = n - len(window)
+    hi1 = max(range(len(window)), key=lambda i: window[i])
+    # Second high: earlier peak not adjacent to hi1.
+    hi_cands = sorted(range(len(window)), key=lambda i: window[i], reverse=True)
+    hi2 = None
+    for i in hi_cands:
+        if abs(i - hi1) >= 5:
+            hi2 = i
+            break
+    lo1 = min(range(len(window)), key=lambda i: window[i])
+    lo_cands = sorted(range(len(window)), key=lambda i: window[i])
+    lo2 = None
+    for i in lo_cands:
+        if abs(i - lo1) >= 5:
+            lo2 = i
+            break
+    macd_div = None
+    rsi_div = None
+    if hi2 is not None and hi1 > hi2 and window[hi1] > window[hi2] * 1.002:
+        d1, d2 = dif[off + hi1], dif[off + hi2]
+        r1, r2 = rsi[off + hi1], rsi[off + hi2]
+        if d1 is not None and d2 is not None and d1 < d2:
+            macd_div = {
+                "kind": "顶背离",
+                "note": "价格抬高而 DIF 未同步抬高",
+                "date": series[off + hi1].get("date") or "",
+            }
+        if r1 is not None and r2 is not None and r1 < r2:
+            rsi_div = {
+                "kind": "顶背离",
+                "note": "价格抬高而 RSI 未同步抬高",
+                "date": series[off + hi1].get("date") or "",
+            }
+    if lo2 is not None and lo1 > lo2 and window[lo1] < window[lo2] * 0.998:
+        d1, d2 = dif[off + lo1], dif[off + lo2]
+        r1, r2 = rsi[off + lo1], rsi[off + lo2]
+        if d1 is not None and d2 is not None and d1 > d2:
+            macd_div = {
+                "kind": "底背离",
+                "note": "价格走低而 DIF 未同步走低",
+                "date": series[off + lo1].get("date") or "",
+            }
+        if r1 is not None and r2 is not None and r1 > r2:
+            rsi_div = {
+                "kind": "底背离",
+                "note": "价格走低而 RSI 未同步走低",
+                "date": series[off + lo1].get("date") or "",
+            }
+    note = "暂无清晰背离"
+    if macd_div or rsi_div:
+        parts = []
+        if macd_div:
+            parts.append(f"MACD{macd_div['kind']}")
+        if rsi_div:
+            parts.append(f"RSI{rsi_div['kind']}")
+        note = " / ".join(parts)
+    return {"macd": macd_div, "rsi": rsi_div, "note": note}
+
+
+def _timing_summary(
+    sid: str,
+    ind: dict[str, Any],
+    st: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach MACD/RSI context that soft-confirms or challenges a scenario."""
+    macd = ind.get("macd_snap") or {}
+    rsi = ind.get("rsi_snap") or {}
+    div = ind.get("divergence") or {}
+    bias = "neutral"
+    if sid.startswith("imp_up") or sid in ("corr_b",):
+        bias = "bull"
+    elif sid.startswith("imp_dn") or sid in ("corr_a", "corr_c"):
+        bias = "bear"
+    notes: list[str] = []
+    weight = 50
+    macd_div = (div.get("macd") or {}).get("kind")
+    rsi_div = (div.get("rsi") or {}).get("kind")
+    zone = rsi.get("zone")
+    if bias == "bull":
+        if macd_div == "底背离" or rsi_div == "底背离":
+            notes.append("底背离支持偏多浪")
+            weight += 18
+        if zone == "超卖":
+            notes.append("RSI 超卖，利于反抽/第2浪结束假设")
+            weight += 10
+        if macd.get("cross") == "金叉":
+            notes.append("MACD 金叉")
+            weight += 8
+        if macd_div == "顶背离" or zone == "超买":
+            notes.append("顶背离/超买对升浪末段示警")
+            weight -= 12
+    elif bias == "bear":
+        if macd_div == "顶背离" or rsi_div == "顶背离":
+            notes.append("顶背离支持偏空浪")
+            weight += 18
+        if zone == "超买":
+            notes.append("RSI 超买，利于回落/B浪结束假设")
+            weight += 10
+        if macd.get("cross") == "死叉":
+            notes.append("MACD 死叉")
+            weight += 8
+        if macd_div == "底背离" or zone == "超卖":
+            notes.append("底背离/超卖对下跌末段示警")
+            weight -= 12
+    else:
+        if zone in ("超买", "超卖"):
+            notes.append(f"RSI {zone}，突破方向前先防假突破")
+        if macd_div or rsi_div:
+            notes.append(div.get("note") or "存在背离，宜等收盘确认")
+    weight = max(0, min(100, weight))
+    return {
+        "macd": macd,
+        "rsi": rsi,
+        "divergence": div.get("note"),
+        "weight": weight,
+        "notes": notes or ["指标中性，以结构为主"],
+    }
+
+
+def _scenario_turns(
+    sid: str,
+    st: dict[str, Any],
+    pivots: list[dict[str, Any]],
+    series: list[dict[str, Any]],
+    last: float,
+    ind: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Project Fibonacci time windows and price levels for one wave scenario."""
+    from market_desk.calendar import add_trading_days
+
+    lp = st.get("last_pivot") or {}
+    pp = st.get("prev_pivot") or {}
+    anchor_date = str(lp.get("date") or (series[-1].get("date") if series else "") or "")
+    if not anchor_date:
+        return []
+    swing_bars = 8
+    if lp.get("index") is not None and pp.get("index") is not None:
+        swing_bars = max(3, abs(int(lp["index"]) - int(pp["index"])))
+    hh = st.get("last_high") or last
+    hl = st.get("last_low") or last
+    try:
+        hi = float(hh)
+        lo = float(hl)
+    except (TypeError, ValueError):
+        hi, lo = last, last
+    span = abs(hi - lo)
+    if span <= 0:
+        span = abs(last) * 0.02 or 1.0
+
+    # Classic Fib session counts + swing-length multiples.
+    fib_days = [5, 8, 13, 21, 34]
+    for r in (0.382, 0.618, 1.0, 1.618):
+        d = max(3, int(round(swing_bars * r)))
+        if d not in fib_days:
+            fib_days.append(d)
+    fib_days = sorted(set(fib_days))[:7]
+
+    bullish = sid.startswith("imp_up") or sid in ("corr_b",)
+    bearish = sid.startswith("imp_dn") or sid in ("corr_a", "corr_c")
+    # Price targets depend on whether the next event is a pullback or extension.
+    price_ratios = (0.382, 0.5, 0.618, 1.0, 1.272, 1.618)
+    levels: list[dict[str, Any]] = []
+    for r in price_ratios:
+        if bullish:
+            # Prefer retracement of last up-swing for w2/w4; extension for w3/w5.
+            if sid in ("imp_up_w2", "imp_up_w4", "corr_b", "triangle", "complex"):
+                px = hi - span * r
+                tag = f"回撤 {r:g}"
+            else:
+                px = lo + span * r if r <= 1 else hi + span * (r - 1)
+                tag = f"延伸 {r:g}" if r > 1 else f"推进 {r:g}"
+        elif bearish:
+            if sid in ("imp_dn_w2", "imp_dn_w4", "corr_b"):
+                px = lo + span * r
+                tag = f"反抽 {r:g}"
+            else:
+                px = hi - span * r if r <= 1 else lo - span * (r - 1)
+                tag = f"延伸 {r:g}" if r > 1 else f"下探 {r:g}"
+        else:
+            px = lo + span * r
+            tag = f"箱体 {r:g}"
+        levels.append({"ratio": r, "price": round(float(px), 2), "tag": tag})
+
+    timing = _timing_summary(sid, ind, st)
+    div_note = (ind.get("divergence") or {}).get("note") or ""
+    rsi_zone = ((ind.get("rsi_snap") or {}).get("zone")) or ""
+    turns: list[dict[str, Any]] = []
+    for i, days in enumerate(fib_days):
+        when = add_trading_days(anchor_date, days)
+        if when is None:
+            continue
+        # Pair each time window with the nearest Fib price of matching order.
+        lvl = levels[min(i, len(levels) - 1)]
+        conf = 40
+        conf_notes: list[str] = []
+        if days in (8, 13, 21):
+            conf += 12
+            conf_notes.append("经典斐波那契交易日")
+        if timing.get("weight", 50) >= 60:
+            conf += 10
+            conf_notes.append("MACD/RSI 同向")
+        if timing.get("weight", 50) <= 40:
+            conf -= 8
+            conf_notes.append("指标逆势示警")
+        if "背离" in div_note and days <= 13:
+            conf += 8
+            conf_notes.append(div_note)
+        if rsi_zone in ("超买", "超卖") and days <= 8:
+            conf += 6
+            conf_notes.append(f"RSI {rsi_zone}")
+        conf = max(0, min(100, conf))
+        turns.append(
+            {
+                "date": when.isoformat(),
+                "bars_ahead": days,
+                "fib": f"{days} 个交易日",
+                "anchor": anchor_date,
+                "price": lvl["price"],
+                "price_tag": lvl["tag"],
+                "level": round(last, 2),
+                "macd_hint": ((ind.get("macd_snap") or {}).get("cross")) or div_note or "—",
+                "rsi_hint": (
+                    f"RSI {((ind.get('rsi_snap') or {}).get('value'))} · {rsi_zone}"
+                    if (ind.get("rsi_snap") or {}).get("value") is not None
+                    else rsi_zone or "—"
+                ),
+                "confidence": conf,
+                "note": "；".join(conf_notes) or "纯时间/点位投影",
+            }
+        )
+    turns.sort(key=lambda x: (-int(x.get("confidence") or 0), int(x.get("bars_ahead") or 0)))
+    return turns[:5]

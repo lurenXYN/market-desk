@@ -31,6 +31,7 @@ def _clist_url(
     pn: int = 1,
     extra_fields: str = "",
     po: int = 1,
+    fid: str = "f3",
 ) -> str:
     fields = (
         "f12,f13,f14,f2,f3,f4,f5,f6,f8,f15,f16,f17,f18,f9,f20,"
@@ -39,7 +40,7 @@ def _clist_url(
     )
     return (
         "https://push2delay.eastmoney.com/api/qt/clist/get"
-        f"?pn={pn}&pz={pz}&po={po}&np=1&fltt=2&invt=2&fid=f3"
+        f"?pn={pn}&pz={pz}&po={po}&np=1&fltt=2&invt=2&fid={fid}"
         f"&ut={EASTMONEY_UT}&fs={fs}&fields={fields}"
     )
 
@@ -266,6 +267,72 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         if mapped:
             out.append(mapped)
     return out
+
+
+_FLOW_FIELDS = (
+    ",f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f204,f205"
+)
+
+
+async def fetch_board_fund_flow(
+    client: httpx.AsyncClient,
+    kind: str = "industry",
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    """Fetch board money-flow ranked by main-force net inflow (f62)."""
+    fs = "m:90+t:2" if kind == "industry" else "m:90+t:3"
+    # Prefer live push2 host for fund-flow boards; fall back to delay mirror.
+    urls = [
+        (
+            "https://push2.eastmoney.com/api/qt/clist/get"
+            f"?pn=1&pz={limit}&po=1&np=1&fltt=2&invt=2&fid=f62"
+            f"&ut={EASTMONEY_UT}&fs={fs}"
+            f"&fields=f12,f13,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,"
+            f"f128,f140,f136,f204,f205"
+        ),
+        _clist_url(fs, pz=limit, pn=1, po=1, fid="f62", extra_fields=_FLOW_FIELDS),
+    ]
+    payload: dict[str, Any] = {}
+    for url in urls:
+        try:
+            payload = await _get_json(client, url)
+            if _diff_rows(payload):
+                break
+        except Exception:
+            continue
+    out: list[dict[str, Any]] = []
+    for item in _diff_rows(payload):
+        mapped = _board_flow_from_diff(item, kind)
+        if mapped:
+            out.append(mapped)
+    return out
+
+
+def _board_flow_from_diff(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
+    """Map a clist money-flow row into a normalized board flow dict."""
+    name = str(item.get("f14") or "")
+    if not name or _is_junk_board(name):
+        return None
+    code = str(item.get("f12") or "")
+    if not code.startswith("BK"):
+        return None
+    leader = str(item.get("f204") or item.get("f128") or "")
+    leader_code = normalize_code(item.get("f205") or item.get("f140"))
+    return {
+        "bk": code,
+        "name": name,
+        "kind": kind,
+        "pct": round(num(item.get("f3"), 0.0) or 0.0, 2),
+        "main_net": num(item.get("f62")),
+        "main_pct": num(item.get("f184")),
+        "super_net": num(item.get("f66")),
+        "large_net": num(item.get("f72")),
+        "mid_net": num(item.get("f78")),
+        "small_net": num(item.get("f84")),
+        "leader_name": leader,
+        "leader_code": leader_code,
+        "leader_pct": round(num(item.get("f136"), 0.0) or 0.0, 2),
+    }
 
 
 async def fetch_board_members(

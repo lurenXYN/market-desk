@@ -68,6 +68,11 @@ _CN_HOLIDAYS: set[str] = {
 }
 
 
+def holiday_set() -> set[str]:
+    """Return the configured mainland market holiday dates (YYYY-MM-DD)."""
+    return set(_CN_HOLIDAYS)
+
+
 def is_trading_day(day: date | datetime | str | None = None) -> bool:
     """Return True when the A-share market is expected to open that calendar day."""
     if day is None:
@@ -79,3 +84,27 @@ def is_trading_day(day: date | datetime | str | None = None) -> bool:
     if day.weekday() >= 5:
         return False
     return day.isoformat() not in _CN_HOLIDAYS
+
+
+def add_trading_days(start: date | datetime | str, n: int) -> date | None:
+    """Advance ``n`` trading sessions from ``start`` (skip weekends/holidays)."""
+    if n < 0:
+        return None
+    if isinstance(start, datetime):
+        day = start.date()
+    elif isinstance(start, str):
+        try:
+            day = date.fromisoformat(start[:10])
+        except ValueError:
+            return None
+    else:
+        day = start
+    left = int(n)
+    # If start itself is not a session, first hop onto the next session as day 0.
+    guard = 0
+    while left > 0 and guard < 800:
+        day = day.fromordinal(day.toordinal() + 1)
+        guard += 1
+        if is_trading_day(day):
+            left -= 1
+    return day if left == 0 else None

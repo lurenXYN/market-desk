@@ -48,7 +48,10 @@ from market_desk.db import (
     upsert_session_segment,
 )
 from market_desk.auction_scan import build_auction_strategy
+from market_desk.emotion_wave import build_emotion_wave
 from market_desk.elliott import build_elliott_scenarios
+from market_desk.fund_flow import build_fund_flow_board
+from market_desk.seasonality import build_seasonality
 from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
@@ -62,6 +65,7 @@ from market_desk.report import build_morning_brief
 from market_desk.session import SEGMENT_ORDER, segment_snapshot_row, session_segment
 
 from market_desk.eastmoney import (
+    fetch_board_fund_flow,
     fetch_board_members,
     fetch_daily_closes_many,
     fetch_daily_klines_many,
@@ -314,13 +318,29 @@ class DeskEngine:
             trade_date_dash = now.strftime("%Y-%m-%d")
             errors: list[str] = []
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                zt, zb, quotes, boards, etfs, indices = await asyncio.gather(
+                zt, zb, quotes, boards, etfs, indices, flow_ind, flow_con = await asyncio.gather(
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
                     _safe(fetch_zb_pool, client, trade_date, errors=errors, label="zb"),
                     _safe(fetch_main_quotes, client, errors=errors, label="quotes"),
                     _safe(fetch_hot_boards, client, errors=errors, label="boards"),
                     _safe(fetch_etfs, client, errors=errors, label="etf"),
                     _safe(fetch_indices, client, errors=errors, label="index"),
+                    _safe(
+                        fetch_board_fund_flow,
+                        client,
+                        "industry",
+                        80,
+                        errors=errors,
+                        label="flow-hy",
+                    ),
+                    _safe(
+                        fetch_board_fund_flow,
+                        client,
+                        "concept",
+                        80,
+                        errors=errors,
+                        label="flow-gn",
+                    ),
                 )
                 yesterday_zt = await self._yesterday(client, now, errors)
                 zt = zt or []
@@ -330,6 +350,9 @@ class DeskEngine:
                 etfs = etfs or []
                 indices = indices or []
                 yesterday_zt = yesterday_zt or []
+                flow_ind = flow_ind or []
+                flow_con = flow_con or []
+                fund_flow = build_fund_flow_board(flow_ind, flow_con)
                 ctx = {
                     "zt": zt,
                     "zb": zb,
@@ -523,7 +546,19 @@ class DeskEngine:
                     ),
                     "etfs": etfs,
                     "indices": indices,
+                    "emotion_wave": build_emotion_wave(
+                        phase=phase,
+                        temperature=temperature,
+                        metrics=metrics,
+                        mainline=(verdict.get("mainline") if isinstance(verdict, dict) else None)
+                        or {},
+                    ),
+                    "seasonality": build_seasonality(
+                        trade_date_dash,
+                        history=history,
+                    ),
                     "elliott": self._build_elliott(indices),
+                    "fund_flow": fund_flow,
                     "hot_boards": hot_cards,
                     "pin_boards": pin_cards,
                     "ice_boards": ice_cards,

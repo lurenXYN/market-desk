@@ -591,6 +591,95 @@
     .ew-bias-bull { color: var(--up); }
     .ew-bias-bear { color: var(--down); }
     .ew-bias-neutral { color: var(--warn); }
+    .ew-turns {
+      margin-top: 8px; padding-top: 8px; border-top: 1px dashed #2a3548;
+      display: grid; gap: 4px;
+    }
+    .ew-turns .ew-turn {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 4px 8px;
+      font-size: 12px; line-height: 1.35;
+    }
+    .ew-turns .ew-turn b { color: var(--ice); font-weight: 650; }
+    .ew-turns .ew-turn .meta { color: var(--muted); }
+    .ew-timing {
+      margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.4;
+    }
+    .fund-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 900px) {
+      .fund-grid { grid-template-columns: 1fr; }
+    }
+    .fund-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .fund-table th, .fund-table td {
+      padding: 5px 6px; border-bottom: 1px solid var(--line);
+      text-align: right; white-space: nowrap;
+    }
+    .fund-table th:first-child, .fund-table td:first-child,
+    .fund-table th:nth-child(2), .fund-table td:nth-child(2) { text-align: left; }
+    .fund-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    .fund-big {
+      display: inline-block; margin-left: 4px; padding: 0 5px;
+      border-radius: 3px; font-size: 11px;
+      background: #2a2210; color: #e0b341; border: 1px solid #5a4820;
+    }
+    .fund-spot {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+    }
+    .fund-spot .chip {
+      padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+      background: #121820; font-size: 12.5px;
+    }
+    .fund-spot .chip b { margin-right: 6px; }
+    .emo-strip {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+    @media (max-width: 960px) {
+      .emo-strip { grid-template-columns: 1fr; }
+    }
+    .emo-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #10161f;
+      padding: 10px;
+      min-height: 120px;
+    }
+    .emo-card.on {
+      border-color: #3a6a4a;
+      background: #0f1a14;
+      box-shadow: inset 0 0 0 1px #2f5a3a;
+    }
+    .emo-card .emo-step {
+      font-size: 11px; color: var(--muted); letter-spacing: 0.08em;
+    }
+    .emo-card b { display: block; margin: 4px 0 6px; font-size: 14px; }
+    .emo-card .emo-path { font-size: 12px; line-height: 1.45; }
+    .emo-card .emo-risk { margin-top: 6px; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+    .season-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 8px;
+    }
+    .season-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #10161f;
+      opacity: 0.55;
+    }
+    .season-card.on {
+      opacity: 1;
+      border-color: #3a5a7a;
+      background: #101820;
+    }
+    .season-card b { display: block; margin-bottom: 4px; }
+    .season-card .when { color: var(--muted); font-size: 11.5px; margin-bottom: 6px; }
     .grid-top {
       display: grid;
       grid-template-columns: 1.15fr 1fr 0.95fr;
@@ -1330,6 +1419,7 @@
       <button type="button" class="on" data-main="desk">作战<span class="hint">买卖</span></button>
       <button type="button" data-main="market">大盘<span class="hint">相位</span></button>
       <button type="button" data-main="boards">板块<span class="hint">热点</span></button>
+      <button type="button" data-main="funds">资金<span class="hint">大单</span></button>
       <button type="button" data-main="watch">观察<span class="hint">异动</span></button>
       <button type="button" data-main="auction">竞价<span class="hint">策略</span></button>
       <button type="button" data-main="pos">仓位</button>
@@ -1514,15 +1604,6 @@
       <h2 style="text-transform:none;letter-spacing:0.04em">主要指数</h2>
       <div class="idx-strip" id="idxStrip"></div>
     </section>
-    <section class="card mid" id="elliottCard">
-      <h2 style="text-transform:none;letter-spacing:0.04em">
-        大盘波浪情景（上证）
-        <button type="button" class="q" data-term="波浪情景">?</button>
-      </h2>
-      <p class="meta" id="elliottNote">规则多假设并列；不改作战台买卖结论。</p>
-      <div class="pos-sum" id="elliottSum" style="margin-bottom:10px"></div>
-      <div id="elliottBody"><div class="meta">等待日线…</div></div>
-    </section>
     <section class="grid-top">
       <article class="card">
         <h2>大盘相位<button type="button" class="q" id="phaseHelp" data-term="相位">?</button> · LIVE</h2>
@@ -1551,6 +1632,15 @@
         <div class="contagion off" id="contagion">冰点 / 传染待刷新</div>
       </article>
     </section>
+    <section class="card mid" id="emotionCard">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        情绪浪（大A结构）
+        <button type="button" class="q" data-term="情绪浪">?</button>
+      </h2>
+      <p class="meta" id="emotionNote">用涨停结构/溢价/晋级命名阶段；比艾略特更贴大A。</p>
+      <div class="pos-sum" id="emotionSum" style="margin-bottom:10px"></div>
+      <div id="emotionBody"><div class="meta">等待…</div></div>
+    </section>
     <section class="card mid">
       <h2 style="text-transform:none;letter-spacing:0.04em">大盘日级明细 · 主板</h2>
       <table>
@@ -1575,6 +1665,24 @@
       </h2>
       <p class="meta" id="similarNote">近端同相位日对照次日冷热</p>
       <div class="similar-box" id="similarBox"></div>
+    </section>
+    <section class="card mid" id="seasonCard">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        季节性 / 日历
+        <button type="button" class="q" data-term="季节性日历">?</button>
+      </h2>
+      <p class="meta" id="seasonNote">月初月末、长假、财报窗、周一周五等偏好提示。</p>
+      <div class="pos-sum" id="seasonSum" style="margin-bottom:10px"></div>
+      <div id="seasonBody"><div class="meta">等待…</div></div>
+    </section>
+    <section class="card mid" id="elliottCard">
+      <h2 style="text-transform:none;letter-spacing:0.04em">
+        大盘波浪情景（上证）
+        <button type="button" class="q" data-term="波浪情景">?</button>
+      </h2>
+      <p class="meta" id="elliottNote">Top5 情景 + 斐波那契变盘窗；参考 MACD/RSI；不改作战台买卖结论。</p>
+      <div class="pos-sum" id="elliottSum" style="margin-bottom:10px"></div>
+      <div id="elliottBody"><div class="meta">等待日线…</div></div>
     </section>
     </section>
 
@@ -1604,6 +1712,20 @@
         <span>实时热点板块 · 东财行业+概念</span>
       </div>
       <section class="boards" id="boards"></section>
+    </section>
+
+    <section class="tab-panel" id="panel-funds" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">大资金流向 · 板块
+          <button type="button" class="q" data-term="大资金流向">?</button>
+        </h2>
+        <p class="meta" id="fundNote">东财主力/超大单净流入作「国家队口径」大资金代理；仅观察，不改买卖闸门。</p>
+        <div class="pos-sum" id="fundSum" style="margin-bottom:10px"></div>
+        <div class="fund-spot" id="fundSpot"></div>
+        <div class="fund-grid" id="fundBody">
+          <div class="meta">等待资金流…</div>
+        </div>
+      </section>
     </section>
 
     <section class="tab-panel" id="panel-watch" hidden>
@@ -2639,7 +2761,72 @@
         </tr>`;
       }).join("") || `<tr><td colspan="12" class="meta">暂无仓位，先记账</td></tr>`;
       paintAuctionStrategy(d);
+      paintEmotionWave(d);
+      paintSeasonality(d);
       paintElliott(d);
+      paintFundFlow(d);
+    }
+
+    function paintEmotionWave(d) {
+      const box = d.emotion_wave || {};
+      const note = document.getElementById("emotionNote");
+      const sum = document.getElementById("emotionSum");
+      const body = document.getElementById("emotionBody");
+      if (!note || !sum || !body) return;
+      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
+      const pri = box.primary || {};
+      sum.innerHTML =
+        `<span>相位 <b>${box.phase || "—"}</b></span>`
+        + `<span>温度 <b>${box.temperature ?? "—"}</b></span>`
+        + (pri.title ? `<span>当前偏 <b>${pri.title}</b>（契合 ${pri.fit ?? "—"}）</span>` : "");
+      const stages = box.stages || [];
+      if (!stages.length) {
+        body.innerHTML = `<div class="meta">暂无情绪浪</div>`;
+        return;
+      }
+      body.innerHTML = `<div class="emo-strip">` + stages.map((st) => {
+        const on = pri.id && st.id === pri.id;
+        const term = st.title || "";
+        const tip = GLOSSARY[term]
+          ? ` <button type="button" class="q" data-term="${term}">?</button>`
+          : "";
+        return `<article class="emo-card${on ? " on" : ""}">
+          <div class="emo-step">第${st.step || "—"}浪 · 契合 ${st.fit ?? "—"}</div>
+          <b>${term}${tip}</b>
+          <div class="meta">${st.fit_note || ""}</div>
+          <div class="emo-path">${st.path || ""}</div>
+          <div class="emo-risk">否决：${st.invalid || ""}</div>
+        </article>`;
+      }).join("") + `</div>`;
+    }
+
+    function paintSeasonality(d) {
+      const box = d.seasonality || {};
+      const note = document.getElementById("seasonNote");
+      const sum = document.getElementById("seasonSum");
+      const body = document.getElementById("seasonBody");
+      if (!note || !sum || !body) return;
+      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
+      const active = box.active || [];
+      sum.innerHTML =
+        `<span>${box.weekday_note || ""}</span>`
+        + `<span>激活 <b>${active.length}</b> 窗</span>`
+        + (box.history_note ? `<span class="meta">${box.history_note}</span>` : "");
+      const wins = box.windows || [];
+      if (!wins.length) {
+        body.innerHTML = `<div class="meta">暂无日历窗</div>`;
+        return;
+      }
+      // Active first, then the rest.
+      const ordered = wins.slice().sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+      body.innerHTML = `<div class="season-grid">` + ordered.map((w) => {
+        return `<article class="season-card${w.active ? " on" : ""}">
+          <b>${w.active ? "● " : ""}${w.title || ""}</b>
+          <div class="when">${w.when || ""}</div>
+          <div class="emo-path">${w.path || ""}</div>
+          <div class="emo-risk">${w.watch || ""}</div>
+        </article>`;
+      }).join("") + `</div>`;
     }
 
     function paintElliott(d) {
@@ -2652,13 +2839,21 @@
         + (box.note ? (" " + box.note) : "");
       const primary = box.primary || {};
       const st = box.structure || {};
+      const ind = box.indicators || {};
+      const macd = ind.macd || {};
+      const rsi = ind.rsi || {};
       sum.innerHTML =
         `<span>现价 <b>${box.last ?? "—"}</b></span>`
         + `<span>样本 <b>${box.bars ?? "—"}</b> 日</span>`
         + `<span>枢轴 <b>${box.pivot_n ?? "—"}</b></span>`
         + `<span class="meta">趋势 ${({ up: "偏多", down: "偏空", side: "震荡" })[st.trend] || "—"}</span>`
+        + `<span>MACD <b>${macd.cross || "—"}</b> DIF ${macd.dif ?? "—"}</span>`
+        + `<span>RSI <b>${rsi.value ?? "—"}</b> ${rsi.zone || ""}</span>`
+        + (ind.divergence && ind.divergence.note
+          ? `<span class="meta">${ind.divergence.note}</span>`
+          : "")
         + (primary.title
-          ? `<span>最高契合 <b>${primary.title}</b>（${primary.fit ?? "—"}）</span>`
+          ? `<span>Top1 <b>${primary.title}</b>（${primary.fit ?? "—"}）</span>`
           : "");
       const rows = box.scenarios || [];
       if (!rows.length) {
@@ -2666,22 +2861,106 @@
         return;
       }
       const topId = primary.id;
+      const waveTermMap = {
+        "第1浪": "第1浪", "第2浪": "第2浪", "第3浪": "第3浪", "第4浪": "第4浪", "第5浪": "第5浪",
+        "A浪": "A浪", "B浪": "B浪", "C浪": "C浪",
+        "三角/平台": "三角整理", "复合调整": "复合调整",
+      };
       body.innerHTML = `<div class="ew-grid">` + rows.map((sc) => {
         const fit = Number(sc.fit || 0);
         const fitCls = fit >= 60 ? "hi" : (fit >= 40 ? "mid" : "");
         const bias = sc.bias || "neutral";
         const isPri = sc.id === topId;
+        const wTerm = waveTermMap[String(sc.wave || "")] || "";
+        const tip = wTerm && GLOSSARY[wTerm]
+          ? ` <button type="button" class="q" data-term="${wTerm}">?</button>`
+          : "";
+        const turns = sc.turns || [];
+        const timing = sc.timing || {};
+        const turnHtml = turns.length
+          ? `<div class="ew-turns"><div class="meta" style="margin-bottom:2px">变盘窗 · 斐波那契交易日
+              <button type="button" class="q" data-term="斐波那契变盘窗">?</button></div>`
+            + turns.map((t) => `
+              <div class="ew-turn">
+                <b>${t.date || "—"}</b>
+                <div>
+                  点位 <b>${t.price ?? "—"}</b>（${t.price_tag || ""}）· ${t.fib || ""}
+                  <div class="meta">MACD ${t.macd_hint || "—"} · ${t.rsi_hint || "—"} · 置信 ${t.confidence ?? "—"}
+                  ${t.note ? " · " + t.note : ""}</div>
+                </div>
+              </div>`).join("")
+            + `</div>`
+          : `<div class="meta" style="margin-top:6px">暂无变盘窗</div>`;
+        const timingHtml = `<div class="ew-timing">指标：${(timing.notes || []).join("；") || "—"}</div>`;
         return `<article class="ew-card${isPri ? " primary" : ""}">
           <div class="ew-top">
-            <b class="ew-bias-${bias}">${sc.title || ""}</b>
+            <b class="ew-bias-${bias}">${sc.title || ""}${tip}</b>
             <span class="ew-fit ${fitCls}">契合 ${fit}</span>
           </div>
           <div class="meta">${sc.family || ""} · ${sc.wave || ""} · ${sc.fit_note || ""}</div>
           <div class="ew-path"><b>后市路径：</b>${sc.path || sc.next || "—"}</div>
           <div class="ew-risk"><b>否决/风险：</b>${sc.invalidation || "—"}</div>
-          <div class="ew-risk">${sc.watch || sc.risk || ""}</div>
+          ${timingHtml}
+          ${turnHtml}
         </article>`;
       }).join("") + `</div>`;
+    }
+
+    function paintFundFlow(d) {
+      const box = d.fund_flow || {};
+      const note = document.getElementById("fundNote");
+      const sum = document.getElementById("fundSum");
+      const spot = document.getElementById("fundSpot");
+      const body = document.getElementById("fundBody");
+      if (!note || !sum || !spot || !body) return;
+      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
+      const tot = box.totals || {};
+      sum.innerHTML =
+        `<span>行业样本 <b>${tot.industry_n ?? "—"}</b></span>`
+        + `<span>概念样本 <b>${tot.concept_n ?? "—"}</b></span>`
+        + `<span>行业流入前部合计 <b class="up">${tot.industry_in_yi ?? "—"}</b> 亿</span>`
+        + `<span>行业流出尾部合计 <b class="down">${tot.industry_out_yi ?? "—"}</b> 亿</span>`;
+      const lights = box.spotlight || [];
+      spot.innerHTML = lights.length
+        ? lights.map((r) => {
+          const yi = r.super_yi != null ? r.super_yi : r.main_yi;
+          const cls = (Number(yi) || 0) >= 0 ? "up" : "down";
+          return `<span class="chip"><b>${r.name || ""}</b>
+            <span class="${cls}">主力 ${r.main_yi ?? "—"}亿</span>
+            ${r.super_yi != null ? ` · 超大 ${r.super_yi}亿` : ""}
+            <span class="fund-big">大资金</span></span>`;
+        }).join("")
+        : `<span class="meta">暂无超大单主导板块</span>`;
+      const table = (title, rows, tone) => {
+        const list = rows || [];
+        if (!list.length) {
+          return `<section class="card mid" style="margin:0"><h2 style="text-transform:none">${title}</h2>
+            <div class="meta">暂无数据</div></section>`;
+        }
+        const head = `<tr><th>#</th><th>板块</th><th>涨跌%</th><th>主力亿</th><th>超大亿</th><th>主力%</th><th>龙头</th></tr>`;
+        const bodyRows = list.map((r, i) => {
+          const mainCls = (Number(r.main_yi) || 0) >= 0 ? "up" : "down";
+          const pctCls = (Number(r.pct) || 0) >= 0 ? "up" : "down";
+          return `<tr>
+            <td>${i + 1}</td>
+            <td>${r.name || ""}${r.big_money ? `<span class="fund-big">大</span>` : ""}</td>
+            <td class="${pctCls}">${r.pct ?? "—"}</td>
+            <td class="${mainCls}">${r.main_yi ?? "—"}</td>
+            <td class="${(Number(r.super_yi) || 0) >= 0 ? "up" : "down"}">${r.super_yi ?? "—"}</td>
+            <td>${r.main_pct ?? "—"}</td>
+            <td>${r.leader_name || "—"}</td>
+          </tr>`;
+        }).join("");
+        return `<section class="card mid" style="margin:0;border-color:${tone === "in" ? "#2f5a3a" : "#5a2f2f"}">
+          <h2 style="text-transform:none">${title}</h2>
+          <table class="fund-table"><thead>${head}</thead><tbody>${bodyRows}</tbody></table>
+        </section>`;
+      };
+      body.innerHTML =
+        table("行业 · 主力流入 Top", box.industry_in, "in")
+        + table("行业 · 主力流出 Top", box.industry_out, "out")
+        + table("概念 · 主力流入 Top", box.concept_in, "in")
+        + table("概念 · 主力流出 Top", box.concept_out, "out");
     }
 
     function paintAuctionStrategy(d) {
@@ -3448,7 +3727,7 @@
       document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
         el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
       );
-      ["desk", "market", "boards", "watch", "auction", "pos", "review"].forEach((name) => {
+      ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review"].forEach((name) => {
         const el = document.getElementById("panel-" + name);
         if (el) el.hidden = name !== currentMain;
       });
@@ -4029,7 +4308,7 @@
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (ev.target && ev.target.isContentEditable)) {
         return;
       }
-      const tabMap = { "1": "desk", "2": "market", "3": "boards", "4": "watch", "5": "auction", "6": "pos", "7": "review" };
+      const tabMap = { "1": "desk", "2": "market", "3": "boards", "4": "funds", "5": "watch", "6": "auction", "7": "pos", "8": "review" };
       if (tabMap[ev.key]) {
         applyMain(tabMap[ev.key]);
         return;
@@ -4177,7 +4456,19 @@
       ] },
       { id: "market", label: "大盘指标", keys: [
         "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "晋级1→2", "晋级2→3", "梯队", "昨停溢价",
-        "成交分位", "周期位置", "竞价基调", "主线透明", "集合竞价策略", "波浪情景",
+        "成交分位", "周期位置", "竞价基调", "主线透明", "集合竞价策略",
+        "情绪浪", "季节性日历", "冰点修复", "主线确认", "扩散加速", "高潮拥挤", "退潮切换",
+      ] },
+      { id: "wave", label: "波浪理论", keys: [
+        "波浪情景", "艾略特波浪", "推动浪", "调整浪",
+        "第1浪", "第2浪", "第3浪", "第4浪", "第5浪",
+        "A浪", "B浪", "C浪",
+        "三角整理", "复合调整", "失败第5浪",
+        "锯齿枢轴", "波浪契合度", "否决位",
+        "斐波那契变盘窗", "MACD背离", "RSI超买超卖",
+      ] },
+      { id: "funds", label: "资金流向", keys: [
+        "大资金流向",
       ] },
     ];
     let glossaryGroup = "phase";
@@ -4263,16 +4554,24 @@
     document.getElementById("glossaryChips").addEventListener("click", (ev) => {
       const btn = ev.target.closest("[data-gg]");
       if (!btn) return;
+      ev.stopPropagation();
       glossaryGroup = btn.getAttribute("data-gg") || "all";
       document.getElementById("glossarySearch").value = "";
       paintGlossaryChips();
       paintGlossaryList();
     });
+    document.getElementById("glossaryPanel").addEventListener("click", (ev) => {
+      // Keep outside-click from seeing panel-internal clicks (esp. after DOM rebuild).
+      ev.stopPropagation();
+    });
     document.getElementById("glossaryList").addEventListener("click", (ev) => {
       const li = ev.target.closest("[data-gkey]");
       if (!li) return;
       glossaryKey = li.getAttribute("data-gkey") || "";
-      paintGlossaryList();
+      document.querySelectorAll("#glossaryList li").forEach((el) => {
+        el.classList.toggle("on", el.getAttribute("data-gkey") === glossaryKey);
+      });
+      paintGlossaryDetail(glossaryKey);
     });
     document.getElementById("settingsBtn").addEventListener("click", () => {
       document.getElementById("glossaryPanel").hidden = true;
@@ -4346,8 +4645,15 @@
     document.addEventListener("click", (ev) => {
       const gPanel = document.getElementById("glossaryPanel");
       if (gPanel.hidden) return;
-      if (ev.target.closest("#glossaryPanel") || ev.target.closest("#glossaryBtn")) return;
-      if (ev.target.closest(".q")) return;
+      const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+      if (
+        path.includes(gPanel)
+        || ev.target.closest("#glossaryPanel")
+        || ev.target.closest("#glossaryBtn")
+        || ev.target.closest(".q")
+      ) {
+        return;
+      }
       gPanel.hidden = true;
     });
     document.getElementById("revExport").addEventListener("click", () => {
