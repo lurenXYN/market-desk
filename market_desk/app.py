@@ -179,9 +179,17 @@ def index() -> FileResponse:
 
 
 @app.get("/api/snapshot")
-def snapshot() -> JSONResponse:
-    """Return the latest assembled market snapshot."""
+def snapshot(view: str | None = Query(default=None)) -> JSONResponse:
+    """Return the latest snapshot, optionally sliced for one UI tab."""
+    if view:
+        return JSONResponse(engine.slice_snapshot(view))
     return JSONResponse(engine.snapshot)
+
+
+@app.get("/api/fund-flow")
+async def fund_flow(force: bool = Query(default=False)) -> dict:
+    """Refresh East Money week/month fund-flow boards for the funds tab."""
+    return await engine.refresh_fund_flow(force=force)
 
 
 @app.get("/api/health")

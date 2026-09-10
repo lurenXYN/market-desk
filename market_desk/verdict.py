@@ -627,6 +627,197 @@ def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
     return v
 
 
+_BUY_ACTIONS = frozenset({"可买入", "可小仓"})
+
+
+def _desk_gate_buy_hint(
+    action: str,
+    ready_items: list[dict[str, Any]],
+    rec: dict[str, Any],
+) -> str:
+    """One-line top-bar hint when live buy is allowed."""
+    primary = next(
+        (x for x in ready_items if x.get("near_entry")),
+        ready_items[0] if ready_items else None,
+    )
+    if primary:
+        name = str(primary.get("name") or primary.get("code") or "").strip()
+        if name:
+            return f"{action} · {name}"
+    title = str(rec.get("title") or "").strip()
+    if title:
+        return f"{action} · {title}"
+    return action
+
+
+def _desk_gate_block_hint(
+    action: str,
+    reasons: list[str],
+    rec: dict[str, Any],
+    mainline: dict[str, Any],
+) -> str:
+    """One-line top-bar hint when live buy is blocked."""
+    if reasons:
+        lead = reasons[0]
+        if len(lead) <= 26:
+            return f"{action} · {lead}"
+        return f"{action} · {lead[:24]}…"
+    title = str(rec.get("title") or "").strip()
+    if title:
+        return f"{action} · {title}"
+    ml = str(mainline.get("name") or "").strip()
+    if ml:
+        return f"{action} · {ml}"
+    return action
+
+
+def build_desk_gate_summary(
+    verdict: dict[str, Any] | None,
+    *,
+    phase: str | None = None,
+) -> dict[str, Any]:
+    """Summarize live-buy permission for the desk top bar (read-only).
+
+    Expects a verdict already passed through ``align_action_with_ready`` and
+    related card gates. Does not mutate verdict fields or re-run gates.
+
+    Returns:
+        action: Hero action string (e.g. 观望 / 观察回踩 / 可买入).
+        can_buy: True when action is buyable and at least one recommend card
+            is ``ready`` without ``block_ready``.
+        reasons: Up to five short Chinese strings explaining why live buy
+            (现买) is blocked; empty when ``can_buy`` is True.
+        hint: Single-line label suitable for the top banner.
+    """
+    v = verdict or {}
+    action = str(v.get("action") or "观望")
+    rec = dict(v.get("recommend") or {})
+    items = list(rec.get("items") or [])
+    mainline = dict(v.get("mainline") or {})
+    playbook = dict(v.get("playbook") or {})
+
+    ready_items = [
+        x
+        for x in items
+        if bool(x.get("ready")) and not x.get("block_ready")
+    ]
+    buyable_action = action in _BUY_ACTIONS
+    can_buy = buyable_action and bool(ready_items)
+
+    if can_buy:
+        return {
+            "action": action,
+            "can_buy": True,
+            "reasons": [],
+            "hint": _desk_gate_buy_hint(action, ready_items, rec),
+        }
+
+    reasons: list[str] = []
+    seen: set[str] = set()
+
+    def _add(reason: str) -> None:
+        text = str(reason or "").strip()
+        if not text or text in seen or len(reasons) >= 5:
+            return
+        seen.add(text)
+        reasons.append(text)
+
+    ml_name = str(mainline.get("name") or "").strip()
+
+    if action == "观望":
+        if v.get("auction_only"):
+            _add("竞价阶段，9:30后再定价")
+        elif mainline.get("status") == "退潮":
+            _add(f"{ml_name}退潮，先观望" if ml_name else "主线退潮，先观望")
+        elif not ml_name:
+            _add("尚未形成可识别主线")
+        else:
+            _add("结论观望，先不买")
+    elif action in ("观察回踩", "观察"):
+        _add("结论观察回踩，等到位再试")
+    elif not buyable_action:
+        _add(f"结论{action}，不宜现买")
+
+    if mainline.get("etf_soft"):
+        _add("近似ETF映射，禁升现买")
+    elif mainline.get("etf_mapped") is False:
+        _add("无ETF映射，只观察不定价")
+
+    bans = [str(b).strip() for b in (v.get("bans") or []) if str(b).strip()]
+    if bans:
+        shown = "、".join(bans[:3])
+        if len(bans) > 3:
+            shown += "等"
+        _add(f"尖峰禁追：{shown}")
+
+    if v.get("stock_block"):
+        _add("复盘闸门禁个股现买")
+
+    if v.get("auction_only") and "竞价阶段" not in "".join(reasons):
+        _add("竞价阶段不作现买")
+
+    size_cap = dict(v.get("size_cap") or {})
+    if size_cap.get("hit"):
+        _add("总仓触相位上限，先减不加")
+
+    ph = str(phase or v.get("phase") or "").strip()
+    if ph == "恐慌" and action != "观望":
+        _add("恐慌相位，优先观望")
+    elif ph == "高潮" and buyable_action:
+        _add("高潮相位，新开宜谨慎")
+
+    fail_counts: dict[str, int] = {}
+    blocked_n = 0
+    near_only_n = 0
+    pending_minute = False
+
+    for item in items:
+        if item.get("block_ready"):
+            blocked_n += 1
+        for flag in item.get("confirm_fail") or []:
+            text = str(flag).strip()
+            if text:
+                fail_counts[text] = fail_counts.get(text, 0) + 1
+        if item.get("minute_pending"):
+            pending_minute = True
+        is_ready = bool(item.get("ready")) and not item.get("block_ready")
+        if not is_ready and item.get("near_entry"):
+            near_only_n += 1
+
+    for flag, _ in sorted(fail_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        _add(flag)
+        if len(reasons) >= 5:
+            break
+
+    if blocked_n and items and blocked_n >= len(items):
+        _add("全部卡片禁现买")
+    elif blocked_n:
+        _add("部分卡片禁现买")
+
+    if pending_minute:
+        _add("分时未验，先等确认")
+
+    if not ready_items:
+        if near_only_n:
+            _add("已触及建议价但未过现买确认")
+        elif items and not fail_counts and blocked_n == 0:
+            _add("卡片未到位，盯回踩价")
+
+    dont = str(playbook.get("dont") or "").strip()
+    if dont and len(reasons) < 5:
+        short = dont.replace("不做：", "").split("、")[0][:22]
+        if short:
+            _add(f"纪律：{short}")
+
+    hint = _desk_gate_block_hint(action, reasons, rec, mainline)
+    return {
+        "action": action,
+        "can_buy": False,
+        "reasons": reasons[:5],
+        "hint": hint,
+    }
+
+
 def _build_side_branch(
     *,
     hot: list[dict[str, Any]],

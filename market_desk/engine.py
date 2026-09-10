@@ -119,6 +119,7 @@ from market_desk.verdict import (
     apply_stock_daily_trends,
     attach_board_etf_trends,
     build_deltas,
+    build_desk_gate_summary,
     build_favorite_desk_plans,
     build_risk_overview,
     build_sell_advice,
@@ -159,6 +160,10 @@ class DeskEngine:
         self._index_bars: list[dict[str, Any]] = []
         # code -> {"day": trade_date, "year": int, "count": int}
         self._zt_ytd_cache: dict[str, dict[str, Any]] = {}
+        # Review payloads: key -> (monotonic_ts, payload)
+        self._review_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._fund_flow_full_at: float = 0.0
+        self._fund_flow_lock = asyncio.Lock()
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -325,11 +330,10 @@ class DeskEngine:
             trade_date_dash = now.strftime("%Y-%m-%d")
             errors: list[str] = []
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                # Hot path: day fund-flow only (week/month via /api/fund-flow).
                 (
                     zt, zb, quotes, boards, etfs, indices,
                     flow_ind_d, flow_con_d,
-                    flow_ind_w, flow_con_w,
-                    flow_ind_m, flow_con_m,
                 ) = await asyncio.gather(
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
                     _safe(fetch_zb_pool, client, trade_date, errors=errors, label="zb"),
@@ -339,10 +343,6 @@ class DeskEngine:
                     _safe(fetch_indices, client, errors=errors, label="index"),
                     _safe(fetch_board_fund_flow, client, "industry", 80, "day", errors=errors, label="flow-hy-d"),
                     _safe(fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"),
-                    _safe(fetch_board_fund_flow, client, "industry", 80, "week", errors=errors, label="flow-hy-w"),
-                    _safe(fetch_board_fund_flow, client, "concept", 80, "week", errors=errors, label="flow-gn-w"),
-                    _safe(fetch_board_fund_flow, client, "industry", 80, "month", errors=errors, label="flow-hy-m"),
-                    _safe(fetch_board_fund_flow, client, "concept", 80, "month", errors=errors, label="flow-gn-m"),
                 )
                 yesterday_zt = await self._yesterday(client, now, errors)
                 zt = zt or []
@@ -360,7 +360,6 @@ class DeskEngine:
                 except Exception:
                     log.exception("save fund_flow_daily failed")
                 stored_dates = list_fund_flow_dates(trade_date_dash, limit=40)
-                # Ensure today's fetch is visible even if save raced / failed.
                 if trade_date_dash not in stored_dates and (flow_ind_d or flow_con_d):
                     stored_dates = [trade_date_dash] + stored_dates
                 stored_rows = load_fund_flow_for_dates(stored_dates)
@@ -369,25 +368,40 @@ class DeskEngine:
                         row = dict(r)
                         row["trade_date"] = trade_date_dash
                         stored_rows.append(row)
+                prev_flow = (self.snapshot or {}).get("fund_flow") or {}
+                prev_periods = (prev_flow.get("api_raw") or {}) if isinstance(prev_flow, dict) else {}
                 fund_flow = build_fund_flow_board(
                     {
                         "day": {
                             "industry": flow_ind_d or [],
                             "concept": flow_con_d or [],
                         },
-                        "week": {
-                            "industry": flow_ind_w or [],
-                            "concept": flow_con_w or [],
-                        },
-                        "month": {
-                            "industry": flow_ind_m or [],
-                            "concept": flow_con_m or [],
-                        },
+                        "week": (prev_periods.get("week") or {"industry": [], "concept": []}),
+                        "month": (prev_periods.get("month") or {"industry": [], "concept": []}),
                     },
                     trade_date=trade_date_dash,
                     stored_dates=stored_dates,
                     stored_rows=stored_rows,
                 )
+                fund_flow["api_raw"] = {
+                    "day": {
+                        "industry": list(flow_ind_d or []),
+                        "concept": list(flow_con_d or []),
+                    },
+                    "week": (prev_periods.get("week") or {"industry": [], "concept": []}),
+                    "month": (prev_periods.get("month") or {"industry": [], "concept": []}),
+                }
+                fund_flow["full_ready"] = bool(
+                    (fund_flow.get("api_raw") or {}).get("week")
+                    and (
+                        ((fund_flow["api_raw"]["week"].get("industry")) or [])
+                        or ((fund_flow["api_raw"]["week"].get("concept")) or [])
+                    )
+                )
+                fund_flow["note"] = (
+                    (fund_flow.get("note") or "")
+                    + (" · 近5/10日东财榜可点「资金」页补齐" if not fund_flow.get("full_ready") else "")
+                ).strip(" ·")
                 ctx = {
                     "zt": zt,
                     "zb": zb,
@@ -537,6 +551,7 @@ class DeskEngine:
                 aligned = align_action_with_ready(verdict)
                 verdict.clear()
                 verdict.update(aligned)
+                desk_gate_summary = build_desk_gate_summary(verdict, phase=phase)
                 updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
                 try:
                     self._persist_session_context(
@@ -616,6 +631,7 @@ class DeskEngine:
                     ),
                     "filter": "个股只做主板 · 市值门槛 · 创业板/科创走 ETF",
                     "verdict": verdict,
+                    "desk_gate_summary": desk_gate_summary,
                     "session_segments": segments,
                     "mainline_switches": switches,
                     "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
@@ -653,17 +669,24 @@ class DeskEngine:
                     metrics=metrics,
                     hot_boards=hot_cards,
                 )
+                # Phase A: publish desk/verdict before slow favorite enrich.
+                payload["favorite_desk"] = fav_desk
+                payload["enrich_pending"] = True
+                payload["health"] = _build_health(now, errors, updated_at, payload)
+                payload["deltas"] = build_deltas(payload, prev)
+                payload["morning_brief"] = build_morning_brief(payload)
+                self._emit_toasts(prev, payload)
+                try:
+                    record_session_signals(payload)
+                except Exception:
+                    log.exception("signal record failed")
+                self.snapshot = payload
+
                 await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
                 await self._apply_favorite_desk_minutes(client, fav_desk)
             payload["favorite_desk"] = fav_desk
+            payload["enrich_pending"] = False
             payload["health"] = _build_health(now, errors, updated_at, payload)
-            payload["deltas"] = build_deltas(payload, prev)
-            payload["morning_brief"] = build_morning_brief(payload)
-            self._emit_toasts(prev, payload)
-            try:
-                record_session_signals(payload)
-            except Exception:
-                log.exception("signal record failed")
             self.snapshot = payload
 
     def _persist_session_context(
@@ -719,8 +742,20 @@ class DeskEngine:
         vs_mainline_mode: str | None = None,
     ) -> dict[str, Any]:
         """Score pending historical signals then return one trade-date review payload."""
+        import time
+
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         day = str(view_date or today).strip()[:10] or today
+        mode_key = str(vs_mainline_mode or "").strip().lower() or "auto"
+        cache_key = f"{day}|{mode_key}|{limit}"
+        now_m = time.monotonic()
+        hit = self._review_cache.get(cache_key)
+        ttl = 45.0 if day == today else 3600.0
+        if hit and now_m - hit[0] < ttl:
+            cached = dict(hit[1])
+            cached["cache_hit"] = True
+            return cached
+
         pending = load_unscored_signals(today, limit=80)
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
@@ -759,7 +794,7 @@ class DeskEngine:
         phase = None
         if day == today and self.snapshot:
             phase = self.snapshot.get("phase")
-        return build_review_payload(
+        payload = build_review_payload(
             limit=limit,
             quotes=quotes,
             trade_date=day,
@@ -772,6 +807,172 @@ class DeskEngine:
             vs_mainline_mode=vs_mainline_mode,
             holders=holders,
         )
+        payload["cache_hit"] = False
+        self._review_cache[cache_key] = (now_m, payload)
+        return payload
+
+    async def refresh_fund_flow(self, *, force: bool = False) -> dict[str, Any]:
+        """Fetch East Money day/week/month fund-flow boards (funds tab on demand)."""
+        import time
+
+        now_m = time.monotonic()
+        if (
+            not force
+            and self._fund_flow_full_at
+            and now_m - self._fund_flow_full_at < 300
+            and ((self.snapshot.get("fund_flow") or {}).get("full_ready"))
+        ):
+            return self.snapshot.get("fund_flow") or {}
+        async with self._fund_flow_lock:
+            if (
+                not force
+                and self._fund_flow_full_at
+                and time.monotonic() - self._fund_flow_full_at < 300
+                and ((self.snapshot.get("fund_flow") or {}).get("full_ready"))
+            ):
+                return self.snapshot.get("fund_flow") or {}
+            trade_date_dash = str(
+                self.snapshot.get("trade_date")
+                or datetime.now(CN_TZ).strftime("%Y-%m-%d")
+            )[:10]
+            errors: list[str] = []
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                (
+                    flow_ind_d, flow_con_d,
+                    flow_ind_w, flow_con_w,
+                    flow_ind_m, flow_con_m,
+                ) = await asyncio.gather(
+                    _safe(fetch_board_fund_flow, client, "industry", 80, "day", errors=errors, label="flow-hy-d"),
+                    _safe(fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"),
+                    _safe(fetch_board_fund_flow, client, "industry", 80, "week", errors=errors, label="flow-hy-w"),
+                    _safe(fetch_board_fund_flow, client, "concept", 80, "week", errors=errors, label="flow-gn-w"),
+                    _safe(fetch_board_fund_flow, client, "industry", 80, "month", errors=errors, label="flow-hy-m"),
+                    _safe(fetch_board_fund_flow, client, "concept", 80, "month", errors=errors, label="flow-gn-m"),
+                )
+            try:
+                save_fund_flow_daily(
+                    trade_date_dash,
+                    list(flow_ind_d or []) + list(flow_con_d or []),
+                )
+            except Exception:
+                log.exception("save fund_flow_daily failed")
+            stored_dates = list_fund_flow_dates(trade_date_dash, limit=40)
+            if trade_date_dash not in stored_dates and (flow_ind_d or flow_con_d):
+                stored_dates = [trade_date_dash] + stored_dates
+            stored_rows = load_fund_flow_for_dates(stored_dates)
+            api_raw = {
+                "day": {
+                    "industry": list(flow_ind_d or []),
+                    "concept": list(flow_con_d or []),
+                },
+                "week": {
+                    "industry": list(flow_ind_w or []),
+                    "concept": list(flow_con_w or []),
+                },
+                "month": {
+                    "industry": list(flow_ind_m or []),
+                    "concept": list(flow_con_m or []),
+                },
+            }
+            fund_flow = build_fund_flow_board(
+                api_raw,
+                trade_date=trade_date_dash,
+                stored_dates=stored_dates,
+                stored_rows=stored_rows,
+            )
+            fund_flow["api_raw"] = api_raw
+            fund_flow["full_ready"] = True
+            if errors:
+                fund_flow["warnings"] = errors
+            self.snapshot["fund_flow"] = fund_flow
+            self._fund_flow_full_at = time.monotonic()
+            return fund_flow
+
+    def slice_snapshot(self, view: str | None = None) -> dict[str, Any]:
+        """Return a tab-scoped snapshot slice to cut bandwidth / DOM work."""
+        snap = self.snapshot or {}
+        view_key = str(view or "full").strip().lower() or "full"
+        if view_key in ("", "full", "all"):
+            return snap
+
+        common = {
+            "ok": snap.get("ok"),
+            "error": snap.get("error"),
+            "warnings": snap.get("warnings"),
+            "updated_at": snap.get("updated_at"),
+            "prev_updated_at": snap.get("prev_updated_at"),
+            "trade_date": snap.get("trade_date"),
+            "live": snap.get("live"),
+            "polling": snap.get("polling"),
+            "trading_day": snap.get("trading_day"),
+            "refresh_seconds": snap.get("refresh_seconds"),
+            "phase": snap.get("phase"),
+            "temperature": snap.get("temperature"),
+            "verdict": snap.get("verdict"),
+            "desk_gate_summary": snap.get("desk_gate_summary"),
+            "health": snap.get("health"),
+            "enrich_pending": snap.get("enrich_pending"),
+            "view": view_key,
+        }
+        by_view: dict[str, tuple[str, ...]] = {
+            "desk": (
+                "morning_brief",
+                "seasonality",
+                "deltas",
+                "favorite_desk",
+                "session_segments",
+                "mainline_switches",
+                "positions",
+                "position_summary",
+                "risk_overview",
+                "sell_advice",
+                "recent_toasts",
+                "filter",
+            ),
+            "market": (
+                "metrics",
+                "kpis",
+                "indices",
+                "etfs",
+                "auction",
+                "emotion_wave",
+                "seasonality",
+                "elliott",
+                "history",
+                "cycle",
+                "similar_days",
+                "events",
+            ),
+            "boards": (
+                "hot_boards",
+                "pin_boards",
+                "ice_boards",
+                "favorite_boards",
+                "contagion",
+                "mainline_lifecycle",
+            ),
+            "funds": ("fund_flow",),
+            "watch": ("watch", "stock_blacklist"),
+            "auction": ("auction", "auction_strategy"),
+            "pos": (
+                "positions",
+                "position_summary",
+                "risk_overview",
+                "watchlist",
+                "stock_blacklist",
+                "sell_advice",
+            ),
+            "review": ("phase", "temperature"),
+        }
+        keys = by_view.get(view_key) or ()
+        out = dict(common)
+        for key in keys:
+            if key in snap:
+                out[key] = snap.get(key)
+        # Glossary is large; send once when missing on client (desk/market first paint).
+        if view_key in ("desk", "market") and snap.get("glossary"):
+            out["glossary"] = snap.get("glossary")
+        return out
 
     async def build_review_zt_ytd(
         self,
@@ -1145,6 +1346,10 @@ class DeskEngine:
             if self.snapshot.get("verdict"):
                 self.snapshot["verdict"]["recommend"] = mark_pullback_entries(new_rec)
                 self.snapshot["verdict"] = align_action_with_ready(self.snapshot["verdict"])
+                self.snapshot["desk_gate_summary"] = build_desk_gate_summary(
+                    self.snapshot["verdict"],
+                    phase=self.snapshot.get("phase"),
+                )
             try:
                 record_session_signals(self.snapshot)
             except Exception:
@@ -1275,17 +1480,25 @@ class DeskEngine:
     ) -> list[dict[str, Any]]:
         hot_names = {x["name"] for x in hot}
         industry = [b for b in boards if b.get("kind") == "industry"]
-        out: list[dict[str, Any]] = []
+        tasks: list[tuple[str, dict[str, Any]]] = []
         for label, aliases in PIN_INDUSTRY_ALIASES.items():
             match = _pick_pin_board(industry, aliases)
             if not match:
                 continue
             match = dict(match)
             match["already_hot"] = match["name"] in hot_names
-            card = await _enrich_board(client, match, ctx)
+            tasks.append((label, match))
+        if not tasks:
+            return []
+
+        async def _one(label: str, board: dict[str, Any]) -> dict[str, Any]:
+            card = await _enrich_board(client, board, ctx)
             card["pin_label"] = label
-            out.append(card)
-        return out
+            return card
+
+        return list(
+            await asyncio.gather(*[_one(label, board) for label, board in tasks])
+        )
 
     async def _favorite_cards(
         self,
@@ -1304,11 +1517,11 @@ class DeskEngine:
         }
         # Cap enrich fan-out; keep newest favorites first (rows already DESC).
         picked = rows[:12]
-        out: list[dict[str, Any]] = []
-        for row in picked:
+
+        async def _one(row: dict[str, Any]) -> dict[str, Any] | None:
             bk = str(row.get("bk") or "").upper()
             if not bk:
-                continue
+                return None
             match = by_bk.get(bk)
             if not match:
                 match = {
@@ -1325,14 +1538,18 @@ class DeskEngine:
                 }
             card = await _enrich_board(client, dict(match), ctx)
             if not card:
-                continue
+                return None
             card["favorite_id"] = row.get("id")
             card["favorite_note"] = row.get("note") or ""
             card["in_favorite"] = True
             if row.get("note"):
-                card["note"] = _join_board_note(card.get("note"), f"看好备注：{row.get('note')}")
-            out.append(card)
-        return out
+                card["note"] = _join_board_note(
+                    card.get("note"), f"看好备注：{row.get('note')}"
+                )
+            return card
+
+        enriched = await asyncio.gather(*[_one(row) for row in picked])
+        return [card for card in enriched if card]
 
     async def _ice_cards(
         self,

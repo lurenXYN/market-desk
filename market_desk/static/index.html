@@ -77,6 +77,23 @@
       box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.4);
     }
     .banner.cash .action-pill { color: #fdba74; border-color: #5a3d2a; background: #1a1410; }
+    .gate-hint {
+      margin: 6px 0 2px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #141a22;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      max-width: 52rem;
+    }
+    .gate-hint.on-buy {
+      color: #86efac;
+      border-color: #2f5a3a;
+      background: #101a14;
+    }
+    .gate-hint b { color: var(--text); font-weight: 600; }
     .mainline-title {
       font-size: 28px; line-height: 1.15; font-weight: 750; margin: 0;
       letter-spacing: 0.02em;
@@ -1545,6 +1562,7 @@
             <span class="meta" id="phasePill"></span>
             <span class="meta" id="lifePill"></span>
           </div>
+          <div class="gate-hint" id="gateHint" hidden title="本轮为何不能现买（观察提示，不改规则）"></div>
           <div class="today-trio" id="todayTrio" title="今日三词：相位 · 主线 · 阶段">
             <span class="lab">今日三词 <button type="button" class="q" data-term="今日三词">?</button></span>
             <span class="w phase" id="trioPhase">—</span>
@@ -2245,6 +2263,25 @@
           ending: "life-end",
         }[lifeStage] || "");
       }
+      const gateEl = document.getElementById("gateHint");
+      const gate = d.desk_gate_summary || {};
+      if (gateEl) {
+        const hint = gate.hint || "";
+        const reasons = (gate.reasons || []).filter(Boolean);
+        if (hint || reasons.length) {
+          gateEl.hidden = false;
+          gateEl.className = "gate-hint" + (gate.can_buy ? " on-buy" : "");
+          gateEl.innerHTML = gate.can_buy
+            ? `<b>可现买</b> · ${hint || act}`
+            : `<b>为何不能现买</b> · ${hint || reasons[0] || act}`
+              + (reasons.length > 1
+                ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+                : "");
+        } else {
+          gateEl.hidden = true;
+          gateEl.innerHTML = "";
+        }
+      }
       const trioPhase = document.getElementById("trioPhase");
       const trioMain = document.getElementById("trioMain");
       const trioStage = document.getElementById("trioStage");
@@ -2823,7 +2860,35 @@
       paintEmotionWave(d);
       paintSeasonality(d);
       paintElliott(d);
-      paintFundFlow(d);
+      if (d.fund_flow) paintFundFlow(d);
+    }
+
+    function paintVisible(d) {
+      // Always refresh banner/desk chrome from merged snapshot.
+      render(d);
+    }
+
+    function snapshotViewForTab(tab) {
+      const t = tab || currentMain || "desk";
+      if (t === "review") return "desk";
+      return t;
+    }
+
+    async function ensureFundFlowFull() {
+      try {
+        const cur = (lastData && lastData.fund_flow) || {};
+        if (cur.full_ready && lastFundFlowFullAt && Date.now() - lastFundFlowFullAt < 280000) {
+          paintFundFlow({ fund_flow: cur });
+          return;
+        }
+        const r = await fetch("/api/fund-flow");
+        const box = await r.json();
+        if (!box || box.ok === false && !box.periods) return;
+        lastFundFlow = box;
+        lastFundFlowFullAt = Date.now();
+        if (lastData) lastData.fund_flow = box;
+        paintFundFlow({ fund_flow: box });
+      } catch (e) {}
     }
 
     function paintEmotionWave(d) {
@@ -2987,6 +3052,7 @@
 
     let fundPeriod = "em_day";
     let lastFundFlow = null;
+    let lastFundFlowFullAt = 0;
 
     function paintFundFlow(d) {
       const box = d.fund_flow || {};
@@ -3949,7 +4015,13 @@
         if (el) el.hidden = name !== currentMain;
       });
       if (currentMain === "review") loadReview(false);
+      if (currentMain === "funds") ensureFundFlowFull();
       try { localStorage.setItem("desk-main-tab", currentMain); } catch (e) {}
+      // Reschedule poll cadence for the active tab.
+      if (lastData) scheduleTick(!!lastData.live);
+      else scheduleTick(false);
+      // Pull a sliced snapshot for the newly visible tab.
+      tick(true);
     }
     function paintClock() {
       const el = document.getElementById("pageClock");
@@ -3958,19 +4030,29 @@
         document.getElementById("dataAge").textContent = dataAgeText(lastData.updated_at);
       }
     }
-    async function tick() {
+    function tickIntervalMs(live) {
+      const tab = currentMain || "desk";
+      if (tab === "review") return live ? 60000 : 120000;
+      if (tab === "funds") return live ? 45000 : 90000;
+      if (tab === "market" || tab === "boards") return live ? 30000 : 90000;
+      return live ? 20000 : 60000;
+    }
+    async function tick(force) {
       try {
-        const r = await fetch("/api/snapshot");
+        const view = snapshotViewForTab(currentMain);
+        const r = await fetch("/api/snapshot?view=" + encodeURIComponent(view));
         const d = await r.json();
         if (!d.ok && !d.updated_at) {
           document.getElementById("stamp").textContent = d.error || "等待首包";
           document.getElementById("dataAge").textContent = d.error || "等待首包";
           return;
         }
-        lastData = d;
-        render(d);
+        lastData = Object.assign({}, lastData || {}, d);
+        if (d.glossary) GLOSSARY = d.glossary;
+        paintVisible(lastData);
         paintClock();
-        scheduleTick(!!d.live);
+        scheduleTick(!!lastData.live);
+        if (currentMain === "funds") ensureFundFlowFull();
       } catch (e) {
         document.getElementById("stamp").textContent = "数据源中断";
         document.getElementById("dataAge").textContent = "数据源中断";
@@ -3980,16 +4062,18 @@
       const saved = localStorage.getItem("desk-main-tab");
       if (saved) currentMain = saved;
     } catch (e) {}
-    applyMain(currentMain);
-    tick();
     let tickTimer = null;
     let tickLive = null;
+    let tickMs = null;
     function scheduleTick(live) {
-      if (tickLive === live && tickTimer) return;
-      tickLive = live;
+      const ms = tickIntervalMs(!!live);
+      if (tickLive === !!live && tickTimer && tickMs === ms) return;
+      tickLive = !!live;
+      tickMs = ms;
       if (tickTimer) clearInterval(tickTimer);
-      tickTimer = setInterval(tick, live ? 20000 : 60000);
+      tickTimer = setInterval(() => tick(false), ms);
     }
+    applyMain(currentMain);
     scheduleTick(false);
     setInterval(paintClock, 1000);
     document.getElementById("navTabs").addEventListener("click", (ev) => {
@@ -4666,6 +4750,7 @@
       { id: "desk", label: "作战/仓位", keys: [
         "推荐买入", "建议卖出", "Playbook", "风险股数", "分批计划", "仓位", "T+1",
         "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
+        "为何不能现买",
       ] },
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",

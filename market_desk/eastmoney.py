@@ -209,10 +209,19 @@ async def _fetch_clist_pages(
 
 
 async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
-    """Fetch Shanghai and Shenzhen main-board quotes with pagination."""
+    """Fetch Shanghai and Shenzhen main-board quotes with pagination.
+
+    Results are cached briefly to cut the heaviest clist fan-out on the 20s tick.
+    """
+    import time
+
+    global _MAIN_QUOTES_CACHE
+    now = time.time()
+    if _MAIN_QUOTES_CACHE and now - _MAIN_QUOTES_CACHE[0] < _MAIN_QUOTES_TTL_SEC:
+        return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
     sh_rows, sz_rows = await asyncio.gather(
-        _fetch_clist_pages(client, "m:1+t:2"),
-        _fetch_clist_pages(client, "m:0+t:6"),
+        _fetch_clist_pages(client, "m:1+t:2", max_pages=18),
+        _fetch_clist_pages(client, "m:0+t:6", max_pages=18),
     )
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -223,7 +232,12 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
             out.append(mapped)
     if not out:
         raise RuntimeError("main-board quote lists were empty")
-    return out
+    _MAIN_QUOTES_CACHE = (now, out)
+    return [dict(row) for row in out]
+
+
+_MAIN_QUOTES_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+_MAIN_QUOTES_TTL_SEC = 120.0
 
 
 def _is_junk_board(name: str) -> bool:
@@ -412,7 +426,17 @@ def _board_flow_from_diff(
 async def fetch_board_members(
     client: httpx.AsyncClient, bk: str, weakest: bool = False
 ) -> list[dict[str, Any]]:
-    """Fetch board constituents; weakest=True returns the largest losers first."""
+    """Fetch board constituents; weakest=True returns the largest losers first.
+
+    Constituent lists change slowly intraday; cache briefly to cut refresh fan-out.
+    """
+    import time
+
+    key = f"{str(bk or '').upper()}:{'w' if weakest else 's'}"
+    now = time.time()
+    hit = _BOARD_MEMBERS_CACHE.get(key)
+    if hit and now - hit[0] < _BOARD_MEMBERS_TTL_SEC:
+        return [dict(row) for row in hit[1]]
     url = _clist_url(f"b:{bk}+f:!50", pz=30, po=0 if weakest else 1)
     try:
         payload = await _get_json(client, url)
@@ -442,7 +466,12 @@ async def fetch_board_members(
         )
         if len(members) >= CONSTITUENT_TOP:
             break
-    return members
+    _BOARD_MEMBERS_CACHE[key] = (now, members)
+    return [dict(row) for row in members]
+
+
+_BOARD_MEMBERS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_BOARD_MEMBERS_TTL_SEC = 90.0
 
 
 def _secid(code: str) -> str:
@@ -724,8 +753,10 @@ async def fetch_daily_klines_many(
     client: httpx.AsyncClient,
     codes: list[str],
     limit: int = 60,
+    *,
+    concurrency: int = 6,
 ) -> dict[str, tuple[list[str], list[float]]]:
-    """Fetch daily dates+closes for several codes concurrently."""
+    """Fetch daily dates+closes for several codes with a concurrency cap."""
     uniq: list[str] = []
     seen: set[str] = set()
     for raw in codes:
@@ -736,9 +767,13 @@ async def fetch_daily_klines_many(
         uniq.append(code)
     if not uniq:
         return {}
-    results = await asyncio.gather(
-        *[fetch_daily_klines(client, code, limit=limit) for code in uniq]
-    )
+    sem = asyncio.Semaphore(max(1, int(concurrency or 6)))
+
+    async def _one(code: str) -> tuple[list[str], list[float]]:
+        async with sem:
+            return await fetch_daily_klines(client, code, limit=limit)
+
+    results = await asyncio.gather(*[_one(code) for code in uniq])
     return {code: pair for code, pair in zip(uniq, results)}
 
 
