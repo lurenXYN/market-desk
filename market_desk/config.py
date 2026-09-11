@@ -205,11 +205,25 @@ STOCK_NEAR_HIGH_PCT = 0.50
 ETF_WAIT_GAP = 0.9955   # ~0.45% below last
 STOCK_WAIT_GAP = 0.9915  # ~0.85% below last
 # Relative band around suggested buy for「回踩到位」.
-ETF_NEAR_ENTRY_UP = 0.0055
-STOCK_NEAR_ENTRY_UP = 0.0085
+ETF_NEAR_ENTRY_UP = 0.0045   # was 0.55%; tighter tip band
+STOCK_NEAR_ENTRY_UP = 0.0055  # was 0.85%
 ETF_NEAR_ENTRY_DOWN = 0.010
 STOCK_NEAR_ENTRY_DOWN = 0.015
-
+# Hero action must not re-upgrade to 可买入 when these algo_notes fired.
+BUY_DEMOTE_LOCK_NOTES = (
+    "恐慌禁开仓",
+    "高潮降级",
+    "指数闸门",
+    "风格闸门",
+    "缩量闸门",
+    "负溢价闸门",
+    "大面闸门",
+    # similar-day cool is size-only now (not an action demote lock)
+    "开盘静音",
+    "竞价观望",
+    "竞价弱开闸门",
+    "竞价强开防追",
+)
 # Minute-structure tip / shallow pullback (percent of recent minute high).
 MINUTE_TIP_THR_NARROW = 0.25
 MINUTE_TIP_THR_WIDE = 0.35
@@ -222,6 +236,29 @@ ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可�
 STOCK_WEAK_VS_ETF_PCT = 1.5        # stock pct must not lag mapped ETF by more than this
 ETF_THIN_AMOUNT = 8e7              # yuan; green ETF below this → volume fail
 MINUTE_SAMPLE_MIN = 25
+
+# Fund-flow soft feed into mainline score / sell urgency (亿元).
+MAINLINE_FLOW_IN_YI = 0.8
+MAINLINE_FLOW_OUT_YI = -1.0
+MAINLINE_FLOW_IN_ADJ = 4.0
+MAINLINE_FLOW_OUT_ADJ = -5.0
+MAINLINE_FLOW_STICKY_BONUS = 2.5  # in day+5d sticky inflow leaders
+SELL_FLOW_OUT_YI = -1.5  # theme outflow → tighten sell soft floor slightly
+
+# Soft / orphan stock listing (no exact ETF map).
+SOFT_STOCK_PB_MIN = 1.1
+SOFT_STOCK_MV_MULT = 1.12
+
+# Stock vs board strength / flow quality.
+STOCK_VS_BOARD_WEAK_PCT = 1.2
+STOCK_FLOW_OUT_SCORE_PEN = 6.0
+
+# Buy-gate auto-loosen when review false-kills are high.
+BUY_GATE_FALSE_KILL_MIN = 3
+BUY_GATE_KILL_MIN = 5
+BUY_GATE_LOOSEN_MULT = 0.88
+BUY_GATE_TRUE_KILL_MIN = 4
+BUY_GATE_TIGHTEN_MULT = 1.12
 
 # Prefer boards with a clear low-height leader + followers (not tip height).
 MAINLINE_LEADER_STRUCT_BONUS = 4.0   # 1–2板龙 + 跟风结构
@@ -248,10 +285,13 @@ MAINLINE_FADE_SWITCH_MULT = 0.55
 
 # Sell-review feedback: adjust pb/pocket from historical sell outcomes.
 SELL_REVIEW_MIN_N = 10
-SELL_REVIEW_WIDEN_BELOW = 40.0   # hit% of 卖后回落 → sold too early → widen
-SELL_REVIEW_TIGHTEN_ABOVE = 60.0  # sells working → slightly earlier take
+SELL_REVIEW_KIND_MIN_N = 6       # etf/stock split can fire earlier
+SELL_REVIEW_WIDEN_BELOW = 40.0   # 卖后回落命中偏低 → 卖早 → 放宽
+SELL_REVIEW_TIGHTEN_ABOVE = 60.0  # 卖后回落命中偏高 → 略收紧止盈回撤
 SELL_REVIEW_WIDEN_MULT = 1.12
 SELL_REVIEW_TIGHTEN_MULT = 0.96  # was 0.92; less aggressive auto-tighten
+SELL_SIM_URGENT_FLOOR = 0.85     # floor when similar urgent stacks on review tighten
+SELL_SIM_URGENT_FLOOR = 0.85     # floor when similar urgent stacks on review tighten
 
 # Soft trim floors — avoid cutting winners that still have room.
 SELL_SOFT_MIN_PNL_STOCK = 2.0
@@ -264,6 +304,20 @@ SELL_SOFT_DEEP_PNL_STOCK = 4.0
 SELL_SOFT_DEEP_PNL_ETF = 2.5
 SELL_CARRIER_FALL_PCT = 0.35  # carrier must drop ≥ this % vs prior tick
 SELL_ENDING_DEFENSE_PNL = 0.0  # ending flat trim only at ≤0% (not +0.2%)
+# Panic soft-trim: skip when the name itself is still green / relatively strong.
+SELL_PANIC_REL_STRONG_PCT = 0.5  # day change ≥ this → no panic soft-exit
+SELL_REL_STRONG_PCT = 0.5  # general: green enough to hold through soft/light takes
+SELL_VS_INDEX_EDGE = 1.5  # or beat HS300 by this many pct pts
+SELL_TIP_HOLD_PB = 0.45  # day-high pullback below this → still extending, don't soft/light-take
+SELL_DAY_WEAK_PCT = -2.5  # day dump → earlier soft floor
+SELL_DAY_WEAK_SOFT_DELTA = -0.8  # add to soft_min (negative = easier trim)
+# Daily uptrend: hold winners longer (widen bands + raise soft-trim floor).
+SELL_UPTREND_BAND_MULT = 1.18
+SELL_SOFT_UPTREND_EXTRA = 1.5  # add to soft-trim min pnl when daily up
+# Sell-side multi-theme: include hot boards within this score gap of sticky.
+# Buys still follow sticky only; sells may match primary / side / these peers.
+SELL_THEME_GAP = 12.0
+SELL_THEME_MAX = 5
 
 # Orphan mainline (no exact ETF): stricter stock pullback / cap filters.
 ORPHAN_STOCK_PB_MIN = 1.2
@@ -348,7 +402,77 @@ PHASE_CLIMAX_TEMP = 72
 # Gap-and-fade blacklist: high open then fade from open.
 GAP_FADE_OPEN_PCT = 2.5          # open vs prev close
 GAP_FADE_DROP_PCT = 1.5          # last below open by at least this %
-GAP_FADE_STRIKE_WINDOW = 10      # lookback trading days
-GAP_FADE_STRIKE_NEED = 3         # strikes to auto-blacklist
-GAP_FADE_CLEAN_DAYS = 3          # consecutive normal days to auto-release
-GAP_FADE_MIN_HHMM = 1000         # only score after 10:00 to cut noise
+# Theme reputation / board affinity (soft mainline score feed).
+THEME_FADE_ZT_DROP = 0.45       # next-day zt ≤ prior * this → fade candidate
+THEME_FADE_PCT_MAX = 0.5        # and/or weak pct with thin zt
+THEME_PERSIST_ZT_MIN = 2
+THEME_PERSIST_PCT_MIN = 1.5
+THEME_REP_MIN_SAMPLES = 2       # mild adj before this; full after
+THEME_REP_ADJ_MIN = -12.0
+THEME_REP_ADJ_MAX = 8.0         # room for sticky persist bonus
+THEME_SIM_PEER_MIN = 0.45       # show peers above this
+THEME_SIM_INHERIT = 0.35        # fraction of peer bad-rep inherited
+THEME_SIM_INHERIT_MIN = 0.70    # only inherit from strong peers
+THEME_SIM_POS_INHERIT = 0.22    # milder positive inheritance
+THEME_SIM_POS_INHERIT_MIN = 0.80
+THEME_MEMBER_SIM_WEIGHT = 0.55  # Jaccard share in affinity
+THEME_REP_DECAY = 0.85          # per older outcome when refreshing adj
+THEME_REP_EARLY_MULT = 0.25     # scale adj before MIN_SAMPLES
+THEME_REP_STREAK_BONUS = 1.8    # extra when newest 2+ outcomes are persist
+THEME_MANUAL_ADJ_MIN = -8.0
+THEME_MANUAL_ADJ_MAX = 8.0
+
+# Adaptive soft feedback (size heat / segment sell / MAE sweet / stock rep).
+ADAPT_HEAT_RECENT_N = 20
+ADAPT_HEAT_MIN_N = 5
+ADAPT_CONSEC_LOSS_SOFT = 3
+ADAPT_CONSEC_LOSS_HARD = 5
+ADAPT_LOSS_MULT_SOFT = 0.5
+ADAPT_LOSS_MULT_HARD = 0.25
+ADAPT_WIN_RATE_MIN = 55.0
+ADAPT_WIN_PF_MIN = 1.4
+ADAPT_WIN_MULT_CAP = 1.35
+ADAPT_SIZE_MULT_MIN = 0.2
+ADAPT_SIZE_MULT_MAX = 1.5
+# Final product clamp for stacked size factors (meta controller).
+ADAPT_META_SIZE_MIN = 0.35
+ADAPT_META_SIZE_MAX = 1.35
+ADAPT_PHASE_KIND_MIN_N = 5
+ADAPT_TUNE_CLAMP = 0.20          # ±20% auto-tune envelope (single shared clamp)
+ADAPT_MISSED_MIN_N = 3           # same context-bucket misses before nudge
+ADAPT_CTX_GATE_MIN_N = 4         # per-context gate kills before threshold nudge
+ADAPT_VOL_HS300_ABS = 1.2        # |沪深300%| ≥ → high vol
+ADAPT_VOL_AMOUNT_PCTILE = 70     # amount percentile ≥ → high vol
+ADAPT_PULLBACK_CLAMP = 0.20
+ADAPT_STOCK_REP_ADJ_MIN = -10.0
+ADAPT_STOCK_REP_ADJ_MAX = 6.0
+ADAPT_STOCK_WATCH_STREAK = 2
+ADAPT_EXEC_MIN_N = 3             # traded fills before exec soft-size fires
+ADAPT_EXEC_SCORE_SOFT = 70.0     # below → mild shrink
+ADAPT_EXEC_SCORE_HARD = 50.0     # below → stronger shrink
+ADAPT_EXEC_CHASE_RATIO = 0.40    # chase share ≥ → shrink
+THEME_TRADE_ADJ_MIN = -6.0
+THEME_TRADE_ADJ_MAX = 4.0
+# Session segment → sell-band soft mult (prior; learned rates override when n enough).
+SEGMENT_SELL_MULT = {
+    "auction": 1.12,
+    "open30": 1.10,
+    "morning": 1.0,
+    "afternoon": 0.88,
+    "closed": 1.0,
+}
+SEGMENT_SELL_LEARN_MIN_N = 6  # per-segment sample to replace static prior
+# Sell MFE: left-on-table from early sells → widen/tighten take-profit soft.
+SELL_MFE_MIN_N = 6
+SELL_MFE_WIDEN_ABOVE = 3.0   # median |MAE| of 卖后继续涨 (%) → widen take
+SELL_MFE_TIGHTEN_BELOW = 1.2
+SELL_MFE_WIDEN_MULT = 1.10
+SELL_MFE_TIGHTEN_MULT = 0.94
+
+# White-box logistic feature weights (soft score only).
+WHITEBOX_MIN_N = 12
+WHITEBOX_L2 = 0.35
+WHITEBOX_LR = 0.35
+WHITEBOX_MAX_ITERS = 250
+WHITEBOX_WEEK_SPLIT = 0.45   # newer fraction reserved for "current" vs older fit
+WHITEBOX_SCORE_SCALE = 4.0   # raw contribution → soft mainline/candidate points

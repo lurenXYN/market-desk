@@ -17,6 +17,7 @@ from market_desk.mainline import (
     etf_spec_for_name,
     etf_spec_soft_fallback,
     explain_mainline,
+    mainline_score,
     match_mainline_etf,
     pick_mainline,
     pick_side_mainline,
@@ -56,9 +57,20 @@ def build_verdict(
             sticky_held = max(0.0, (now_naive - since_dt).total_seconds())
         except (TypeError, ValueError):
             sticky_held = None
+    sticky_bias: dict[str, Any] = {}
+    sticky_margin: float | None = None
+    try:
+        from market_desk.adapt import build_sticky_margin_bias
+
+        sticky_bias = build_sticky_margin_bias()
+        if sticky_bias.get("margin") is not None:
+            sticky_margin = float(sticky_bias["margin"])
+    except Exception:
+        sticky_bias = {}
     main = pick_mainline(
         hot,
         sticky_name=sticky,
+        margin=sticky_margin,
         sticky_held_seconds=sticky_held,
     ) or {}
     board_name = main.get("name") or ""
@@ -66,8 +78,12 @@ def build_verdict(
         hot,
         main,
         sticky_name=sticky,
+        margin=sticky_margin,
         sticky_held_seconds=sticky_held,
     )
+    if sticky_bias.get("ok") and sticky_bias.get("note"):
+        # Defer algo note until algo_notes exists below.
+        pass
     if board_name and sticky and board_name == sticky and sticky_since_prev:
         sticky_since = sticky_since_prev
     else:
@@ -77,6 +93,8 @@ def build_verdict(
     soft_etf = False
     etf = match_mainline_etf(board_name, etfs) if board_name else None
     algo_notes: list[str] = []
+    if sticky_bias.get("ok") and sticky_bias.get("note"):
+        algo_notes.append(str(sticky_bias["note"]))
     if board_name and not etf:
         # Soft fallback: nearest mapped industry ETF so the desk still has a vehicle path.
         soft = etf_spec_soft_fallback(board_name)
@@ -148,8 +166,10 @@ def build_verdict(
         action = "可买入"
         reason = f"主线 {board_name}，载体离日低回升且未继续下探"
     elif status == "确认中":
-        action = "可买入"
-        reason = f"主线确认：{board_name}，按你自己的仓位买对应载体"
+        # Confirmed identity alone is not a chase signal — wait bounce or near-entry.
+        action = "观察回踩"
+        reason = f"主线确认：{board_name}，等载体离日低回升或回踩到位再买"
+        algo_notes.append("确认中待回升")
     else:
         action = "观察回踩"
         reason = f"实时主线倾向 {board_name}，结构未完全确认"
@@ -179,6 +199,10 @@ def build_verdict(
         open_mute=bool(seg.get("open_mute")),
         open_mute_minutes=mute_m,
     )
+    if bool(seg.get("open_mute")):
+        algo_notes.append("开盘静音")
+    if auction_only:
+        algo_notes.append("竞价观望")
     if soft_size_note:
         size_hint = _join_hint(size_hint or "", soft_size_note)
     action, reason, size_hint, gate_notes = apply_market_gates(
@@ -195,7 +219,7 @@ def build_verdict(
         action, reason, size_hint, phase=phase
     )
     algo_notes.extend(review_notes)
-    action, reason, size_hint, similar_notes = apply_similar_gate(
+    action, reason, size_hint, similar_notes, similar_size_mult = apply_similar_gate(
         action, reason, size_hint, similar=similar
     )
     algo_notes.extend(similar_notes)
@@ -226,6 +250,32 @@ def build_verdict(
         )
     bans = [b["name"] for b in (hot or []) if b.get("status") == "尖峰禁追"][:4]
     stocks: list[dict[str, Any]] = []
+    # Warm adaptive tune (contextual missed) before stock scoring uses the cache.
+    adapt_bundle: dict[str, Any] = {}
+    try:
+        from market_desk.adapt import build_adapt_bundle
+
+        adapt_bundle = build_adapt_bundle(
+            phase=phase,
+            segment_key=str(seg.get("key") or "closed"),
+            metrics=metrics if isinstance(metrics, dict) else None,
+            trade_date=str(now.strftime("%Y-%m-%d")),
+        )
+    except Exception:
+        adapt_bundle = {}
+    if sticky_bias:
+        adapt_bundle["sticky_margin"] = sticky_bias
+    # Soft size factors collected here; final product clamped in _attach_risk_sizing.
+    if any("软降" in str(n) for n in review_notes):
+        adapt_bundle["phase_soft_size"] = True
+        adapt_bundle["phase_soft_mult"] = 0.75
+    # Similar-day cool → soft size only (no action demote).
+    try:
+        sm = float(similar_size_mult)
+    except (TypeError, ValueError):
+        sm = 1.0
+    if sm < 0.999:
+        adapt_bundle["similar_size_mult"] = round(max(0.5, min(1.0, sm)), 3)
     # Without ETF mapping, still allow主板回踩观察票, but never as ready buys.
     allow_stocks = not stock_block and not _blocks_chi_star_stocks(board_name)
     if allow_stocks:
@@ -234,12 +284,14 @@ def build_verdict(
             zt or [],
             zb or [],
             boards=hot or [],
-            orphan=not exact_etf,
+            orphan=("hard" if not exact_etf and not soft_etf else ("soft" if soft_etf else False)),
+            phase=phase,
         )
     elif stock_block and action in ("可买入", "观察回踩"):
-        algo_notes.append("复盘命中偏低，本轮禁个股只留 ETF")
+        algo_notes.append("复盘命中偏低（已改软降，个股仍可观察）")
     recommend = _build_recommend(action, main, vehicle, bounce, stocks, bans)
-    if not exact_etf and board_name:
+    if board_name and not exact_etf and not soft_etf:
+        # Hard orphan: no vehicle path — stocks observe only.
         stock_n = sum(1 for x in (recommend.get("items") or []) if x.get("kind") == "stock")
         for item in recommend.get("items") or []:
             item["block_ready"] = True
@@ -249,13 +301,7 @@ def build_verdict(
             if item.get("kind") == "stock":
                 item["role_label"] = "个股盯回踩"
         recommend["buy"] = False
-        if soft_etf:
-            recommend["title"] = "近似ETF · 盯回踩"
-            recommend["size_note"] = _join_hint(
-                str(recommend.get("size_note") or ""),
-                f"近似映射 {vehicle.get('name') or ''}，个股更严筛选且禁现买",
-            )
-        elif stock_n:
+        if stock_n:
             recommend["title"] = "无映射ETF · 盯主板回踩票"
             recommend["size_note"] = _join_hint(
                 str(recommend.get("size_note") or ""),
@@ -268,27 +314,73 @@ def build_verdict(
                 "主线无ETF映射，且暂无合格回踩票",
             )
     elif soft_etf:
-        # Defensive: exact map path should not also be soft; keep observe block.
+        # Soft map: ETF never ready; stocks may ready after confirmations (milder orphan).
         for item in recommend.get("items") or []:
-            item["block_ready"] = True
-            item["ready"] = False
-            if item.get("wait_price") is not None:
-                item["buy_price"] = item.get("wait_price")
-            kind = item.get("kind") or "stock"
-            item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
+            if item.get("kind") == "etf":
+                item["block_ready"] = True
+                item["ready"] = False
+                if item.get("wait_price") is not None:
+                    item["buy_price"] = item.get("wait_price")
+                item["role_label"] = "ETF 盯回踩"
         recommend["buy"] = False
-        recommend["title"] = "近似ETF · 盯回踩"
+        recommend["title"] = "近似ETF · 个股可试回踩"
         recommend["size_note"] = _join_hint(
             str(recommend.get("size_note") or ""),
-            f"近似映射 {vehicle.get('name') or ''}，到位只提示、不点亮可买",
+            f"近似映射 {vehicle.get('name') or ''}，ETF 只观察；个股经确认后可小仓",
         )
     recommend = _apply_ready_confirmations(recommend, vehicle, metrics, main=main)
     if size_hint and recommend.get("size_note"):
         recommend["size_note"] = f"{size_hint}；{recommend['size_note']}"
     elif size_hint:
         recommend["size_note"] = size_hint
-    playbook = build_playbook(phase, action=action, size_hint=size_hint)
-    recommend = _attach_risk_sizing(recommend, playbook=playbook)
+    # Precompose size (incl. phase soft / similar / float cool) for playbook + qty.
+    try:
+        from market_desk.adapt import compose_size_mult
+        from market_desk.db import load_positions
+        from market_desk.settings import setting as _setting
+
+        factors = [
+            dict(f)
+            for f in (adapt_bundle.get("size_factors") or [])
+            if isinstance(f, dict)
+        ]
+        if not factors and adapt_bundle.get("size_mult") is not None:
+            factors.append(
+                {"key": "adapt", "label": "自适应包", "mult": float(adapt_bundle.get("size_mult") or 1.0)}
+            )
+        if adapt_bundle.get("phase_soft_size"):
+            factors.append(
+                {
+                    "key": "phase_soft",
+                    "label": "相位软降",
+                    "mult": float(adapt_bundle.get("phase_soft_mult") or 0.75),
+                }
+            )
+        if float(adapt_bundle.get("similar_size_mult") or 1.0) < 0.999:
+            factors.append(
+                {
+                    "key": "similar",
+                    "label": "相似日降温",
+                    "mult": float(adapt_bundle.get("similar_size_mult") or 1.0),
+                }
+            )
+        cool_n = int(_setting("cool_after_losses", 3) or 3)
+        open_rows = [r for r in (load_positions() or []) if int(r.get("qty") or 0) > 0]
+        losers = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) < 0)
+        if cool_n > 0 and losers >= cool_n:
+            factors.append({"key": "float_cool", "label": f"浮亏{losers}只", "mult": 0.75})
+        pre = compose_size_mult(factors)
+        adapt_bundle["size_compose"] = pre
+        adapt_bundle["size_mult"] = pre.get("size_mult")
+        adapt_bundle["size_factors_live"] = factors
+    except Exception:
+        pass
+    playbook = build_playbook(phase, action=action, size_hint=size_hint, adapt=adapt_bundle)
+    recommend = _attach_risk_sizing(recommend, playbook=playbook, adapt=adapt_bundle)
+    meta = recommend.get("risk_meta") if isinstance(recommend.get("risk_meta"), dict) else {}
+    if isinstance(meta.get("size_compose"), dict):
+        adapt_bundle["size_compose"] = meta["size_compose"]
+        adapt_bundle["size_mult"] = meta.get("size_mult", adapt_bundle.get("size_mult"))
 
     side_info, side_recommend = _build_side_branch(
         hot=hot,
@@ -332,6 +424,15 @@ def build_verdict(
         )
     if algo_notes:
         narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:5]) + "。"
+    sell_themes = build_sell_themes(
+        hot=hot,
+        main=main,
+        vehicle=vehicle,
+        side_info=side_info,
+        recommend=recommend,
+        side_recommend=side_recommend,
+        life_stage=life_stage,
+    )
     out = {
         "action": action,
         "headline": headline,
@@ -342,6 +443,7 @@ def build_verdict(
         "recommend": recommend,
         "side_mainline": side_info,
         "side_recommend": side_recommend,
+        "sell_themes": sell_themes,
         "playbook": playbook,
         "algo_notes": algo_notes,
         "mainline": {
@@ -351,6 +453,7 @@ def build_verdict(
             "status": status,
             "pct": main.get("pct"),
             "zt_n": main.get("zt_n"),
+            "main_yi": main.get("main_yi"),
             "leader_name": main.get("leader_name"),
             "leader_code": main.get("leader_code"),
             "leader_boards": main.get("leader_boards"),
@@ -388,11 +491,16 @@ def build_verdict(
         "temperature": metrics.get("zt"),
         "stock_block": stock_block,
         "similar": similar or {},
+        "adapt": adapt_bundle,
     }
-    out["recommend"] = mark_pullback_entries(out.get("recommend"))
-    out["side_recommend"] = mark_pullback_entries(
-        out.get("side_recommend"), observe_only=True
+    block_arm = bool(seg.get("open_mute")) or auction_only
+    out["recommend"] = mark_pullback_entries(
+        out.get("recommend"), block_arm=block_arm
     )
+    out["side_recommend"] = mark_pullback_entries(
+        out.get("side_recommend"), observe_only=True, block_arm=block_arm
+    )
+    out = reconfirm_recommend_ready(out, metrics)
     return align_action_with_ready(out)
 
 
@@ -449,10 +557,15 @@ def mark_pullback_entries(
     recommend: dict[str, Any] | None,
     *,
     observe_only: bool = False,
+    require_minute: bool = True,
+    block_arm: bool = False,
 ) -> dict[str, Any]:
     """Flag cards whose last price sits near suggested buy; optionally arm ready.
 
     observe_only keeps side-branch cards as watch-only even when price tags the wait.
+    When ``require_minute`` is True, near-entry arms only after minute.ok is True
+    (missing / pending minute does not arm). ``block_arm`` forces watch-only
+    (open mute / auction).
     """
     rec = dict(recommend or {})
     items: list[dict[str, Any]] = []
@@ -478,12 +591,15 @@ def mark_pullback_entries(
         else:
             item["near_entry_pct"] = None
 
+        minute_ok = (item.get("minute") or {}).get("ok")
+        minute_pass = (not require_minute) or (minute_ok is True)
         can_arm = (
             near
             and not observe_only
+            and not block_arm
             and not item.get("trend_down")
             and not item.get("block_ready")
-            and item.get("minute", {}).get("ok") is not False
+            and minute_pass
         )
         # Do not revive cards already failed by day-high / minute / trend gates.
         fails = item.get("confirm_fail") or []
@@ -526,6 +642,39 @@ def mark_pullback_entries(
                         f"现价贴近建议买 {primary.get('buy_price')}"
                     ).strip()
     return rec
+
+
+def _hero_buy_locked(verdict: dict[str, Any]) -> bool:
+    """Return True when market/segment gates forbid upgrading hero to 可买入."""
+    from market_desk.config import BUY_DEMOTE_LOCK_NOTES
+
+    notes = [str(x) for x in (verdict.get("algo_notes") or [])]
+    for token in BUY_DEMOTE_LOCK_NOTES:
+        if any(token in n for n in notes):
+            return True
+    seg = verdict.get("segment") or {}
+    if seg.get("open_mute") or str(seg.get("key") or "") == "auction":
+        return True
+    if bool(verdict.get("auction_only")):
+        return True
+    return False
+
+
+def reconfirm_recommend_ready(
+    verdict: dict[str, Any] | None,
+    metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Re-run day-high / flow / thin-confirm gates after near-entry arming."""
+    v = dict(verdict or {})
+    carrier = v.get("carrier") or {}
+    main = v.get("mainline") or {}
+    v["recommend"] = _apply_ready_confirmations(
+        v.get("recommend") or {},
+        carrier,
+        metrics,
+        main=main,
+    )
+    return v
 
 
 def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
@@ -576,7 +725,8 @@ def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
         v["algo_notes"] = notes
         return v
 
-    if action in ("观察回踩", "观察") and any_entry:
+    buy_locked = _hero_buy_locked(v)
+    if action in ("观察回踩", "观察") and any_entry and not buy_locked:
         note = "现价贴近建议买，回踩到位可买"
         v["action"] = "可买入"
         v["reason"] = _join_hint(str(v.get("reason") or ""), note)
@@ -597,6 +747,15 @@ def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
         narrative = str(v.get("narrative") or "")
         if note not in narrative:
             v["narrative"] = (narrative.rstrip("。") + f"；{note}。") if narrative else f"{note}。"
+        return v
+    if action in ("观察回踩", "观察") and any_entry and buy_locked:
+        # Keep near-entry badge but do not upgrade hero past market/segment locks.
+        notes = list(v.get("algo_notes") or [])
+        if "到位·闸门未开" not in notes:
+            notes.append("到位·闸门未开")
+        v["algo_notes"] = notes
+        rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "已到建议买，但市场闸门未开")
+        v["recommend"] = rec
         return v
 
     if action not in ("可买入", "可小仓"):
@@ -759,7 +918,9 @@ def build_desk_gate_summary(
         _add(f"尖峰禁追：{shown}")
 
     if v.get("stock_block"):
-        _add("复盘闸门禁个股现买")
+        _add("个股通道关闭（非硬禁）")
+    elif any("缩仓加严" in str(x) for x in (v.get("review_hints") or [])):
+        _add("复盘相位命中偏低·个股软降级")
 
     if v.get("auction_only") and "竞价阶段" not in "".join(reasons):
         _add("竞价阶段不作现买")
@@ -913,8 +1074,160 @@ def _build_side_branch(
         "etf_soft": soft,
         "carrier_code": vehicle.get("code"),
         "carrier_name": vehicle.get("name"),
+        "pool_codes": _pool_codes_from_board(side),
     }
     return info, rec
+
+
+def _pool_codes_from_board(board: dict[str, Any] | None) -> list[str]:
+    """Collect normalized member codes from a hot-board card."""
+    out: list[str] = []
+    for m in (board or {}).get("pool") or (board or {}).get("members") or []:
+        raw = m.get("code") if isinstance(m, dict) else m
+        code = normalize_code(raw)
+        if code and code not in out:
+            out.append(code)
+    return out[:40]
+
+
+def _recommend_codes(recommend: dict[str, Any] | None) -> list[str]:
+    """Collect codes from a recommend / side_recommend payload."""
+    out: list[str] = []
+    for item in ((recommend or {}).get("items") or []):
+        code = normalize_code(item.get("code"))
+        if code and code not in out:
+            out.append(code)
+    return out
+
+
+def _theme_entry(
+    *,
+    name: str,
+    role: str,
+    status: str,
+    lifecycle: str | None,
+    pool_codes: list[str] | None = None,
+    carrier_code: str | None = None,
+    rec_codes: list[str] | None = None,
+    score: float | None = None,
+    main_yi: float | None = None,
+) -> dict[str, Any]:
+    """Build one sell-theme descriptor (buy path never reads this list)."""
+    return {
+        "name": name,
+        "role": role,
+        "status": status or "",
+        "lifecycle": lifecycle or "",
+        "pool_codes": list(pool_codes or [])[:40],
+        "carrier_code": normalize_code(carrier_code) if carrier_code else None,
+        "rec_codes": list(rec_codes or [])[:20],
+        "score": score,
+        "main_yi": main_yi,
+    }
+
+
+def build_sell_themes(
+    *,
+    hot: list[dict[str, Any]] | None,
+    main: dict[str, Any] | None,
+    vehicle: dict[str, Any] | None,
+    side_info: dict[str, Any] | None,
+    recommend: dict[str, Any] | None = None,
+    side_recommend: dict[str, Any] | None = None,
+    life_stage: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build multi-theme set for sells; buys still follow sticky mainline only.
+
+    Includes sticky primary, observation side branch, and other hot boards within
+    ``SELL_THEME_GAP`` of the sticky score (退潮 peers kept so residual positions
+    can still soft-exit on their own theme fade).
+    """
+    from market_desk.config import SELL_THEME_GAP, SELL_THEME_MAX
+
+    main = main or {}
+    vehicle = vehicle or {}
+    primary = str(main.get("name") or "").strip()
+    themes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(entry: dict[str, Any]) -> None:
+        name = str(entry.get("name") or "").strip()
+        if not name or name in seen:
+            return
+        if len(themes) >= int(SELL_THEME_MAX):
+            return
+        seen.add(name)
+        themes.append(entry)
+
+    if primary:
+        _add(
+            _theme_entry(
+                name=primary,
+                role="primary",
+                status=str(main.get("status") or ""),
+                lifecycle=life_stage or classify_lifecycle(main),
+                pool_codes=_pool_codes_from_board(main),
+                carrier_code=vehicle.get("code"),
+                rec_codes=_recommend_codes(recommend),
+                score=mainline_score(main) if main else None,
+                main_yi=main.get("main_yi"),
+            )
+        )
+
+    side = side_info or {}
+    side_name = str(side.get("name") or "").strip()
+    if side_name:
+        _add(
+            _theme_entry(
+                name=side_name,
+                role="side",
+                status=str(side.get("status") or ""),
+                lifecycle=side.get("lifecycle") or "",
+                pool_codes=list(side.get("pool_codes") or []),
+                carrier_code=side.get("carrier_code"),
+                rec_codes=_recommend_codes(side_recommend),
+                score=side.get("score"),
+                main_yi=side.get("main_yi"),
+            )
+        )
+
+    gap = float(SELL_THEME_GAP)
+    boards = list(hot or [])
+    industries = [b for b in boards if b.get("kind") == "industry"]
+    pool = industries or boards
+    main_score = mainline_score(main) if primary else 0.0
+    # Pass 1: competitive peers within gap. Pass 2: fading leftovers (any gap).
+    ranked = sorted(pool, key=mainline_score, reverse=True)
+
+    def _maybe_add(board: dict[str, Any], *, allow_outside_fade: bool) -> None:
+        name = str(board.get("name") or "").strip()
+        if not name or name in seen:
+            return
+        sc = mainline_score(board)
+        status = str(board.get("status") or "")
+        life = classify_lifecycle(board)
+        outside = bool(primary) and (main_score - sc) > gap
+        fading = status == "退潮" or life == "ending"
+        if outside and not (allow_outside_fade and fading):
+            return
+        _add(
+            _theme_entry(
+                name=name,
+                role="hot",
+                status=status,
+                lifecycle=life,
+                pool_codes=_pool_codes_from_board(board),
+                carrier_code=None,
+                score=round(sc, 1),
+                main_yi=board.get("main_yi"),
+            )
+        )
+
+    for board in ranked:
+        _maybe_add(board, allow_outside_fade=False)
+    for board in ranked:
+        _maybe_add(board, allow_outside_fade=True)
+    return themes
 
 
 def _resolve_board_vehicle(
@@ -1272,9 +1585,14 @@ def apply_review_bias(
     *,
     phase: str,
 ) -> tuple[str, str, str, bool, list[str]]:
-    """Use historical phase hit-rate to shrink size or block stocks."""
+    """Use historical phase hit-rate and adaptive size heat to shrink size.
+
+    Soft DSS: low phase hit-rate demotes action and size hints but never hard-bans
+    the stock pool (``stock_block`` stays False). Hard bans remain blacklist /
+    panic / size-cap only.
+    """
     notes: list[str] = []
-    stock_block = False
+    stock_block = False  # kept for API compat; no longer hard-blocks stocks
     hint = size_hint or ""
     act = action
     why = reason
@@ -1284,22 +1602,32 @@ def apply_review_bias(
 
         hits = build_phase_hit_rates(load_signals(limit=240))
     except Exception:
-        return act, why, hint, False, notes
+        hits = []
     row = next((h for h in hits if str(h.get("phase") or "") == str(phase or "")), None)
-    if not row or int(row.get("scored_n") or 0) < 5 or row.get("hit_rate") is None:
-        return act, why, hint, False, notes
-    rate = float(row["hit_rate"])
-    scored = int(row["scored_n"])
-    if rate < 35:
-        stock_block = True
-        hint = _join_hint(hint, f"相位{phase}命中{rate}%（n={scored}）偏低，仅ETF小仓")
-        notes.append(f"复盘命中{rate}%")
-        if act == "可买入":
-            act = "观察回踩"
-            why = f"相位{phase}历史命中偏低({rate}%)，降级观察回踩：{why}"
-    elif rate < 45:
-        hint = _join_hint(hint, f"相位{phase}命中{rate}%一般，偏小仓")
-        notes.append(f"复盘命中{rate}%偏弱")
+    if row and int(row.get("scored_n") or 0) >= 5 and row.get("hit_rate") is not None:
+        rate = float(row["hit_rate"])
+        scored = int(row["scored_n"])
+        if rate < 35:
+            hint = _join_hint(
+                hint,
+                f"相位{phase}命中{rate}%（n={scored}）偏低·缩仓加严（个股仍可观察）",
+            )
+            notes.append(f"复盘命中{rate}%·软降")
+            if act == "可买入":
+                act = "观察回踩"
+                why = f"相位{phase}历史命中偏低({rate}%)，降级观察回踩：{why}"
+        elif rate < 45:
+            hint = _join_hint(hint, f"相位{phase}命中{rate}%一般，偏小仓")
+            notes.append(f"复盘命中{rate}%偏弱")
+    try:
+        from market_desk.adapt import build_size_heat
+
+        heat = build_size_heat()
+        if heat.get("ok") and abs(float(heat.get("size_mult") or 1.0) - 1.0) > 0.02:
+            hint = _join_hint(hint, str(heat.get("note") or f"仓位热度×{heat.get('size_mult')}"))
+            notes.append(f"仓位热度×{heat.get('size_mult')}")
+    except Exception:
+        pass
     return act, why, hint, stock_block, notes
 
 
@@ -1309,29 +1637,36 @@ def apply_similar_gate(
     size_hint: str,
     *,
     similar: dict[str, Any] | None,
-) -> tuple[str, str, str, list[str]]:
-    """Use similar-day cool/hot bias as a real action gate, not only a hint."""
+) -> tuple[str, str, str, list[str], float]:
+    """Apply similar-day cool/hot as soft size bias (does not demote action).
+
+    Returns ``(action, reason, size_hint, notes, size_mult)``. Cool days shrink
+    suggested risk size; hot days only add chase-caution copy. Sell-side
+    ``sell_gate`` remains unchanged elsewhere.
+    """
     notes: list[str] = []
     sim = similar or {}
     hint = size_hint or ""
     act = action
     why = reason
+    size_mult = 1.0
     bias = str(sim.get("bias") or "").strip()
     gate = sim.get("gate")
+    sell_gate = str(sim.get("sell_gate") or "")
     n = int(sim.get("n") or 0)
     if bias:
         hint = _join_hint(hint, bias)
     if n:
         notes.append(f"相似日n={n}")
-    if gate == "cool" and act == "可买入" and n >= 2:
-        act = "观察回踩"
-        why = f"相似日偏降温，降级观察回踩：{why}"
-        notes.append("相似日降温闸门")
-        hint = _join_hint(hint, "相似日降温只试错或观望")
+    if gate == "cool" and n >= 2:
+        # Prefer size over action demote; urgent cool presses a bit harder.
+        size_mult = 0.65 if sell_gate == "urgent" else 0.75
+        notes.append(f"相似日降温·缩仓×{size_mult}")
+        hint = _join_hint(hint, f"相似日降温·建议仓位×{size_mult}")
     elif gate == "hot" and act == "可买入":
         hint = _join_hint(hint, "相似日偏升温仍防追高")
         notes.append("相似日升温防追")
-    return act, why, hint, notes
+    return act, why, hint, notes, size_mult
 
 
 def _join_hint(base: str, extra: str) -> str:
@@ -1369,9 +1704,21 @@ def _apply_ready_confirmations(
     v_pct = vehicle.get("pct")
     main = main or {}
     thin_confirm = (
-        str(main.get("status") or "") == "确认中"
+        str(main.get("status") or "") in ("确认中", "观察")
         and int(main.get("zt_n") or 0) <= int(THIN_CONFIRM_ZT_MAX)
     )
+    gate_bias: dict[str, Any] = {}
+    try:
+        from market_desk.adapt import resolve_gate_mult
+        from market_desk.review import cached_buy_gate_bias
+
+        gate_bias = cached_buy_gate_bias() or {}
+        off_mult = float(resolve_gate_mult("off_high", 1.0))
+        thin_mult = float(resolve_gate_mult("thin", 1.0))
+    except Exception:
+        gate_bias = {}
+        off_mult = 1.0
+        thin_mult = 1.0
     changed = False
     for item in items:
         if not item.get("ready"):
@@ -1386,6 +1733,7 @@ def _apply_ready_confirmations(
 
                 dist = (float(high) - float(last)) / float(high) * 100.0
                 need = ETF_OFF_HIGH_MIN if kind == "etf" else STOCK_OFF_HIGH_MIN
+                need = float(need) * max(0.75, min(1.25, off_mult))
                 if dist < need:
                     flags.append("离日高过近")
         except (TypeError, ValueError):
@@ -1398,11 +1746,30 @@ def _apply_ready_confirmations(
                 pass
         if kind == "stock" and m.get("weak_index"):
             flags.append("指数弱禁个股现买")
+        if kind == "stock":
+            try:
+                from market_desk.config import MAINLINE_FLOW_OUT_YI
+
+                yi = main.get("main_yi")
+                if yi is not None and float(yi) <= float(MAINLINE_FLOW_OUT_YI):
+                    flags.append("板块主力流出")
+            except (TypeError, ValueError):
+                pass
         if kind == "stock" and thin_confirm:
+            thin_m = max(0.75, min(1.25, thin_mult))
+            cross_need = max(1, int(round(float(THIN_CROSS_BOARD_MIN) * thin_m)))
+            theme_need = max(1, int(round(float(THIN_CROSS_THEME_MIN) * thin_m)))
+            # Loosen: lower required cross counts when false-kills high.
+            if thin_m < 1.0:
+                cross_need = max(1, int(THIN_CROSS_BOARD_MIN) - 1)
+                theme_need = max(0, int(THIN_CROSS_THEME_MIN) - 1)
+            elif thin_m > 1.0:
+                cross_need = max(cross_need, int(THIN_CROSS_BOARD_MIN) + 1)
+                theme_need = max(theme_need, int(THIN_CROSS_THEME_MIN) + 1)
             cross_n = int(item.get("cross_n") or 0)
             theme_n = int(item.get("cross_theme_n") or 0)
-            ok_cross = cross_n >= int(THIN_CROSS_BOARD_MIN)
-            ok_theme = theme_n >= int(THIN_CROSS_THEME_MIN)
+            ok_cross = cross_n >= cross_need
+            ok_theme = theme_n >= theme_need
             if not (ok_cross or ok_theme):
                 flags.append("薄确认缺跨板块共振")
         if kind == "etf":
@@ -1835,15 +2202,17 @@ def _stock_candidates(
     zb: list[dict[str, Any]] | None = None,
     boards: list[dict[str, Any]] | None = None,
     *,
-    orphan: bool = False,
+    orphan: bool | str = False,
+    phase: str = "",
 ) -> list[dict[str, Any]]:
     """Pick unsealed main-board pullbacks from the live mainline constituent pool.
 
-    When ``orphan`` is True (no exact ETF map), apply stricter pullback / market-cap
-    filters and skip the soft non-strict fallback pass.
+    ``orphan``: False | True/"hard" | "soft". Hard = no exact ETF (strictest);
+    soft = approximate ETF map (milder listing band).
     """
     from market_desk.db import load_blacklist_codes
 
+    orphan_mode = "hard" if orphan in (True, "hard") else ("soft" if orphan == "soft" else "")
     sealed = {normalize_code(x.get("code")) for x in zt}
     broken = {normalize_code(x.get("code")) for x in (zb or [])}
     boards_by = {
@@ -1859,6 +2228,8 @@ def _stock_candidates(
     blocked = load_blacklist_codes()
     pool = list(main.get("pool") or main.get("members") or [])
     board_name = str(main.get("name") or "")
+    board_pct = main.get("pct")
+    board_flow = main.get("main_yi")
     # Index current scoring board + other hot cards so multi-membership is visible.
     index_boards = list(boards or [])
     if main and not any(
@@ -1879,11 +2250,14 @@ def _stock_candidates(
             board_name=board_name,
             membership=membership,
             strict=True,
-            orphan=orphan,
+            orphan=orphan_mode,
+            board_pct=board_pct,
+            board_main_yi=board_flow,
+            phase=phase,
         )
         if item:
             scored.append(item)
-    if len(scored) < 2 and not orphan:
+    if len(scored) < 2 and orphan_mode != "hard":
         for member in pool:
             code = normalize_code(member.get("code"))
             if any(code == normalize_code(x[1].get("code")) for x in scored):
@@ -1899,7 +2273,10 @@ def _stock_candidates(
                 board_name=board_name,
                 membership=membership,
                 strict=False,
-                orphan=False,
+                orphan="",
+                board_pct=board_pct,
+                board_main_yi=board_flow,
+                phase=phase,
             )
             if item:
                 scored.append(item)
@@ -1919,18 +2296,26 @@ def _score_stock(
     board_name: str = "",
     membership: dict[str, list[dict[str, str]]] | None = None,
     strict: bool,
-    orphan: bool = False,
+    orphan: bool | str = False,
+    board_pct: float | None = None,
+    board_main_yi: float | None = None,
+    phase: str = "",
 ) -> tuple[float, dict[str, Any]] | None:
     """Score one constituent as a pullback candidate, or reject it."""
     from market_desk.config import (
         ORPHAN_STOCK_MV_MULT,
         ORPHAN_STOCK_PB_MIN,
+        SOFT_STOCK_MV_MULT,
+        SOFT_STOCK_PB_MIN,
+        STOCK_FLOW_OUT_SCORE_PEN,
         STOCK_PULLBACK_BAND_MAX,
         STOCK_PULLBACK_SWEET_MAX,
         STOCK_READY_PULLBACK_MIN,
+        STOCK_VS_BOARD_WEAK_PCT,
     )
     from market_desk.settings import setting
 
+    orphan_mode = "hard" if orphan in (True, "hard") else ("soft" if orphan == "soft" else "")
     code = normalize_code(member.get("code"))
     name = str(member.get("name") or "")
     pct = member.get("pct")
@@ -1947,8 +2332,10 @@ def _score_stock(
     if pct is None:
         return None
     min_mv = float(setting("min_stock_mv_yi", 120.0) or 0.0)
-    if orphan and min_mv > 0:
+    if orphan_mode == "hard" and min_mv > 0:
         min_mv *= float(ORPHAN_STOCK_MV_MULT)
+    elif orphan_mode == "soft" and min_mv > 0:
+        min_mv *= float(SOFT_STOCK_MV_MULT)
     mv_yi = member.get("mv_yi")
     if min_mv > 0:
         if mv_yi is None:
@@ -1967,9 +2354,32 @@ def _score_stock(
     if not strict and (pct < -1.5 or pct > 7.0):
         return None
 
-    pb_min = float(ORPHAN_STOCK_PB_MIN if orphan else STOCK_READY_PULLBACK_MIN)
+    if orphan_mode == "hard":
+        pb_min = float(ORPHAN_STOCK_PB_MIN)
+    elif orphan_mode == "soft":
+        pb_min = float(SOFT_STOCK_PB_MIN)
+    else:
+        pb_min = float(STOCK_READY_PULLBACK_MIN)
+    # Gate loosen/tighten applies ONLY via auto_tune (single channel, ±CLAMP).
     pb_max = float(STOCK_PULLBACK_BAND_MAX)
     pb_sweet = float(STOCK_PULLBACK_SWEET_MAX)
+    try:
+        from market_desk.adapt import build_pullback_sweet, resolve_auto_tune
+        from market_desk import adapt as adapt_mod
+
+        ctx = adapt_mod._ADAPT_CACHE.get("context")
+        if not isinstance(ctx, dict):
+            ctx = None
+        tune = resolve_auto_tune(current_context=ctx)
+        t_mult = float(tune.get("pb_min_mult") or 1.0)
+        if abs(t_mult - 1.0) > 0.01:
+            pb_min = float(pb_min) * t_mult
+        sweet = build_pullback_sweet()
+        if sweet.get("ok"):
+            pb_sweet = float(sweet.get("sweet_max") or pb_sweet)
+            pb_max = float(sweet.get("band_max") or pb_max)
+    except Exception:
+        pass
     pullback = None
     if high and high > 0:
         pullback = (float(high) - float(price)) / float(high) * 100.0
@@ -1984,6 +2394,19 @@ def _score_stock(
             score += 4.0
         else:
             score -= 6.0
+    try:
+        from market_desk.adapt import stock_rep_score_adj
+
+        srep = stock_rep_score_adj(code)
+        if srep.get("ok"):
+            score += float(srep.get("score_adj") or 0)
+            if srep.get("watch") and strict:
+                # Watch-list names need deeper pullback confirmation.
+                if pullback is None or pullback < max(pb_min + 0.8, pb_min * 1.15):
+                    return None
+                score -= 3.0
+    except Exception:
+        pass
     # Prefer larger caps slightly when scores are close.
     if mv_yi is not None:
         score += min(6.0, float(mv_yi) / 80.0)
@@ -2001,9 +2424,44 @@ def _score_stock(
         score -= 4.0
     cross_adj, cross_meta = _cross_board_adj(code, board_name, membership or {})
     score += cross_adj
+    try:
+        from market_desk.whitebox import fit_whitebox, whitebox_score_adj
+
+        # Affinity already in cross_adj — never also feed whitebox board_match.
+        wb = whitebox_score_adj(
+            kind="stock",
+            phase=str(phase or member.get("_phase") or ""),
+            ready=True,
+            trend=member.get("trend") if isinstance(member.get("trend"), dict) else None,
+            board_match=False,
+            model=fit_whitebox(),
+        )
+        if wb.get("ok"):
+            score += float(wb.get("score_adj") or 0)
+            out_wb = {
+                "score_adj": wb.get("score_adj"),
+                "parts": list(wb.get("parts") or []),
+                "contribs": list(wb.get("contribs") or []),
+                "note": wb.get("note"),
+            }
+        else:
+            out_wb = None
+    except Exception:
+        out_wb = None
+    # Relative strength vs board + board fund-flow quality.
+    try:
+        if board_pct is not None and float(pct) < float(board_pct) - float(STOCK_VS_BOARD_WEAK_PCT):
+            score -= 5.0
+    except (TypeError, ValueError):
+        pass
+    try:
+        if board_main_yi is not None and float(board_main_yi) <= -1.0:
+            score -= float(STOCK_FLOW_OUT_SCORE_PEN)
+    except (TypeError, ValueError):
+        pass
     boards = int(boards_by.get(code) or 0)
-    # Ready after enough day-high pullback; still blocks tip-chase names.
-    ready = pullback is not None and pullback >= pb_min
+    # Ready only inside the sweet pullback band (not merely past pb_min).
+    ready = pullback is not None and pb_min <= pullback <= pb_sweet
     if turnover is not None and turnover >= 15.0:
         ready = False
     if explode_n >= 2:
@@ -2031,6 +2489,8 @@ def _score_stock(
     out["cross_adj"] = round(cross_adj, 1)
     out["score"] = round(score, 1)
     out["reason"] = reason
+    if out_wb:
+        out["whitebox"] = out_wb
     return score, out
 
 
@@ -2158,11 +2618,14 @@ def _attach_risk_sizing(
     recommend: dict[str, Any],
     *,
     playbook: dict[str, Any] | None = None,
+    adapt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attach risk-based share counts onto recommendation cards."""
+    from market_desk.adapt import compose_size_mult
     from market_desk.settings import setting
 
     rec = dict(recommend or {})
+    adapt = adapt if isinstance(adapt, dict) else {}
     equity = float(setting("account_equity", 50000))
     risk_pct = float(setting("risk_pct_per_trade", 1.0))
     # Soft scale risk% by playbook size cap (e.g. panic uses smaller risk).
@@ -2171,6 +2634,61 @@ def _attach_risk_sizing(
         risk_pct = min(risk_pct, 0.6)
     elif cap < 55:
         risk_pct = min(risk_pct, 1.0)
+
+    # Prefer atomic factors from adapt bundle; fall back to precomposed size_mult.
+    factors: list[dict[str, Any]] = []
+    base_factors = adapt.get("size_factors")
+    if isinstance(base_factors, list) and base_factors:
+        factors.extend(dict(f) for f in base_factors if isinstance(f, dict))
+    else:
+        try:
+            base_m = float(adapt.get("size_mult") or 1.0)
+        except (TypeError, ValueError):
+            base_m = 1.0
+        factors.append({"key": "adapt", "label": "自适应包", "mult": base_m})
+
+    if adapt.get("phase_soft_size"):
+        try:
+            ps = float(adapt.get("phase_soft_mult") or 0.75)
+        except (TypeError, ValueError):
+            ps = 0.75
+        factors.append({"key": "phase_soft", "label": "相位软降", "mult": max(0.5, min(1.0, ps))})
+
+    try:
+        sim_m = float(adapt.get("similar_size_mult") or 1.0)
+    except (TypeError, ValueError):
+        sim_m = 1.0
+    if sim_m < 0.999:
+        factors.append(
+            {
+                "key": "similar",
+                "label": "相似日降温",
+                "mult": max(0.5, min(1.0, sim_m)),
+            }
+        )
+
+    cool_n = int(setting("cool_after_losses", 3) or 3)
+    try:
+        from market_desk.db import load_positions
+
+        open_rows = [r for r in (load_positions() or []) if int(r.get("qty") or 0) > 0]
+        losers = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) < 0)
+    except Exception:
+        losers = 0
+    if cool_n > 0 and losers >= cool_n:
+        factors.append(
+            {
+                "key": "float_cool",
+                "label": f"浮亏{losers}只",
+                "mult": 0.75,
+            }
+        )
+
+    composed = compose_size_mult(factors)
+    size_mult = float(composed.get("size_mult") or 1.0)
+    risk_pct = round(max(0.15, risk_pct * size_mult), 3)
+    heat_note = str((adapt.get("size_heat") or {}).get("note") or "")
+    cool_note = str(composed.get("note") or "")
     items = []
     for raw in rec.get("items") or []:
         item = dict(raw)
@@ -2187,12 +2705,18 @@ def _attach_risk_sizing(
             item["risk_plan"] = plan
             if plan.get("qty"):
                 item["qty"] = int(plan["qty"])
+        if abs(size_mult - 1.0) > 0.02:
+            item["size_mult"] = size_mult
         items.append(item)
     rec["items"] = items
     rec["risk_meta"] = {
         "account_equity": equity,
         "risk_pct_per_trade": risk_pct,
         "size_cap_pct": cap,
+        "size_mult": size_mult,
+        "size_heat_note": heat_note,
+        "cool_note": cool_note,
+        "size_compose": composed,
     }
     return rec
 
@@ -2378,6 +2902,8 @@ def _position_tied_to_mainline(row: dict[str, Any], verdict: dict[str, Any]) -> 
     """Return True when a held name is the live carrier or in the mainline pool.
 
     Soft mainline-fade sells should not fire on unrelated residual positions.
+    Prefer ``_sell_theme_context`` for sells (multi-theme); this remains the
+    sticky-only fallback when ``sell_themes`` is absent.
     """
     code = normalize_code(row.get("code"))
     if not code:
@@ -2396,7 +2922,118 @@ def _position_tied_to_mainline(row: dict[str, Any], verdict: dict[str, Any]) -> 
     main_name = str(main.get("name") or "")
     if board and main_name and (board in main_name or main_name in board):
         return True
+    if board and main_name and same_theme(board, main_name):
+        return True
     return False
+
+
+def _match_sell_theme(row: dict[str, Any], theme: dict[str, Any]) -> bool:
+    """Return True when a position belongs to one sell-theme descriptor."""
+    code = normalize_code(row.get("code"))
+    if not code:
+        return False
+    carrier = normalize_code(theme.get("carrier_code"))
+    if carrier and code == carrier:
+        return True
+    pool = {normalize_code(c) for c in (theme.get("pool_codes") or []) if c}
+    if code in pool:
+        return True
+    rec = {normalize_code(c) for c in (theme.get("rec_codes") or []) if c}
+    if code in rec:
+        return True
+    name = str(theme.get("name") or "")
+    labels: list[str] = []
+    for raw in (
+        row.get("board"),
+        row.get("sector"),
+        row.get("industry"),
+        row.get("entry_board"),
+    ):
+        text = str(raw or "").strip()
+        if text:
+            labels.append(text)
+    for raw in row.get("board_names") or []:
+        text = str(raw or "").strip()
+        if text:
+            labels.append(text)
+    for held in labels:
+        if name and (held in name or name in held or same_theme(held, name)):
+            return True
+    return False
+
+
+def _sell_theme_context(row: dict[str, Any], verdict: dict[str, Any]) -> dict[str, Any]:
+    """Resolve which sell-theme(s) a position belongs to and the active context.
+
+    Buys ignore this. Sells use multi-theme membership so a side/hot peer fade
+    can trim the right bags without requiring them to be today's sticky name.
+    When both strong and fading themes match, fade wins (safer exit bias).
+    """
+    themes = list(verdict.get("sell_themes") or [])
+    if not themes:
+        tied = _position_tied_to_mainline(row, verdict)
+        main = verdict.get("mainline") or {}
+        status = str(main.get("status") or "")
+        life = str(main.get("lifecycle") or "")
+        fade = status == "退潮" or life == "ending"
+        return {
+            "tied": tied,
+            "name": main.get("name") if tied else None,
+            "role": "primary" if tied else None,
+            "status": status if tied else "",
+            "lifecycle": life if tied else "",
+            "fade": bool(tied and fade),
+            "carrier_falling": bool(tied and (verdict.get("carrier") or {}).get("falling")),
+            "matched_names": [main.get("name")] if tied and main.get("name") else [],
+        }
+
+    matches = [t for t in themes if _match_sell_theme(row, t)]
+    if not matches:
+        return {
+            "tied": False,
+            "name": None,
+            "role": None,
+            "status": "",
+            "lifecycle": "",
+            "fade": False,
+            "carrier_falling": False,
+            "matched_names": [],
+        }
+
+    def _is_fade(t: dict[str, Any]) -> bool:
+        return str(t.get("status") or "") == "退潮" or str(t.get("lifecycle") or "") == "ending"
+
+    def _is_strong(t: dict[str, Any]) -> bool:
+        return str(t.get("status") or "") == "确认中" and str(t.get("lifecycle") or "") != "ending"
+
+    fade_hits = [t for t in matches if _is_fade(t)]
+    strong_hits = [t for t in matches if _is_strong(t)]
+    # Prefer primary among equals so sticky context stays visible in reasons.
+    def _rank(t: dict[str, Any]) -> tuple[int, float]:
+        role_rank = {"primary": 0, "side": 1, "hot": 2}.get(str(t.get("role") or ""), 9)
+        try:
+            sc = -float(t.get("score") or 0)
+        except (TypeError, ValueError):
+            sc = 0.0
+        return (role_rank, sc)
+
+    fade_hits.sort(key=_rank)
+    strong_hits.sort(key=_rank)
+    matches_sorted = sorted(matches, key=_rank)
+    ctx = fade_hits[0] if fade_hits else (strong_hits[0] if strong_hits else matches_sorted[0])
+    tied_primary = any(str(t.get("role") or "") == "primary" for t in matches)
+    return {
+        "tied": True,
+        "name": ctx.get("name"),
+        "role": ctx.get("role"),
+        "status": str(ctx.get("status") or ""),
+        "lifecycle": str(ctx.get("lifecycle") or ""),
+        "fade": bool(fade_hits),
+        "carrier_falling": bool(
+            tied_primary and (verdict.get("carrier") or {}).get("falling")
+        ),
+        "matched_names": [str(t.get("name")) for t in matches_sorted if t.get("name")],
+    }
 
 
 def build_sell_advice(
@@ -2406,6 +3043,8 @@ def build_sell_advice(
     *,
     trade_date: str | None = None,
     trends_by_code: dict[str, dict[str, Any]] | None = None,
+    similar: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build sell / hold cards for locally recorded positions."""
     verdict = verdict or {}
@@ -2427,9 +3066,14 @@ def build_sell_advice(
             continue
         code = normalize_code(row.get("code"))
         is_etf = _is_etf_code(code) if code else False
-        kind_bias = (sell_bundle.get("etf") if is_etf else sell_bundle.get("stock")) or {}
-        if not kind_bias.get("ok"):
-            kind_bias = sell_bundle.get("all") or {}
+        try:
+            from market_desk.review import resolve_sell_kind_bias
+
+            kind_bias = resolve_sell_kind_bias(sell_bundle, etf=is_etf)
+        except Exception:
+            kind_bias = (sell_bundle.get("etf") if is_etf else sell_bundle.get("stock")) or {}
+            if not kind_bias.get("ok"):
+                kind_bias = sell_bundle.get("all") or {}
         item = _sell_item(
             row,
             verdict,
@@ -2437,6 +3081,8 @@ def build_sell_advice(
             trade_date=day,
             trend=trends.get(code) if code else None,
             sell_bias=kind_bias,
+            similar=similar,
+            metrics=metrics,
         )
         if item:
             items.append(item)
@@ -2512,6 +3158,8 @@ def _exit_band_params(
     trend: dict[str, Any] | None,
     carrier_falling: bool,
     sell_bias: dict[str, Any] | None = None,
+    rel_strong: bool = False,
+    segment_key: str | None = None,
 ) -> dict[str, Any]:
     """Pick stop / pullback / take-profit bands from multi-module context.
 
@@ -2522,10 +3170,14 @@ def _exit_band_params(
     - neutral: default fixed bands.
 
     Optional ``sell_bias`` from review sell outcomes scales pb/take/pocket.
+    ``rel_strong`` (day green / beats index) blocks panic-alone tight bands.
+    Session ``segment_key`` soft-widens open / soft-tightens afternoon.
     """
-    from market_desk.config import SELL_BAND_ETF, SELL_BAND_STOCK
+    from market_desk.config import SELL_BAND_ETF, SELL_BAND_STOCK, SELL_UPTREND_BAND_MULT
 
     trend = trend or {}
+    daily_up = bool(trend.get("up")) and not bool(trend.get("down"))
+    daily_down = bool(trend.get("down"))
     # Lifecycle keys: starting | ongoing | ending (see lifecycle.py).
     rising_life = life_stage in ("starting", "ongoing")
     confirming = main_status == "确认中"
@@ -2533,17 +3185,22 @@ def _exit_band_params(
         on_mainline
         and confirming
         and rising_life
-        and trend.get("up")
+        and daily_up
         and not soft_exit
         and not ending
     )
-    weak_context = bool(
+    # Daily uptrend: do not let soft fade / carrier tick alone force tight bands.
+    fade_pressure = bool(
         soft_exit
-        or ending
-        or trend.get("down")
-        or phase == "恐慌"
         or (on_mainline and carrier_falling)
         or (on_mainline and main_status == "退潮")
+    )
+    panic_tight = phase == "恐慌" and not rel_strong
+    weak_context = bool(
+        daily_down
+        or ending
+        or panic_tight
+        or (fade_pressure and not daily_up)
     )
     if strong_hold:
         mode = "give"
@@ -2554,8 +3211,17 @@ def _exit_band_params(
     else:
         mode = "neutral"
         mode_zh = "标准"
+    if rel_strong and mode == "neutral":
+        mode_zh = f"{mode_zh}·相对偏强"
     table = SELL_BAND_ETF if etf else SELL_BAND_STOCK
     band = dict(table[mode])
+    if daily_up:
+        up_mult = float(SELL_UPTREND_BAND_MULT)
+        for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+            band[key] = float(band[key]) * up_mult
+        # More negative stop = wider room (e.g. -3.0 → -3.54).
+        band["pnl_stop"] = float(band["pnl_stop"]) * up_mult
+        mode_zh = f"{mode_zh}·日线上升"
     bias = sell_bias or {}
     mult = float(bias.get("mult") or 1.0)
     if bias.get("widen") and mult > 1.0:
@@ -2568,8 +3234,37 @@ def _exit_band_params(
         for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
             band[key] = float(band[key]) * mult
         mode_zh = f"{mode_zh}·卖准收紧"
+    seg_info: dict[str, Any] = {}
+    try:
+        from market_desk.adapt import build_sell_mfe_bias, segment_sell_mult
+
+        seg_info = segment_sell_mult(segment_key)
+        seg_m = float(seg_info.get("mult") or 1.0)
+        # Stack with review bias but clamp product so bands stay sane.
+        if abs(seg_m - 1.0) > 0.02:
+            stacked = max(0.75, min(1.25, mult * seg_m))
+            residual = stacked / max(mult, 1e-6) if mult > 0 else seg_m
+            for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+                band[key] = float(band[key]) * residual
+            if seg_info.get("widen"):
+                band["pnl_stop"] = float(band["pnl_stop"]) * (1.0 + (residual - 1.0) * 0.4)
+                mode_zh = f"{mode_zh}·{seg_info.get('note')}"
+            elif seg_info.get("tighten"):
+                mode_zh = f"{mode_zh}·{seg_info.get('note')}"
+        mfe_info = build_sell_mfe_bias()
+        mfe_m = float(mfe_info.get("mult") or 1.0)
+        if mfe_info.get("ok") and abs(mfe_m - 1.0) > 0.02:
+            for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+                band[key] = float(band[key]) * mfe_m
+            mode_zh = f"{mode_zh}·{mfe_info.get('note')}"
+            seg_info = dict(seg_info)
+            seg_info["mfe"] = mfe_info
+    except Exception:
+        seg_info = {}
     band["mode"] = mode
     band["mode_zh"] = mode_zh
+    band["daily_up"] = daily_up
+    band["rel_strong"] = bool(rel_strong)
     band["sell_bias"] = {
         "widen": bool(bias.get("widen")),
         "tighten": bool(bias.get("tighten")),
@@ -2578,6 +3273,7 @@ def _exit_band_params(
         "n": bias.get("n"),
         "note": bias.get("note"),
     }
+    band["segment_sell"] = seg_info
     return band
 
 
@@ -2589,6 +3285,8 @@ def _sell_item(
     trade_date: str | None = None,
     trend: dict[str, Any] | None = None,
     sell_bias: dict[str, Any] | None = None,
+    similar: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Decide whether a held name should be sold, trimmed, or held.
 
@@ -2631,27 +3329,70 @@ def _sell_item(
     if last is not None and hold_peak > 0:
         pullback = (hold_peak - float(last)) / hold_peak * 100.0
 
-    action = verdict.get("action") or ""
     mainline = verdict.get("mainline") or {}
-    main_status = mainline.get("status") or ""
-    life_stage = mainline.get("lifecycle") or ""
+    sticky_status = str(mainline.get("status") or "")
+    sticky_life = str(mainline.get("lifecycle") or "")
+    sticky_fade = sticky_status == "退潮" or sticky_life == "ending"
+    theme_ctx = _sell_theme_context(row, verdict)
+    on_mainline = bool(theme_ctx.get("tied"))
+    main_status = str(theme_ctx.get("status") or "") if on_mainline else ""
+    life_stage = str(theme_ctx.get("lifecycle") or "") if on_mainline else ""
     ending = life_stage == "ending"
-    carrier = verdict.get("carrier") or {}
-    on_mainline = _position_tied_to_mainline(row, verdict)
     auction_only = bool(verdict.get("auction_only"))
     # Soft exits: panic always; climax only with higher profit bar later.
-    # Mainline fade = 退潮/ending — not bare「观望」(auction also sets 观望).
+    # Theme fade = matched sell-theme 退潮/ending (multi-theme; not sticky-only).
     phase_panic = phase == "恐慌"
     phase_climax = phase == "高潮"
-    mainline_fade = (not auction_only) and (
-        main_status == "退潮" or ending
+    mainline_fade = (not auction_only) and bool(theme_ctx.get("fade"))
+    # Relative strength / tip / day-weak context for soft & light takes.
+    day_pct = row.get("last_pct")
+    if day_pct is None:
+        day_pct = row.get("pct")
+    try:
+        day_pct_f = float(day_pct) if day_pct is not None else None
+    except (TypeError, ValueError):
+        day_pct_f = None
+    day_pb = None
+    try:
+        if high not in (None, 0) and last is not None and float(high) > 0:
+            day_pb = (float(high) - float(last)) / float(high) * 100.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        day_pb = None
+    from market_desk.config import (
+        SELL_DAY_WEAK_PCT,
+        SELL_PANIC_REL_STRONG_PCT,
+        SELL_REL_STRONG_PCT,
+        SELL_TIP_HOLD_PB,
+        SELL_VS_INDEX_EDGE,
     )
-    soft_exit = phase_panic or (mainline_fade and on_mainline)
+
+    at_tip = day_pb is not None and day_pb < float(SELL_TIP_HOLD_PB)
+    rel_strong = False
+    if day_pct_f is not None and day_pct_f >= float(SELL_REL_STRONG_PCT):
+        rel_strong = True
+    else:
+        try:
+            idx = (metrics or {}).get("hs300_pct")
+            if day_pct_f is not None and idx is not None:
+                if float(day_pct_f) - float(idx) >= float(SELL_VS_INDEX_EDGE):
+                    rel_strong = True
+        except (TypeError, ValueError):
+            pass
+    panic_rel_strong = bool(
+        phase_panic
+        and day_pct_f is not None
+        and day_pct_f >= float(SELL_PANIC_REL_STRONG_PCT)
+    )
+    day_weak = day_pct_f is not None and day_pct_f <= float(SELL_DAY_WEAK_PCT)
+    partial_done = int(row.get("day_sold_qty") or 0) > 0
+    soft_exit = (phase_panic and not panic_rel_strong) or (mainline_fade and on_mainline)
     t1_locked = is_t1_locked(row, trade_date)
     buy_day = position_buy_day(row)
     hold_qty = int(row.get("qty") or 0)
     trend = trend or {}
     ma20 = trend.get("ma20")
+    theme_label = str(theme_ctx.get("name") or "")
+    theme_role = str(theme_ctx.get("role") or "")
 
     band = _exit_band_params(
         etf=etf,
@@ -2662,9 +3403,44 @@ def _sell_item(
         phase=phase,
         soft_exit=soft_exit,
         trend=trend,
-        carrier_falling=bool(carrier.get("falling")),
+        carrier_falling=bool(theme_ctx.get("carrier_falling")),
         sell_bias=sell_bias,
+        rel_strong=rel_strong or panic_rel_strong,
+        segment_key=str((verdict.get("segment") or {}).get("key") or ""),
     )
+    # Similar-day sell urgency + theme fund outflow: nudge soft floors earlier.
+    sell_gate = str((similar or {}).get("sell_gate") or "")
+    theme_yi = None
+    for t in verdict.get("sell_themes") or []:
+        if str(t.get("name") or "") == theme_label:
+            theme_yi = t.get("main_yi")
+            break
+    flow_pressure = False
+    try:
+        from market_desk.config import SELL_FLOW_OUT_YI
+
+        if theme_yi is not None and float(theme_yi) <= float(SELL_FLOW_OUT_YI):
+            flow_pressure = True
+    except (TypeError, ValueError):
+        flow_pressure = False
+    if sell_gate == "urgent" or flow_pressure:
+        from market_desk.config import SELL_SIM_URGENT_FLOOR
+
+        pb_scale = 0.88 if sell_gate == "urgent" else 0.93
+        # Soft floor when review already tightened — avoid double-cut.
+        if sell_bias and sell_bias.get("tighten"):
+            pb_scale = max(float(SELL_SIM_URGENT_FLOOR), pb_scale)
+        band["pb_light"] = float(band["pb_light"]) * pb_scale
+        band["pb_deep"] = float(band["pb_deep"]) * pb_scale
+        band["take_pnl"] = float(band["take_pnl"]) * pb_scale
+        if sell_gate == "urgent":
+            band["mode_zh"] = f"{band['mode_zh']}·相似日急"
+        elif flow_pressure:
+            band["mode_zh"] = f"{band['mode_zh']}·资金流出"
+    elif sell_gate == "hold" and band["mode"] != "tight":
+        band["pb_light"] = float(band["pb_light"]) * 1.06
+        band["take_pnl"] = float(band["take_pnl"]) * 1.06
+        band["mode_zh"] = f"{band['mode_zh']}·相似日持"
     stop = buy * float(band["stop_buy"])
     if low not in (None, 0) and float(low) < buy:
         stop = max(float(low), buy * float(band["stop_floor"]))
@@ -2743,6 +3519,7 @@ def _sell_item(
         and pnl_pct >= take_pnl
         and pullback is not None
         and pullback >= pb_light
+        and not (at_tip and rel_strong and not (ending and on_mainline))
     ):
         urgency = "take"
         ready = True
@@ -2770,7 +3547,7 @@ def _sell_item(
                 f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%"
                 f"（{band['mode_zh']}），先减一半"
             )
-    elif pnl_pct is not None and pnl_pct >= pocket_pnl:
+    elif pnl_pct is not None and pnl_pct >= pocket_pnl and not (at_tip and rel_strong):
         urgency = "take"
         ready = True
         sell_price = float(last)
@@ -2786,8 +3563,9 @@ def _sell_item(
             reason_parts.append(
                 f"浮盈 {_fmt_pct(pnl_pct)}（{band['mode_zh']}），建议先减一半，余仓盯止损"
             )
-    elif (soft_exit or phase_climax) and pnl_pct is not None:
+    elif (soft_exit or phase_climax) and pnl_pct is not None and not (at_tip and rel_strong):
         from market_desk.config import (
+            SELL_DAY_WEAK_SOFT_DELTA,
             SELL_SOFT_CLIMAX_MIN_PNL_ETF,
             SELL_SOFT_CLIMAX_MIN_PNL_STOCK,
             SELL_SOFT_DEEP_PNL_ETF,
@@ -2796,6 +3574,7 @@ def _sell_item(
             SELL_SOFT_MIN_PNL_ENDING_STOCK,
             SELL_SOFT_MIN_PNL_ETF,
             SELL_SOFT_MIN_PNL_STOCK,
+            SELL_SOFT_UPTREND_EXTRA,
         )
 
         if ending and on_mainline:
@@ -2808,16 +3587,27 @@ def _sell_item(
                 soft_min,
                 SELL_SOFT_CLIMAX_MIN_PNL_ETF if etf else SELL_SOFT_CLIMAX_MIN_PNL_STOCK,
             )
+        daily_up = bool(trend.get("up")) and not bool(trend.get("down"))
+        if daily_up:
+            soft_min = float(soft_min) + float(SELL_SOFT_UPTREND_EXTRA)
+        if day_weak:
+            soft_min = float(soft_min) + float(SELL_DAY_WEAK_SOFT_DELTA)
+        # Relative strength: climax soft needs more profit; skip mild climax alone.
+        if phase_climax and rel_strong and not soft_exit:
+            soft_min = float(soft_min) + 1.0
         if pnl_pct > soft_min:
             urgency = "trim"
             ready = True
             sell_price = float(last)
             deep_need = SELL_SOFT_DEEP_PNL_ETF if etf else SELL_SOFT_DEEP_PNL_STOCK
+            if daily_up:
+                deep_need = float(deep_need) + float(SELL_SOFT_UPTREND_EXTRA)
             deep_fade = ending and on_mainline and (
                 (pullback is not None and pullback >= pb_light)
                 or pnl_pct >= deep_need
             )
-            if deep_fade:
+            # Uptrend: soft fade only halves; never clear on soft branch.
+            if deep_fade and not daily_up:
                 exit_mode = "clear"
                 role_label = "衰退清仓"
                 sell_pct = 100
@@ -2835,21 +3625,34 @@ def _sell_item(
                     if ending and on_mainline
                     else (
                         "相位恐慌"
-                        if phase_panic
-                        else ("相位高潮" if phase_climax else "主线退潮")
+                        if phase_panic and soft_exit
+                        else (
+                            "相位高潮"
+                            if phase_climax
+                            else (
+                                f"主题「{theme_label}」退潮"
+                                if theme_label
+                                else "主线退潮"
+                            )
+                        )
                     )
                 )
                 reason_parts.append(
-                    f"{why}，浮盈 {_fmt_pct(pnl_pct)}（门槛 {soft_min:.1f}%），先减一半"
+                    f"{why}，浮盈 {_fmt_pct(pnl_pct)}（门槛 {soft_min:.1f}%"
+                    + ("·日线上升抬高" if daily_up else "")
+                    + ("·当日偏弱放宽" if day_weak else "")
+                    + "），先减一半"
                 )
         # else: below soft floor — fall through to carrier / ending / hold
     if not ready and (
         not etf
         and on_mainline
-        and carrier.get("falling")
+        and theme_ctx.get("carrier_falling")
         and pnl_pct is not None
         and pnl_pct > -1.0
         and last is not None
+        and not rel_strong
+        and not (bool(trend.get("up")) and not bool(trend.get("down")))
     ):
         from market_desk.config import SELL_CARRIER_FALL_PCT
 
@@ -2865,7 +3668,8 @@ def _sell_item(
     if not ready and ending and on_mainline and pnl_pct is not None and last is not None:
         from market_desk.config import SELL_ENDING_DEFENSE_PNL
 
-        if pnl_pct <= float(SELL_ENDING_DEFENSE_PNL):
+        daily_up = bool(trend.get("up")) and not bool(trend.get("down"))
+        if (not daily_up) and pnl_pct <= float(SELL_ENDING_DEFENSE_PNL):
             urgency = "trim"
             ready = True
             exit_mode = "half"
@@ -2873,6 +3677,34 @@ def _sell_item(
             sell_price = float(last)
             sell_pct = 50
             reason_parts.append(f"生命周期偏衰退且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
+    # Overnight gap-fade: prior-day bag opens strong then fails from open.
+    if (
+        not ready
+        and not t1_locked
+        and last is not None
+        and pnl_pct is not None
+        and pnl_pct > -1.5
+    ):
+        try:
+            from market_desk.config import GAP_FADE_DROP_PCT, GAP_FADE_OPEN_PCT
+
+            prev = row.get("prev")
+            open_px = row.get("open")
+            if prev not in (None, 0) and open_px not in (None, 0):
+                open_gap = (float(open_px) / float(prev) - 1.0) * 100.0
+                from_open = (float(last) / float(open_px) - 1.0) * 100.0
+                if open_gap >= float(GAP_FADE_OPEN_PCT) and from_open <= -float(GAP_FADE_DROP_PCT):
+                    urgency = "trim"
+                    ready = True
+                    exit_mode = "half"
+                    role_label = "隔夜高开低走先减"
+                    sell_price = float(last)
+                    sell_pct = 50
+                    reason_parts.append(
+                        f"开盘相对昨收高开 {open_gap:.1f}% 后回落 {abs(from_open):.1f}%，先减一半"
+                    )
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
     if not ready and last is not None:
         role_label = "继续持有"
         sell_price = target
@@ -2884,12 +3716,42 @@ def _sell_item(
                 reason_parts.append(f"高点回撤 {pullback:.1f}%")
             if soft_exit or phase_climax:
                 reason_parts.append("主线/相位偏弱但未过软减门槛")
+            elif phase_panic and panic_rel_strong:
+                reason_parts.append(
+                    f"相位恐慌但当日 {_fmt_pct(day_pct_f)} 偏强，先不因恐慌软减"
+                )
+            elif at_tip and rel_strong:
+                reason_parts.append(
+                    f"当日仍贴近高点（回撤 {day_pb:.1f}%）且偏强，先不轻减"
+                    if day_pb is not None
+                    else "当日仍贴近高点且偏强，先不轻减"
+                )
             if ending and on_mainline:
-                reason_parts.append("主线生命周期偏衰退，反抽优先减")
-            elif mainline_fade and not on_mainline:
-                reason_parts.append("非当前主线持仓，主线转弱不自动减")
+                reason_parts.append(
+                    f"主题「{theme_label}」生命周期偏衰退，反抽优先减"
+                    if theme_label
+                    else "主线生命周期偏衰退，反抽优先减"
+                )
+            elif sticky_fade and not on_mainline:
+                reason_parts.append("非卖侧主题持仓，主线转弱不自动减")
             if band["mode"] != "neutral":
                 reason_parts.append(f"波段口径 {band['mode_zh']}")
+            if on_mainline and theme_role and theme_role != "primary" and theme_label:
+                reason_parts.append(f"卖侧归属「{theme_label}」（{ {'side':'支线','hot':'热点同伴'}.get(theme_role, theme_role) }）")
+
+    # Already trimmed today: do not keep nagging half on soft/take; keep stop/clear.
+    if (
+        ready
+        and partial_done
+        and exit_mode == "half"
+        and urgency in ("trim", "take")
+    ):
+        ready = False
+        exit_mode = "hold"
+        sell_pct = 0
+        role_label = "今日已减·余仓持有"
+        sell_price = target
+        reason_parts.insert(0, "今日已减过仓，余仓改盯止损/结构清仓，不再重复先减")
 
     if t1_locked and ready:
         ready = False
@@ -2939,6 +3801,9 @@ def _sell_item(
         "stop_price": _px(stop, digits),
         "target_price": _px(target, digits),
         "reason": "，".join(reason_parts),
+        "on_sell_theme": on_mainline,
+        "sell_theme": theme_label or None,
+        "sell_theme_role": theme_role or None,
     }
 
 
@@ -2947,9 +3812,13 @@ def decorate_positions(
     quotes: dict[str, dict[str, Any]],
     *,
     trade_date: str | None = None,
+    boards: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Attach mark-to-market and day-realized fields used by the position tab."""
+    from market_desk.review import lookup_code_boards
+
     day = str(trade_date or "").strip()[:10]
+    board_pool = list(boards or [])
     out: list[dict[str, Any]] = []
     for row in rows:
         code = str(row.get("code") or "").zfill(6)
@@ -3003,6 +3872,7 @@ def decorate_positions(
         item["last_pct"] = None if closed else q.get("pct")
         item["high"] = q.get("high")
         item["low"] = q.get("low")
+        item["open"] = None if closed else q.get("open")
         item["prev"] = None if closed else q.get("prev")
         item["cost"] = cost
         item["market"] = market
@@ -3014,6 +3884,14 @@ def decorate_positions(
         item["day_sold_qty"] = day_sold
         item["day_realized_pnl"] = day_realized
         item["status"] = "今日已平" if closed else ("部分兑现" if day_sold > 0 else "持仓")
+        # Sell-theme membership helpers for orphan bags.
+        names = lookup_code_boards(code, board_pool) if board_pool else []
+        entry = str(row.get("entry_board") or "").strip()
+        if entry and entry not in names:
+            names = [entry] + names
+        item["board_names"] = names[:4]
+        item["board"] = names[0] if names else (entry or None)
+        item["entry_board"] = entry or None
         # Maintain hold-peak for cross-day take-profit pullback.
         if not closed and qty > 0:
             peak_vals = [buy]
@@ -3167,7 +4045,7 @@ def build_risk_overview(
             f"今日盈亏已触及单日亏损帽 {loss_cap:g}%（当前 {day_pct}%），建议停手、只减不加"
         )
     if cool_hit:
-        tips.append(f"浮亏标的 {losers} 只 ≥ 连亏降温阈值 {cool_n}，先冷静再开新仓")
+        tips.append(f"浮亏标的 {losers} 只 ≥ 连亏降温阈值 {cool_n}，建议手数×0.75、先冷静再开新仓")
     if target_dev is not None and abs(target_dev) >= 15:
         tips.append(f"总成本相对目标 {target_cost:.0f} 偏差 {target_dev:+.1f}%")
     if int(base.get("closed_count") or 0):

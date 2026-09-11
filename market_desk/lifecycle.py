@@ -127,16 +127,20 @@ def classify_lifecycle(
 
 
 def _review_lifecycle_bias() -> dict[str, Any]:
-    """Soften/tighten lifecycle thresholds using recent buy hit-rate."""
+    """Soften/tighten lifecycle thresholds using recent buy hit-rate.
+
+    Uses the same cool bar as ``apply_review_bias`` (n≥5, hit&lt;35%) on overall
+    traded buys. Phase-specific demote stays in verdict; lifecycle only needs a
+    shared threshold so both layers do not invent different cutoffs.
+    """
     try:
         from market_desk.db import load_signals
         from market_desk.review import summarize_signals
 
-        rows = load_signals(limit=180)
+        rows = load_signals(limit=240)
         summary = summarize_signals(rows)
         rate = summary.get("buy_hit_rate")
         scored_n = int(summary.get("buy_scored") or 0)
-        # Align with buy-side review gates (n≥5, cool below ~35%).
         if rate is None or scored_n < 5:
             return {"strict": False, "hit_rate": rate, "n": scored_n}
         return {

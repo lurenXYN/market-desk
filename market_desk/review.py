@@ -289,6 +289,17 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     board_cards = list(snapshot.get("hot_boards") or []) + list(
         snapshot.get("pin_boards") or []
     )
+    try:
+        from market_desk.adapt import make_trade_context
+
+        seg_key = str((verdict.get("segment") or {}).get("key") or "")
+        trade_ctx = make_trade_context(
+            segment_key=seg_key,
+            signaled_at=signaled_at,
+            metrics=snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else None,
+        )
+    except Exception:
+        trade_ctx = {}
     n = 0
 
     rec = verdict.get("recommend") or {}
@@ -350,6 +361,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "board_names": board_cmp["boards"],
                         "vs_mainline": board_cmp["vs_mainline"],
                         "board_match": board_cmp["match"],
+                        "context": trade_ctx or None,
                     },
                 }
             )
@@ -398,6 +410,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "board_names": board_cmp["boards"],
                     "vs_mainline": board_cmp["vs_mainline"],
                     "board_match": board_cmp["match"],
+                    "context": trade_ctx or None,
                 },
             }
         )
@@ -656,6 +669,8 @@ def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[dict[str, Any]]:
     """List same-day buys that were skipped or never traded while price already ran."""
+    from market_desk.adapt import context_from_row
+
     out: list[dict[str, Any]] = []
     for row in rows:
         if str(row.get("trade_date") or "") != trade_date:
@@ -668,6 +683,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
         miss = "miss_pullback" in flags or "未回踩" in str(row.get("price_mark") or "")
         if not ((skipped and miss) or (not traded and not skipped and miss)):
             continue
+        ctx = context_from_row(row)
         out.append(
             {
                 "id": row.get("id"),
@@ -681,6 +697,8 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
                 "price_mark": row.get("price_mark"),
                 "mainline": row.get("mainline"),
                 "signaled_at": row.get("signaled_at"),
+                "context": ctx,
+                "context_label": ctx.get("label"),
             }
         )
     return out
@@ -801,12 +819,37 @@ def build_tune_hints(
     kind_hits: list[dict[str, Any]] | None,
     gate_kills: list[dict[str, Any]] | None = None,
     sell_bias: dict[str, Any] | None = None,
+    current_context: dict[str, Any] | None = None,
 ) -> list[str]:
     """Return short threshold-tuning hints from review buckets (not orders)."""
+    from market_desk.adapt import count_missed_by_context
+    from market_desk.config import ADAPT_MISSED_MIN_N, ADAPT_TUNE_CLAMP
+
     hints: list[str] = []
     missed_n = len(missed or [])
-    if missed_n >= 3:
-        hints.append(f"漏买 {missed_n} 笔：可略放宽回撤/到位容差，或检查是否总在追不追价")
+    by_ctx = count_missed_by_context(missed)
+    clamp_pct = int(float(ADAPT_TUNE_CLAMP) * 100)
+    ctx = current_context or {}
+    if ctx.get("tagged") and ctx.get("key"):
+        bucket_n = int(by_ctx.get(str(ctx["key"])) or 0)
+        if bucket_n >= int(ADAPT_MISSED_MIN_N):
+            hints.append(
+                f"{ctx.get('label')}漏买 {bucket_n} 笔：auto_tune 略放宽回踩"
+                f"（共用夹紧±{clamp_pct}%·不串桶）"
+            )
+        elif missed_n >= 3:
+            # Show other buckets as info only.
+            top = sorted(by_ctx.items(), key=lambda kv: -kv[1])[:2]
+            extra = "、".join(f"{k}×{v}" for k, v in top) if top else "他桶不足"
+            hints.append(
+                f"漏买合计 {missed_n}，当前桶 {ctx.get('label')} 仅 {bucket_n}："
+                f"不调参（{extra}）"
+            )
+    elif missed_n >= 3:
+        hints.append(
+            f"漏买 {missed_n} 笔缺情景标签：只提示不调参"
+            f"（需时段×波动；夹紧±{clamp_pct}%）"
+        )
     for row in kind_hits or []:
         rate = row.get("hit_rate")
         n = int(row.get("scored_n") or 0)
@@ -833,7 +876,8 @@ def build_tune_hints(
         gate = row.get("gate") or ""
         if fk >= 3 and kn >= 5:
             hints.append(
-                f"闸门「{gate}」误杀偏多（假杀 {fk}/{kn}）：可复查该确认条件是否过严"
+                f"闸门「{gate}」误杀偏多（假杀 {fk}/{kn}）：已自动略放宽该确认门槛"
+                f"（夹紧±{clamp_pct}%）"
             )
     sb = sell_bias or {}
     if sb.get("widen") and int(sb.get("n") or 0) >= 6:
@@ -950,6 +994,7 @@ def build_sell_review_bias(
     high hit-rate → slightly tighten take-profit pullback.
     """
     from market_desk.config import (
+        SELL_REVIEW_KIND_MIN_N,
         SELL_REVIEW_MIN_N,
         SELL_REVIEW_TIGHTEN_ABOVE,
         SELL_REVIEW_TIGHTEN_MULT,
@@ -975,7 +1020,8 @@ def build_sell_review_bias(
         sells = [r for r in sells if str(r.get("kind") or "stock") == kind_f]
     n = len(sells)
     label = {"etf": "ETF", "stock": "个股"}.get(kind_f or "", "合计")
-    if n < int(SELL_REVIEW_MIN_N):
+    min_n = int(SELL_REVIEW_KIND_MIN_N) if kind_f in ("etf", "stock") else int(SELL_REVIEW_MIN_N)
+    if n < min_n:
         return {
             "ok": False,
             "kind": kind_f,
@@ -984,7 +1030,7 @@ def build_sell_review_bias(
             "widen": False,
             "tighten": False,
             "mult": 1.0,
-            "note": f"{label}卖点样本不足（n={n}，需≥{SELL_REVIEW_MIN_N}）",
+            "note": f"{label}卖点样本不足（n={n}，需≥{min_n}）",
         }
     hit = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后回落")
     early = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后继续涨")
@@ -1011,6 +1057,44 @@ def build_sell_review_bias(
         "mult": mult,
         "note": note,
     }
+
+
+def resolve_sell_kind_bias(
+    bundle: dict[str, Any] | None,
+    *,
+    etf: bool,
+) -> dict[str, Any]:
+    """Pick etf/stock sell bias with conflict damping vs the all-sample row."""
+    box = bundle or {}
+    kind = dict((box.get("etf") if etf else box.get("stock")) or {})
+    overall = dict(box.get("all") or {})
+    if kind.get("ok"):
+        if overall.get("ok"):
+            if bool(kind.get("widen")) and bool(overall.get("tighten")):
+                kind = {
+                    **kind,
+                    "mult": 1.0,
+                    "widen": False,
+                    "tighten": False,
+                    "note": (kind.get("note") or "") + "·与合计冲突取中",
+                }
+            elif bool(kind.get("tighten")) and bool(overall.get("widen")):
+                kind = {
+                    **kind,
+                    "mult": 1.0,
+                    "widen": False,
+                    "tighten": False,
+                    "note": (kind.get("note") or "") + "·与合计冲突取中",
+                }
+        return kind
+    if overall.get("ok"):
+        out = dict(overall)
+        note = str(out.get("note") or "")
+        tag = "·分品种不足用合计"
+        if tag not in note:
+            out["note"] = note + tag if note else "分品种不足用合计"
+        return out
+    return kind or overall or {"ok": False, "mult": 1.0, "widen": False, "tighten": False}
 
 
 def build_sell_review_bias_bundle(
@@ -1040,7 +1124,7 @@ def build_sell_review_bias_bundle(
     }
 
 
-_REVIEW_BIAS_CACHE: dict[str, Any] = {"day": "", "sell": None}
+_REVIEW_BIAS_CACHE: dict[str, Any] = {"day": "", "sell": None, "buy_gate": None}
 
 
 def cached_sell_bias_bundle() -> dict[str, Any]:
@@ -1057,8 +1141,95 @@ def cached_sell_bias_bundle() -> dict[str, Any]:
                 "stock": {"ok": False, "mult": 1.0, "widen": False, "tighten": False},
                 "note": "卖点闭环暂不可用",
             }
+        _REVIEW_BIAS_CACHE["buy_gate"] = None
+    if _REVIEW_BIAS_CACHE.get("buy_gate") is None:
+        try:
+            _REVIEW_BIAS_CACHE["buy_gate"] = build_buy_gate_bias()
+        except Exception:
+            _REVIEW_BIAS_CACHE["buy_gate"] = {
+                "ok": False,
+                "mult": 1.0,
+                "loosen": False,
+                "gates": {},
+                "note": "买侧闸门闭环暂不可用",
+            }
     return dict(_REVIEW_BIAS_CACHE["sell"] or {})
 
+def cached_buy_gate_bias() -> dict[str, Any]:
+    """Day-scoped buy-gate loosen multipliers from false-kill stats."""
+    cached_sell_bias_bundle()  # ensure day cache warm
+    return dict(_REVIEW_BIAS_CACHE.get("buy_gate") or {"ok": False, "mult": 1.0, "loosen": False, "gates": {}})
+
+
+def build_buy_gate_bias() -> dict[str, Any]:
+    """Tune tip / minute / thin-confirm thresholds from review kill stats.
+
+    False-kills loosen (mult < 1); true-kills tighten (mult > 1). Returns
+    per-gate multipliers and a global mult for shared knobs.
+    """
+    from market_desk.config import (
+        BUY_GATE_FALSE_KILL_MIN,
+        BUY_GATE_KILL_MIN,
+        BUY_GATE_LOOSEN_MULT,
+        BUY_GATE_TIGHTEN_MULT,
+        BUY_GATE_TRUE_KILL_MIN,
+    )
+    from market_desk.db import load_signals
+
+    kills = build_gate_kill_stats(load_signals(limit=240))
+    gates: dict[str, dict[str, Any]] = {}
+    loosen_any = False
+    tighten_any = False
+    mult = 1.0
+    note_parts: list[str] = []
+    target = {
+        "分时": "minute",
+        "离日高": "off_high",
+        "薄确认/共振": "thin",
+        "相对强弱": "rel_strength",
+    }
+    for row in kills or []:
+        gate = str(row.get("gate") or "")
+        key = target.get(gate)
+        if not key:
+            continue
+        fk = int(row.get("false_kill_n") or 0)
+        tk = int(row.get("true_kill_n") or 0)
+        kn = int(row.get("kill_n") or 0)
+        if fk >= int(BUY_GATE_FALSE_KILL_MIN) and kn >= int(BUY_GATE_KILL_MIN):
+            g_mult = float(BUY_GATE_LOOSEN_MULT)
+            gates[key] = {
+                "gate": gate,
+                "mult": g_mult,
+                "false_kill_n": fk,
+                "true_kill_n": tk,
+                "kill_n": kn,
+                "mode": "loosen",
+            }
+            loosen_any = True
+            mult = min(mult, g_mult)
+            note_parts.append(f"{gate}假杀{fk}/{kn}→×{g_mult}")
+        elif tk >= int(BUY_GATE_TRUE_KILL_MIN) and kn >= int(BUY_GATE_KILL_MIN) and fk <= max(1, tk // 3):
+            g_mult = float(BUY_GATE_TIGHTEN_MULT)
+            gates[key] = {
+                "gate": gate,
+                "mult": g_mult,
+                "false_kill_n": fk,
+                "true_kill_n": tk,
+                "kill_n": kn,
+                "mode": "tighten",
+            }
+            tighten_any = True
+            mult = max(mult, g_mult)
+            note_parts.append(f"{gate}真杀{tk}/{kn}→×{g_mult}")
+    return {
+        "ok": True,
+        "loosen": loosen_any,
+        "tighten": tighten_any,
+        "mult": mult,
+        "gates": gates,
+        "note": "；".join(note_parts) if note_parts else "买侧闸门暂不调参",
+    }
 
 def snapshot_quote_map(snapshot: dict[str, Any] | None) -> dict[str, float]:
     """Collect last prices from the live snapshot for band checks."""
@@ -1460,7 +1631,14 @@ def build_review_payload(
         kind_hits=summary["kind_hits"],
         gate_kills=summary["gate_kills"],
         sell_bias=summary["sell_bias"].get("all") or summary["sell_bias"],
+        current_context=None,
     )
+    try:
+        from market_desk.whitebox import fit_whitebox
+
+        summary["whitebox"] = fit_whitebox(global_rows, use_cache=False)
+    except Exception:
+        summary["whitebox"] = {"ok": False, "note": "白盒不可用"}
     return {
         "ok": True,
         "signals": day_rows,

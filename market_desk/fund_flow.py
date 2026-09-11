@@ -1,18 +1,12 @@
-"""Sector money-flow monitor (observe-only).
+"""Sector money-flow monitor with a soft desk feed.
 
 Two data sources are shown side by side:
 
 1. **East Money API** — live rankings
-   - em_day  → 今日 (f62)
-   - em_5d   → 近5日累计 (f164)
-   - em_10d  → 近10日累计 (f174)
-
-2. **Local SQLite** — daily snapshots we persist each session, then sum
-   - loc_5d / loc_10d → last N stored trading days (fair compare vs EM)
-   - loc_week / loc_month → calendar week (Mon→today) / calendar month
+2. **Local SQLite** — daily snapshots we persist each session
 
 Diffs compare EM rolling windows vs local same-length trading-day sums.
-Does not feed desk buy/sell gates.
+Today's net inflow also soft-feeds mainline scoring / sell urgency (not a hard gate).
 """
 
 from __future__ import annotations
@@ -121,7 +115,8 @@ def build_fund_flow_board(
         "disclaimer": (
             "「东财」= 接口即时榜；「本地」= 本机按日落库后再读/累加。"
             + day_skew
-            + "自然周/月仅本地有。非官方国家队持仓；不改作战台买卖。"
+            + "自然周/月仅本地有。非官方国家队持仓；"
+            "今日净流入会软性影响主线打分与卖侧紧迫度（非硬闸门）。"
         ),
         "note": (
             f"本地已存 {len(dates_desc)} 个交易日"
@@ -539,3 +534,78 @@ def _f(v: Any) -> float | None:
 def _round(v: Any, n: int) -> float | None:
     f = _f(v)
     return round(f, n) if f is not None else None
+
+
+def flow_lookup(fund_flow: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Map board name → day flow row (main_yi, sticky flags) from fund_flow board."""
+    out: dict[str, dict[str, Any]] = {}
+    box = fund_flow or {}
+    periods = box.get("periods") or {}
+    day = periods.get("em_day") or {}
+    for key in ("industry_rank", "concept_rank", "industry_in", "industry_out", "concept_in", "concept_out"):
+        for row in day.get(key) or []:
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            cur = out.get(name) or {}
+            cur.update({k: row.get(k) for k in ("bk", "name", "main_yi", "main_pct", "big_money") if row.get(k) is not None})
+            out[name] = cur
+    compare = box.get("compare") or {}
+    sticky = set(compare.get("sticky_day_week") or [])
+    for name in sticky:
+        if name in out:
+            out[name]["sticky_week"] = True
+        else:
+            out[name] = {"name": name, "sticky_week": True, "main_yi": None}
+    return out
+
+
+def flow_score_adj(main_yi: float | None, *, sticky_week: bool = False) -> float:
+    """Return mainline score nudge from day net inflow (亿元)."""
+    from market_desk.config import (
+        MAINLINE_FLOW_IN_ADJ,
+        MAINLINE_FLOW_IN_YI,
+        MAINLINE_FLOW_OUT_ADJ,
+        MAINLINE_FLOW_OUT_YI,
+        MAINLINE_FLOW_STICKY_BONUS,
+    )
+
+    adj = 0.0
+    try:
+        yi = float(main_yi) if main_yi is not None else None
+    except (TypeError, ValueError):
+        yi = None
+    if yi is not None:
+        if yi >= float(MAINLINE_FLOW_IN_YI):
+            adj += float(MAINLINE_FLOW_IN_ADJ)
+        elif yi <= float(MAINLINE_FLOW_OUT_YI):
+            adj += float(MAINLINE_FLOW_OUT_ADJ)
+    if sticky_week and (yi is None or yi >= 0):
+        adj += float(MAINLINE_FLOW_STICKY_BONUS)
+    return adj
+
+
+def attach_boards_fund_flow(
+    boards: list[dict[str, Any]] | None,
+    fund_flow: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Attach day main_yi / flow_adj onto hot-board cards for scoring and sells."""
+    lookup = flow_lookup(fund_flow)
+    out: list[dict[str, Any]] = []
+    for board in boards or []:
+        card = dict(board)
+        name = str(card.get("name") or "").strip()
+        hit = lookup.get(name) or {}
+        # Fuzzy: substring match when exact name missing.
+        if not hit and name:
+            for key, row in lookup.items():
+                if name in key or key in name:
+                    hit = row
+                    break
+        main_yi = hit.get("main_yi")
+        sticky = bool(hit.get("sticky_week"))
+        card["main_yi"] = main_yi
+        card["flow_sticky"] = sticky
+        card["flow_adj"] = round(flow_score_adj(main_yi, sticky_week=sticky), 2)
+        out.append(card)
+    return out

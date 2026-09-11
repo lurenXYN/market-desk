@@ -53,7 +53,12 @@ from market_desk.db import (
 from market_desk.auction_scan import build_auction_strategy
 from market_desk.emotion_wave import build_emotion_wave
 from market_desk.elliott import build_elliott_scenarios
-from market_desk.fund_flow import build_fund_flow_board
+from market_desk.fund_flow import attach_boards_fund_flow, build_fund_flow_board
+from market_desk.theme_memory import (
+    attach_board_affinity,
+    reputation_map,
+    settle_theme_reputation,
+)
 from market_desk.seasonality import build_seasonality
 from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
@@ -127,6 +132,7 @@ from market_desk.verdict import (
     decorate_positions,
     mark_pullback_entries,
     position_summary,
+    reconfirm_recommend_ready,
 )
 
 log = logging.getLogger("market_desk")
@@ -144,6 +150,7 @@ class DeskEngine:
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._eod_date: str | None = None
+        self._theme_settle_date: str | None = None
         self._toast_armed = False
         self._toast_sent: dict[str, float] = {}
         # Level toasts (band/wl) stay latched until the condition clears.
@@ -191,7 +198,14 @@ class DeskEngine:
                 "high": row.get("high"),
                 "low": row.get("low"),
             }
-        positions = decorate_positions(load_positions(), quotes, trade_date=trade_dash)
+        positions = decorate_positions(
+            load_positions(),
+            quotes,
+            trade_date=trade_dash,
+            boards=list(self.snapshot.get("hot_boards") or [])
+            + list(self.snapshot.get("pin_boards") or [])
+            + list(self.snapshot.get("favorite_boards") or []),
+        )
         self.snapshot["positions"] = positions
         self.snapshot["position_summary"] = position_summary(positions)
         cap = float(
@@ -220,6 +234,8 @@ class DeskEngine:
             self.snapshot.get("phase") or "",
             trade_date=trade_dash,
             trends_by_code=trends,
+            similar=self.snapshot.get("similar_days"),
+            metrics=self.snapshot.get("metrics"),
         )
         return positions
 
@@ -452,7 +468,12 @@ class DeskEngine:
             save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards + fav_cards)
             if not isinstance(pos_quote_map, dict):
                 pos_quote_map = {}
-            positions = decorate_positions(pos_rows, pos_quote_map, trade_date=trade_date_dash)
+            positions = decorate_positions(
+                pos_rows,
+                pos_quote_map,
+                trade_date=trade_date_dash,
+                boards=hot_cards + pin_cards + fav_cards,
+            )
             peaks = {
                 int(r["id"]): float(r["peak_price"])
                 for r in positions
@@ -512,6 +533,10 @@ class DeskEngine:
                 temperature=temperature,
                 metrics=metrics,
                 history=history_prev,
+                mainline=str(
+                    ((((self.snapshot or {}).get("verdict") or {}).get("mainline") or {}).get("name"))
+                    or ""
+                ),
             )
             prev = self.snapshot if self.snapshot.get("ok") else None
             # Day-once daily closes: carrier ETFs + open positions before mainline pick.
@@ -529,6 +554,25 @@ class DeskEngine:
                 hot_cards = attach_board_etf_trends(hot_cards, board_trends)
                 pin_cards = attach_board_etf_trends(pin_cards, board_trends)
                 fav_cards = attach_board_etf_trends(fav_cards, board_trends)
+                hot_cards = attach_boards_fund_flow(hot_cards, fund_flow)
+                pin_cards = attach_boards_fund_flow(pin_cards, fund_flow)
+                fav_cards = attach_boards_fund_flow(fav_cards, fund_flow)
+                theme_settle: dict[str, Any] = {}
+                try:
+                    if self._theme_settle_date != trade_date_dash:
+                        theme_settle = settle_theme_reputation(trade_date_dash) or {}
+                        self._theme_settle_date = trade_date_dash
+                except Exception:
+                    log.exception("theme reputation settle failed")
+                    theme_settle = {"ok": False}
+                try:
+                    rep = reputation_map()
+                    hot_cards = attach_board_affinity(hot_cards, rep)
+                    pin_cards = attach_board_affinity(pin_cards, rep)
+                    fav_cards = attach_board_affinity(fav_cards, rep)
+                except Exception:
+                    log.exception("board affinity attach failed")
+                    rep = {}
                 verdict = build_verdict(
                     now,
                     phase,
@@ -541,16 +585,48 @@ class DeskEngine:
                     similar=similar,
                     zb=zb,
                 )
+                # Refresh similar with live sticky mainline when available.
+                ml_name = str(((verdict.get("mainline") or {}).get("name")) or "")
+                if ml_name:
+                    similar = build_similar_days(
+                        phase=phase,
+                        temperature=temperature,
+                        metrics=metrics,
+                        history=history_prev,
+                        mainline=ml_name,
+                    )
+                    try:
+                        # Patch mainline onto today's metrics row (merge, don't wipe).
+                        save_daily(trade_date_dash, {"mainline": ml_name})
+                    except Exception:
+                        log.exception("save daily mainline failed")
                 await self._apply_recommend_trends(client, verdict, trade_date_dash)
-                # Arm near-entry first, then minute-gate ready cards (never re-arm after).
-                soft_main = bool((verdict.get("mainline") or {}).get("etf_soft"))
+                # Soft ETF maps block_ready on the vehicle only; stocks may arm.
+                seg_v = verdict.get("segment") or {}
+                block_arm = bool(seg_v.get("open_mute")) or bool(verdict.get("auction_only"))
                 verdict["recommend"] = mark_pullback_entries(
-                    verdict.get("recommend"), observe_only=soft_main
+                    verdict.get("recommend"),
+                    observe_only=False,
+                    block_arm=block_arm,
                 )
                 verdict["side_recommend"] = mark_pullback_entries(
-                    verdict.get("side_recommend"), observe_only=True
+                    verdict.get("side_recommend"),
+                    observe_only=True,
+                    block_arm=block_arm,
                 )
                 await self._apply_recommend_minutes(client, verdict)
+                # Rematch near-entry after minutes so only minute.ok=True arms.
+                verdict["recommend"] = mark_pullback_entries(
+                    verdict.get("recommend"),
+                    observe_only=False,
+                    block_arm=block_arm,
+                )
+                verdict["side_recommend"] = mark_pullback_entries(
+                    verdict.get("side_recommend"),
+                    observe_only=True,
+                    block_arm=block_arm,
+                )
+                verdict = reconfirm_recommend_ready(verdict, metrics)
                 verdict = apply_size_cap_gate(verdict, positions)
                 aligned = align_action_with_ready(verdict)
                 verdict.clear()
@@ -621,6 +697,10 @@ class DeskEngine:
                     "history": history,
                     "cycle": cycle,
                     "similar_days": similar,
+                    "theme_memory": {
+                        "reputation": list((rep or {}).values())[:20],
+                        "settle": theme_settle or {},
+                    },
                     "events": _today_events(phase, metrics, hot_cards, zt, ice_cards, contagion),
                     "watch": _decorate_watch_pool(
                         _watch_pool(zt, zb, quotes),
@@ -656,6 +736,8 @@ class DeskEngine:
                         phase,
                         trade_date=trade_date_dash,
                         trends_by_code=self._cached_trends_for(pos_codes),
+                        similar=similar,
+                        metrics=metrics,
                     ),
                     "glossary": GLOSSARY,
                 }
@@ -921,6 +1003,15 @@ class DeskEngine:
             "view": view_key,
         }
         by_view: dict[str, tuple[str, ...]] = {
+            "boards": (
+                "hot_boards",
+                "pin_boards",
+                "ice_boards",
+                "favorite_boards",
+                "contagion",
+                "mainline_lifecycle",
+                "theme_memory",
+            ),
             "desk": (
                 "morning_brief",
                 "seasonality",
@@ -934,6 +1025,7 @@ class DeskEngine:
                 "sell_advice",
                 "recent_toasts",
                 "filter",
+                "theme_memory",
             ),
             "market": (
                 "metrics",
@@ -948,14 +1040,7 @@ class DeskEngine:
                 "cycle",
                 "similar_days",
                 "events",
-            ),
-            "boards": (
-                "hot_boards",
-                "pin_boards",
-                "ice_boards",
-                "favorite_boards",
-                "contagion",
-                "mainline_lifecycle",
+                "theme_memory",
             ),
             "funds": ("fund_flow",),
             "watch": ("watch", "stock_blacklist"),
@@ -1251,7 +1336,7 @@ class DeskEngine:
                 continue
             buy = board.get("buy") or {}
             for item in buy.get("items") or []:
-                if item.get("ready") and item.get("code"):
+                if item.get("code") and (item.get("ready") or item.get("near_entry")):
                     codes.append(str(item.get("code") or "").zfill(6))
         codes = sorted(set(c for c in codes if c))
         if not codes:
@@ -1280,21 +1365,23 @@ class DeskEngine:
         for board in boards:
             if board.get("etf_soft"):
                 continue
+            soft = bool(board.get("etf_soft"))
             buy = apply_minute_confirmations(board.get("buy") or {}, minutes_by_code)
-            board["buy"] = buy
+            board["buy"] = mark_pullback_entries(buy, observe_only=soft)
 
     async def _apply_recommend_minutes(
         self,
         client: httpx.AsyncClient,
         verdict: dict[str, Any],
     ) -> None:
-        """Fetch minute series for ready cards and downgrade failed structures."""
+        """Fetch minute series for ready / near-entry cards and gate structure."""
         rec = verdict.get("recommend") or {}
         codes = sorted(
             {
                 str(x.get("code") or "").zfill(6)
                 for x in (rec.get("items") or [])
-                if x.get("ready") and x.get("code")
+                if x.get("code")
+                and (x.get("ready") or x.get("near_entry"))
             }
         )
         if not codes:
@@ -1355,6 +1442,9 @@ class DeskEngine:
             )
             if self.snapshot.get("verdict"):
                 self.snapshot["verdict"]["recommend"] = mark_pullback_entries(new_rec)
+                self.snapshot["verdict"] = reconfirm_recommend_ready(
+                    self.snapshot["verdict"]
+                )
                 self.snapshot["verdict"] = align_action_with_ready(self.snapshot["verdict"])
                 self.snapshot["desk_gate_summary"] = build_desk_gate_summary(
                     self.snapshot["verdict"],
@@ -1365,6 +1455,68 @@ class DeskEngine:
             except Exception:
                 log.exception("signal record after trend override failed")
         return {"ok": True, "override": row, "recommend": ((self.snapshot.get("verdict") or {}).get("recommend"))}
+
+    def apply_theme_manual_adj(
+        self,
+        theme_key: str,
+        *,
+        manual_adj: float | None = None,
+        delta: float | None = None,
+        note: str | None = None,
+        clear: bool = False,
+    ) -> dict[str, Any]:
+        """Persist a manual theme reputation nudge and patch live board affinity."""
+        from market_desk.db import set_theme_manual_adj
+        from market_desk.theme_memory import attach_board_affinity, reputation_map
+
+        row = set_theme_manual_adj(
+            theme_key,
+            manual_adj=manual_adj,
+            delta=delta,
+            note=note,
+            clear=clear,
+        )
+        if not row:
+            return {"ok": False, "error": "empty theme"}
+        rep = reputation_map()
+        for pool in ("hot_boards", "pin_boards", "favorite_boards"):
+            cards = list(self.snapshot.get(pool) or [])
+            if cards:
+                self.snapshot[pool] = attach_board_affinity(cards, rep)
+        tm = dict(self.snapshot.get("theme_memory") or {})
+        tm["reputation"] = list(rep.values())[:20]
+        self.snapshot["theme_memory"] = tm
+        # Soft-patch mainline why chips when the sticky theme matches.
+        verdict = self.snapshot.get("verdict") or {}
+        ml = verdict.get("mainline") or {}
+        why = dict(ml.get("why") or {}) if isinstance(ml, dict) else {}
+        from market_desk.mainline import theme_key as canon_theme
+
+        ml_theme = canon_theme(str(ml.get("name") or "")) if ml else ""
+        row_theme = str(row.get("theme_key") or "")
+        if ml_theme and row_theme and ml_theme == row_theme:
+            # Find refreshed adj from hot/pin cards.
+            patched = None
+            for pool in ("hot_boards", "pin_boards", "favorite_boards"):
+                for b in self.snapshot.get(pool) or []:
+                    if canon_theme(str(b.get("name") or "")) == ml_theme:
+                        patched = b
+                        break
+                if patched:
+                    break
+            if patched is not None:
+                why["rep_adj"] = patched.get("rep_adj")
+                why["rep_label"] = patched.get("rep_label")
+                ml = dict(ml)
+                ml["why"] = why
+                verdict = dict(verdict)
+                verdict["mainline"] = ml
+                self.snapshot["verdict"] = verdict
+        return {
+            "ok": True,
+            "row": row,
+            "theme_memory": self.snapshot.get("theme_memory"),
+        }
 
     async def _yesterday(
         self,

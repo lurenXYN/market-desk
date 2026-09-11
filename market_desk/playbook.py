@@ -50,13 +50,43 @@ def build_playbook(
     *,
     action: str | None = None,
     size_hint: str | None = None,
+    adapt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return the three-line playbook for the current phase."""
+    """Return the three-line playbook for the current phase.
+
+    Soft-adapts ``size_cap_pct`` from size heat / phase hit when samples exist;
+    never raises the panic ceiling above the static prior.
+    """
     key = str(phase or "").strip() or "分歧"
     base = PLAYBOOKS.get(key) or PLAYBOOKS["分歧"]
     lines = list(base["lines"])
+    prior_cap = float(base["size_cap_pct"])
+    cap = prior_cap
+    adapt_note = ""
+    ad = adapt if isinstance(adapt, dict) else {}
+    try:
+        size_m = float(ad.get("size_mult") or 1.0)
+    except (TypeError, ValueError):
+        size_m = 1.0
+    # Scale cap gently with composed size mult; clamp ±20% of prior, floor 15.
+    if abs(size_m - 1.0) > 0.02:
+        nudged = prior_cap * (0.55 + 0.45 * size_m)
+        lo = prior_cap * 0.80
+        hi = prior_cap * 1.20
+        # Panic stays defensive: never above prior.
+        if key == "恐慌":
+            hi = prior_cap
+        cap = max(15.0, min(hi, max(lo, nudged)))
+        adapt_note = f"自适应仓位上限 {cap:.0f}%（先验 {prior_cap:.0f}%）"
+    pk = ((ad.get("phase_kind") or {}).get("stock") or {})
+    if pk.get("ok") and float(pk.get("size_mult") or 1.0) < 0.9 and key != "恐慌":
+        cap = min(cap, prior_cap * 0.9)
+        adapt_note = adapt_note or f"相位命中偏弱·上限 {cap:.0f}%"
+    cap = round(cap, 0)
     if size_hint:
         lines[2] = f"{lines[2]}（系统：{size_hint}）"
+    if adapt_note:
+        lines[2] = f"{lines[2]}；{adapt_note}"
     if action == "观望" and key != "恐慌":
         lines[0] = f"当前结论观望：{lines[0]}"
     elif action == "观察回踩":
@@ -67,7 +97,9 @@ def build_playbook(
         "phase": key if key in PLAYBOOKS else "分歧",
         "title": base["title"],
         "lines": lines,
-        "size_cap_pct": base["size_cap_pct"],
+        "size_cap_pct": cap,
+        "size_cap_prior": prior_cap,
+        "size_cap_note": adapt_note,
         "do": lines[0],
         "dont": lines[1],
         "size": lines[2],

@@ -120,6 +120,16 @@ class TrendOverrideIn(BaseModel):
     verdict: str = Field(description="up or down")
 
 
+class ThemeRepIn(BaseModel):
+    """Manual theme reputation adjustment (absolute, delta, or clear)."""
+
+    theme_key: str
+    manual_adj: float | None = None
+    delta: float | None = None
+    note: str = ""
+    clear: bool = False
+
+
 class WatchlistIn(BaseModel):
     """Payload for adding a personal watchlist ticker."""
 
@@ -285,7 +295,17 @@ def create_position(body: PositionIn) -> dict:
     if len(code) != 6 or not code.isdigit():
         raise HTTPException(400, "code must be a 6-digit ticker")
     name = (body.name or "").strip()
-    add_position(code, name, float(body.buy_price), int(body.qty), body.note.strip())
+    entry_board = str(
+        (((engine.snapshot.get("verdict") or {}).get("mainline") or {}).get("name")) or ""
+    )
+    add_position(
+        code,
+        name,
+        float(body.buy_price),
+        int(body.qty),
+        body.note.strip(),
+        entry_board=entry_board,
+    )
     rows = engine.sync_positions()
     return {
         "ok": True,
@@ -337,11 +357,33 @@ def trim_position_api(pid: int, body: TrimIn) -> dict:
         fill_qty=trimmed,
         note=note,
     )
+    # Soft reputation write-back from realized chunk PnL%.
+    feedback = None
+    try:
+        from market_desk.adapt import record_trade_feedback
+
+        buy = float(row.get("buy_price") or 0)
+        sell_px = float(row.get("sell_price") or 0)
+        pnl_pct = ((sell_px / buy) - 1.0) * 100.0 if buy > 0 and sell_px > 0 else None
+        feedback = record_trade_feedback(
+            code=str(row.get("code") or ""),
+            name=str(row.get("name") or ""),
+            pnl_pct=pnl_pct,
+            entry_board=str(row.get("entry_board") or ""),
+            trade_date=trade_day,
+        )
+        # Bust day cache so next refresh sees new heat/rep.
+        from market_desk import adapt as adapt_mod
+
+        adapt_mod._ADAPT_CACHE["day"] = ""
+    except Exception:
+        feedback = None
     rows = engine.sync_positions()
     return {
         "ok": True,
         "trimmed": row,
         "signal_fill": signal_fill,
+        "feedback": feedback,
         "positions": rows,
         "summary": engine.snapshot.get("position_summary"),
     }
@@ -423,7 +465,18 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
             if px <= 0:
                 raise HTTPException(400, "missing buy price")
             qty = int(fill_qty or 100)
-            booked = add_position(code, name, px, qty, note)
+            booked = add_position(
+                code,
+                name,
+                px,
+                qty,
+                note,
+                entry_board=str(row.get("mainline") or "")
+                or str(
+                    (((engine.snapshot.get("verdict") or {}).get("mainline") or {}).get("name"))
+                    or ""
+                ),
+            )
         else:
             positions = [
                 p
@@ -534,6 +587,26 @@ def trend_override(body: TrendOverrideIn) -> dict:
     if flag not in ("up", "down"):
         raise HTTPException(400, "verdict must be up or down")
     return engine.apply_trend_override(code, flag)
+
+
+@app.post("/api/theme-reputation")
+def theme_reputation_adjust(body: ThemeRepIn) -> dict:
+    """Set, nudge, or clear a manual theme reputation adjustment."""
+    theme = (body.theme_key or "").strip()
+    if not theme:
+        raise HTTPException(400, "theme_key required")
+    if not body.clear and body.manual_adj is None and body.delta is None:
+        raise HTTPException(400, "provide manual_adj, delta, or clear")
+    out = engine.apply_theme_manual_adj(
+        theme,
+        manual_adj=body.manual_adj,
+        delta=body.delta,
+        note=(body.note or "").strip() or None,
+        clear=bool(body.clear),
+    )
+    if not out.get("ok"):
+        raise HTTPException(400, out.get("error") or "adjust failed")
+    return out
 
 
 @app.get("/api/watchlist")

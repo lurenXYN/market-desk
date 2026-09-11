@@ -92,6 +92,10 @@ def mainline_score(board: dict[str, Any]) -> float:
     leader_adj = leader_structure_adj(board)
     # Carrier ETF daily trend (attached once per session day); unclear → 0.
     etf_trend_adj = float(board.get("etf_trend_adj") or 0.0)
+    # Day fund-flow soft nudge (attached from fund_flow board).
+    flow_adj = float(board.get("flow_adj") or 0.0)
+    # Theme reputation (一日游 memory) + inherited similar-theme drag.
+    rep_adj = float(board.get("rep_adj") or 0.0)
     return (
         rank
         + float(zt_n) * 6.0
@@ -102,6 +106,8 @@ def mainline_score(board: dict[str, Any]) -> float:
         + etf_adj
         + leader_adj
         + etf_trend_adj
+        + flow_adj
+        + rep_adj
         - zb_pen
         - explode_pen
         - late_pen
@@ -413,6 +419,9 @@ def explain_mainline(
         "status": chosen.get("status"),
         "leader_boards": chosen.get("leader_boards"),
         "leader_adj": round(leader_structure_adj(chosen), 1) if name else 0.0,
+        "rep_adj": round(float(chosen.get("rep_adj") or 0), 2) if name else 0.0,
+        "rep_label": chosen.get("rep_label") if name else None,
+        "similar_peers": list(chosen.get("similar_peers") or [])[:3] if name else [],
         "etf_exact": bool(etf_spec_for_name(name)) if name else False,
         "sticky_name": sticky or None,
         "sticky_score": hold_s,
@@ -436,6 +445,8 @@ def explain_mainline(
                 "leader_boards": b.get("leader_boards"),
                 "leader_adj": round(leader_structure_adj(b), 1),
                 "theme": theme_key(str(b.get("name") or "")),
+                "rep_adj": round(float(b.get("rep_adj") or 0), 2),
+                "rep_label": b.get("rep_label"),
             }
             for b in runners
             if b.get("name")
