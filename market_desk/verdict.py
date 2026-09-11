@@ -107,7 +107,15 @@ def build_verdict(
     if price is not None and low not in (None, 0):
         bounce = (price / low - 1.0) * 100.0
     prev_px = (((prev or {}).get("verdict") or {}).get("carrier") or {}).get("price")
-    falling = price is not None and prev_px is not None and price < prev_px - 1e-6
+    falling = False
+    if price is not None and prev_px not in (None, 0):
+        try:
+            from market_desk.config import SELL_CARRIER_FALL_PCT
+
+            drop_pct = (float(prev_px) - float(price)) / float(prev_px) * 100.0
+            falling = drop_pct >= float(SELL_CARRIER_FALL_PCT)
+        except (TypeError, ValueError, ZeroDivisionError):
+            falling = False
     status = main.get("status") or ""
     life_stage = classify_lifecycle(main) if board_name else None
     mute_m = int(setting("open_mute_minutes", 5))
@@ -2533,7 +2541,7 @@ def _exit_band_params(
         soft_exit
         or ending
         or trend.get("down")
-        or phase in ("恐慌", "高潮")
+        or phase == "恐慌"
         or (on_mainline and carrier_falling)
         or (on_mainline and main_status == "退潮")
     )
@@ -2630,10 +2638,15 @@ def _sell_item(
     ending = life_stage == "ending"
     carrier = verdict.get("carrier") or {}
     on_mainline = _position_tied_to_mainline(row, verdict)
-    # Market-wide soft exits (panic/climax) vs mainline-fade exits (only tied names).
-    phase_soft = phase in ("恐慌", "高潮")
-    mainline_fade = action == "观望" or main_status == "退潮" or ending
-    soft_exit = phase_soft or (mainline_fade and on_mainline)
+    auction_only = bool(verdict.get("auction_only"))
+    # Soft exits: panic always; climax only with higher profit bar later.
+    # Mainline fade = 退潮/ending — not bare「观望」(auction also sets 观望).
+    phase_panic = phase == "恐慌"
+    phase_climax = phase == "高潮"
+    mainline_fade = (not auction_only) and (
+        main_status == "退潮" or ending
+    )
+    soft_exit = phase_panic or (mainline_fade and on_mainline)
     t1_locked = is_t1_locked(row, trade_date)
     buy_day = position_buy_day(row)
     hold_qty = int(row.get("qty") or 0)
@@ -2773,32 +2786,64 @@ def _sell_item(
             reason_parts.append(
                 f"浮盈 {_fmt_pct(pnl_pct)}（{band['mode_zh']}），建议先减一半，余仓盯止损"
             )
-    elif soft_exit and pnl_pct is not None and pnl_pct > (0.2 if (ending and on_mainline) else 0.5):
-        urgency = "trim"
-        ready = True
-        sell_price = float(last)
-        deep_fade = ending and on_mainline and (
-            (pullback is not None and pullback >= pb_light)
-            or pnl_pct >= (2.0 if etf else 3.0)
+    elif (soft_exit or phase_climax) and pnl_pct is not None:
+        from market_desk.config import (
+            SELL_SOFT_CLIMAX_MIN_PNL_ETF,
+            SELL_SOFT_CLIMAX_MIN_PNL_STOCK,
+            SELL_SOFT_DEEP_PNL_ETF,
+            SELL_SOFT_DEEP_PNL_STOCK,
+            SELL_SOFT_MIN_PNL_ENDING_ETF,
+            SELL_SOFT_MIN_PNL_ENDING_STOCK,
+            SELL_SOFT_MIN_PNL_ETF,
+            SELL_SOFT_MIN_PNL_STOCK,
         )
-        if deep_fade:
-            exit_mode = "clear"
-            role_label = "衰退清仓"
-            sell_pct = 100
-            reason_parts.append(
-                f"生命周期/主线偏弱，浮盈 {_fmt_pct(pnl_pct)}"
-                + (f"，回撤 {pullback:.1f}%" if pullback is not None else "")
-                + "，建议清仓"
-            )
+
+        if ending and on_mainline:
+            soft_min = SELL_SOFT_MIN_PNL_ENDING_ETF if etf else SELL_SOFT_MIN_PNL_ENDING_STOCK
         else:
-            exit_mode = "half"
-            role_label = "衰退先减" if ending and on_mainline else "建议先减"
-            sell_pct = 50
-            reason_parts.append(
-                f"{'生命周期偏衰退' if ending and on_mainline else '主线转弱/相位偏热'}，"
-                f"浮盈 {_fmt_pct(pnl_pct)}，先减一半"
+            soft_min = SELL_SOFT_MIN_PNL_ETF if etf else SELL_SOFT_MIN_PNL_STOCK
+        # Climax alone (no panic / no 退潮) needs a higher profit floor.
+        if phase_climax and not soft_exit:
+            soft_min = max(
+                soft_min,
+                SELL_SOFT_CLIMAX_MIN_PNL_ETF if etf else SELL_SOFT_CLIMAX_MIN_PNL_STOCK,
             )
-    elif (
+        if pnl_pct > soft_min:
+            urgency = "trim"
+            ready = True
+            sell_price = float(last)
+            deep_need = SELL_SOFT_DEEP_PNL_ETF if etf else SELL_SOFT_DEEP_PNL_STOCK
+            deep_fade = ending and on_mainline and (
+                (pullback is not None and pullback >= pb_light)
+                or pnl_pct >= deep_need
+            )
+            if deep_fade:
+                exit_mode = "clear"
+                role_label = "衰退清仓"
+                sell_pct = 100
+                reason_parts.append(
+                    f"生命周期/主线偏弱，浮盈 {_fmt_pct(pnl_pct)}"
+                    + (f"，回撤 {pullback:.1f}%" if pullback is not None else "")
+                    + "，建议清仓"
+                )
+            else:
+                exit_mode = "half"
+                role_label = "衰退先减" if ending and on_mainline else "建议先减"
+                sell_pct = 50
+                why = (
+                    "生命周期偏衰退"
+                    if ending and on_mainline
+                    else (
+                        "相位恐慌"
+                        if phase_panic
+                        else ("相位高潮" if phase_climax else "主线退潮")
+                    )
+                )
+                reason_parts.append(
+                    f"{why}，浮盈 {_fmt_pct(pnl_pct)}（门槛 {soft_min:.1f}%），先减一半"
+                )
+        # else: below soft floor — fall through to carrier / ending / hold
+    if not ready and (
         not etf
         and on_mainline
         and carrier.get("falling")
@@ -2806,36 +2851,45 @@ def _sell_item(
         and pnl_pct > -1.0
         and last is not None
     ):
+        from market_desk.config import SELL_CARRIER_FALL_PCT
+
         urgency = "trim"
         ready = True
         exit_mode = "half"
         role_label = "载体走弱先减"
         sell_price = float(last)
         sell_pct = 50
-        reason_parts.append("主线 ETF/载体价格较上一轮回落，个股先减一半")
-    elif ending and on_mainline and pnl_pct is not None and pnl_pct <= 0.2 and last is not None:
-        # Ending + flat/small loss: warn trim before stop, but do not force clear.
-        urgency = "trim"
-        ready = True
-        exit_mode = "half"
-        role_label = "衰退防守先减"
-        sell_price = float(last)
-        sell_pct = 50
-        reason_parts.append(f"生命周期偏衰退且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
-    else:
+        reason_parts.append(
+            f"主线 ETF/载体较上一轮回落≥{float(SELL_CARRIER_FALL_PCT):.2f}%，个股先减一半"
+        )
+    if not ready and ending and on_mainline and pnl_pct is not None and last is not None:
+        from market_desk.config import SELL_ENDING_DEFENSE_PNL
+
+        if pnl_pct <= float(SELL_ENDING_DEFENSE_PNL):
+            urgency = "trim"
+            ready = True
+            exit_mode = "half"
+            role_label = "衰退防守先减"
+            sell_price = float(last)
+            sell_pct = 50
+            reason_parts.append(f"生命周期偏衰退且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
+    if not ready and last is not None:
         role_label = "继续持有"
         sell_price = target
         sell_pct = 0
         exit_mode = "hold"
-        reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，未到卖点，盯目标价")
-        if pullback is not None:
-            reason_parts.append(f"高点回撤 {pullback:.1f}%")
-        if ending and on_mainline:
-            reason_parts.append("主线生命周期偏衰退，反抽优先减")
-        elif mainline_fade and not on_mainline:
-            reason_parts.append("非当前主线持仓，主线转弱不自动减")
-        if band["mode"] != "neutral":
-            reason_parts.append(f"波段口径 {band['mode_zh']}")
+        if not reason_parts:
+            reason_parts.append(f"浮盈 {_fmt_pct(pnl_pct)}，未到卖点，盯目标价")
+            if pullback is not None:
+                reason_parts.append(f"高点回撤 {pullback:.1f}%")
+            if soft_exit or phase_climax:
+                reason_parts.append("主线/相位偏弱但未过软减门槛")
+            if ending and on_mainline:
+                reason_parts.append("主线生命周期偏衰退，反抽优先减")
+            elif mainline_fade and not on_mainline:
+                reason_parts.append("非当前主线持仓，主线转弱不自动减")
+            if band["mode"] != "neutral":
+                reason_parts.append(f"波段口径 {band['mode_zh']}")
 
     if t1_locked and ready:
         ready = False

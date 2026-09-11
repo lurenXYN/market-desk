@@ -251,7 +251,19 @@ SELL_REVIEW_MIN_N = 10
 SELL_REVIEW_WIDEN_BELOW = 40.0   # hit% of 卖后回落 → sold too early → widen
 SELL_REVIEW_TIGHTEN_ABOVE = 60.0  # sells working → slightly earlier take
 SELL_REVIEW_WIDEN_MULT = 1.12
-SELL_REVIEW_TIGHTEN_MULT = 0.92
+SELL_REVIEW_TIGHTEN_MULT = 0.96  # was 0.92; less aggressive auto-tighten
+
+# Soft trim floors — avoid cutting winners that still have room.
+SELL_SOFT_MIN_PNL_STOCK = 2.0
+SELL_SOFT_MIN_PNL_ETF = 1.5
+SELL_SOFT_MIN_PNL_ENDING_STOCK = 1.0
+SELL_SOFT_MIN_PNL_ENDING_ETF = 0.8
+SELL_SOFT_CLIMAX_MIN_PNL_STOCK = 3.0  # climax alone needs more profit
+SELL_SOFT_CLIMAX_MIN_PNL_ETF = 2.0
+SELL_SOFT_DEEP_PNL_STOCK = 4.0
+SELL_SOFT_DEEP_PNL_ETF = 2.5
+SELL_CARRIER_FALL_PCT = 0.35  # carrier must drop ≥ this % vs prior tick
+SELL_ENDING_DEFENSE_PNL = 0.0  # ending flat trim only at ≤0% (not +0.2%)
 
 # Orphan mainline (no exact ETF): stricter stock pullback / cap filters.
 ORPHAN_STOCK_PB_MIN = 1.2
@@ -288,11 +300,11 @@ SELL_BAND_STOCK = {
         "stop_buy": 0.98,
         "stop_floor": 0.97,
         "pnl_stop": -2.0,
-        "pb_light": 1.1,
-        "pb_deep": 2.0,
-        "take_pnl": 4.0,
-        "take_deep_pnl": 5.0,
-        "pocket_pnl": 6.0,
+        "pb_light": 1.3,
+        "pb_deep": 2.2,
+        "take_pnl": 4.5,
+        "take_deep_pnl": 5.5,
+        "pocket_pnl": 7.0,
     },
 }
 SELL_BAND_ETF = {
@@ -320,11 +332,11 @@ SELL_BAND_ETF = {
         "stop_buy": 0.99,
         "stop_floor": 0.985,
         "pnl_stop": -1.0,
-        "pb_light": 0.6,
-        "pb_deep": 0.9,
-        "take_pnl": 2.0,
-        "take_deep_pnl": 2.8,
-        "pocket_pnl": 3.0,
+        "pb_light": 0.75,
+        "pb_deep": 1.1,
+        "take_pnl": 2.2,
+        "take_deep_pnl": 3.0,
+        "pocket_pnl": 3.5,
     },
 }
 
