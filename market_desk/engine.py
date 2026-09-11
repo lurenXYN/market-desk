@@ -402,6 +402,10 @@ class DeskEngine:
                     (fund_flow.get("note") or "")
                     + (" · 近5/10日东财榜可点「资金」页补齐" if not fund_flow.get("full_ready") else "")
                 ).strip(" ·")
+                fund_flow["refreshed_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                fund_flow["refreshed_kind"] = (
+                    "full" if fund_flow.get("full_ready") else "day"
+                )
                 ctx = {
                     "zt": zt,
                     "zb": zb,
@@ -882,6 +886,8 @@ class DeskEngine:
             )
             fund_flow["api_raw"] = api_raw
             fund_flow["full_ready"] = True
+            fund_flow["refreshed_at"] = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            fund_flow["refreshed_kind"] = "full"
             if errors:
                 fund_flow["warnings"] = errors
             self.snapshot["fund_flow"] = fund_flow
@@ -996,7 +1002,11 @@ class DeskEngine:
                 )
         except Exception:
             log.exception("review zt_ytd fetch failed")
-        return {"trade_date": day, "by_code": by_code}
+        return {
+            "trade_date": day,
+            "by_code": by_code,
+            "refreshed_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     async def _zt_ytd_for_codes(
         self,

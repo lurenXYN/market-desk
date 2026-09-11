@@ -94,6 +94,17 @@
       background: #101a14;
     }
     .gate-hint b { color: var(--text); font-weight: 600; }
+    .mod-stamp {
+      margin-left: 8px;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--muted);
+      text-transform: none;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .mod-stamp.loading { color: #93c5fd; }
+    .mod-stamp.stale { color: #fdba74; }
     .mainline-title {
       font-size: 28px; line-height: 1.15; font-weight: 750; margin: 0;
       letter-spacing: 0.02em;
@@ -1585,6 +1596,7 @@
           <div class="season-desk" id="seasonDesk" hidden>
             <div class="k">日历提醒 <button type="button" class="q" data-term="季节性日历">?</button>
               <span class="meta">仅观察</span>
+              <span class="mod-stamp" id="seasonDeskStamp" title="随作战台快照更新"></span>
             </div>
             <div class="txt" id="seasonDeskLine"></div>
             <div class="detail" id="seasonDeskDetail"></div>
@@ -1700,6 +1712,7 @@
       <h2 style="text-transform:none;letter-spacing:0.04em">
         情绪浪（大A结构）
         <button type="button" class="q" data-term="情绪浪">?</button>
+        <span class="mod-stamp" id="emotionStamp" title="随大盘快照更新"></span>
       </h2>
       <p class="meta" id="emotionNote">用涨停结构/溢价/晋级命名阶段；比艾略特更贴大A。</p>
       <div class="pos-sum" id="emotionSum" style="margin-bottom:10px"></div>
@@ -1734,6 +1747,7 @@
       <h2 style="text-transform:none;letter-spacing:0.04em">
         季节性 / 日历
         <button type="button" class="q" data-term="季节性日历">?</button>
+        <span class="mod-stamp" id="seasonStamp" title="随大盘快照更新"></span>
       </h2>
       <p class="meta" id="seasonNote">月初月末、长假、财报窗、周一周五等偏好提示。</p>
       <div class="pos-sum" id="seasonSum" style="margin-bottom:10px"></div>
@@ -1743,6 +1757,7 @@
       <h2 style="text-transform:none;letter-spacing:0.04em">
         大盘波浪情景（上证）
         <button type="button" class="q" data-term="波浪情景">?</button>
+        <span class="mod-stamp" id="elliottStamp" title="随大盘快照更新"></span>
       </h2>
       <p class="meta" id="elliottNote">Top5 情景 + 斐波那契变盘窗；参考 MACD/RSI；不改作战台买卖结论。</p>
       <div class="pos-sum" id="elliottSum" style="margin-bottom:10px"></div>
@@ -1782,16 +1797,17 @@
       <section class="card">
         <h2 style="text-transform:none">大资金流向 · 板块
           <button type="button" class="q" data-term="大资金流向">?</button>
+          <span class="mod-stamp" id="fundStamp" title="本模块最近刷新时间"></span>
         </h2>
         <p class="meta" id="fundNote">东财主力/超大单净流入作「国家队口径」大资金代理；仅观察，不改买卖闸门。</p>
         <div class="g-chips" id="fundPeriodChips" style="margin:8px 0 10px"></div>
         <div class="pos-sum" id="fundSum" style="margin-bottom:8px"></div>
         <div class="pos-sum" id="fundStats" style="margin-bottom:10px"></div>
         <div class="fund-spot" id="fundSpot"></div>
-        <div id="fundDiff" style="margin-bottom:12px"></div>
         <div class="fund-grid" id="fundBody">
           <div class="meta">等待资金流…</div>
         </div>
+        <div id="fundDiff" style="margin-top:14px"></div>
       </section>
     </section>
 
@@ -1887,7 +1903,10 @@
 
     <section class="tab-panel" id="panel-review" hidden>
       <section class="card">
-        <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button></h2>
+        <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button>
+          <span class="mod-stamp" id="revStamp" title="复盘主表刷新时间"></span>
+          <span class="mod-stamp" id="revZtStamp" title="年内涨停列异步补齐时间"></span>
+        </h2>
         <p class="rev-note">按交易日浏览。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。进入可买带或触及止损/不追会弹系统通知。</p>
         <div class="rev-daybar" id="revDayBar">
           <div class="rev-day-nav">
@@ -2240,6 +2259,38 @@
       return "数据时间 " + updatedAt + " · 已过 " + sec + " 秒";
     }
 
+    function fmtModClock(ts) {
+      const s = String(ts || "").trim();
+      if (!s) return "";
+      if (s.length >= 19) return s.slice(11, 19);
+      if (s.length >= 8 && s.indexOf(":") >= 0) return s.slice(-8);
+      return s;
+    }
+
+    function setModStamp(elOrId, ts, opts) {
+      const el = typeof elOrId === "string" ? document.getElementById(elOrId) : elOrId;
+      if (!el) return;
+      const o = opts || {};
+      if (o.loading) {
+        el.className = "mod-stamp loading";
+        el.textContent = o.label ? (`${o.label}刷新中…`) : "刷新中…";
+        el.title = o.title || "异步加载中";
+        return;
+      }
+      const clock = fmtModClock(ts);
+      if (!clock) {
+        el.className = "mod-stamp";
+        el.textContent = "";
+        el.title = "";
+        return;
+      }
+      const kind = o.kind || "";
+      const label = o.label || "刷新";
+      el.className = "mod-stamp" + (o.stale ? " stale" : "");
+      el.textContent = kind ? `${label} ${clock}（${kind}）` : `${label} ${clock}`;
+      el.title = o.title || (String(ts || "") + (kind ? ` · ${kind}` : ""));
+    }
+
     function render(d) {
       if (d.glossary) GLOSSARY = d.glossary;
       const v = d.verdict || {};
@@ -2360,6 +2411,7 @@
         if (show) {
           document.getElementById("seasonDeskLine").textContent = seasonHint.line || "";
           document.getElementById("seasonDeskDetail").textContent = seasonHint.detail || "";
+          setModStamp("seasonDeskStamp", d.updated_at, { label: "刷新" });
         }
       }
       const brief = d.morning_brief || {};
@@ -2878,17 +2930,23 @@
       try {
         const cur = (lastData && lastData.fund_flow) || {};
         if (cur.full_ready && lastFundFlowFullAt && Date.now() - lastFundFlowFullAt < 280000) {
-          paintFundFlow({ fund_flow: cur });
+          paintFundFlow({ fund_flow: cur, updated_at: (lastData && lastData.updated_at) || "" });
           return;
         }
+        setModStamp("fundStamp", null, { loading: true, label: "近5/10日" });
         const r = await fetch("/api/fund-flow");
         const box = await r.json();
-        if (!box || box.ok === false && !box.periods) return;
+        if (!box || box.ok === false && !box.periods) {
+          setModStamp("fundStamp", cur.refreshed_at, { label: "刷新", stale: true });
+          return;
+        }
         lastFundFlow = box;
         lastFundFlowFullAt = Date.now();
         if (lastData) lastData.fund_flow = box;
-        paintFundFlow({ fund_flow: box });
-      } catch (e) {}
+        paintFundFlow({ fund_flow: box, updated_at: (lastData && lastData.updated_at) || "" });
+      } catch (e) {
+        setModStamp("fundStamp", null, { loading: false });
+      }
     }
 
     function paintEmotionWave(d) {
@@ -2897,6 +2955,7 @@
       const sum = document.getElementById("emotionSum");
       const body = document.getElementById("emotionBody");
       if (!note || !sum || !body) return;
+      setModStamp("emotionStamp", box.refreshed_at || d.updated_at, { label: "刷新" });
       note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
       const pri = box.primary || {};
       sum.innerHTML =
@@ -2930,6 +2989,7 @@
       const sum = document.getElementById("seasonSum");
       const body = document.getElementById("seasonBody");
       if (!note || !sum || !body) return;
+      setModStamp("seasonStamp", box.refreshed_at || d.updated_at, { label: "刷新" });
       note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
       const active = box.active || [];
       sum.innerHTML =
@@ -2959,6 +3019,7 @@
       const sum = document.getElementById("elliottSum");
       const body = document.getElementById("elliottBody");
       if (!note || !sum || !body) return;
+      setModStamp("elliottStamp", box.refreshed_at || d.updated_at, { label: "刷新" });
       note.textContent = (box.disclaimer || "波浪多解，仅观察。")
         + (box.note ? (" " + box.note) : "");
       const primary = box.primary || {};
@@ -3067,6 +3128,17 @@
       if (!note || !sum || !spot || !body) return;
       note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "")
         + (box.day_skew_note ? (" " + box.day_skew_note) : "");
+      const stampKind = box.full_ready
+        ? "全日"
+        : (box.refreshed_kind === "day" ? "当日" : "");
+      setModStamp("fundStamp", box.refreshed_at || d.updated_at, {
+        label: "刷新",
+        kind: stampKind,
+        title: box.full_ready
+          ? "含近5/10日东财榜"
+          : "热路径仅当日；打开本页会异步补齐近5/10日",
+        stale: !box.full_ready,
+      });
       const meta = box.period_meta || [];
       if (!meta.some((m) => m.id === fundPeriod)) fundPeriod = box.default_period || "em_day";
       if (chips) {
@@ -3244,6 +3316,8 @@
     let reviewLoadedAt = 0;
     let reviewZtLoading = false;
     let reviewZtSeq = 0;
+    let reviewRefreshedAt = "";
+    let reviewZtRefreshedAt = "";
     let chartCode = "";
     let chartSignalAt = "";
 
@@ -3878,6 +3952,7 @@
         if (seq === reviewZtSeq) reviewZtLoading = false;
         return;
       }
+      setModStamp("revZtStamp", null, { loading: true, label: "年内涨停" });
       try {
         const r = await fetch("/api/review/zt-ytd?date=" + encodeURIComponent(want));
         const d = await r.json();
@@ -3905,10 +3980,20 @@
           row.zt_ytd_note = hit.note;
         }
         reviewZtLoading = false;
+        reviewZtRefreshedAt = d.refreshed_at || new Date().toTimeString().slice(0, 8);
+        setModStamp("revZtStamp", reviewZtRefreshedAt, {
+          label: "年内涨停",
+          title: "年内涨停列异步补齐完成",
+        });
         paintReview(lastReview);
       } catch (e) {
         if (seq !== reviewZtSeq) return;
         reviewZtLoading = false;
+        setModStamp("revZtStamp", reviewZtRefreshedAt || null, {
+          label: "年内涨停",
+          stale: true,
+          title: "年内涨停补齐失败",
+        });
         if (lastReview && (lastReview.signals || []).length) {
           paintReview(lastReview);
         }
@@ -3926,18 +4011,25 @@
         if (want) params.set("date", want);
         if (reviewVsMlMode) params.set("vs_ml", reviewVsMlMode);
         const q = params.toString() ? ("?" + params.toString()) : "";
+        setModStamp("revStamp", null, { loading: true, label: "复盘" });
         const r = await fetch("/api/review" + q);
         const d = await r.json();
         const day = d.view_date || (d.summary || {}).view_date || want;
         const seq = ++reviewZtSeq;
         reviewZtLoading = true;
-        paintReview(d);
         reviewLoadedAt = Date.now();
+        reviewRefreshedAt = new Date().toTimeString().slice(0, 8);
+        setModStamp("revStamp", reviewRefreshedAt, {
+          label: "复盘",
+          title: d.cache_hit ? "命中复盘缓存" : "复盘主表已刷新",
+        });
+        paintReview(d);
         loadReviewZtYtd(day, seq);
       } catch (e) {
         const n = Math.max(visibleRevCols().length, 1);
         document.getElementById("revBody").innerHTML =
           `<tr><td colspan="${n}" class="meta">复盘加载失败</td></tr>`;
+        setModStamp("revStamp", null, { stale: true, label: "复盘" });
       }
     }
 
