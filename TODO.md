@@ -4,6 +4,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Open
 
+- [ ] **板块联动买点（软）** — 主线无 ready / 偏追高时，从相似板块（board_similarity）挖回踩票作副卡：标「联动」、仓位×0.7～0.8，不改 sticky 主线、不硬升「可买入」。防买不到与追高两头空。
 - [ ] （可选）自选「可试探」时是否进作战台副卡 — 暂保持仅观察页状态列+toast
 
 ## Done recently (context)
