@@ -1,0 +1,22 @@
+[Unit]
+Description=A-share Market Desk (FastAPI / uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change User / WorkingDirectory / ExecStart paths to match your install.
+User=REPLACE_USER
+Group=REPLACE_USER
+WorkingDirectory=/opt/market-desk
+Environment=PYTHONUNBUFFERED=1
+# Bind 0.0.0.0 for LAN; use 127.0.0.1 for local-only.
+ExecStart=/opt/market-desk/.venv/bin/uvicorn market_desk.app:app --host 0.0.0.0 --port 8765 --log-level info
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

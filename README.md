@@ -36,16 +36,38 @@
 
 ## 快速开始
 
+### Windows
+
 ```bat
 cd D:\Source\Repos\market-desk
 start.bat
+```
+
+### Linux（前台）
+
+```bash
+cd /path/to/market-desk
+chmod +x start.sh
+./start.sh
+```
+
+### Linux（长期 / 开机自启）
+
+```bash
+chmod +x start.sh deploy/install-systemd.sh
+# 默认安装到 /opt/market-desk，绑定 0.0.0.0:8765
+./deploy/install-systemd.sh
+
+# 可选环境变量：
+# INSTALL_DIR=/home/you/market-desk HOST=127.0.0.1 PORT=8765 SERVICE_USER=you ./deploy/install-systemd.sh
 ```
 
 浏览器打开：http://127.0.0.1:8765/
 
 - **怎么买、复盘信号算不算买单**：见同目录 [`使用指南.md`](./使用指南.md)
 - 盘中约 **20 秒**拉一次行情；午休 / 收盘 / 周末不打行情源
-- 依赖：Python 3.11+，见 `requirements.txt`（`start.bat` 会建 `.venv` 并安装）
+- 依赖：Python 3.11+，见 `requirements.txt`（`start.bat` / `start.sh` 会建 `.venv` 并安装）
+- Linux 无 Windows 托盘通知；页面内 toast 仍可用。长期运行用 `deploy/market-desk.service`
 
 ## 技术栈
 
@@ -232,6 +254,8 @@ start.bat
 ```
 market-desk/
 ├── start.bat                 # Windows 一键启动
+├── start.sh                  # Linux/macOS 前台启动
+├── deploy/                   # systemd 单元与安装脚本
 ├── requirements.txt
 ├── market_desk/
 │   ├── app.py                # FastAPI 入口
