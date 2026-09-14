@@ -1,5 +1,5 @@
 [Unit]
-Description=A-share Market Desk (FastAPI / uvicorn)
+Description=牛来-作战台 (FastAPI / uvicorn)
 After=network-online.target
 Wants=network-online.target
 

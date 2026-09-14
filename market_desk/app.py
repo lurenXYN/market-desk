@@ -179,7 +179,7 @@ async def lifespan(_app: FastAPI):
     await engine.stop()
 
 
-app = FastAPI(title="A-share Market Desk", lifespan=lifespan)
+app = FastAPI(title="牛来-作战台", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

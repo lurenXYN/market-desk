@@ -165,7 +165,7 @@ def build_daily_report(
     verdict = snap.get("verdict") or {}
     ml = verdict.get("mainline") or {}
     lines = [
-        f"# A股情绪作战台日报 · {today.get('date') or snap.get('trade_date') or '—'}",
+        f"# 牛来-作战台日报 · {today.get('date') or snap.get('trade_date') or '—'}",
         "",
         "## 大盘与主线",
         f"- 相位：{snap.get('phase') or today.get('phase') or '—'}",

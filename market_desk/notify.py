@@ -20,7 +20,7 @@ def notify_windows(title: str, body: str) -> bool:
         from winotify import Notification, audio
 
         toast = Notification(
-            app_id="A股情绪作战台",
+            app_id="牛来-作战台",
             title=(title or "作战台")[:60],
             msg=(body or "")[:220],
             duration="short",
