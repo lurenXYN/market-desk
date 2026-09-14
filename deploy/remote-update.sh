@@ -96,22 +96,43 @@ run_root bash -lc "
 
 echo "==> restart $SERVICE_NAME"
 run_root systemctl restart "$SERVICE_NAME"
-sleep 2
-run_root systemctl --no-pager --full is-active "$SERVICE_NAME"
+
+# Lifespan waits for the first East Money refresh (can be 20–60s on a remote VPS).
+# Do not fail while systemd is still "activating".
+echo "==> wait until systemd active"
+ACTIVE_OK=0
+for i in $(seq 1 60); do
+  state="$(run_root systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  if [[ "$state" == "active" ]]; then
+    echo "systemd: active (${i}s)"
+    ACTIVE_OK=1
+    break
+  fi
+  if [[ "$state" == "failed" ]]; then
+    echo "systemd: failed"
+    run_root journalctl -u "$SERVICE_NAME" -n 60 --no-pager || true
+    exit 1
+  fi
+  sleep 1
+done
+if [[ "$ACTIVE_OK" != "1" ]]; then
+  echo "systemd did not become active in time: $(run_root systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  run_root journalctl -u "$SERVICE_NAME" -n 60 --no-pager || true
+  exit 1
+fi
 
 if command -v curl >/dev/null 2>&1; then
-  echo "==> health check $HEALTH_URL"
-  for _ in 1 2 3 4 5; do
-    if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null; then
-      curl -fsS --max-time 5 "$HEALTH_URL" || true
-      echo
+  echo "==> health check $HEALTH_URL (up to ~90s)"
+  for i in $(seq 1 45); do
+    if body="$(curl -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null)"; then
+      echo "$body"
       echo "Deploy OK"
       exit 0
     fi
     sleep 2
   done
-  echo "Service restarted but health check failed: $HEALTH_URL"
-  run_root journalctl -u "$SERVICE_NAME" -n 40 --no-pager || true
+  echo "Service active but health check failed: $HEALTH_URL"
+  run_root journalctl -u "$SERVICE_NAME" -n 60 --no-pager || true
   exit 1
 fi
 
