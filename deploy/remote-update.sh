@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Sync a git checkout into the systemd install dir and restart the service.
+# Intended to run ON the VPS (called by GitHub Actions over SSH, or manually).
+#
+# Env (optional):
+#   REPO_DIR      git clone path          (default: ~/github/market-desk or $PWD)
+#   INSTALL_DIR   runtime path           (default: /opt/market-desk)
+#   SERVICE_NAME  systemd unit           (default: market-desk)
+#   HEALTH_URL    post-restart probe     (default: http://127.0.0.1:8765/api/health)
+#   SKIP_PULL=1   skip git fetch/reset
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="${REPO_DIR:-$DEFAULT_REPO}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
+SERVICE_NAME="${SERVICE_NAME:-market-desk}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8765/api/health}"
+SKIP_PULL="${SKIP_PULL:-0}"
+
+run_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
+echo "==> repo:    $REPO_DIR"
+echo "==> install: $INSTALL_DIR"
+echo "==> service: $SERVICE_NAME"
+
+cd "$REPO_DIR"
+
+if [[ "$SKIP_PULL" != "1" ]]; then
+  echo "==> git fetch + reset to origin/main"
+  git fetch --prune origin
+  git checkout main
+  git reset --hard origin/main
+fi
+
+if [[ ! -x "$REPO_DIR/deploy/remote-update.sh" ]]; then
+  echo "remote-update.sh missing after pull; abort."
+  exit 1
+fi
+
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "rsync required. apt install -y rsync"
+  exit 1
+fi
+
+if [[ "$REPO_DIR" != "$INSTALL_DIR" ]]; then
+  echo "==> rsync -> $INSTALL_DIR (keep .venv + data)"
+  run_root mkdir -p "$INSTALL_DIR/data"
+  run_root rsync -a --delete \
+    --exclude '.venv/' \
+    --exclude '__pycache__/' \
+    --exclude '*.pyc' \
+    --exclude 'data/' \
+    --exclude '.git/' \
+    "$REPO_DIR/" "$INSTALL_DIR/"
+else
+  echo "==> repo is install dir; skip rsync"
+  mkdir -p "$INSTALL_DIR/data"
+fi
+
+echo "==> ensure venv + pip install"
+if [[ -d "$INSTALL_DIR/.venv" && ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
+  echo "Removing broken .venv"
+  run_root rm -rf "$INSTALL_DIR/.venv"
+fi
+
+run_root bash -lc "
+  set -euo pipefail
+  cd '$INSTALL_DIR'
+  if [[ ! -x .venv/bin/python ]]; then
+    rm -rf .venv
+    python3 -m venv .venv
+  fi
+  .venv/bin/python -m pip install -q -U pip
+  .venv/bin/python -m pip install -q -r requirements.txt
+"
+
+echo "==> restart $SERVICE_NAME"
+run_root systemctl restart "$SERVICE_NAME"
+sleep 2
+run_root systemctl --no-pager --full is-active "$SERVICE_NAME"
+
+if command -v curl >/dev/null 2>&1; then
+  echo "==> health check $HEALTH_URL"
+  for _ in 1 2 3 4 5; do
+    if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null; then
+      curl -fsS --max-time 5 "$HEALTH_URL" || true
+      echo
+      echo "Deploy OK"
+      exit 0
+    fi
+    sleep 2
+  done
+  echo "Service restarted but health check failed: $HEALTH_URL"
+  run_root journalctl -u "$SERVICE_NAME" -n 40 --no-pager || true
+  exit 1
+fi
+
+echo "Deploy OK (curl not installed; skipped health check)"

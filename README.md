@@ -67,6 +67,10 @@ chmod +x start.sh deploy/install-systemd.sh
 # 脚本在 root 下也会尝试自动 apt 安装 python3-venv
 ```
 
+### 自动部署（push → VPS）
+
+推送 `main` 后由 GitHub Actions SSH 更新服务器。配置步骤见 [`deploy/GITHUB_ACTIONS_DEPLOY.md`](./deploy/GITHUB_ACTIONS_DEPLOY.md)。
+
 浏览器打开：http://127.0.0.1:8765/
 
 - **怎么买、复盘信号算不算买单**：见同目录 [`使用指南.md`](./使用指南.md)
@@ -260,7 +264,8 @@ chmod +x start.sh deploy/install-systemd.sh
 market-desk/
 ├── start.bat                 # Windows 一键启动
 ├── start.sh                  # Linux/macOS 前台启动
-├── deploy/                   # systemd 单元与安装脚本
+├── deploy/                   # systemd / 远程更新 / Actions 部署说明
+├── .github/workflows/        # push main 自动 SSH 部署
 ├── requirements.txt
 ├── market_desk/
 │   ├── app.py                # FastAPI 入口
