@@ -630,6 +630,11 @@
     .rec-prices .stop .val { color: var(--warn); }
     .rec-prices .chase .val { color: var(--up); }
     .rec-why { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
+    .rec-holder {
+      margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.35;
+    }
+    .rec-holder .up { color: var(--down); }
+    .rec-holder .down { color: var(--up); }
     .rec-card .pos-btn { margin-top: 8px; width: 100%; }
     .trend-ok {
       margin-top: 8px;
@@ -2493,6 +2498,24 @@
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${trendHtml}
+        ${(() => {
+          if (kind === "etf") return "";
+          if (it.holder_num == null && it.holder_chg_pct == null) return "";
+          const tip = [
+            it.holder_end ? `统计截止 ${it.holder_end}` : "",
+            it.holder_notice ? `公告 ${it.holder_notice}` : "",
+            it.holder_prev != null ? `上次 ${fmtHolderNum(it.holder_prev)}` : "",
+            "季度披露，非实时",
+          ].filter(Boolean).join(" · ");
+          const chg = it.holder_chg_pct;
+          let chgHtml = "";
+          if (chg != null && !Number.isNaN(Number(chg))) {
+            const n = Number(chg);
+            const cls = n < 0 ? "up" : (n > 0 ? "down" : "");
+            chgHtml = ` <span class="${cls}">${n > 0 ? "+" : ""}${n.toFixed(2)}%</span>`;
+          }
+          return `<div class="rec-holder" title="${tip}"><button type="button" class="q" data-term="股东户数">?</button> 股东 ${fmtHolderNum(it.holder_num)}${chgHtml}</div>`;
+        })()}
         ${gateHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>

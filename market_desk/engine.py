@@ -605,6 +605,7 @@ class DeskEngine:
                     except Exception:
                         log.exception("save daily mainline failed")
                 await self._apply_recommend_trends(client, verdict, trade_date_dash)
+                await self._apply_recommend_holders(client, verdict)
                 # Soft ETF maps block_ready on the vehicle only; stocks may arm.
                 seg_v = verdict.get("segment") or {}
                 block_arm = bool(seg_v.get("open_mute")) or bool(verdict.get("auction_only"))
@@ -784,6 +785,7 @@ class DeskEngine:
                 self.snapshot = payload
 
                 await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
+                await self._apply_favorite_desk_holders(client, fav_desk)
                 await self._apply_favorite_desk_minutes(client, fav_desk)
             payload["favorite_desk"] = fav_desk
             payload["enrich_pending"] = False
@@ -1310,6 +1312,65 @@ class DeskEngine:
                 if item.get("wait_price") is not None:
                     item["buy_price"] = item.get("wait_price")
             verdict["link_recommend"]["buy"] = False
+
+    async def _apply_recommend_holders(
+        self,
+        client: httpx.AsyncClient,
+        verdict: dict[str, Any],
+    ) -> None:
+        """Attach quarterly shareholder counts onto stock buy cards (skip ETF)."""
+        keys = ("recommend", "side_recommend", "link_recommend")
+        codes: list[str] = []
+        for key in keys:
+            for item in ((verdict.get(key) or {}).get("items") or []):
+                if str(item.get("kind") or "stock") != "stock":
+                    continue
+                code = normalize_code(item.get("code"))
+                if code:
+                    codes.append(code)
+        codes = list(dict.fromkeys(codes))
+        if not codes:
+            return
+        try:
+            holders = await fetch_holder_stats_many(client, codes)
+        except Exception:
+            log.exception("recommend holder stats failed")
+            return
+        for key in keys:
+            rec = verdict.get(key)
+            if not isinstance(rec, dict) or not rec.get("items"):
+                continue
+            verdict[key] = _attach_holders_to_items(rec, holders)
+
+    async def _apply_favorite_desk_holders(
+        self,
+        client: httpx.AsyncClient,
+        fav_desk: dict[str, Any],
+    ) -> None:
+        """Attach shareholder counts onto favorite-desk stock buy cards."""
+        boards = list((fav_desk or {}).get("boards") or [])
+        if not boards:
+            return
+        codes: list[str] = []
+        for board in boards:
+            for item in ((board.get("buy") or {}).get("items") or []):
+                if str(item.get("kind") or "stock") != "stock":
+                    continue
+                code = normalize_code(item.get("code"))
+                if code:
+                    codes.append(code)
+        codes = list(dict.fromkeys(codes))
+        if not codes:
+            return
+        try:
+            holders = await fetch_holder_stats_many(client, codes)
+        except Exception:
+            log.exception("favorite-desk holder stats failed")
+            return
+        for board in boards:
+            buy = board.get("buy")
+            if isinstance(buy, dict) and buy.get("items"):
+                board["buy"] = _attach_holders_to_items(buy, holders)
 
     async def _apply_favorite_desk_trends(
         self,
@@ -2005,6 +2066,34 @@ def _decorate_watchlist(
         item["last_pct"] = q.get("pct")
         out.append(item)
     return _annotate_watchlist_observe(out, verdict)
+
+
+def _attach_holders_to_items(
+    recommend: dict[str, Any] | None,
+    holders_by_code: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Copy quarterly holder-count fields onto stock recommendation items."""
+    rec = dict(recommend or {})
+    by_code = holders_by_code or {}
+    items: list[dict[str, Any]] = []
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        if str(item.get("kind") or "stock") != "stock":
+            items.append(item)
+            continue
+        code = normalize_code(item.get("code"))
+        h = by_code.get(code) if code else None
+        if isinstance(h, dict) and h:
+            item["holder_num"] = h.get("holder_num")
+            item["holder_prev"] = h.get("holder_prev")
+            item["holder_chg"] = h.get("holder_chg")
+            item["holder_chg_pct"] = h.get("holder_chg_pct")
+            item["holder_avg_wan"] = h.get("holder_avg_wan")
+            item["holder_end"] = h.get("holder_end")
+            item["holder_notice"] = h.get("holder_notice")
+        items.append(item)
+    rec["items"] = items
+    return rec
 
 
 def _annotate_watchlist_observe(
