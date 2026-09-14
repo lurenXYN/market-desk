@@ -1862,9 +1862,64 @@
       }
     }
     .rev-table-wrap { width: 100%; }
+    .auth-mask {
+      position: fixed; inset: 0; z-index: 80;
+      background: rgba(6, 10, 16, 0.72);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    .auth-mask[hidden] { display: none !important; }
+    .auth-card {
+      width: min(420px, 100%);
+      background: #121820;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 16px 14px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.45);
+    }
+    .auth-card h2 { margin: 0 0 6px; font-size: 18px; }
+    .auth-card .meta { margin-bottom: 12px; }
+    .auth-card label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
+    .auth-card input {
+      width: 100%; margin-top: 4px; padding: 8px 10px;
+      border-radius: 6px; border: 1px solid #334155; background: #0b1118; color: var(--text);
+    }
+    .auth-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+    .auth-actions button { flex: 1; min-width: 110px; }
+    .auth-msg { min-height: 1.2em; margin-top: 8px; font-size: 12px; color: #fbbf24; }
+    .auth-user {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-left: 10px; font-size: 12px; color: var(--muted);
+    }
+    .auth-user b { color: #e2e8f0; font-weight: 600; }
+    .auth-user button {
+      padding: 2px 8px; font-size: 12px;
+      border: 1px solid #334155; border-radius: 4px;
+      background: #0f172a; color: #cbd5e1; cursor: pointer;
+    }
+    .admin-users { margin-top: 10px; max-height: 220px; overflow: auto; font-size: 12px; }
+    .admin-users .row {
+      display: flex; gap: 8px; align-items: center; justify-content: space-between;
+      padding: 6px 0; border-bottom: 1px solid #1e293b;
+    }
   </style>
 </head>
 <body>
+  <div class="auth-mask" id="authMask" hidden>
+    <div class="auth-card">
+      <h2 id="authTitle">登录作战台</h2>
+      <div class="meta" id="authHint">仓位 / 自选 / 账户资金按账号隔离；盘面公用。</div>
+      <label>用户名<input id="authUser" autocomplete="username" /></label>
+      <label>密码<input id="authPass" type="password" autocomplete="current-password" /></label>
+      <div class="auth-actions">
+        <button type="button" id="authLoginBtn">登录</button>
+        <button type="button" id="authRegisterBtn">注册</button>
+        <button type="button" id="authCloseBtn">先看盘面</button>
+      </div>
+      <div class="auth-msg" id="authMsg"></div>
+      <div class="admin-users" id="adminUsers" hidden></div>
+    </div>
+  </div>
   <div class="wrap">
     <div class="hdr">
       <div class="hdr-main">
@@ -1873,6 +1928,12 @@
           <span class="dot" id="liveDot"></span>
           <span id="stamp">加载中…</span>
           <span id="pageClock" style="margin-left:10px"></span>
+          <span class="auth-user" id="authUserChip">
+            <span id="authUserLabel">未登录</span>
+            <button type="button" id="authOpenBtn">登录</button>
+            <button type="button" id="authLogoutBtn" hidden>退出</button>
+            <button type="button" id="authAdminBtn" hidden>审批</button>
+          </span>
         </div>
       </div>
       <div class="hdr-tools" id="hdrTools" aria-label="手机端工具">
@@ -4990,7 +5051,9 @@
     async function tick(force) {
       try {
         const view = snapshotViewForTab(currentMain);
-        const r = await fetch("/api/snapshot?view=" + encodeURIComponent(view));
+        const r = await fetch("/api/snapshot?view=" + encodeURIComponent(view), {
+          credentials: "same-origin",
+        });
         const d = await r.json();
         if (!d.ok && !d.updated_at) {
           document.getElementById("stamp").textContent = d.error || "等待首包";
@@ -4999,6 +5062,7 @@
         }
         lastData = Object.assign({}, lastData || {}, d);
         if (d.glossary) GLOSSARY = d.glossary;
+        if (d.auth_user !== undefined) paintAuthUser(d.auth_user);
         paintVisible(lastData);
         paintClock();
         scheduleTick(!!lastData.live);
@@ -5008,6 +5072,127 @@
         document.getElementById("dataAge").textContent = "数据源中断";
       }
     }
+
+    let authUser = null;
+    function paintAuthUser(user) {
+      authUser = user || null;
+      const label = document.getElementById("authUserLabel");
+      const loginBtn = document.getElementById("authOpenBtn");
+      const logoutBtn = document.getElementById("authLogoutBtn");
+      const adminBtn = document.getElementById("authAdminBtn");
+      if (!label) return;
+      if (authUser) {
+        label.innerHTML = `<b>${authUser.username}</b>`
+          + (authUser.role === "admin" ? " · 管理员" : "");
+        if (loginBtn) loginBtn.hidden = true;
+        if (logoutBtn) logoutBtn.hidden = false;
+        if (adminBtn) adminBtn.hidden = authUser.role !== "admin";
+      } else {
+        label.textContent = "未登录";
+        if (loginBtn) loginBtn.hidden = false;
+        if (logoutBtn) logoutBtn.hidden = true;
+        if (adminBtn) adminBtn.hidden = true;
+      }
+    }
+    function showAuth(msg) {
+      const mask = document.getElementById("authMask");
+      if (!mask) return;
+      mask.hidden = false;
+      const m = document.getElementById("authMsg");
+      if (m) m.textContent = msg || "";
+      document.getElementById("adminUsers").hidden = true;
+    }
+    async function refreshAdminUsers() {
+      const box = document.getElementById("adminUsers");
+      if (!box || !authUser || authUser.role !== "admin") return;
+      box.hidden = false;
+      const r = await fetch("/api/admin/users", { credentials: "same-origin" });
+      const d = await r.json();
+      if (!d.ok) {
+        box.innerHTML = `<div class="meta">${d.detail || "加载失败"}</div>`;
+        return;
+      }
+      box.innerHTML = (d.users || []).map((u) => {
+        const pending = u.status === "pending";
+        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}</span>`
+          + (pending
+            ? `<span><button type="button" data-approve="${u.id}">同意</button> `
+              + `<button type="button" data-reject="${u.id}">拒绝</button></span>`
+            : "")
+          + `</div>`;
+      }).join("") || `<div class="meta">暂无用户</div>`;
+      box.querySelectorAll("[data-approve]").forEach((btn) => {
+        btn.onclick = async () => {
+          await fetch("/api/admin/users/" + btn.dataset.approve + "/approve", {
+            method: "POST", credentials: "same-origin",
+          });
+          refreshAdminUsers();
+        };
+      });
+      box.querySelectorAll("[data-reject]").forEach((btn) => {
+        btn.onclick = async () => {
+          await fetch("/api/admin/users/" + btn.dataset.reject + "/reject", {
+            method: "POST", credentials: "same-origin",
+          });
+          refreshAdminUsers();
+        };
+      });
+    }
+    async function authRequest(path) {
+      const username = (document.getElementById("authUser").value || "").trim();
+      const password = document.getElementById("authPass").value || "";
+      const r = await fetch(path, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) {
+        throw new Error(d.detail || d.message || ("HTTP " + r.status));
+      }
+      return d;
+    }
+    document.getElementById("authOpenBtn")?.addEventListener("click", () => showAuth(""));
+    document.getElementById("authCloseBtn")?.addEventListener("click", () => {
+      document.getElementById("authMask").hidden = true;
+    });
+    document.getElementById("authLoginBtn")?.addEventListener("click", async () => {
+      const msg = document.getElementById("authMsg");
+      try {
+        const d = await authRequest("/api/auth/login");
+        paintAuthUser(d.user);
+        msg.textContent = "登录成功";
+        document.getElementById("authMask").hidden = true;
+        tick(true);
+      } catch (e) {
+        msg.textContent = String(e.message || e);
+      }
+    });
+    document.getElementById("authRegisterBtn")?.addEventListener("click", async () => {
+      const msg = document.getElementById("authMsg");
+      try {
+        const d = await authRequest("/api/auth/register");
+        msg.textContent = d.message || "已提交，等待管理员同意";
+      } catch (e) {
+        msg.textContent = String(e.message || e);
+      }
+    });
+    document.getElementById("authLogoutBtn")?.addEventListener("click", async () => {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+      paintAuthUser(null);
+      tick(true);
+    });
+    document.getElementById("authAdminBtn")?.addEventListener("click", () => {
+      showAuth("待审批用户");
+      refreshAdminUsers();
+    });
+    // Soft-gate: opening 仓位 while logged out prompts login.
+    const _posTab = document.querySelector('#navTabs [data-main="pos"]');
+    _posTab?.addEventListener("click", () => {
+      if (!authUser) showAuth("仓位页需要登录");
+    });
+
     try {
       const saved = localStorage.getItem("desk-main-tab");
       if (saved) currentMain = saved;

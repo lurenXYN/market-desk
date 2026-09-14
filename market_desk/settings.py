@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from market_desk import config as cfg
-from market_desk.db import load_setting, save_setting
+from market_desk.db import load_setting, load_user_setting, save_setting, save_user_setting
 
 _SETTINGS_KEY = "runtime"
 _CACHE: dict[str, Any] | None = None
+_USER_OVERLAY: ContextVar[dict[str, Any] | None] = ContextVar("user_settings", default=None)
+
+# Per-user private knobs (risk / sizing / personal alerts).
+USER_PRIVATE_KEYS = frozenset(
+    {
+        "account_equity",
+        "risk_pct_per_trade",
+        "daily_loss_cap_pct",
+        "cool_after_losses",
+        "target_total_cost",
+        "equal_weight_target",
+        "batch_plan",
+        "alert_mode",
+        "toast_enabled",
+        "toast_cooldown",
+        "decision_alerts",
+        "hit_rate_mode",
+    }
+)
 
 DEFAULTS: dict[str, Any] = {
     "refresh_seconds": int(cfg.SESSION_REFRESH_SECONDS),
@@ -74,21 +94,78 @@ def get_settings(*, refresh: bool = False) -> dict[str, Any]:
     return dict(out)
 
 
-def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
-    """Apply a partial settings patch and persist it."""
+def update_settings(patch: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any]:
+    """Apply a partial settings patch.
+
+    When ``user_id`` is set, only ``USER_PRIVATE_KEYS`` are written to that user;
+    global keys still update the shared runtime row (caller should gate by admin).
+    """
     global _CACHE
     cur = get_settings(refresh=True)
-    for key, value in (patch or {}).items():
-        if key in DEFAULTS and value is not None:
+    personal_patch = {
+        k: v for k, v in (patch or {}).items() if k in USER_PRIVATE_KEYS and v is not None
+    }
+    global_patch = {
+        k: v
+        for k, v in (patch or {}).items()
+        if k in DEFAULTS and k not in USER_PRIVATE_KEYS and v is not None
+    }
+    if global_patch:
+        for key, value in global_patch.items():
             cur[key] = value
-    cur = _normalize(cur)
-    save_setting(_SETTINGS_KEY, cur)
-    _CACHE = cur
-    return dict(cur)
+        cur = _normalize(cur)
+        # Persist global keys only (keep legacy personal values as server defaults).
+        save_setting(_SETTINGS_KEY, cur)
+        _CACHE = cur
+    if user_id is not None and personal_patch:
+        prev = load_user_setting(int(user_id), "runtime") or {}
+        if not isinstance(prev, dict):
+            prev = {}
+        merged = dict(prev)
+        merged.update(personal_patch)
+        # Normalize via full merge then store private subset.
+        probe = dict(cur)
+        probe.update(merged)
+        probe = _normalize(probe)
+        store = {k: probe[k] for k in USER_PRIVATE_KEYS}
+        save_user_setting(int(user_id), "runtime", store)
+    return get_settings_for_user(user_id) if user_id is not None else get_settings(refresh=True)
+
+
+def get_settings_for_user(user_id: int | None) -> dict[str, Any]:
+    """Merge global runtime settings with one user's private overrides."""
+    base = get_settings()
+    if user_id is None:
+        return base
+    raw = load_user_setting(int(user_id), "runtime") or {}
+    out = dict(base)
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key in USER_PRIVATE_KEYS:
+                out[key] = value
+    return _normalize(out)
+
+
+def use_user_settings(user_id: int | None):
+    """Context manager that overlays one user's private settings onto ``setting()``."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ctx():
+        token = _USER_OVERLAY.set(get_settings_for_user(user_id) if user_id is not None else None)
+        try:
+            yield
+        finally:
+            _USER_OVERLAY.reset(token)
+
+    return _ctx()
 
 
 def setting(key: str, default: Any = None) -> Any:
-    """Return one runtime setting value."""
+    """Return one runtime setting value (honors active user overlay)."""
+    overlay = _USER_OVERLAY.get()
+    if isinstance(overlay, dict) and key in overlay:
+        return overlay[key]
     vals = get_settings()
     if key in vals:
         return vals[key]

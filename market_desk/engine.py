@@ -185,83 +185,55 @@ class DeskEngine:
         if self._task:
             self._task.cancel()
 
-    def sync_positions(self) -> list[dict[str, Any]]:
-        """Reload positions from SQLite and reuse last quotes in the snapshot."""
+    def sync_positions(self, user_id: int | None = None) -> list[dict[str, Any]]:
+        """Reload positions for one user (or clear personal fields when None)."""
         trade_date = str(self.snapshot.get("trade_date") or datetime.now().strftime("%Y%m%d"))
         trade_dash = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}" if len(trade_date) == 8 else trade_date[:10]
         purge_stale_closed_positions(trade_dash)
-        quotes: dict[str, dict[str, Any]] = {}
-        for row in self.snapshot.get("positions") or []:
-            code = str(row.get("code") or "").zfill(6)
-            quotes[code] = {
-                "code": code,
-                "name": row.get("name") or "",
-                "price": row.get("last"),
-                "pct": row.get("last_pct"),
-                "high": row.get("high"),
-                "low": row.get("low"),
-            }
-        positions = decorate_positions(
-            load_positions(),
-            quotes,
-            trade_date=trade_dash,
-            boards=list(self.snapshot.get("hot_boards") or [])
-            + list(self.snapshot.get("pin_boards") or [])
-            + list(self.snapshot.get("favorite_boards") or []),
-        )
-        peaks = {
-            int(r["id"]): float(r["peak_price"])
-            for r in positions
-            if r.get("peak_dirty") and r.get("id") and r.get("peak_price")
-        }
-        if peaks:
-            try:
-                touch_position_peaks(peaks)
-            except Exception:
-                log.exception("touch position peaks failed")
-        trends = self._cached_trends_for(
-            [normalize_code(r.get("code")) for r in positions if r.get("code")]
-        )
-        positions = attach_position_daily_trends(positions, trends)
-        self.snapshot["positions"] = positions
-        self.snapshot["position_summary"] = position_summary(positions)
-        cap = float(
-            ((self.snapshot.get("verdict") or {}).get("playbook") or {}).get("size_cap_pct")
-            or 100
-        )
-        self.snapshot["risk_overview"] = build_risk_overview(
-            positions, size_cap_pct=cap
-        )
-        self.snapshot["sell_advice"] = build_sell_advice(
-            positions,
-            self.snapshot.get("verdict") or {},
-            self.snapshot.get("phase") or "",
-            trade_date=trade_dash,
-            trends_by_code=trends,
-            similar=self.snapshot.get("similar_days"),
-            metrics=self.snapshot.get("metrics"),
-        )
-        return positions
+        if user_id is None:
+            self.snapshot["positions"] = []
+            self.snapshot["position_summary"] = position_summary([])
+            self.snapshot["risk_overview"] = build_risk_overview([], size_cap_pct=100)
+            self.snapshot["sell_advice"] = {"items": [], "text": ""}
+            return []
+        from market_desk.personal import attach_personal_layer
 
-    def sync_watchlist(self, quotes: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-        """Reload personal watchlist and attach last prices when available."""
-        qmap = dict(quotes or {})
-        if not qmap:
-            for row in self.snapshot.get("watchlist") or []:
-                code = str(row.get("code") or "").zfill(6)
-                if row.get("last") is not None:
-                    qmap[code] = {"price": row.get("last"), "pct": row.get("last_pct"), "name": row.get("name")}
-        rows = _decorate_watchlist(
-            load_watchlist(),
-            qmap,
-            verdict=self.snapshot.get("verdict"),
+        layered = attach_personal_layer(
+            self.snapshot,
+            int(user_id),
+            trends_for=self._cached_trends_for,
+            decorate_watchlist=lambda rows, quotes, verdict: _decorate_watchlist(
+                rows, quotes, verdict=verdict
+            ),
+            decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
         )
-        self.snapshot["watchlist"] = rows
-        return rows
+        # Keep shared snapshot free of personal data; caller uses return / layered.
+        return list(layered.get("positions") or [])
 
-    def sync_favorite_boards(self) -> list[dict[str, Any]]:
-        """Reload favored boards into the live snapshot without a full refresh."""
-        rows = load_favorite_boards()
+    def snapshot_for_user(self, user_id: int | None) -> dict[str, Any]:
+        """Market snapshot plus optional personal layer for the logged-in user."""
+        base = dict(self.snapshot or {})
+        # Ensure shared personal slots stay empty in the public base.
+        base["positions"] = []
+        base["watchlist"] = []
+        base.setdefault("position_summary", position_summary([]))
+        if user_id is None:
+            base["auth_required_personal"] = True
+            return base
+        from market_desk.personal import attach_personal_layer
+
+        return attach_personal_layer(
+            base,
+            int(user_id),
+            trends_for=self._cached_trends_for,
+            decorate_watchlist=lambda rows, quotes, verdict: _decorate_watchlist(
+                rows, quotes, verdict=verdict
+            ),
+            decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
+        )
+
+    def _decorate_favorite_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach live board cards onto favorite rows (user-scoped)."""
         cards = list(self.snapshot.get("favorite_boards") or [])
         by_bk = {str(c.get("bk") or "").upper(): c for c in cards if c.get("bk")}
         for pool in ("hot_boards", "pin_boards", "ice_boards"):
@@ -270,7 +242,6 @@ class DeskEngine:
                 if bk and bk not in by_bk:
                     by_bk[bk] = c
         out: list[dict[str, Any]] = []
-        fav_bks = {str(r.get("bk") or "").upper() for r in rows if r.get("bk")}
         for row in rows:
             bk = str(row.get("bk") or "").upper()
             hit = by_bk.get(bk)
@@ -281,32 +252,36 @@ class DeskEngine:
                     "bk": bk,
                     "name": row.get("name") or bk,
                     "kind": row.get("kind") or "",
-                    "pct": None,
-                    "status": "观察",
-                    "headline": "已加入看好，下一轮刷新后补全行情",
-                    "tone": "slate",
-                    "members": [],
-                    "tags": [],
-                    "spark": [],
-                    "note": row.get("note") or "",
                 }
-            card["favorite_id"] = row.get("id")
-            card["favorite_note"] = row.get("note") or ""
-            card["in_favorite"] = True
+            card["fav"] = True
+            card["fav_id"] = row.get("id")
+            card["fav_note"] = row.get("note") or ""
             out.append(card)
-        self.snapshot["favorite_boards"] = out
-        for pool in ("hot_boards", "pin_boards", "ice_boards", "favorite_boards"):
-            for card in self.snapshot.get(pool) or []:
-                bk = str(card.get("bk") or "").upper()
-                card["in_favorite"] = bk in fav_bks
-                if card["in_favorite"]:
-                    match = next(
-                        (r for r in rows if str(r.get("bk") or "").upper() == bk),
-                        None,
-                    )
-                    if match:
-                        card["favorite_id"] = match.get("id")
         return out
+
+    def sync_watchlist(
+        self,
+        quotes: dict[str, dict[str, Any]] | None = None,
+        *,
+        user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Reload personal watchlist for one user."""
+        if user_id is None:
+            self.snapshot["watchlist"] = []
+            return []
+        qmap = dict(quotes or {})
+        rows = _decorate_watchlist(
+            load_watchlist(user_id=int(user_id)),
+            qmap,
+            verdict=self.snapshot.get("verdict"),
+        )
+        return rows
+
+    def sync_favorite_boards(self, *, user_id: int | None = None) -> list[dict[str, Any]]:
+        """Reload favored boards for one user."""
+        if user_id is None:
+            return []
+        return self._decorate_favorite_rows(load_favorite_boards(user_id=int(user_id)))
 
     async def _loop(self) -> None:
         first = True

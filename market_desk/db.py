@@ -377,7 +377,330 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_positions_code ON positions(code)"
         )
+        _ensure_auth_and_user_scope(conn)
         conn.commit()
+
+
+def _table_cols(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Return column names for a SQLite table."""
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_auth_and_user_scope(conn: sqlite3.Connection) -> None:
+    """Create users/sessions and migrate personal tables to user_id scope."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            status TEXT NOT NULL DEFAULT 'pending',
+            must_change_password INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            approved_at TEXT,
+            approved_by INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)"
+    )
+
+    # positions: add user_id (no unique constraint historically)
+    pos_cols = _table_cols(conn, "positions")
+    if "user_id" not in pos_cols:
+        conn.execute("ALTER TABLE positions ADD COLUMN user_id INTEGER")
+        conn.execute(
+            "UPDATE positions SET user_id = 1 WHERE user_id IS NULL"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id)"
+    )
+
+    # watchlist: rebuild if still globally unique on code
+    _migrate_watchlist_user_scope(conn)
+    _migrate_favorite_boards_user_scope(conn)
+
+
+def _migrate_watchlist_user_scope(conn: sqlite3.Connection) -> None:
+    """Ensure watchlist is unique per (user_id, code)."""
+    cols = _table_cols(conn, "watchlist")
+    if "user_id" in cols:
+        # Already migrated or fresh create with user_id — ensure index.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_user_code "
+            "ON watchlist(user_id, code)"
+        )
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchlist_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            note TEXT,
+            suggest_price REAL,
+            stop_price REAL,
+            chase_price REAL,
+            first_seen_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, code)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_v2(
+            id, user_id, code, name, note, suggest_price, stop_price, chase_price,
+            first_seen_at, created_at
+        )
+        SELECT id, 1, code, name, note, suggest_price, stop_price, chase_price,
+               first_seen_at, created_at
+        FROM watchlist
+        """
+    )
+    conn.execute("DROP TABLE watchlist")
+    conn.execute("ALTER TABLE watchlist_v2 RENAME TO watchlist")
+
+
+def _migrate_favorite_boards_user_scope(conn: sqlite3.Connection) -> None:
+    """Ensure favorite_boards is unique per (user_id, bk)."""
+    cols = _table_cols(conn, "favorite_boards")
+    if "user_id" in cols:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_fav_boards_user_bk "
+            "ON favorite_boards(user_id, bk)"
+        )
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS favorite_boards_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            bk TEXT NOT NULL,
+            name TEXT,
+            kind TEXT,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, bk)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO favorite_boards_v2(id, user_id, bk, name, kind, note, created_at)
+        SELECT id, 1, bk, name, kind, note, created_at FROM favorite_boards
+        """
+    )
+    conn.execute("DROP TABLE favorite_boards")
+    conn.execute("ALTER TABLE favorite_boards_v2 RENAME TO favorite_boards")
+
+
+def user_count() -> int:
+    """Return number of registered users."""
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+    return int(row["n"] if row else 0)
+
+
+def create_user(
+    username: str,
+    password_hash: str,
+    *,
+    role: str = "user",
+    status: str = "pending",
+    must_change_password: bool = False,
+) -> dict[str, Any]:
+    """Insert a user row and return it."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO users(
+                username, password_hash, role, status, must_change_password, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(username).strip(),
+                password_hash,
+                role,
+                status,
+                1 if must_change_password else 0,
+                now,
+            ),
+        )
+        uid = int(cur.lastrowid)
+        if status == "active":
+            conn.execute(
+                "UPDATE users SET approved_at = ? WHERE id = ?",
+                (now, uid),
+            )
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    return dict(row)
+
+
+def get_user_by_username(username: str) -> dict[str, Any] | None:
+    """Load one user by username."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?",
+            (str(username or "").strip(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> dict[str, Any] | None:
+    """Load one user by id."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_users() -> list[dict[str, Any]]:
+    """Return all users, pending first then newest."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM users
+            ORDER BY
+              CASE status WHEN 'pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
+              id DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def approve_user(user_id: int, admin_id: int) -> dict[str, Any] | None:
+    """Mark a user active after admin approval."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET status = 'active', approved_at = ?, approved_by = ?
+            WHERE id = ?
+            """,
+            (now, int(admin_id), int(user_id)),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (int(user_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def reject_user(user_id: int, admin_id: int) -> dict[str, Any] | None:
+    """Mark a registration rejected."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET status = 'rejected', approved_at = ?, approved_by = ?
+            WHERE id = ?
+            """,
+            (now, int(admin_id), int(user_id)),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (int(user_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_user_password(
+    user_id: int,
+    password_hash: str,
+    *,
+    must_change: bool = False,
+) -> None:
+    """Replace a user's password hash."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, must_change_password = ?
+            WHERE id = ?
+            """,
+            (password_hash, 1 if must_change else 0, int(user_id)),
+        )
+        conn.commit()
+
+
+def create_session(user_id: int, token: str, expires_at: str) -> None:
+    """Persist a login session token."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO auth_sessions(token, user_id, expires_at, created_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (token, int(user_id), expires_at, now, now),
+        )
+        conn.commit()
+
+
+def delete_session(token: str) -> None:
+    """Remove one session token."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+        conn.commit()
+
+
+def touch_session(token: str) -> None:
+    """Bump last_seen_at for an active session."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE auth_sessions SET last_seen_at = ? WHERE token = ?",
+            (now, token),
+        )
+        conn.commit()
+
+
+def get_session_user(token: str) -> dict[str, Any] | None:
+    """Return the user row for a non-expired session token."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT u.*
+            FROM auth_sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.token = ? AND s.expires_at >= ?
+            """,
+            (token, now),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def load_user_setting(user_id: int, key: str) -> Any | None:
+    """Load one JSON setting scoped to a user."""
+    return load_setting(f"user:{int(user_id)}:{key}")
+
+
+def save_user_setting(user_id: int, key: str, value: Any) -> None:
+    """Persist one JSON setting scoped to a user."""
+    save_setting(f"user:{int(user_id)}:{key}", value)
 
 
 def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) -> None:
@@ -1169,7 +1492,7 @@ def load_theme_outcomes_for_theme(theme_key: str, limit: int = 12) -> list[dict[
 
 
 _POS_SELECT = """
-    id, code, name, buy_price, qty, note, created_at, last_buy_date,
+    id, user_id, code, name, buy_price, qty, note, created_at, last_buy_date,
     closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
     peak_price, entry_board
 """
@@ -1187,6 +1510,10 @@ def _position_item(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     peak = item.get("peak_price")
     item["peak_price"] = float(peak) if peak not in (None, "") else None
     item["entry_board"] = str(item.get("entry_board") or "").strip() or None
+    try:
+        item["user_id"] = int(item["user_id"]) if item.get("user_id") is not None else None
+    except (TypeError, ValueError):
+        item["user_id"] = None
     return item
 
 
@@ -1226,8 +1553,10 @@ def add_position(
     note: str = "",
     *,
     entry_board: str = "",
+    user_id: int,
 ) -> dict[str, Any]:
     """Insert a position, or average into an existing open same-code row."""
+    uid = int(user_id)
     code = str(code or "").zfill(6)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     buy_day = now[:10]
@@ -1236,21 +1565,22 @@ def add_position(
         existing = conn.execute(
             f"""
             SELECT {_POS_SELECT}
-            FROM positions WHERE code = ? ORDER BY id DESC LIMIT 1
+            FROM positions
+            WHERE code = ? AND user_id = ?
+            ORDER BY id DESC LIMIT 1
             """,
-            (code,),
+            (code, uid),
         ).fetchone()
         if existing:
             old_qty = int(existing["qty"] or 0)
             old_px = float(existing["buy_price"] or 0)
-            # Reopen a same-day closed row instead of averaging into qty=0.
             if old_qty <= 0:
                 conn.execute(
                     """
                     UPDATE positions
                     SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
                         closed_date = NULL, created_at = ?, peak_price = ?, entry_board = ?
-                    WHERE id = ?
+                    WHERE id = ? AND user_id = ?
                     """,
                     (
                         name or existing["name"] or code,
@@ -1262,11 +1592,13 @@ def add_position(
                         float(buy_price),
                         board or (str(existing["entry_board"] or "").strip() or None),
                         int(existing["id"]),
+                        uid,
                     ),
                 )
                 conn.commit()
                 return {
                     "id": int(existing["id"]),
+                    "user_id": uid,
                     "code": code,
                     "name": name or existing["name"] or code,
                     "buy_price": float(buy_price),
@@ -1279,7 +1611,10 @@ def add_position(
                 }
             new_qty = old_qty + int(qty)
             if new_qty <= 0:
-                conn.execute("DELETE FROM positions WHERE id = ?", (int(existing["id"]),))
+                conn.execute(
+                    "DELETE FROM positions WHERE id = ? AND user_id = ?",
+                    (int(existing["id"]), uid),
+                )
                 conn.commit()
                 return {"id": int(existing["id"]), "deleted": True, "code": code}
             avg = (old_px * old_qty + float(buy_price) * int(qty)) / float(new_qty)
@@ -1291,7 +1626,7 @@ def add_position(
                 UPDATE positions
                 SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
                     closed_date = NULL, entry_board = COALESCE(?, entry_board)
-                WHERE id = ?
+                WHERE id = ? AND user_id = ?
                 """,
                 (
                     name or existing["name"] or code,
@@ -1301,11 +1636,13 @@ def add_position(
                     buy_day,
                     board,
                     int(existing["id"]),
+                    uid,
                 ),
             )
             conn.commit()
             return {
                 "id": int(existing["id"]),
+                "user_id": uid,
                 "code": code,
                 "name": name or existing["name"] or code,
                 "buy_price": round(avg, 4),
@@ -1319,18 +1656,19 @@ def add_position(
         cur = conn.execute(
             """
             INSERT INTO positions(
-                code, name, buy_price, qty, note, created_at, last_buy_date,
+                user_id, code, name, buy_price, qty, note, created_at, last_buy_date,
                 closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
                 peak_price, entry_board
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?, ?)
             """,
-            (code, name, buy_price, qty, note, now, buy_day, float(buy_price), board),
+            (uid, code, name, buy_price, qty, note, now, buy_day, float(buy_price), board),
         )
         pid = int(cur.lastrowid)
         conn.commit()
     return {
         "id": pid,
+        "user_id": uid,
         "code": code,
         "name": name,
         "buy_price": buy_price,
@@ -1348,6 +1686,7 @@ def trim_position(
     *,
     sell_price: float | None = None,
     trade_date: str | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Reduce shares; keep qty=0 rows as closed-today until the next trade day."""
     sell = int(qty)
@@ -1355,10 +1694,16 @@ def trim_position(
         return None
     day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
     with _connect() as conn:
-        row = conn.execute(
-            f"SELECT {_POS_SELECT} FROM positions WHERE id = ?",
-            (pid,),
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                f"SELECT {_POS_SELECT} FROM positions WHERE id = ? AND user_id = ?",
+                (pid, int(user_id)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT {_POS_SELECT} FROM positions WHERE id = ?",
+                (pid,),
+            ).fetchone()
         if not row:
             return None
         hold = int(row["qty"] or 0)
@@ -1404,10 +1749,16 @@ def trim_position(
         return item
 
 
-def delete_position(pid: int) -> bool:
+def delete_position(pid: int, *, user_id: int | None = None) -> bool:
     """Delete a position by id. Return True if a row was removed."""
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM positions WHERE id = ?", (pid,))
+        if user_id is not None:
+            cur = conn.execute(
+                "DELETE FROM positions WHERE id = ? AND user_id = ?",
+                (pid, int(user_id)),
+            )
+        else:
+            cur = conn.execute("DELETE FROM positions WHERE id = ?", (pid,))
         conn.commit()
         return cur.rowcount > 0
 
@@ -1444,19 +1795,25 @@ def purge_stale_closed_positions(trade_date: str | None = None) -> dict[str, int
         }
 
 
-def load_positions() -> list[dict[str, Any]]:
-    """Return all locally recorded positions, newest first (includes closed-today)."""
+def load_positions(*, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Return positions for one user (empty when user_id is None)."""
+    if user_id is None:
+        return []
+    uid = int(user_id)
     with _connect() as conn:
         rows = conn.execute(
             f"""
             SELECT {_POS_SELECT}
             FROM positions
+            WHERE user_id = ?
             ORDER BY
               CASE WHEN qty > 0 THEN 0 ELSE 1 END,
               id DESC
-            """
+            """,
+            (uid,),
         ).fetchall()
     return [_position_item(row) for row in rows]
+
 
 
 def position_buy_day(row: dict[str, Any] | None) -> str:
@@ -2233,14 +2590,19 @@ def add_watchlist(
     suggest_price: float | None = None,
     stop_price: float | None = None,
     chase_price: float | None = None,
+    user_id: int,
 ) -> dict[str, Any]:
     """Insert or refresh a personal watchlist row; first_seen/suggest stay locked."""
+    uid = int(user_id)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     code = str(code or "").zfill(6)
     with _connect() as conn:
         existing = conn.execute(
-            "SELECT id, first_seen_at, suggest_price, stop_price, chase_price FROM watchlist WHERE code = ?",
-            (code,),
+            """
+            SELECT id, first_seen_at, suggest_price, stop_price, chase_price
+            FROM watchlist WHERE code = ? AND user_id = ?
+            """,
+            (code, uid),
         ).fetchone()
         if existing:
             conn.execute(
@@ -2250,49 +2612,67 @@ def add_watchlist(
                     note = ?,
                     stop_price = COALESCE(?, stop_price),
                     chase_price = COALESCE(?, chase_price)
-                WHERE code = ?
+                WHERE code = ? AND user_id = ?
                 """,
-                (name, note, stop_price, chase_price, code),
+                (name, note, stop_price, chase_price, code, uid),
             )
             if existing["suggest_price"] is None and suggest_price is not None:
                 conn.execute(
-                    "UPDATE watchlist SET suggest_price = ? WHERE code = ?",
-                    (float(suggest_price), code),
+                    "UPDATE watchlist SET suggest_price = ? WHERE code = ? AND user_id = ?",
+                    (float(suggest_price), code, uid),
                 )
             conn.commit()
-            row = conn.execute("SELECT * FROM watchlist WHERE code = ?", (code,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM watchlist WHERE code = ? AND user_id = ?",
+                (code, uid),
+            ).fetchone()
             return dict(row)
         conn.execute(
             """
             INSERT INTO watchlist(
-                code, name, note, suggest_price, stop_price, chase_price, first_seen_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                user_id, code, name, note, suggest_price, stop_price, chase_price,
+                first_seen_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (code, name, note, suggest_price, stop_price, chase_price, now, now),
+            (uid, code, name, note, suggest_price, stop_price, chase_price, now, now),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM watchlist WHERE code = ?", (code,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM watchlist WHERE code = ? AND user_id = ?",
+            (code, uid),
+        ).fetchone()
         return dict(row)
 
 
-def load_watchlist() -> list[dict[str, Any]]:
-    """Return personal watchlist rows, newest first."""
+def load_watchlist(*, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Return personal watchlist rows for one user (empty if no user)."""
+    if user_id is None:
+        return []
+    uid = int(user_id)
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, code, name, note, suggest_price, stop_price, chase_price,
+            SELECT id, user_id, code, name, note, suggest_price, stop_price, chase_price,
                    first_seen_at, created_at
             FROM watchlist
+            WHERE user_id = ?
             ORDER BY id DESC
-            """
+            """,
+            (uid,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def delete_watchlist(item_id: int) -> bool:
+def delete_watchlist(item_id: int, *, user_id: int | None = None) -> bool:
     """Delete one watchlist row by id."""
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM watchlist WHERE id = ?", (int(item_id),))
+        if user_id is not None:
+            cur = conn.execute(
+                "DELETE FROM watchlist WHERE id = ? AND user_id = ?",
+                (int(item_id), int(user_id)),
+            )
+        else:
+            cur = conn.execute("DELETE FROM watchlist WHERE id = ?", (int(item_id),))
         conn.commit()
         return cur.rowcount > 0
 
@@ -2303,16 +2683,18 @@ def add_favorite_board(
     *,
     kind: str = "",
     note: str = "",
+    user_id: int,
 ) -> dict[str, Any]:
     """Insert or refresh a personally favored sector board."""
+    uid = int(user_id)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     bk = str(bk or "").strip().upper()
     if not bk.startswith("BK"):
         raise ValueError("bk must look like BKXXXX")
     with _connect() as conn:
         existing = conn.execute(
-            "SELECT id FROM favorite_boards WHERE bk = ?",
-            (bk,),
+            "SELECT id FROM favorite_boards WHERE bk = ? AND user_id = ?",
+            (bk, uid),
         ).fetchone()
         if existing:
             conn.execute(
@@ -2321,55 +2703,81 @@ def add_favorite_board(
                 SET name = COALESCE(NULLIF(?, ''), name),
                     kind = COALESCE(NULLIF(?, ''), kind),
                     note = ?
-                WHERE bk = ?
+                WHERE bk = ? AND user_id = ?
                 """,
-                (name, kind, note, bk),
+                (name, kind, note, bk, uid),
             )
             conn.commit()
-            row = conn.execute("SELECT * FROM favorite_boards WHERE bk = ?", (bk,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM favorite_boards WHERE bk = ? AND user_id = ?",
+                (bk, uid),
+            ).fetchone()
             return dict(row)
         conn.execute(
             """
-            INSERT INTO favorite_boards(bk, name, kind, note, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO favorite_boards(user_id, bk, name, kind, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (bk, name, kind, note, now),
+            (uid, bk, name, kind, note, now),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM favorite_boards WHERE bk = ?", (bk,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM favorite_boards WHERE bk = ? AND user_id = ?",
+            (bk, uid),
+        ).fetchone()
         return dict(row)
 
 
-def load_favorite_boards() -> list[dict[str, Any]]:
-    """Return personally favored boards, newest first."""
+def load_favorite_boards(*, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Return favored boards for one user (empty if no user)."""
+    if user_id is None:
+        return []
+    uid = int(user_id)
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, bk, name, kind, note, created_at
+            SELECT id, user_id, bk, name, kind, note, created_at
             FROM favorite_boards
+            WHERE user_id = ?
             ORDER BY id DESC
-            """
+            """,
+            (uid,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def delete_favorite_board(item_id: int) -> bool:
+def delete_favorite_board(item_id: int, *, user_id: int | None = None) -> bool:
     """Delete one favored board by id."""
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM favorite_boards WHERE id = ?", (int(item_id),))
+        if user_id is not None:
+            cur = conn.execute(
+                "DELETE FROM favorite_boards WHERE id = ? AND user_id = ?",
+                (int(item_id), int(user_id)),
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM favorite_boards WHERE id = ?", (int(item_id),)
+            )
         conn.commit()
         return cur.rowcount > 0
 
 
-def delete_favorite_board_by_bk(bk: str) -> bool:
+def delete_favorite_board_by_bk(bk: str, *, user_id: int | None = None) -> bool:
     """Delete one favored board by East Money board code."""
-    bk = str(bk or "").strip().upper()
-    if not bk:
+    key = str(bk or "").strip().upper()
+    if not key:
         return False
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM favorite_boards WHERE bk = ?", (bk,))
+        if user_id is not None:
+            cur = conn.execute(
+                "DELETE FROM favorite_boards WHERE bk = ? AND user_id = ?",
+                (key, int(user_id)),
+            )
+        else:
+            cur = conn.execute("DELETE FROM favorite_boards WHERE bk = ?", (key,))
         conn.commit()
         return cur.rowcount > 0
+
 
 
 def upsert_gap_fade_strike(

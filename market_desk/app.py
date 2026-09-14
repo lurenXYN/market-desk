@@ -8,10 +8,24 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from market_desk.auth import (
+    SESSION_COOKIE,
+    admin_approve,
+    admin_list_users,
+    admin_reject,
+    change_password,
+    ensure_bootstrap_admin,
+    login_user,
+    logout_token,
+    register_user,
+)
+from market_desk.deps import current_admin_required, current_user_optional, current_user_required
+from market_desk.settings import get_settings_for_user
 
 from market_desk.config import STATIC_DIR
 from market_desk.db import (
@@ -160,6 +174,20 @@ class BlacklistIn(BaseModel):
     reason: str = ""
 
 
+class AuthCredIn(BaseModel):
+    """Login / register payload."""
+
+    username: str
+    password: str
+
+
+class PasswordChangeIn(BaseModel):
+    """Change-password payload."""
+
+    old_password: str
+    new_password: str
+
+
 class BackupIn(BaseModel):
     """JSON backup import payload."""
 
@@ -170,6 +198,7 @@ class BackupIn(BaseModel):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Start the refresh loop and wait for the first snapshot."""
+    ensure_bootstrap_admin()
     engine.start()
     for _ in range(120):
         if engine.snapshot.get("updated_at"):
@@ -195,12 +224,120 @@ def favicon() -> FileResponse:
     return FileResponse(Path(STATIC_DIR) / "favicon.ico")
 
 
+
+@app.post("/api/auth/register")
+def auth_register(body: AuthCredIn) -> dict:
+    """Self-register; account stays pending until an admin approves."""
+    try:
+        user = register_user(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "ok": True,
+        "user": user,
+        "message": "已提交注册，等待管理员同意后方可登录",
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(body: AuthCredIn, response: Response) -> dict:
+    """Log in and set an HttpOnly session cookie."""
+    try:
+        user, token, expires = login_user(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=14 * 24 * 3600,
+        path="/",
+    )
+    return {"ok": True, "user": user, "expires_at": expires.strftime("%Y-%m-%d %H:%M:%S")}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(
+    response: Response,
+    user: dict | None = Depends(current_user_optional),
+) -> dict:
+    """Clear the session cookie."""
+    # Best-effort: drop cookie; token cleanup happens on next resolve if expired.
+    del user
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict | None = Depends(current_user_optional)) -> dict:
+    """Return the current session user (or null)."""
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/auth/password")
+def auth_password(
+    body: PasswordChangeIn,
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Change the logged-in user's password."""
+    try:
+        change_password(int(user["id"]), body.old_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/api/admin/users")
+def admin_users(admin: dict = Depends(current_admin_required)) -> dict:
+    """List users for admin approval."""
+    del admin
+    return {"ok": True, "users": admin_list_users()}
+
+
+@app.post("/api/admin/users/{uid}/approve")
+def admin_user_approve(uid: int, admin: dict = Depends(current_admin_required)) -> dict:
+    """Approve a pending registration."""
+    try:
+        row = admin_approve(uid, int(admin["id"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "user": row}
+
+
+@app.post("/api/admin/users/{uid}/reject")
+def admin_user_reject(uid: int, admin: dict = Depends(current_admin_required)) -> dict:
+    """Reject a pending registration."""
+    try:
+        row = admin_reject(uid, int(admin["id"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "user": row}
+
+
 @app.get("/api/snapshot")
-def snapshot(view: str | None = Query(default=None)) -> JSONResponse:
-    """Return the latest snapshot, optionally sliced for one UI tab."""
+def snapshot(
+    view: str | None = Query(default=None),
+    user: dict | None = Depends(current_user_optional),
+) -> JSONResponse:
+    """Return market snapshot plus the caller's personal layer when logged in."""
+    uid = int(user["id"]) if user else None
+    full = engine.snapshot_for_user(uid)
+    if user:
+        full["auth_user"] = user
+    else:
+        full["auth_user"] = None
     if view:
-        return JSONResponse(engine.slice_snapshot(view))
-    return JSONResponse(engine.snapshot)
+        # Reuse slice keys on the already-personalized payload.
+        engine.snapshot, prev = full, engine.snapshot
+        try:
+            sliced = engine.slice_snapshot(view)
+        finally:
+            engine.snapshot = prev
+        sliced["auth_user"] = full.get("auth_user")
+        sliced["auth_required_personal"] = full.get("auth_required_personal")
+        return JSONResponse(sliced)
+    return JSONResponse(full)
 
 
 @app.get("/api/fund-flow")
@@ -285,18 +422,18 @@ async def chart(code: str, signal_at: str | None = Query(default=None)) -> dict:
 
 
 @app.get("/api/positions")
-def list_positions() -> dict:
+def list_positions(user: dict = Depends(current_user_required)) -> dict:
     """Return recorded positions with the last known marks."""
-    rows = engine.sync_positions()
+    snap = engine.snapshot_for_user(int(user["id"]))
     return {
         "ok": True,
-        "positions": rows,
-        "summary": engine.snapshot.get("position_summary"),
+        "positions": snap.get("positions") or [],
+        "summary": snap.get("position_summary"),
     }
 
 
 @app.post("/api/positions")
-def create_position(body: PositionIn) -> dict:
+def create_position(body: PositionIn, user: dict = Depends(current_user_required)) -> dict:
     """Record a buy: code, price and share count."""
     code = normalize_code(body.code)
     if len(code) != 6 or not code.isdigit():
@@ -312,30 +449,31 @@ def create_position(body: PositionIn) -> dict:
         int(body.qty),
         body.note.strip(),
         entry_board=entry_board,
+        user_id=int(user["id"]),
     )
-    rows = engine.sync_positions()
+    snap = engine.snapshot_for_user(int(user["id"]))
     return {
         "ok": True,
-        "positions": rows,
-        "summary": engine.snapshot.get("position_summary"),
+        "positions": snap.get("positions") or [],
+        "summary": snap.get("position_summary"),
     }
 
 
 @app.delete("/api/positions/{pid}")
-def remove_position(pid: int) -> dict:
+def remove_position(pid: int, user: dict = Depends(current_user_required)) -> dict:
     """Delete a recorded position."""
-    if not delete_position(pid):
+    if not delete_position(pid, user_id=int(user["id"])):
         raise HTTPException(404, "position not found")
-    rows = engine.sync_positions()
+    snap = engine.snapshot_for_user(int(user["id"]))
     return {
         "ok": True,
-        "positions": rows,
-        "summary": engine.snapshot.get("position_summary"),
+        "positions": snap.get("positions") or [],
+        "summary": snap.get("position_summary"),
     }
 
 
 @app.post("/api/positions/{pid}/trim")
-def trim_position_api(pid: int, body: TrimIn) -> dict:
+def trim_position_api(pid: int, body: TrimIn, user: dict = Depends(current_user_required)) -> dict:
     """Sell/reduce shares on a recorded position (local book only).
 
     When a same-day sell signal exists in review, auto-mark it traded and fill
@@ -351,6 +489,7 @@ def trim_position_api(pid: int, body: TrimIn) -> dict:
         int(body.qty),
         sell_price=body.sell_price,
         trade_date=trade_day,
+        user_id=int(user["id"]),
     )
     if row is None:
         raise HTTPException(404, "position not found")
@@ -385,14 +524,14 @@ def trim_position_api(pid: int, body: TrimIn) -> dict:
         adapt_mod._ADAPT_CACHE["day"] = ""
     except Exception:
         feedback = None
-    rows = engine.sync_positions()
+    snap = engine.snapshot_for_user(int(user["id"]))
     return {
         "ok": True,
         "trimmed": row,
         "signal_fill": signal_fill,
         "feedback": feedback,
-        "positions": rows,
-        "summary": engine.snapshot.get("position_summary"),
+        "positions": snap.get("positions") or [],
+        "summary": snap.get("position_summary"),
     }
 
 
@@ -413,7 +552,7 @@ def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
 
 
 @app.post("/api/review/{sid}/trade")
-def trade_signal(sid: int, body: SignalTradeIn) -> dict:
+def trade_signal(sid: int, body: SignalTradeIn, user: dict = Depends(current_user_required)) -> dict:
     """Mark traded; optionally book a buy or trim a sell into local positions."""
     row = load_signal(sid)
     if not row:
@@ -435,7 +574,7 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
         )[:10]
         positions = [
             p
-            for p in load_positions()
+            for p in load_positions(user_id=int(user["id"]))
             if normalize_code(p.get("code")) == code and int(p.get("qty") or 0) > 0
         ]
         if positions and is_t1_locked(positions[0], trade_day):
@@ -483,11 +622,12 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
                     (((engine.snapshot.get("verdict") or {}).get("mainline") or {}).get("name"))
                     or ""
                 ),
+                user_id=int(user["id"]),
             )
         else:
             positions = [
                 p
-                for p in load_positions()
+                for p in load_positions(user_id=int(user["id"]))
                 if normalize_code(p.get("code")) == code and int(p.get("qty") or 0) > 0
             ]
             if not positions:
@@ -510,10 +650,12 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
                 qty,
                 sell_price=sell_px,
                 trade_date=str(row.get("trade_date") or "")[:10] or None,
+                user_id=int(user["id"]),
             )
             update_signal_meta(sid, fill_qty=qty, fill_price=fill_px or float(pos.get("buy_price") or 0) or None)
 
-    rows = engine.sync_positions()
+    snap = engine.snapshot_for_user(int(user["id"]))
+    rows = snap.get("positions") or []
     book_summary: dict[str, Any] | None = None
     if booked:
         if is_buy_signal(sig_type):
@@ -559,21 +701,34 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
         "booked": booked,
         "book_summary": book_summary,
         "positions": rows,
-        "summary": engine.snapshot.get("position_summary"),
+        "summary": snap.get("position_summary"),
     }
 
 
 @app.get("/api/settings")
-def read_settings() -> dict:
-    """Return runtime settings for the parameters panel."""
-    return {"ok": True, "settings": get_settings(refresh=True)}
+def read_settings(user: dict | None = Depends(current_user_optional)) -> dict:
+    """Return runtime settings (merged with user private knobs when logged in)."""
+    uid = int(user["id"]) if user else None
+    return {"ok": True, "settings": get_settings_for_user(uid), "auth_user": user}
 
 
 @app.post("/api/settings")
-def write_settings(body: SettingsIn) -> dict:
-    """Patch runtime settings from the parameters panel."""
+def write_settings(
+    body: SettingsIn,
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Patch settings: private keys per user; global keys require admin."""
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
-    return {"ok": True, "settings": update_settings(patch)}
+    from market_desk.settings import USER_PRIVATE_KEYS
+
+    global_keys = [k for k in patch if k not in USER_PRIVATE_KEYS]
+    if global_keys and user.get("role") != "admin":
+        raise HTTPException(403, "全局参数仅管理员可改：" + "、".join(global_keys[:6]))
+    return {
+        "ok": True,
+        "settings": update_settings(patch, user_id=int(user["id"])),
+        "auth_user": user,
+    }
 
 
 @app.delete("/api/review/{sid}")
@@ -617,14 +772,14 @@ def theme_reputation_adjust(body: ThemeRepIn) -> dict:
 
 
 @app.get("/api/watchlist")
-def list_watchlist() -> dict:
+def list_watchlist(user: dict = Depends(current_user_required)) -> dict:
     """Return personal watchlist rows with last known marks."""
-    rows = engine.sync_watchlist()
+    rows = engine.sync_watchlist(user_id=int(user["id"]))
     return {"ok": True, "watchlist": rows}
 
 
 @app.post("/api/watchlist")
-def create_watchlist(body: WatchlistIn) -> dict:
+def create_watchlist(body: WatchlistIn, user: dict = Depends(current_user_required)) -> dict:
     """Add or refresh one personal watchlist ticker."""
     code = normalize_code(body.code)
     if len(code) != 6 or not code.isdigit():
@@ -636,27 +791,35 @@ def create_watchlist(body: WatchlistIn) -> dict:
         suggest_price=body.suggest_price,
         stop_price=body.stop_price,
         chase_price=body.chase_price,
+        user_id=int(user["id"]),
     )
-    return {"ok": True, "watchlist": engine.sync_watchlist()}
+    return {"ok": True, "watchlist": engine.sync_watchlist(user_id=int(user["id"]))}
 
 
 @app.delete("/api/watchlist/{item_id}")
-def remove_watchlist(item_id: int) -> dict:
+def remove_watchlist(item_id: int, user: dict = Depends(current_user_required)) -> dict:
     """Delete one personal watchlist row."""
-    if not delete_watchlist(item_id):
+    if not delete_watchlist(item_id, user_id=int(user["id"])):
         raise HTTPException(404, "watchlist item not found")
-    return {"ok": True, "watchlist": engine.sync_watchlist()}
+    return {"ok": True, "watchlist": engine.sync_watchlist(user_id=int(user["id"]))}
 
 
 @app.get("/api/favorite-boards")
-def list_favorite_boards() -> dict:
+def list_favorite_boards(user: dict = Depends(current_user_required)) -> dict:
     """Return personally favored boards from the live snapshot."""
-    rows = engine.sync_favorite_boards()
-    return {"ok": True, "favorite_boards": rows, "stored": load_favorite_boards()}
+    rows = engine.sync_favorite_boards(user_id=int(user["id"]))
+    return {
+        "ok": True,
+        "favorite_boards": rows,
+        "stored": load_favorite_boards(user_id=int(user["id"])),
+    }
 
 
 @app.post("/api/favorite-boards")
-def create_favorite_board(body: FavoriteBoardIn) -> dict:
+def create_favorite_board(
+    body: FavoriteBoardIn,
+    user: dict = Depends(current_user_required),
+) -> dict:
     """Add or refresh one favored sector board."""
     bk = str(body.bk or "").strip().upper()
     if not bk.startswith("BK") or len(bk) < 4:
@@ -667,26 +830,27 @@ def create_favorite_board(body: FavoriteBoardIn) -> dict:
             body.name.strip(),
             kind=body.kind.strip(),
             note=body.note.strip(),
+            user_id=int(user["id"]),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
+    return {"ok": True, "favorite_boards": engine.sync_favorite_boards(user_id=int(user["id"]))}
 
 
 @app.delete("/api/favorite-boards/by-bk/{bk}")
-def remove_favorite_board_bk(bk: str) -> dict:
+def remove_favorite_board_bk(bk: str, user: dict = Depends(current_user_required)) -> dict:
     """Delete one favored board by East Money board code."""
-    if not delete_favorite_board_by_bk(bk):
+    if not delete_favorite_board_by_bk(bk, user_id=int(user["id"])):
         raise HTTPException(404, "favorite board not found")
-    return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
+    return {"ok": True, "favorite_boards": engine.sync_favorite_boards(user_id=int(user["id"]))}
 
 
 @app.delete("/api/favorite-boards/{item_id}")
-def remove_favorite_board(item_id: int) -> dict:
+def remove_favorite_board(item_id: int, user: dict = Depends(current_user_required)) -> dict:
     """Delete one favored board by id."""
-    if not delete_favorite_board(item_id):
+    if not delete_favorite_board(item_id, user_id=int(user["id"])):
         raise HTTPException(404, "favorite board not found")
-    return {"ok": True, "favorite_boards": engine.sync_favorite_boards()}
+    return {"ok": True, "favorite_boards": engine.sync_favorite_boards(user_id=int(user["id"]))}
 
 
 @app.get("/api/blacklist")
@@ -785,6 +949,4 @@ def backup_import(body: BackupIn) -> dict:
     from market_desk.settings import get_settings
 
     get_settings(refresh=True)
-    engine.sync_positions()
-    engine.sync_watchlist()
     return {"ok": True, "counts": counts}

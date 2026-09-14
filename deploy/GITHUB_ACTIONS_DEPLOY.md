@@ -83,6 +83,8 @@ curl -sS http://127.0.0.1:8765/api/health
 ## 注意
 
 - `data/desk.db` 不会被 rsync 覆盖（排除了 `data/`）。
+- 多用户：首次启动若无用户会创建管理员 `admin` / `admin123`（可用环境变量 `MARKET_DESK_ADMIN_USER` / `MARKET_DESK_ADMIN_PASSWORD` 覆盖）；他人自助注册后需管理员在页头「审批」同意。
 - Actions 并发组会取消进行中的旧部署，避免叠两次 restart。
 - 私钥只放在 GitHub Secrets，不要提交进仓库；本机测完可删本地 `market-desk-deploy` 或锁进密码器。
 - 若仓库是 private，服务器 `git fetch` 需已配置 deploy key / token（当前 public 则无需）。
+- 公网务必 Nginx + HTTPS，勿长期裸奔 `0.0.0.0:8765`。
