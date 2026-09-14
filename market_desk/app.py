@@ -189,6 +189,12 @@ def index() -> FileResponse:
     return FileResponse(Path(STATIC_DIR) / "index.html")
 
 
+@app.get("/favicon.ico")
+def favicon() -> FileResponse:
+    """Serve the tab icon (browsers request this at site root)."""
+    return FileResponse(Path(STATIC_DIR) / "favicon.ico")
+
+
 @app.get("/api/snapshot")
 def snapshot(view: str | None = Query(default=None)) -> JSONResponse:
     """Return the latest snapshot, optionally sliced for one UI tab."""
