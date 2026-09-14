@@ -5063,6 +5063,20 @@
         lastData = Object.assign({}, lastData || {}, d);
         if (d.glossary) GLOSSARY = d.glossary;
         if (d.auth_user !== undefined) paintAuthUser(d.auth_user);
+        // Unauthenticated: never keep stale personal rows from a prior merge/login.
+        if (!d.auth_user) {
+          lastData.positions = Array.isArray(d.positions) ? d.positions : [];
+          lastData.watchlist = Array.isArray(d.watchlist) ? d.watchlist : [];
+          lastData.favorite_boards = Array.isArray(d.favorite_boards) ? d.favorite_boards : [];
+          lastData.position_summary = d.position_summary || {};
+          lastData.risk_overview = d.risk_overview || lastData.position_summary || {};
+          lastData.sell_advice = d.sell_advice || { items: [], text: "" };
+          if (lastData.verdict) {
+            lastData.verdict = Object.assign({}, lastData.verdict, {
+              watch_trial_recommend: (d.verdict && d.verdict.watch_trial_recommend) || null,
+            });
+          }
+        }
         paintVisible(lastData);
         paintClock();
         scheduleTick(!!lastData.live);
@@ -5181,6 +5195,16 @@
     document.getElementById("authLogoutBtn")?.addEventListener("click", async () => {
       await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
       paintAuthUser(null);
+      // Drop cached personal rows immediately (don't wait for next tick merge).
+      if (lastData) {
+        lastData.positions = [];
+        lastData.watchlist = [];
+        lastData.favorite_boards = [];
+        lastData.position_summary = {};
+        lastData.risk_overview = {};
+        lastData.sell_advice = { items: [], text: "" };
+        paintVisible(lastData);
+      }
       tick(true);
     });
     document.getElementById("authAdminBtn")?.addEventListener("click", () => {

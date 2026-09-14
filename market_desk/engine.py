@@ -212,13 +212,27 @@ class DeskEngine:
 
     def snapshot_for_user(self, user_id: int | None) -> dict[str, Any]:
         """Market snapshot plus optional personal layer for the logged-in user."""
+        # Shallow copy is fine: we overwrite every personal key below.
         base = dict(self.snapshot or {})
-        # Ensure shared personal slots stay empty in the public base.
+        empty_sum = position_summary([])
+        empty_risk = build_risk_overview([], size_cap_pct=100)
+        # Always strip personal slots first (shared engine snap must not leak).
         base["positions"] = []
         base["watchlist"] = []
-        base.setdefault("position_summary", position_summary([]))
+        base["favorite_boards"] = []
+        base["position_summary"] = empty_sum
+        base["risk_overview"] = empty_risk
+        base["sell_advice"] = {"items": [], "text": "", "title": ""}
+        verdict = dict(base.get("verdict") or {})
+        verdict["watch_trial_recommend"] = None
+        # size_cap / personal demotions should not stick from another user
+        if "size_cap" in verdict:
+            verdict = dict(verdict)
+            verdict.pop("size_cap", None)
+        base["verdict"] = verdict
         if user_id is None:
             base["auth_required_personal"] = True
+            base["auth_user"] = None
             return base
         from market_desk.personal import attach_personal_layer
 
@@ -744,26 +758,19 @@ class DeskEngine:
                     "session_segments": segments,
                     "mainline_switches": switches,
                     "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
-                    "positions": positions,
-                    "position_summary": position_summary(positions),
+                    # Multi-user: shared snap never carries personal books.
+                    "positions": [],
+                    "position_summary": position_summary([]),
                     "risk_overview": build_risk_overview(
-                        positions,
+                        [],
                         size_cap_pct=float(
                             ((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
                         ),
                     ),
-                    "watchlist": watchlist,
+                    "watchlist": [],
                     "stock_blacklist": blacklist_state,
                     "recent_toasts": list(self._toast_feed),
-                    "sell_advice": build_sell_advice(
-                        positions,
-                        verdict,
-                        phase,
-                        trade_date=trade_date_dash,
-                        trends_by_code=pos_trends,
-                        similar=similar,
-                        metrics=metrics,
-                    ),
+                    "sell_advice": {"items": [], "text": "", "title": ""},
                     "glossary": GLOSSARY,
                 }
                 fav_desk = build_favorite_desk_plans(
