@@ -1970,9 +1970,11 @@
               <div class="bans" id="bans"></div>
             </div>
           </details>
-            <div class="desk-pair">
+          <div class="desk-pair">
             <div class="buybox off" id="buybox">
-              <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button></div>
+              <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button>
+                <span class="meta" id="enrichHint" hidden>补齐中…</span>
+              </div>
               <div class="buyline" id="buyline">暂不买入</div>
               <div class="buymeta" id="buymeta"></div>
               <div class="buymeta" id="buystop"></div>
@@ -2610,6 +2612,8 @@
         vsHtml = `<div class="meta">相对主线载体 <span class="${cls}">${Number(it.vs_carrier) > 0 ? "+" : ""}${Number(it.vs_carrier).toFixed(1)}pt</span>${it.carrier_falling ? " · 载体走弱" : ""}</div>`;
       } else if (it.carrier_falling) {
         vsHtml = `<div class="meta">主线载体走弱</div>`;
+      } else if (it.carrier_compare_absent) {
+        vsHtml = `<div class="meta">无载体对比（主线无精确ETF/报价）</div>`;
       }
       if (it.partial_done && !sellNow) {
         vsHtml += `<div class="meta">今日已减 · 余仓盯止损</div>`;
@@ -3118,9 +3122,15 @@
         if (ad.sell_mfe && ad.sell_mfe.ok && ad.sell_mfe.note) bits.push(ad.sell_mfe.note);
         if (ad.segment_sell && ad.segment_sell.note) bits.push(ad.segment_sell.note);
         if (ad.pullback_sweet && ad.pullback_sweet.ok && ad.pullback_sweet.note) bits.push(ad.pullback_sweet.note);
+        if (ad.desk_source_bias && ad.desk_source_bias.ok && ad.desk_source_bias.note) bits.push(ad.desk_source_bias.note);
         if (ad.whitebox && ad.whitebox.ok && ad.whitebox.note) bits.push(ad.whitebox.note);
         adaptNote.textContent = bits.join(" · ");
         adaptNote.hidden = !bits.length;
+      }
+      const enrichHint = document.getElementById("enrichHint");
+      if (enrichHint) {
+        enrichHint.hidden = !d.enrich_pending;
+        enrichHint.textContent = d.enrich_pending ? "股东/日线补齐中…" : "";
       }
       const wbPanel = document.getElementById("whiteboxPanel");
       const wbBody = document.getElementById("whiteboxBody");
@@ -4419,9 +4429,18 @@
       const kindLine = kh.length
         ? ("品种 " + kh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
         : "";
-      const deskLine = dh.length
-        ? ("来源 " + dh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
-        : "";
+      const deskLine = (() => {
+        if (!dh.length) return "";
+        const main = dh.find((k) => k.source === "main");
+        const rest = dh.filter((k) => k.source !== "main");
+        const mainBit = main
+          ? `主线 ${main.hit_rate}%（${main.scored_n}）`
+          : "";
+        const restBit = rest.length
+          ? ("次要 " + rest.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" / "))
+          : "";
+        return "来源 " + [mainBit, restBit].filter(Boolean).join(" · ");
+      })();
       const crossLine = pkh.length
         ? ("交叉 " + pkh.slice(0, 8).map((p) =>
             `${p.phase}·${p.label} ${p.hit_rate}%（${p.scored_n}）`
@@ -4497,16 +4516,21 @@
       };
       const isPaperWait = (r) => {
         const st = String(r.signal_type || "");
-        if (st === "sell") return false;
-        if (Number(r.ready || 0) || Number(r.traded || 0)) return false;
+        if (!(st === "buy" || st.startsWith("buy_"))) return false;
+        if (Number(r.ready || 0) || Number(r.traded || 0) || Number(r.skipped || 0)) return false;
+        if (r.outcome_label) return false;
         const flags = r.price_flags || [];
-        if (flags.includes("miss_pullback") || flags.includes("chase_hit") || flags.includes("stop_hit") || flags.includes("in_band")) {
+        // Keep actionable / diagnostic rows visible.
+        if (flags.some((f) => ["miss_pullback", "chase_hit", "stop_hit", "in_band", "near_wait"].includes(f))) {
           return false;
         }
-        // Pure 盯回踩: not near-entry / not gated / still waiting.
         const near = !!(r.near_entry || (r.payload && r.payload.near_entry));
         const gated = (r.confirm_fail || (r.payload && r.payload.confirm_fail) || []).length > 0;
-        return !near && !gated;
+        const mark = String(r.price_mark || "");
+        if (near || gated) return false;
+        if (mark && !mark.includes("回踩") && mark !== "—") return false;
+        // Pure 盯回踩 paper: waiting far from band, no gate fail, no live flag.
+        return true;
       };
       const rows = (lastReview.signals || []).filter((r) => {
         if (type === "buy") {
@@ -4519,6 +4543,25 @@
         if (hideWait && isPaperWait(r)) return false;
         return true;
       });
+      const hiddenWaitN = hideWait
+        ? (lastReview.signals || []).filter((r) => {
+            if (type === "buy") {
+              const st = String(r.signal_type || "");
+              if (!(st === "buy" || st.startsWith("buy_"))) return false;
+            } else if (type === "sell") return false;
+            else if (type && r.signal_type !== type) return false;
+            if (kind && (r.kind || "") !== kind) return false;
+            if (srcFilter && srcOf(r) !== srcFilter) return false;
+            if (main && !(String(r.mainline || "").includes(main))) return false;
+            return isPaperWait(r);
+          }).length
+        : 0;
+      const hideLab = document.querySelector("#revHideWait")?.parentElement?.querySelector("span");
+      if (hideLab) {
+        hideLab.textContent = hiddenWaitN
+          ? `隐藏纯盯回踩（已藏 ${hiddenWaitN}）`
+          : "隐藏纯盯回踩";
+      }
       const cols = visibleRevCols();
       document.getElementById("revHead").innerHTML = cols.map((id) =>
         `<th class="col-${id}">${revColLabel(id)}</th>`

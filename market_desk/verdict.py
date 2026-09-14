@@ -415,7 +415,13 @@ def build_verdict(
 
         link_adapt = dict(adapt_bundle)
         link_adapt["board_link"] = True
-        link_adapt["board_link_mult"] = float(BOARD_LINK_SIZE_MULT)
+        link_m = float(BOARD_LINK_SIZE_MULT)
+        bias = adapt_bundle.get("desk_source_bias") or {}
+        try:
+            link_m *= float(bias.get("link_mult") or 1.0)
+        except (TypeError, ValueError):
+            pass
+        link_adapt["board_link_mult"] = round(max(0.5, min(1.0, link_m)), 3)
         link_recommend = _attach_risk_sizing(
             link_recommend or {}, playbook=playbook, adapt=link_adapt
         )
@@ -1615,7 +1621,12 @@ def build_watch_trial_recommend(
     }
     trial_adapt = dict(adapt or {})
     trial_adapt["watch_trial"] = True
-    trial_adapt["watch_trial_mult"] = float(WATCH_TRIAL_SIZE_MULT)
+    try:
+        base = float(WATCH_TRIAL_SIZE_MULT)
+        damp = float((adapt or {}).get("desk_source_bias", {}).get("trial_mult") or 1.0)
+        trial_adapt["watch_trial_mult"] = round(max(0.5, min(1.0, base * damp)), 3)
+    except (TypeError, ValueError):
+        trial_adapt["watch_trial_mult"] = float(WATCH_TRIAL_SIZE_MULT)
     return _attach_risk_sizing(rec, playbook=playbook, adapt=trial_adapt)
 
 
@@ -4229,6 +4240,9 @@ def _sell_item(
         "carrier_rel_strong": carrier_rel_strong,
         "carrier_rel_weak": carrier_rel_weak,
         "vs_carrier": vs_carrier,
+        "carrier_compare_absent": bool(
+            on_mainline and carrier_pct is None and not theme_ctx.get("carrier_falling")
+        ),
         "partial_done": partial_done,
     }
 

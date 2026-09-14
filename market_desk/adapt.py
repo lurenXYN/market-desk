@@ -1014,6 +1014,51 @@ def build_pullback_sweet(
     return out
 
 
+def build_desk_source_size_bias(
+    desk_hits: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Soft-damp link/trial card size when their review hit-rate lags mainline.
+
+    Does not touch sticky mainline buys; only BOARD_LINK / WATCH_TRIAL multipliers.
+    """
+    from market_desk.config import DESK_SRC_HIT_DAMP, DESK_SRC_HIT_GAP_PP, DESK_SRC_HIT_MIN_N
+
+    by = {str(r.get("source") or ""): r for r in (desk_hits or []) if r.get("source")}
+    main = by.get("main") or {}
+    main_n = int(main.get("scored_n") or 0)
+    main_rate = main.get("hit_rate")
+    out: dict[str, Any] = {
+        "ok": False,
+        "link_mult": 1.0,
+        "trial_mult": 1.0,
+        "note": "",
+    }
+    if main_rate is None or main_n < int(DESK_SRC_HIT_MIN_N):
+        return out
+    notes: list[str] = []
+    gap = float(DESK_SRC_HIT_GAP_PP)
+    damp = float(DESK_SRC_HIT_DAMP)
+
+    def _lag(src: str) -> bool:
+        row = by.get(src) or {}
+        n = int(row.get("scored_n") or 0)
+        rate = row.get("hit_rate")
+        if rate is None or n < int(DESK_SRC_HIT_MIN_N):
+            return False
+        return float(rate) <= float(main_rate) - gap
+
+    if _lag("link"):
+        out["link_mult"] = damp
+        notes.append(f"联动命中落后主线→联动仓×{damp:g}")
+    if _lag("watch_trial"):
+        out["trial_mult"] = damp
+        notes.append(f"自选试探命中落后→试探仓×{damp:g}")
+    if notes:
+        out["ok"] = True
+        out["note"] = "；".join(notes)
+    return out
+
+
 def build_auto_tune_deltas(
     *,
     gate_bias: dict[str, Any] | None = None,
@@ -1195,8 +1240,10 @@ def build_adapt_bundle(
     _ADAPT_CACHE["context_gate"] = context_gate
     missed_by: dict[str, int] = {}
     missed_n = 0
+    desk_hits: list[dict[str, Any]] = []
     try:
         from market_desk.review import (
+            build_desk_source_hit_rates,
             build_kind_hit_rates,
             build_missed_buys,
             cached_buy_gate_bias,
@@ -1204,6 +1251,7 @@ def build_adapt_bundle(
 
         gate = cached_buy_gate_bias()
         kinds = build_kind_hit_rates(rows)
+        desk_hits = build_desk_source_hit_rates(rows)
         day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
         # Prefer dash date; signals may also use YYYYMMDD.
         day_alt = day.replace("-", "")
@@ -1232,6 +1280,8 @@ def build_adapt_bundle(
     except Exception:
         gate = {}
         kinds = []
+        desk_hits = []
+    desk_src_bias = build_desk_source_size_bias(desk_hits)
     tune = build_auto_tune_deltas(
         gate_bias=gate,
         kind_hits=kinds,
@@ -1273,6 +1323,7 @@ def build_adapt_bundle(
             seg.get("note"),
             sweet.get("note") if sweet.get("ok") else "",
             tune.get("note") if tune.get("ok") else "",
+            desk_src_bias.get("note") if desk_src_bias.get("ok") else "",
             whitebox.get("note") if whitebox.get("ok") else "",
         )
         if n
@@ -1290,9 +1341,11 @@ def build_adapt_bundle(
         "sell_mfe": sell_mfe,
         "pullback_sweet": sweet,
         "auto_tune": tune,
+        "desk_source_bias": desk_src_bias,
+        "desk_hits": desk_hits,
         "context": current_ctx,
         "whitebox": whitebox,
-        "note": " · ".join(notes[:5]),
+        "note": " · ".join(notes[:6]),
     }
 
 

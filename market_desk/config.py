@@ -422,6 +422,10 @@ BOARD_LINK_CHASE_RATIO = 0.997  # last ≥ chase * this → counts as hug-chase
 # Watchlist「可试探」desk side cards (same soft tier as board link).
 WATCH_TRIAL_SIZE_MULT = 0.75
 WATCH_TRIAL_MAX_ITEMS = 4
+# Soft damp side-card size when review hit-rate lags mainline (desk_source buckets).
+DESK_SRC_HIT_MIN_N = 5
+DESK_SRC_HIT_GAP_PP = 15.0      # link/trial hit_rate ≤ main − this → damp
+DESK_SRC_HIT_DAMP = 0.85        # multiply BOARD_LINK / WATCH_TRIAL size
 # Smarter affinity: weight strong members / leaders / board co-move.
 THEME_MEMBER_SIM_WEIGHT = 0.40  # unweighted Jaccard share (fallback mix)
 THEME_WEIGHTED_MEMBER_WEIGHT = 0.35  # pct/leader-weighted Jaccard
