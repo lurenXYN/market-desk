@@ -411,6 +411,10 @@ THEME_REP_MIN_SAMPLES = 2       # mild adj before this; full after
 THEME_REP_ADJ_MIN = -12.0
 THEME_REP_ADJ_MAX = 8.0         # room for sticky persist bonus
 THEME_SIM_PEER_MIN = 0.45       # show peers above this
+# Soft board-linkage buys: similar peer cards when mainline has no ready entry.
+BOARD_LINK_SIM_MIN = 0.45       # reuse peer floor; raise to be stricter
+BOARD_LINK_SIZE_MULT = 0.75     # extra size damp vs mainline risk plan
+BOARD_LINK_MAX_STOCKS = 2
 THEME_SIM_INHERIT = 0.35        # fraction of peer bad-rep inherited
 THEME_SIM_INHERIT_MIN = 0.70    # only inherit from strong peers
 THEME_SIM_POS_INHERIT = 0.22    # milder positive inheritance

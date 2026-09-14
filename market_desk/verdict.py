@@ -394,6 +394,34 @@ def build_verdict(
     if side_info:
         algo_notes.append(f"观察支线={side_info.get('name')}")
 
+    link_info, link_recommend = _build_link_branch(
+        hot=hot or [],
+        main=main,
+        etfs=etfs,
+        zt=zt or [],
+        zb=zb or [],
+        bans=bans,
+        stock_block=stock_block,
+        recommend=recommend,
+        side_info=side_info,
+        orphan=("hard" if not exact_etf and not soft_etf else ("soft" if soft_etf else False)),
+        phase=phase,
+    )
+    if link_info:
+        algo_notes.append(
+            f"板块联动={link_info.get('name')}({int(round(float(link_info.get('sim') or 0) * 100))}%)"
+        )
+        from market_desk.config import BOARD_LINK_SIZE_MULT
+
+        link_adapt = dict(adapt_bundle)
+        link_adapt["board_link"] = True
+        link_adapt["board_link_mult"] = float(BOARD_LINK_SIZE_MULT)
+        link_recommend = _attach_risk_sizing(
+            link_recommend or {}, playbook=playbook, adapt=link_adapt
+        )
+    else:
+        link_recommend = None
+
     prev_name = (
         (((prev or {}).get("verdict") or {}).get("mainline") or {}).get("name") or ""
     ).strip()
@@ -422,6 +450,14 @@ def build_verdict(
             )
             + "，只盯回踩不当现买。"
         )
+    if link_info and link_info.get("name"):
+        sim_pct = int(round(float(link_info.get("sim") or 0) * 100))
+        narrative = (
+            narrative.rstrip("。")
+            + f"；主线暂无现买点，联动相似板块「{link_info.get('name')}」"
+            + (f"（相似{sim_pct}%）" if sim_pct else "")
+            + "，小仓盯回踩不改主线。"
+        )
     if algo_notes:
         narrative = narrative.rstrip("。") + "；算法：" + "、".join(algo_notes[:5]) + "。"
     sell_themes = build_sell_themes(
@@ -431,6 +467,8 @@ def build_verdict(
         side_info=side_info,
         recommend=recommend,
         side_recommend=side_recommend,
+        link_info=link_info,
+        link_recommend=link_recommend,
         life_stage=life_stage,
     )
     out = {
@@ -443,6 +481,8 @@ def build_verdict(
         "recommend": recommend,
         "side_mainline": side_info,
         "side_recommend": side_recommend,
+        "link_mainline": link_info,
+        "link_recommend": link_recommend,
         "sell_themes": sell_themes,
         "playbook": playbook,
         "algo_notes": algo_notes,
@@ -499,6 +539,9 @@ def build_verdict(
     )
     out["side_recommend"] = mark_pullback_entries(
         out.get("side_recommend"), observe_only=True, block_arm=block_arm
+    )
+    out["link_recommend"] = mark_pullback_entries(
+        out.get("link_recommend"), observe_only=True, block_arm=block_arm
     )
     out = reconfirm_recommend_ready(out, metrics)
     return align_action_with_ready(out)
@@ -1079,6 +1122,166 @@ def _build_side_branch(
     return info, rec
 
 
+def _build_link_branch(
+    *,
+    hot: list[dict[str, Any]] | None,
+    main: dict[str, Any] | None,
+    etfs: list[dict[str, Any]] | None,
+    zt: list[dict[str, Any]],
+    zb: list[dict[str, Any]],
+    bans: list[str],
+    stock_block: bool,
+    recommend: dict[str, Any] | None,
+    side_info: dict[str, Any] | None = None,
+    orphan: bool | str = False,
+    phase: str = "",
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Build soft sibling-board cards when sticky mainline has no ready entry.
+
+    Does not switch sticky mainline or upgrade hero action; cards stay observation
+    path with an extra size damp (BOARD_LINK_SIZE_MULT).
+    """
+    from market_desk.config import BOARD_LINK_MAX_STOCKS, BOARD_LINK_SIM_MIN, BOARD_LINK_SIZE_MULT
+
+    main = main or {}
+    main_name = str(main.get("name") or "").strip()
+    if not main_name or stock_block:
+        return None, None
+    if any(bool(i.get("ready")) for i in ((recommend or {}).get("items") or [])):
+        return None, None
+
+    peers = list(main.get("similar_peers") or [])
+    if not peers:
+        return None, None
+    by_name = {
+        str(b.get("name") or "").strip(): b
+        for b in (hot or [])
+        if str(b.get("name") or "").strip()
+    }
+    side_name = str((side_info or {}).get("name") or "").strip()
+    chosen: dict[str, Any] | None = None
+    chosen_sim = 0.0
+    best = -1.0
+    for peer in peers:
+        name = str(peer.get("name") or "").strip()
+        if not name or name == main_name or name == side_name:
+            continue
+        try:
+            sim = float(peer.get("sim") or 0)
+        except (TypeError, ValueError):
+            sim = 0.0
+        if sim < float(BOARD_LINK_SIM_MIN):
+            continue
+        board = by_name.get(name)
+        if not board:
+            continue
+        status = str(board.get("status") or "")
+        if status in ("尖峰禁追", "退潮"):
+            continue
+        if _blocks_chi_star_stocks(name):
+            continue
+        rank = sim + (0.12 if status == "确认中" else 0.0) + min(
+            float(board.get("zt_n") or 0) * 0.01, 0.08
+        )
+        if rank > best:
+            best = rank
+            chosen = board
+            chosen_sim = sim
+    if not chosen:
+        return None, None
+
+    peer_name = str(chosen.get("name") or "").strip()
+    exact = etf_spec_for_name(peer_name)
+    soft = False
+    vehicle = match_mainline_etf(peer_name, etfs) if exact else None
+    if not vehicle:
+        soft_spec = etf_spec_soft_fallback(peer_name)
+        if soft_spec:
+            _, code, name = soft_spec
+            quote = next((x for x in (etfs or []) if x.get("code") == code), None)
+            vehicle = (
+                dict(quote)
+                if quote
+                else {
+                    "code": code,
+                    "name": name,
+                    "price": None,
+                    "pct": None,
+                    "low": None,
+                    "high": None,
+                }
+            )
+            soft = True
+    vehicle = vehicle or {}
+    bounce = None
+    price = vehicle.get("price")
+    low = vehicle.get("low")
+    if price is not None and low not in (None, 0):
+        bounce = (float(price) / float(low) - 1.0) * 100.0
+
+    allow_stocks = not _blocks_chi_star_stocks(peer_name)
+    stocks = (
+        _stock_candidates(
+            chosen, zt, zb, boards=hot or [], orphan=orphan, phase=phase
+        )
+        if allow_stocks
+        else []
+    )
+    skip = set(_recommend_codes(recommend))
+    stocks = [s for s in stocks if normalize_code(s.get("code")) not in skip][
+        : int(BOARD_LINK_MAX_STOCKS)
+    ]
+    if not stocks and not vehicle.get("code"):
+        return None, None
+
+    rec = _build_recommend("观察回踩", chosen, vehicle, bounce, stocks, bans)
+    for item in rec.get("items") or []:
+        item["ready"] = False
+        item["link_board"] = True
+        item["link_sim"] = round(chosen_sim, 2)
+        if item.get("wait_price") is not None:
+            item["buy_price"] = item.get("wait_price")
+        kind = item.get("kind") or "stock"
+        item["role_label"] = (
+            f"联动ETF·{peer_name}" if kind == "etf" else f"联动·{peer_name}"
+        )
+        reason = str(item.get("reason") or "")
+        tip = f"相似主线 {main_name}（{int(round(chosen_sim * 100))}%）"
+        item["reason"] = f"{tip}；{reason}" if reason else tip
+    rec["buy"] = False
+    rec["link"] = True
+    rec["link_sim"] = round(chosen_sim, 2)
+    rec["title"] = f"板块联动 · {peer_name}"
+    rec["size_note"] = _join_hint(
+        f"主线暂无现买点；相似板块回踩可小仓（建议再×{BOARD_LINK_SIZE_MULT:g}），不改 sticky 主线",
+        f"相似 {int(round(chosen_sim * 100))}%"
+        + (f" · 载体近似 {vehicle.get('name')}" if soft and vehicle.get("name") else ""),
+    )
+    if not (rec.get("items") or []):
+        return None, None
+
+    life = classify_lifecycle(chosen)
+    info = {
+        "name": peer_name,
+        "bk": chosen.get("bk"),
+        "kind": chosen.get("kind"),
+        "status": chosen.get("status"),
+        "pct": chosen.get("pct"),
+        "zt_n": chosen.get("zt_n"),
+        "leader_name": chosen.get("leader_name"),
+        "leader_code": chosen.get("leader_code"),
+        "lifecycle": life,
+        "score": chosen.get("score"),
+        "sim": round(chosen_sim, 2),
+        "etf_soft": soft,
+        "carrier_code": vehicle.get("code"),
+        "carrier_name": vehicle.get("name"),
+        "pool_codes": _pool_codes_from_board(chosen),
+        "mainline_name": main_name,
+    }
+    return info, rec
+
+
 def _pool_codes_from_board(board: dict[str, Any] | None) -> list[str]:
     """Collect normalized member codes from a hot-board card."""
     out: list[str] = []
@@ -1134,13 +1337,15 @@ def build_sell_themes(
     side_info: dict[str, Any] | None,
     recommend: dict[str, Any] | None = None,
     side_recommend: dict[str, Any] | None = None,
+    link_info: dict[str, Any] | None = None,
+    link_recommend: dict[str, Any] | None = None,
     life_stage: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build multi-theme set for sells; buys still follow sticky mainline only.
 
-    Includes sticky primary, observation side branch, and other hot boards within
-    ``SELL_THEME_GAP`` of the sticky score (退潮 peers kept so residual positions
-    can still soft-exit on their own theme fade).
+    Includes sticky primary, observation side branch, soft link peer, and other
+    hot boards within ``SELL_THEME_GAP`` of the sticky score (退潮 peers kept so
+    residual positions can still soft-exit on their own theme fade).
     """
     from market_desk.config import SELL_THEME_GAP, SELL_THEME_MAX
 
@@ -1188,6 +1393,23 @@ def build_sell_themes(
                 rec_codes=_recommend_codes(side_recommend),
                 score=side.get("score"),
                 main_yi=side.get("main_yi"),
+            )
+        )
+
+    link = link_info or {}
+    link_name = str(link.get("name") or "").strip()
+    if link_name:
+        _add(
+            _theme_entry(
+                name=link_name,
+                role="link",
+                status=str(link.get("status") or ""),
+                lifecycle=link.get("lifecycle") or "",
+                pool_codes=list(link.get("pool_codes") or []),
+                carrier_code=link.get("carrier_code"),
+                rec_codes=_recommend_codes(link_recommend),
+                score=link.get("score"),
+                main_yi=link.get("main_yi"),
             )
         )
 
@@ -2667,6 +2889,19 @@ def _attach_risk_sizing(
             }
         )
 
+    if adapt.get("board_link"):
+        try:
+            link_m = float(adapt.get("board_link_mult") or 0.75)
+        except (TypeError, ValueError):
+            link_m = 0.75
+        factors.append(
+            {
+                "key": "board_link",
+                "label": "板块联动",
+                "mult": max(0.5, min(1.0, link_m)),
+            }
+        )
+
     cool_n = int(setting("cool_after_losses", 3) or 3)
     try:
         from market_desk.db import load_positions
@@ -2757,7 +2992,7 @@ def apply_size_cap_gate(
     }
     if equity_default and open_cost > 0:
         warn = "账户资金仍为默认5万，总仓占比可能失真，请在参数里改真实资金"
-        for key in ("recommend", "side_recommend"):
+        for key in ("recommend", "side_recommend", "link_recommend"):
             rec = dict(v.get(key) or {})
             if rec:
                 rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), warn)
@@ -2768,7 +3003,7 @@ def apply_size_cap_gate(
     note = f"总仓已约 {used_pct:.0f}%≥相位上限 {cap:.0f}%，先减不加"
     if equity_default:
         note = f"{note}；账户资金仍为默认5万，请核对"
-    for key in ("recommend", "side_recommend"):
+    for key in ("recommend", "side_recommend", "link_recommend"):
         rec = dict(v.get(key) or {})
         items = []
         changed = False
@@ -2782,7 +3017,12 @@ def apply_size_cap_gate(
                 if item.get("wait_price") is not None:
                     item["buy_price"] = item.get("wait_price")
                 kind = item.get("kind") or "stock"
-                item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
+                if item.get("link_board"):
+                    item["role_label"] = (
+                        "联动ETF盯回踩" if kind == "etf" else "联动盯回踩"
+                    )
+                else:
+                    item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
                 fails = list(item.get("confirm_fail") or [])
                 if "总仓触相位上限" not in fails:
                     fails.append("总仓触相位上限")

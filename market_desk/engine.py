@@ -618,6 +618,11 @@ class DeskEngine:
                     observe_only=True,
                     block_arm=block_arm,
                 )
+                verdict["link_recommend"] = mark_pullback_entries(
+                    verdict.get("link_recommend"),
+                    observe_only=True,
+                    block_arm=block_arm,
+                )
                 await self._apply_recommend_minutes(client, verdict)
                 # Rematch near-entry after minutes so only minute.ok=True arms.
                 verdict["recommend"] = mark_pullback_entries(
@@ -627,6 +632,11 @@ class DeskEngine:
                 )
                 verdict["side_recommend"] = mark_pullback_entries(
                     verdict.get("side_recommend"),
+                    observe_only=True,
+                    block_arm=block_arm,
+                )
+                verdict["link_recommend"] = mark_pullback_entries(
+                    verdict.get("link_recommend"),
                     observe_only=True,
                     block_arm=block_arm,
                 )
@@ -1262,9 +1272,12 @@ class DeskEngine:
         """Fetch daily closes for recommended stocks/ETFs and mark non-uptrends."""
         rec = verdict.get("recommend") or {}
         side_rec = verdict.get("side_recommend") or {}
+        link_rec = verdict.get("link_recommend") or {}
         codes = [
             str(x.get("code") or "")
-            for x in list(rec.get("items") or []) + list(side_rec.get("items") or [])
+            for x in list(rec.get("items") or [])
+            + list(side_rec.get("items") or [])
+            + list(link_rec.get("items") or [])
             if x.get("kind") in ("stock", "etf") and x.get("code")
         ]
         codes = list(dict.fromkeys(codes))
@@ -1287,6 +1300,16 @@ class DeskEngine:
                 if item.get("wait_price") is not None:
                     item["buy_price"] = item.get("wait_price")
             verdict["side_recommend"]["buy"] = False
+        if link_rec.get("items"):
+            verdict["link_recommend"] = apply_stock_daily_trends(
+                link_rec, closes_by_code, fetch_ok_by_code, overrides
+            )
+            for item in (verdict["link_recommend"].get("items") or []):
+                item["ready"] = False
+                item["link_board"] = True
+                if item.get("wait_price") is not None:
+                    item["buy_price"] = item.get("wait_price")
+            verdict["link_recommend"]["buy"] = False
 
     async def _apply_favorite_desk_trends(
         self,

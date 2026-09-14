@@ -501,6 +501,12 @@
     .sidebox {
       margin-top: 10px; border-color: #3a4558; background: #10141c;
     }
+    .linkbox {
+      margin-top: 10px; padding: 14px 16px;
+      border: 1px solid #5a4a2a; border-radius: 8px; background: #16140e;
+      box-shadow: inset 3px 0 0 #c9a227;
+    }
+    .linkbox .k { color: #eab308; font-size: 12px; letter-spacing: 0.12em; }
     .favdesk {
       margin-top: 10px; padding: 14px 16px;
       border: 1px solid #1e3a5f; border-radius: 8px; background: #0e1520;
@@ -1977,6 +1983,14 @@
             <div class="buymeta" id="sidemeta"></div>
             <div class="rec-grid" id="sideItems"></div>
           </div>
+          <div class="linkbox" id="linkbox" hidden>
+            <div class="k">板块联动<button type="button" class="q" data-term="板块联动">?</button>
+              <span class="meta" id="linkSim"></span>
+            </div>
+            <div class="buyline" id="linkline">暂无联动</div>
+            <div class="buymeta" id="linkmeta"></div>
+            <div class="rec-grid" id="linkItems"></div>
+          </div>
           <div class="favdesk" id="favDesk" hidden>
             <div class="k">看好板块 · 推荐买卖<button type="button" class="q" data-term="看好板块买卖">?</button>
               <span class="meta" id="favDeskNote"></span>
@@ -2861,6 +2875,32 @@
         } else {
           sideBox.hidden = true;
           document.getElementById("sideItems").innerHTML = "";
+        }
+      }
+      const link = v.link_mainline || null;
+      const linkRec = v.link_recommend || {};
+      const linkBox = document.getElementById("linkbox");
+      if (linkBox) {
+        if (link && link.name && (linkRec.items || []).length) {
+          linkBox.hidden = false;
+          const simPct = link.sim == null ? null : Math.round(Number(link.sim) * 100);
+          document.getElementById("linkline").textContent =
+            linkRec.text || linkRec.title || (`联动 · ${link.name}`);
+          document.getElementById("linkmeta").textContent =
+            (linkRec.size_note || "主线暂无现买点时，相似板块回踩可小仓")
+            + (link.status ? ` · ${link.status}` : "")
+            + (link.pct == null ? "" : ` · ${Number(link.pct) > 0 ? "+" : ""}${Number(link.pct).toFixed(2)}%`);
+          const simEl = document.getElementById("linkSim");
+          if (simEl) {
+            simEl.textContent = simPct == null
+              ? ""
+              : (`· 相对主线相似 ${simPct}%` + (link.mainline_name ? `（${link.mainline_name}）` : ""));
+          }
+          document.getElementById("linkItems").innerHTML =
+            (linkRec.items || []).map(recCard).join("");
+        } else {
+          linkBox.hidden = true;
+          document.getElementById("linkItems").innerHTML = "";
         }
       }
       const favDesk = d.favorite_desk || {};
@@ -4839,7 +4879,7 @@
         alert("钉自选失败");
       }
     }
-    ["buybox", "sidebox", "favDesk"].forEach((id) => {
+    ["buybox", "sidebox", "linkbox", "favDesk"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("click", onDeskRecClick);
     });
@@ -5439,7 +5479,7 @@
       { id: "phase", label: "相位", keys: ["相位", "恐慌", "分歧", "发酵", "高潮", "温度"] },
       { id: "action", label: "结论", keys: ["现金", "可小仓", "可买入", "观望", "观察回踩", "回踩到位", "禁追", "观察"] },
       { id: "board", label: "板块", keys: [
-        "实时主线", "观察支线", "主线切换", "主线透明", "主线生命周期", "板块相似度", "题材信誉",
+        "实时主线", "观察支线", "板块联动", "主线切换", "主线透明", "主线生命周期", "板块相似度", "题材信誉",
         "仓位热度", "仓位合流", "个股信誉", "自适应卖点", "回踩甜区", "漏买情景", "自适应调参", "白盒特征权重", "确认中", "尖峰禁追", "退潮",
         "点火", "一波", "二波", "加速", "滞涨", "A杀", "修复", "反包", "天地",
         "聚集度", "总龙头", "卡位龙", "冰点", "冷冻", "相对最冷", "传染", "传染预警", "看好板块", "看好板块买卖",
