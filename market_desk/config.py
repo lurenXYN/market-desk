@@ -277,6 +277,12 @@ STOCK_TREND_DOWN_PENALTY = 12.0
 # Soft size scale after trend classify (lot-rounded qty on buy cards).
 TREND_SIZE_UP_MULT = 1.10
 TREND_SIZE_DOWN_MULT = 0.75
+TREND_SIZE_SIDEWAYS_MULT = 0.85  # stock sideways: soft shrink, no ready kill
+STOCK_TREND_SIDEWAYS_PENALTY = 6.0  # softer than full down penalty
+# Minute sample thin: keep ready, soft shrink (structure fail still hard-gates).
+MINUTE_PENDING_SIZE_MULT = 0.85
+# Mainline near-entry probe when hard gates pass but full ready not armed.
+PROBE_SIZE_MULT = 0.50
 # Mainline carrier ETF daily-trend nudge (same once-per-day closes).
 MAINLINE_ETF_TREND_UP = 9.0
 MAINLINE_ETF_TREND_DOWN = 9.0

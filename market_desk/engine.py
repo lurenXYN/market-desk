@@ -132,6 +132,7 @@ from market_desk.verdict import (
     build_verdict,
     build_watch_trial_recommend,
     decorate_positions,
+    finalize_recommend_buy_ux,
     mark_pullback_entries,
     position_summary,
     reconfirm_recommend_ready,
@@ -649,6 +650,22 @@ class DeskEngine:
                 aligned = align_action_with_ready(verdict)
                 verdict.clear()
                 verdict.update(aligned)
+                seg_lock = bool(seg_v.get("open_mute")) or bool(verdict.get("auction_only"))
+                verdict["recommend"] = finalize_recommend_buy_ux(
+                    verdict.get("recommend"),
+                    block_arm=seg_lock,
+                    allow_probe=True,
+                )
+                verdict["side_recommend"] = finalize_recommend_buy_ux(
+                    verdict.get("side_recommend"),
+                    block_arm=seg_lock,
+                    allow_probe=False,
+                )
+                verdict["link_recommend"] = finalize_recommend_buy_ux(
+                    verdict.get("link_recommend"),
+                    block_arm=seg_lock,
+                    allow_probe=False,
+                )
                 desk_gate_summary = build_desk_gate_summary(verdict, phase=phase)
                 watchlist = _annotate_watchlist_observe(watchlist, verdict)
                 watch_trial = build_watch_trial_recommend(
@@ -1598,8 +1615,13 @@ class DeskEngine:
                     self.snapshot["verdict"]
                 )
                 self.snapshot["verdict"] = align_action_with_ready(self.snapshot["verdict"])
+                vv = self.snapshot["verdict"]
+                vv["recommend"] = finalize_recommend_buy_ux(
+                    vv.get("recommend"),
+                    allow_probe=True,
+                )
                 self.snapshot["desk_gate_summary"] = build_desk_gate_summary(
-                    self.snapshot["verdict"],
+                    vv,
                     phase=self.snapshot.get("phase"),
                 )
             try:

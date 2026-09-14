@@ -651,9 +651,9 @@ def mark_pullback_entries(
             and not item.get("block_ready")
             and minute_pass
         )
-        # Do not revive cards already failed by day-high / minute / trend gates.
-        fails = item.get("confirm_fail") or []
-        if fails:
+        # Soft confirms (sideways / thin minute) do not block arming.
+        hard_fails = hard_confirm_fails(item.get("confirm_fail") or [])
+        if hard_fails:
             can_arm = False
         if can_arm:
             was_ready = bool(item.get("ready"))
@@ -902,9 +902,11 @@ def build_desk_gate_summary(
         action: Hero action string (e.g. 观望 / 观察回踩 / 可买入).
         can_buy: True when action is buyable and at least one recommend card
             is ``ready`` without ``block_ready``.
+        can_probe: True when a mainline card is near-entry probe (soft half size).
         reasons: Up to five short Chinese strings explaining why live buy
             (现买) is blocked; empty when ``can_buy`` is True.
         hint: Single-line label suitable for the top banner.
+        progress: Best near-entry card's buy_progress (if any).
     """
     v = verdict or {}
     action = str(v.get("action") or "观望")
@@ -918,15 +920,41 @@ def build_desk_gate_summary(
         for x in items
         if bool(x.get("ready")) and not x.get("block_ready")
     ]
+    probe_items = [
+        x
+        for x in items
+        if bool(x.get("probe_ok")) and not x.get("block_ready")
+    ]
+    near_items = [
+        x
+        for x in items
+        if bool(x.get("near_entry")) and not x.get("block_ready")
+    ]
     buyable_action = action in _BUY_ACTIONS
     can_buy = buyable_action and bool(ready_items)
+    can_probe = (not can_buy) and bool(probe_items)
+
+    def _progress_of(pool: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for x in pool:
+            bp = x.get("buy_progress")
+            if isinstance(bp, dict) and bp:
+                return bp
+        return None
+
+    progress = (
+        _progress_of(ready_items)
+        or _progress_of(probe_items)
+        or _progress_of(near_items)
+    )
 
     if can_buy:
         return {
             "action": action,
             "can_buy": True,
+            "can_probe": False,
             "reasons": [],
             "hint": _desk_gate_buy_hint(action, ready_items, rec),
+            "progress": progress,
         }
 
     reasons: list[str] = []
@@ -940,8 +968,18 @@ def build_desk_gate_summary(
         reasons.append(text)
 
     ml_name = str(mainline.get("name") or "").strip()
+    miss = list((progress or {}).get("missing") or [])
+    miss_txt = " · ".join(str(x) for x in miss[:3] if x)
 
-    if action == "观望":
+    if can_probe:
+        _add("已触建议价，可小仓试探")
+        if miss_txt:
+            _add(f"全仓还差：{miss_txt}")
+    elif near_items:
+        _add("已触建议价，现买确认未齐")
+        if miss_txt:
+            _add(f"还差：{miss_txt}")
+    elif action == "观望":
         if v.get("auction_only"):
             _add("竞价阶段，9:30后再定价")
         elif mainline.get("status") == "退潮":
@@ -993,10 +1031,13 @@ def build_desk_gate_summary(
     for item in items:
         if item.get("block_ready"):
             blocked_n += 1
-        for flag in item.get("confirm_fail") or []:
+        for flag in hard_confirm_fails(item.get("confirm_fail") or []):
+            fail_counts[flag] = fail_counts.get(flag, 0) + 1
+        for flag in item.get("confirm_soft") or []:
             text = str(flag).strip()
-            if text:
-                fail_counts[text] = fail_counts.get(text, 0) + 1
+            if text and text not in fail_counts:
+                # Soft notes go later; count for display only if space.
+                pass
         if item.get("minute_pending"):
             pending_minute = True
         is_ready = bool(item.get("ready")) and not item.get("block_ready")
@@ -1013,13 +1054,13 @@ def build_desk_gate_summary(
     elif blocked_n:
         _add("部分卡片禁现买")
 
-    if pending_minute:
-        _add("分时未验，先等确认")
+    if pending_minute and "分时" not in "".join(reasons):
+        _add("分时未验（软，不关现买）")
 
-    if not ready_items:
-        if near_only_n:
+    if not ready_items and not can_probe:
+        if near_only_n and not miss_txt:
             _add("已触及建议价但未过现买确认")
-        elif items and not fail_counts and blocked_n == 0:
+        elif items and not fail_counts and blocked_n == 0 and not near_items:
             _add("卡片未到位，盯回踩价")
 
     dont = str(playbook.get("dont") or "").strip()
@@ -1028,12 +1069,24 @@ def build_desk_gate_summary(
         if short:
             _add(f"纪律：{short}")
 
-    hint = _desk_gate_block_hint(action, reasons, rec, mainline)
+    if can_probe:
+        if miss_txt:
+            hint = f"靠近买点·可小仓试探 · 还差{miss_txt}"
+        else:
+            hint = "靠近买点·可小仓试探"
+    elif near_items and miss_txt:
+        hint = f"靠近买点 · 还差{miss_txt}"
+    elif near_items:
+        hint = "靠近买点 · 现买确认未齐"
+    else:
+        hint = _desk_gate_block_hint(action, reasons, rec, mainline)
     return {
         "action": action,
         "can_buy": False,
+        "can_probe": can_probe,
         "reasons": reasons[:5],
         "hint": hint,
+        "progress": progress,
     }
 
 
@@ -2021,6 +2074,332 @@ def _join_hint(base: str, extra: str) -> str:
     return f"{base}；{extra}"
 
 
+# Soft confirm flags: score/size only — never hard-kill ready / never block arm.
+_SOFT_CONFIRM_FLAGS = frozenset(
+    {
+        "日线非上升",
+        "分时样本不足",
+        "分时未验",
+    }
+)
+
+
+def is_soft_confirm_flag(flag: str) -> bool:
+    """Return True when a confirm_fail / soft label is advisory only."""
+    text = str(flag or "").strip()
+    if not text:
+        return False
+    if text in _SOFT_CONFIRM_FLAGS:
+        return True
+    if text.startswith("分时样本"):
+        return True
+    return False
+
+
+def hard_confirm_fails(flags: list[Any] | None) -> list[str]:
+    """Filter confirm_fail down to hard gates that block ready / arming."""
+    out: list[str] = []
+    for raw in flags or []:
+        text = str(raw or "").strip()
+        if text and not is_soft_confirm_flag(text):
+            out.append(text)
+    return out
+
+
+def _scale_item_qty(item: dict[str, Any], mult: float, tip: str) -> None:
+    """Lot-round scale qty / risk_plan after soft probe or trend damp."""
+    try:
+        qty = int(item.get("qty") or 0)
+    except (TypeError, ValueError):
+        return
+    if qty <= 0 or abs(float(mult) - 1.0) < 0.01:
+        return
+    new_qty = max(100, int(round(qty * float(mult) / 100.0) * 100))
+    item["qty"] = new_qty
+    plan = item.get("risk_plan")
+    if isinstance(plan, dict):
+        plan = dict(plan)
+        plan["qty"] = new_qty
+        plan["note"] = _join_hint(str(plan.get("note") or ""), tip)
+        item["risk_plan"] = plan
+
+
+def build_item_buy_progress(item: dict[str, Any] | None) -> dict[str, Any]:
+    """Build a short checklist of what still blocks a full live buy."""
+    it = item or {}
+    steps: list[dict[str, Any]] = []
+    missing: list[str] = []
+    soft_notes: list[str] = []
+
+    near = bool(it.get("near_entry"))
+    steps.append(
+        {
+            "key": "price",
+            "label": "价带",
+            "ok": near,
+            "detail": "已触建议价" if near else "未到位",
+        }
+    )
+    if not near:
+        missing.append("价带")
+
+    if it.get("trend_pending"):
+        steps.append(
+            {
+                "key": "trend",
+                "label": "日线",
+                "ok": None,
+                "soft": True,
+                "detail": str(it.get("trend") or "暂未取到"),
+            }
+        )
+        soft_notes.append("日线未取到")
+    elif it.get("trend_ok"):
+        steps.append(
+            {
+                "key": "trend",
+                "label": "日线",
+                "ok": True,
+                "detail": "上升",
+            }
+        )
+    elif it.get("trend_down"):
+        steps.append(
+            {
+                "key": "trend",
+                "label": "日线",
+                "ok": False,
+                "detail": "下降",
+            }
+        )
+        missing.append("日线上升")
+    elif it.get("trend"):
+        steps.append(
+            {
+                "key": "trend",
+                "label": "日线",
+                "ok": None,
+                "soft": True,
+                "detail": "震荡·软",
+            }
+        )
+        soft_notes.append("日线震荡")
+    else:
+        steps.append(
+            {
+                "key": "trend",
+                "label": "日线",
+                "ok": None,
+                "detail": "未标注",
+            }
+        )
+
+    hard = hard_confirm_fails(it.get("confirm_fail") or [])
+    soft_flags = [
+        str(x).strip()
+        for x in (it.get("confirm_soft") or [])
+        if str(x).strip()
+    ]
+    for flag in it.get("confirm_fail") or []:
+        text = str(flag or "").strip()
+        if text and is_soft_confirm_flag(text) and text not in soft_flags:
+            soft_flags.append(text)
+
+    off_fail = next((f for f in hard if "离日高" in f), None)
+    if off_fail:
+        steps.append(
+            {
+                "key": "off_high",
+                "label": "离日高",
+                "ok": False,
+                "detail": off_fail,
+            }
+        )
+        missing.append("离日高")
+    else:
+        steps.append(
+            {
+                "key": "off_high",
+                "label": "离日高",
+                "ok": True if near or bool(it.get("ready")) else None,
+                "detail": "已过" if (near or it.get("ready")) and not off_fail else "待验",
+            }
+        )
+
+    minute = it.get("minute") or {}
+    minute_ok = minute.get("ok")
+    if minute_ok is True:
+        steps.append(
+            {
+                "key": "minute",
+                "label": "分时",
+                "ok": True,
+                "detail": str(minute.get("label") or "已过"),
+            }
+        )
+    elif minute_ok is False:
+        steps.append(
+            {
+                "key": "minute",
+                "label": "分时",
+                "ok": False,
+                "detail": str(minute.get("label") or "未过"),
+            }
+        )
+        missing.append("分时")
+    else:
+        steps.append(
+            {
+                "key": "minute",
+                "label": "分时",
+                "ok": None,
+                "soft": True,
+                "detail": str(minute.get("label") or "样本不足·软"),
+            }
+        )
+        missing.append("分时")
+        soft_notes.append("分时未验")
+
+    other_hard = [f for f in hard if "离日高" not in f and not str(f).startswith("分时")]
+    if other_hard:
+        steps.append(
+            {
+                "key": "other",
+                "label": "其它",
+                "ok": False,
+                "detail": "、".join(other_hard[:2]),
+            }
+        )
+        for f in other_hard[:2]:
+            short = f if len(f) <= 8 else f[:7] + "…"
+            if short not in missing:
+                missing.append(short)
+    elif it.get("block_ready"):
+        steps.append(
+            {
+                "key": "other",
+                "label": "其它",
+                "ok": False,
+                "detail": "禁现买",
+            }
+        )
+        missing.append("禁现买")
+    else:
+        steps.append(
+            {
+                "key": "other",
+                "label": "其它",
+                "ok": True if (it.get("ready") or it.get("probe_ok")) else None,
+                "detail": "无硬闸",
+            }
+        )
+
+    for s in soft_flags:
+        if s not in soft_notes:
+            soft_notes.append(s)
+
+    passed = sum(1 for s in steps if s.get("ok") is True)
+    total = len(steps)
+    if it.get("ready") and not it.get("block_ready"):
+        summary = "现买确认已过"
+        missing = []
+    elif it.get("probe_ok"):
+        miss_txt = " · ".join(missing[:3]) if missing else "确认中"
+        summary = f"可小仓试探 · 还差{miss_txt}"
+    elif missing:
+        summary = "还差：" + " · ".join(missing[:3])
+    else:
+        summary = "盯回踩价"
+    return {
+        "steps": steps,
+        "passed": passed,
+        "total": total,
+        "missing": missing[:4],
+        "soft_notes": soft_notes[:4],
+        "summary": summary,
+    }
+
+
+def attach_buy_progress(recommend: dict[str, Any] | None) -> dict[str, Any]:
+    """Attach ``buy_progress`` checklist onto each recommend card."""
+    rec = dict(recommend or {})
+    items: list[dict[str, Any]] = []
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        item["buy_progress"] = build_item_buy_progress(item)
+        items.append(item)
+    rec["items"] = items
+    return rec
+
+
+def apply_mainline_probe(
+    recommend: dict[str, Any] | None,
+    *,
+    block_arm: bool = False,
+) -> dict[str, Any]:
+    """Mark near-entry mainline cards as soft probe when full ready is not armed.
+
+    Does not upgrade hero action. Shrinks suggested size by ``PROBE_SIZE_MULT``.
+    Hard confirm fails / block_ready / trend_down still forbid probe.
+    """
+    from market_desk.config import PROBE_SIZE_MULT
+
+    rec = dict(recommend or {})
+    items: list[dict[str, Any]] = []
+    any_probe = False
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        item["probe_ok"] = False
+        if (
+            block_arm
+            or item.get("block_ready")
+            or item.get("ready")
+            or item.get("trend_down")
+            or not item.get("near_entry")
+        ):
+            items.append(item)
+            continue
+        if hard_confirm_fails(item.get("confirm_fail") or []):
+            items.append(item)
+            continue
+        # Soft path: price tagged, hard gates clear, full ready not armed yet.
+        item["probe_ok"] = True
+        any_probe = True
+        kind = item.get("kind") or "stock"
+        item["role_label"] = "ETF·可试探" if kind == "etf" else "主线·可试探"
+        _scale_item_qty(item, float(PROBE_SIZE_MULT), "主线可试探·半仓")
+        item["probe_size_mult"] = round(float(PROBE_SIZE_MULT), 3)
+        item["reason"] = _join_hint(
+            str(item.get("reason") or ""),
+            "靠近建议价，可小仓试探（不升顶栏可买入）",
+        )
+        items.append(item)
+    rec["items"] = items
+    if any_probe:
+        rec["probe"] = True
+        rec["size_note"] = _join_hint(
+            str(rec.get("size_note") or ""),
+            "主线可试探·建议半仓，不改顶栏可买入",
+        )
+    return rec
+
+
+def finalize_recommend_buy_ux(
+    recommend: dict[str, Any] | None,
+    *,
+    block_arm: bool = False,
+    allow_probe: bool = True,
+) -> dict[str, Any]:
+    """Apply mainline probe (optional) then attach buy-progress checklists."""
+    rec = dict(recommend or {})
+    if allow_probe:
+        rec = apply_mainline_probe(rec, block_arm=block_arm)
+    else:
+        for raw in rec.get("items") or []:
+            raw["probe_ok"] = False
+    return attach_buy_progress(rec)
+
+
 def _apply_ready_confirmations(
     recommend: dict[str, Any],
     vehicle: dict[str, Any],
@@ -2203,24 +2582,44 @@ def apply_stock_daily_trends(
     fetch_ok_by_code: dict[str, bool] | None = None,
     overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Attach daily-trend labels, nudge scores, and gate ready buys.
+    """Attach daily-trend labels, nudge scores, and soft/hard ready gates.
 
-    Stocks: clear up +bonus; clear down / sideways gate ready.
+    Stocks: clear up +bonus; clear down hard-gates ready; sideways soft score+size.
     ETF: clear up +bonus; clear down gates ready; sideways score-only (no gate).
     Missing/thin kline → ``trend_pending`` visible, no ready gate / score nudge.
     """
     del overrides  # Manual overrides removed; trend is informational + ready gate.
-    from market_desk.config import STOCK_TREND_DOWN_PENALTY, STOCK_TREND_UP_BONUS
+    from market_desk.config import (
+        STOCK_TREND_DOWN_PENALTY,
+        STOCK_TREND_SIDEWAYS_PENALTY,
+        STOCK_TREND_UP_BONUS,
+    )
 
     def _apply_trend_size_soft(item: dict[str, Any]) -> None:
         """Soft-scale suggested lot size after daily trend classify."""
-        from market_desk.config import TREND_SIZE_DOWN_MULT, TREND_SIZE_UP_MULT
+        from market_desk.config import (
+            TREND_SIZE_DOWN_MULT,
+            TREND_SIZE_SIDEWAYS_MULT,
+            TREND_SIZE_UP_MULT,
+        )
 
         mult = None
+        tip = ""
         if item.get("trend_ok"):
             mult = float(TREND_SIZE_UP_MULT)
+            tip = "日线上升略加仓"
         elif item.get("trend_down"):
             mult = float(TREND_SIZE_DOWN_MULT)
+            tip = "日线下降略减仓"
+        elif (
+            item.get("kind") == "stock"
+            and not item.get("trend_pending")
+            and not item.get("trend_ok")
+            and not item.get("trend_down")
+            and item.get("trend")
+        ):
+            mult = float(TREND_SIZE_SIDEWAYS_MULT)
+            tip = "日线震荡软缩仓"
         if mult is None or abs(mult - 1.0) < 0.01:
             return
         try:
@@ -2230,16 +2629,14 @@ def apply_stock_daily_trends(
         if qty <= 0:
             return
         new_qty = max(100, int(round(qty * mult / 100.0) * 100))
+        item["trend_size_mult"] = round(mult, 3)
         if new_qty == qty:
-            item["trend_size_mult"] = round(mult, 3)
             return
         item["qty"] = new_qty
-        item["trend_size_mult"] = round(mult, 3)
         plan = item.get("risk_plan")
         if isinstance(plan, dict):
             plan = dict(plan)
             plan["qty"] = new_qty
-            tip = "日线上升略加仓" if mult > 1.0 else "日线下降略减仓"
             plan["note"] = _join_hint(str(plan.get("note") or ""), tip)
             item["risk_plan"] = plan
 
@@ -2330,7 +2727,7 @@ def apply_stock_daily_trends(
                 "日线下降趋势，减分",
             )
         else:
-            # Sideways: stocks gate ready; ETF keeps ready but no up-bonus.
+            # Sideways: stocks soft score+size (no ready kill); ETF no up-bonus.
             marked["trend"] = "震荡/非上升"
             marked["trend_ok"] = False
             marked["trend_down"] = False
@@ -2338,10 +2735,15 @@ def apply_stock_daily_trends(
             marked["trend_pending"] = False
             marked["trend_warn"] = "不是上升趋势"
             if kind == "stock":
-                _gate_ready("日线非上升")
-                marked["reason"] = (
-                    str(marked.get("reason") or "") + "；确认失败：日线非上升"
-                ).strip("；")
+                trend_adj = -float(STOCK_TREND_SIDEWAYS_PENALTY)
+                soft = list(marked.get("confirm_soft") or [])
+                if "日线非上升" not in soft:
+                    soft.append("日线非上升")
+                marked["confirm_soft"] = soft
+                marked["reason"] = _join_hint(
+                    str(marked.get("reason") or ""),
+                    "日线震荡，软减分缩仓（不关现买）",
+                )
             else:
                 marked["reason"] = _join_hint(
                     str(marked.get("reason") or ""),

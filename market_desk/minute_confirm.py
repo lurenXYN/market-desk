@@ -163,40 +163,71 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
     }
 
 
+def _soft_scale_qty(item: dict[str, Any], mult: float, tip: str) -> None:
+    """Soft-shrink suggested lot size without clearing ready."""
+    try:
+        qty = int(item.get("qty") or 0)
+    except (TypeError, ValueError):
+        return
+    if qty <= 0 or abs(mult - 1.0) < 0.01:
+        return
+    new_qty = max(100, int(round(qty * mult / 100.0) * 100))
+    item["qty"] = new_qty
+    item["minute_size_mult"] = round(mult, 3)
+    plan = item.get("risk_plan")
+    if isinstance(plan, dict):
+        plan = dict(plan)
+        plan["qty"] = new_qty
+        note = str(plan.get("note") or "").strip()
+        tip = (tip or "").strip()
+        if tip and tip not in note:
+            plan["note"] = f"{note}；{tip}" if note else tip
+        item["risk_plan"] = plan
+
+
 def apply_minute_confirmations(
     recommend: dict[str, Any] | None,
     minutes_by_code: dict[str, list[dict[str, Any]]] | None,
 ) -> dict[str, Any]:
-    """Downgrade ready cards that fail the minute-structure check."""
+    """Apply minute-structure checks: soft on thin samples, hard on structure fail."""
     rec = dict(recommend or {})
     items = [dict(x) for x in (rec.get("items") or [])]
     if not items:
         return rec
     minutes_by_code = minutes_by_code or {}
     changed = False
+    soft_pending = False
     for item in items:
         code = str(item.get("code") or "").zfill(6)
         if not code or code not in minutes_by_code:
             continue
         verdict = evaluate_minute_structure(minutes_by_code.get(code))
         item["minute"] = verdict
-        if not item.get("ready"):
-            continue
-        # Missing / thin minute sample: do not keep ready (avoids chase on blind).
-        if verdict.get("ok") is None and item.get("ready"):
-            changed = True
+        # Always surface pending / fail labels for progress UX.
+        if verdict.get("ok") is None:
             item["minute_pending"] = True
-            item["ready"] = False
-            if item.get("wait_price") is not None:
-                item["buy_price"] = item.get("wait_price")
-            kind = item.get("kind") or "stock"
-            item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
-            flag = str(verdict.get("label") or "分时未验")
-            fails = list(item.get("confirm_fail") or [])
-            fails.append(flag)
-            item["confirm_fail"] = fails
-            item["reason"] = (str(item.get("reason") or "") + f"；确认失败：{flag}").strip("；")
-        elif verdict.get("ok") is False:
+            soft = list(item.get("confirm_soft") or [])
+            flag = str(verdict.get("label") or "分时样本不足")
+            if flag not in soft:
+                soft.append(flag)
+            item["confirm_soft"] = soft
+            soft_pending = True
+            if item.get("ready"):
+                from market_desk.config import MINUTE_PENDING_SIZE_MULT
+
+                _soft_scale_qty(
+                    item,
+                    float(MINUTE_PENDING_SIZE_MULT),
+                    "分时样本不足·软缩仓",
+                )
+                item["reason"] = (
+                    str(item.get("reason") or "") + f"；软提示：{flag}"
+                ).strip("；")
+            continue
+        if not item.get("ready"):
+            item["minute_pending"] = False
+            continue
+        if verdict.get("ok") is False:
             changed = True
             item["minute_pending"] = False
             item["ready"] = False
@@ -206,11 +237,17 @@ def apply_minute_confirmations(
             item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
             flag = str(verdict.get("label") or "分时未确认")
             fails = list(item.get("confirm_fail") or [])
-            fails.append(flag)
+            if flag not in fails:
+                fails.append(flag)
             item["confirm_fail"] = fails
             item["reason"] = (str(item.get("reason") or "") + f"；确认失败：{flag}").strip("；")
         else:
             item["minute_pending"] = False
+    if soft_pending:
+        note = str(rec.get("size_note") or "")
+        extra = "分时样本不足·软缩仓（不关现买）"
+        if extra not in note:
+            rec["size_note"] = f"{note}；{extra}" if note else extra
     if not changed:
         rec["items"] = items
         return rec

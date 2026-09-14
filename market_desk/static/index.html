@@ -96,7 +96,44 @@
       border-color: #2f5a3a;
       background: #101a14;
     }
+    .gate-hint.on-probe {
+      color: #fde68a;
+      border-color: #a16207;
+      background: #1a1608;
+    }
     .gate-hint b { color: var(--text); font-weight: 600; }
+    .buy-progress {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      margin: 4px 0 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .buy-progress .bp-sum { color: #e2e8f0; font-weight: 600; }
+    .buy-progress .bp-steps { display: flex; flex-wrap: wrap; gap: 4px; }
+    .buy-progress .bp-step {
+      padding: 1px 6px;
+      border: 1px solid #334155;
+      border-radius: 3px;
+      background: #0f172a;
+    }
+    .buy-progress .bp-step.ok {
+      border-color: #2f5a3a;
+      color: #86efac;
+      background: #101a14;
+    }
+    .buy-progress .bp-step.bad {
+      border-color: #7f1d1d;
+      color: #fca5a5;
+      background: #1a1010;
+    }
+    .buy-progress .bp-step.soft {
+      border-color: #a16207;
+      color: #fde68a;
+      background: #1a1608;
+    }
     .mod-stamp {
       margin-left: 8px;
       font-size: 12px;
@@ -589,6 +626,17 @@
     }
     .entry-badge-soft {
       border-color: #a16207; color: #fde68a; background: #1a1608;
+    }
+    .entry-badge-probe {
+      border-color: #ca8a04; color: #fef08a; background: #1f1808;
+    }
+    .rec-card.probe-ok {
+      border-color: #ca8a04;
+      background: linear-gradient(180deg, #241c0a 0%, #1a1608 100%);
+      box-shadow: inset 3px 0 0 #eab308, 0 0 0 1px rgba(234, 179, 8, 0.35);
+    }
+    .buybox .rec-card.probe-ok .pos-btn.rec-book {
+      background: #2a2208; color: #fde68a; border-color: #a16207; font-weight: 700;
     }
     .rec-card.near-touch {
       border-color: #ca8a04;
@@ -2454,6 +2502,7 @@
       const kind = it.kind || "stock";
       const wait = !it.ready;
       const near = !!it.near_entry;
+      const probe = !!it.probe_ok;
       const buy = it.buy_price != null ? it.buy_price : it.last;
       let trendHtml = "";
       if (it.trend_ok) {
@@ -2463,7 +2512,7 @@
       } else if (it.trend_down) {
         trendHtml = `<div class="trend-warn">日线 · 下降趋势</div>`;
       } else if (it.trend) {
-        trendHtml = `<div class="trend-warn">日线 · ${it.trend}</div>`;
+        trendHtml = `<div class="trend-warn">日线 · ${it.trend}（软减分，不关现买）</div>`;
       }
       const batch = (it.batch_plan || []).map((b) =>
         `${b.lot}·${b.label}${b.qty}股${b.approx_cost != null ? "≈" + b.approx_cost : ""}`
@@ -2501,18 +2550,22 @@
       const cardCls = [
         "rec-card",
         wait ? "wait" : "buy-ready",
+        probe ? "probe-ok" : "",
         near && !wait ? "near-entry" : (near ? "near-touch" : ""),
       ].filter(Boolean).join(" ");
       const entryBadge = near
-        ? (wait
-          ? `<span class="entry-badge entry-badge-soft">触及建议价</span>`
-          : `<span class="entry-badge">建议价附近·可买</span>`)
+        ? (probe
+          ? `<span class="entry-badge entry-badge-probe">可小仓试探</span>`
+          : (wait
+            ? `<span class="entry-badge entry-badge-soft">触及建议价</span>`
+            : `<span class="entry-badge">建议价附近·可买</span>`))
         : "";
       const fails = (it.confirm_fail || []).filter(Boolean);
+      const softFails = (it.confirm_soft || []).filter(Boolean);
       const minute = it.minute || {};
       const gateBits = [];
-      if (it.minute_pending || minute.ok == null && it.ready) {
-        gateBits.push("分时未验");
+      if (it.minute_pending || (minute.ok == null && (it.ready || near))) {
+        gateBits.push("分时未验·软");
       } else if (minute.label && minute.ok === false) {
         gateBits.push(minute.label);
       } else if (minute.label && minute.ok === true) {
@@ -2520,8 +2573,26 @@
       }
       if (it.block_ready) gateBits.push("禁现买");
       fails.forEach((f) => { if (!gateBits.includes(f)) gateBits.push(f); });
+      softFails.forEach((f) => {
+        const lab = `${f}·软`;
+        if (!gateBits.includes(f) && !gateBits.includes(lab)) gateBits.push(lab);
+      });
       const gateHtml = gateBits.length
         ? `<div class="rec-gate">${gateBits.map((g) => `<span class="gate-chip">${g}</span>`).join("")}</div>`
+        : "";
+      const bp = it.buy_progress || {};
+      const bpSteps = (bp.steps || []).map((s) => {
+        let cls = "bp-step";
+        if (s.ok === true) cls += " ok";
+        else if (s.ok === false) cls += " bad";
+        else if (s.soft) cls += " soft";
+        const tip = s.detail ? ` title="${String(s.detail).replace(/"/g, "")}"` : "";
+        return `<span class="${cls}"${tip}>${s.label || ""}</span>`;
+      }).join("");
+      const progressHtml = (bp.summary || bpSteps)
+        ? `<div class="buy-progress"><span class="bp-sum">${bp.summary || "距可买"}</span>`
+          + (bpSteps ? `<span class="bp-steps">${bpSteps}</span>` : "")
+          + `</div>`
         : "";
       return `<article class="${cardCls}">
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${fmtPct(it.pct)}</div>
@@ -2545,10 +2616,11 @@
           }
           return `<div class="rec-holder" title="${tip}"><button type="button" class="q" data-term="股东户数">?</button> 股东 ${fmtHolderNum(it.holder_num)}${chgHtml}</div>`;
         })()}
+        ${progressHtml}
         ${gateHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
-          <div class="buy"><div class="lab">${near && !wait ? "建议买·到位" : "建议买"}</div><div class="val">${fmtPx(buy, kind)}</div></div>
+          <div class="buy"><div class="lab">${!wait ? "建议买·到位" : (probe ? "建议买·试探" : "建议买")}</div><div class="val">${fmtPx(buy, kind)}</div></div>
           <div><div class="lab">回踩</div><div class="val">${fmtPx(it.wait_price, kind)}</div></div>
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div class="chase"><div class="lab">不追</div><div class="val">${fmtPx(it.chase_price, kind)}</div></div>
@@ -2779,13 +2851,21 @@
         const reasons = (gate.reasons || []).filter(Boolean);
         if (hint || reasons.length) {
           gateEl.hidden = false;
-          gateEl.className = "gate-hint" + (gate.can_buy ? " on-buy" : "");
-          gateEl.innerHTML = gate.can_buy
-            ? `<b>可现买</b> · ${hint || act}`
-            : `<b>为何不能现买</b> · ${hint || reasons[0] || act}`
+          gateEl.className = "gate-hint"
+            + (gate.can_buy ? " on-buy" : (gate.can_probe ? " on-probe" : ""));
+          if (gate.can_buy) {
+            gateEl.innerHTML = `<b>可现买</b> · ${hint || act}`;
+          } else if (gate.can_probe) {
+            gateEl.innerHTML = `<b>可小仓试探</b> · ${hint || reasons[0] || act}`
               + (reasons.length > 1
                 ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
                 : "");
+          } else {
+            gateEl.innerHTML = `<b>${(hint || "").startsWith("靠近买点") ? "靠近买点" : "为何不能现买"}</b> · ${hint || reasons[0] || act}`
+              + (reasons.length > 1
+                ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+                : "");
+          }
         } else {
           gateEl.hidden = true;
           gateEl.innerHTML = "";
