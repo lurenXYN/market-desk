@@ -8,6 +8,10 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **复盘可用性+闭环** — 来源筛选/默认藏盯回踩；漏买仅主线；来源命中分桶；记入优先主买。*(2026-09-14)*
+- [x] **卖侧载体相对强弱** — vs 主线载体 pt + 已减短文案。*(2026-09-14)*
+- [x] **刷新后置 holders/试探趋势** — Phase A 先发，Phase B 补齐。*(2026-09-14)*
+- [x] **主线换防旁注** — mlWhy 展示 sticky→现主线 / 保留·挑战者。*(2026-09-14)*
 - [x] **复盘落库加宽** — 观察回踩全量；支线/联动/自选试探分类型入库（buy_side/link/trial）。*(2026-09-14)*
 - [x] **趋势分权加重** — 个股 ±12、主线 ETF ±9；上升×1.10 / 下降×0.75 软仓位。*(2026-09-14)*
 - [x] **自选可试探进作战台副卡** — watch_trial_recommend，仓位×0.75，不改顶栏。*(2026-09-14)*

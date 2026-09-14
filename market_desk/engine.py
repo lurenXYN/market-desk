@@ -608,8 +608,8 @@ class DeskEngine:
                     except Exception:
                         log.exception("save daily mainline failed")
                 await self._apply_recommend_trends(client, verdict, trade_date_dash)
-                await self._apply_recommend_holders(client, verdict)
                 # Soft ETF maps block_ready on the vehicle only; stocks may arm.
+                # Holders / watch-trial enrich run after first snapshot publish (Phase A).
                 seg_v = verdict.get("segment") or {}
                 block_arm = bool(seg_v.get("open_mute")) or bool(verdict.get("auction_only"))
                 verdict["recommend"] = mark_pullback_entries(
@@ -657,9 +657,6 @@ class DeskEngine:
                     adapt=verdict.get("adapt"),
                 )
                 if watch_trial:
-                    await self._apply_watch_trial_trends(
-                        client, watch_trial, trade_date_dash
-                    )
                     for item in watch_trial.get("items") or []:
                         item["ready"] = False
                         if item.get("wait_price") is not None:
@@ -804,10 +801,31 @@ class DeskEngine:
                     log.exception("signal record failed")
                 self.snapshot = payload
 
+                # Phase B: slow enrich (holders / trial trends / favorite) after UI can paint.
+                try:
+                    await self._apply_recommend_holders(client, verdict)
+                except Exception:
+                    log.exception("recommend holders enrich failed")
+                wt = verdict.get("watch_trial_recommend")
+                if wt and (wt.get("items") or []):
+                    try:
+                        await self._apply_watch_trial_trends(
+                            client, wt, trade_date_dash
+                        )
+                        for item in wt.get("items") or []:
+                            item["ready"] = False
+                            if item.get("wait_price") is not None:
+                                item["buy_price"] = item.get("wait_price")
+                        wt["buy"] = False
+                        verdict["watch_trial_recommend"] = wt
+                        payload["verdict"] = verdict
+                    except Exception:
+                        log.exception("watch trial trends enrich failed")
                 await self._apply_favorite_desk_trends(client, fav_desk, trade_date_dash)
                 await self._apply_favorite_desk_holders(client, fav_desk)
                 await self._apply_favorite_desk_minutes(client, fav_desk)
             payload["favorite_desk"] = fav_desk
+            payload["verdict"] = verdict if isinstance(verdict, dict) else payload.get("verdict")
             payload["enrich_pending"] = False
             payload["health"] = _build_health(now, errors, updated_at, payload)
             self.snapshot = payload

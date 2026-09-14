@@ -738,7 +738,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
     for row in rows:
         if str(row.get("trade_date") or "") != trade_date:
             continue
-        if not is_buy_signal(row.get("signal_type")):
+        if str(row.get("signal_type") or "") != "buy":
             continue
         skipped = int(row.get("skipped") or 0)
         traded = int(row.get("traded") or 0)
@@ -762,6 +762,59 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
                 "signaled_at": row.get("signaled_at"),
                 "context": ctx,
                 "context_label": ctx.get("label"),
+            }
+        )
+    return out
+
+
+def build_desk_source_hit_rates(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate buy hit-rate by desk source (main / side / link / watch_trial)."""
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    label_map = {
+        "main": "主线",
+        "side": "支线",
+        "link": "联动",
+        "watch_trial": "自选试探",
+    }
+    type_to_src = {
+        "buy": "main",
+        "buy_side": "side",
+        "buy_link": "link",
+        "buy_trial": "watch_trial",
+    }
+    buckets: dict[str, list[dict[str, Any]]] = {k: [] for k in label_map}
+    for row in rows:
+        if not is_buy_signal(row.get("signal_type")):
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        if mode == "traded" and not int(row.get("traded") or 0):
+            continue
+        if not row.get("outcome_label"):
+            continue
+        src = str(row.get("desk_source") or "").strip()
+        if not src:
+            src = type_to_src.get(str(row.get("signal_type") or ""), "main")
+        if src not in buckets:
+            src = "main"
+        buckets[src].append(row)
+    out: list[dict[str, Any]] = []
+    for key in ("main", "side", "link", "watch_trial"):
+        items = buckets[key]
+        if not items:
+            continue
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        out.append(
+            {
+                "source": key,
+                "label": label_map[key],
+                "scored_n": len(items),
+                "hit_n": hit,
+                "hit_rate": round(100.0 * hit / len(items), 1),
             }
         )
     return out
@@ -1685,6 +1738,7 @@ def build_review_payload(
     summary["phase_hits"] = build_phase_hit_rates(global_rows)
     summary["kind_hits"] = build_kind_hit_rates(global_rows)
     summary["phase_kind_hits"] = build_phase_kind_hit_rates(global_rows)
+    summary["desk_hits"] = build_desk_source_hit_rates(global_rows)
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
@@ -1728,6 +1782,10 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
             if is_buy_signal(item.get("signal_type"))
             else ("sell" if is_sell_signal(item.get("signal_type")) else None)
         )
+    if item.get("near_entry") is None and "near_entry" in payload:
+        item["near_entry"] = bool(payload.get("near_entry"))
+    if not item.get("confirm_fail") and payload.get("confirm_fail"):
+        item["confirm_fail"] = list(payload.get("confirm_fail") or [])
     return item
 
 

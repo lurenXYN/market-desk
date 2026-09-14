@@ -2324,7 +2324,7 @@
         <div class="rev-hist" id="revHist"></div>
         <div class="rev-sum" id="revSum"></div>
         <div class="rev-toolbar">
-          <div class="pos-form" id="revFilters" style="grid-template-columns: 100px 100px 140px 120px auto auto auto auto; margin:0; flex:1;">
+          <div class="pos-form" id="revFilters" style="grid-template-columns: 90px 90px 110px 120px 120px auto auto auto auto auto; margin:0; flex:1;">
             <label>类型
               <select id="revType">
                 <option value="">全部</option>
@@ -2339,12 +2339,25 @@
                 <option value="stock">个股</option>
               </select>
             </label>
+            <label>来源
+              <select id="revSource" title="主线/支线/联动/自选">
+                <option value="">全部来源</option>
+                <option value="main">主线</option>
+                <option value="side">支线</option>
+                <option value="link">联动</option>
+                <option value="watch_trial">自选试探</option>
+              </select>
+            </label>
             <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
             <label>命中口径
               <select id="revHitMode" title="与运行参数同步；改后立即生效">
                 <option value="traded">仅已交易</option>
                 <option value="all">全部已打分</option>
               </select>
+            </label>
+            <label class="wide" style="display:flex;align-items:center;gap:6px;grid-column:auto">
+              <input type="checkbox" id="revHideWait" checked />
+              <span>隐藏纯盯回踩</span>
             </label>
             <button type="button" id="revApply">筛选</button>
             <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
@@ -2591,6 +2604,16 @@
       } else if (it.trend || it.daily_trend) {
         trendHtml = `<div class="trend-warn">日线 · ${it.trend || it.daily_trend}</div>`;
       }
+      let vsHtml = "";
+      if (it.vs_carrier != null) {
+        const cls = Number(it.vs_carrier) >= 0 ? "up" : "down";
+        vsHtml = `<div class="meta">相对主线载体 <span class="${cls}">${Number(it.vs_carrier) > 0 ? "+" : ""}${Number(it.vs_carrier).toFixed(1)}pt</span>${it.carrier_falling ? " · 载体走弱" : ""}</div>`;
+      } else if (it.carrier_falling) {
+        vsHtml = `<div class="meta">主线载体走弱</div>`;
+      }
+      if (it.partial_done && !sellNow) {
+        vsHtml += `<div class="meta">今日已减 · 余仓盯止损</div>`;
+      }
       return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
@@ -2602,6 +2625,7 @@
           <div><div class="lab">浮盈</div><div class="val">${pnlHtml}</div></div>
         </div>
         ${trendHtml}
+        ${vsHtml}
         <div class="rec-why">${it.reason || ""}</div>
         <div class="rev-actions" style="margin-top:8px">${actions}</div>
       </article>`;
@@ -2798,11 +2822,23 @@
           whyEl.innerHTML =
             `<div><b>主线为什么是它</b> <button type="button" class="q" data-term="主线透明">?</button></div>`
             + `<div style="margin-top:4px">${why.reason}</div>`
+            + (why.kept === false && why.sticky_name
+              ? `<div class="top" style="margin-top:4px">换防旁注：${why.sticky_name} → ${why.name || ml || "—"}`
+                + (why.gap == null ? "" : ` · 分差 ${why.gap > 0 ? "+" : ""}${why.gap} / 需 ${why.need ?? "—"}`)
+                + (why.same_theme_challenge ? " · 同主题" : "")
+                + (why.in_hold ? " · 持有期满后切换" : "")
+                + `</div>`
+              : (why.kept && why.challenger_name
+                ? `<div class="top" style="margin-top:4px">换防旁注：保留「${why.name || ml}」，挑战者 ${why.challenger_name}`
+                  + (why.gap == null ? "" : ` 分差 ${why.gap > 0 ? "+" : ""}${why.gap} &lt; 需 ${why.need ?? "—"}`)
+                  + `</div>`
+                : ""))
             + `<div style="margin-top:6px">`
             + `<span class="chip">主题 ${why.theme || "—"}</span>`
             + `<span class="chip">分 ${why.score ?? "—"}</span>`
             + `<span class="chip">分差 ${gapTxt} / 需 ${why.need ?? "—"}</span>`
             + `<span class="chip">持有 ${held}</span>`
+            + (why.kept === false ? `<span class="chip">已换防</span>` : (why.kept ? `<span class="chip">粘滞保留</span>` : ""))
             + (why.etf_exact ? `<span class="chip">精确ETF</span>` : `<span class="chip">无精确ETF</span>`)
             + (why.rep_label ? `<span class="chip">${why.rep_label}${why.rep_adj != null && why.rep_adj !== 0 ? " " + (why.rep_adj > 0 ? "+" : "") + why.rep_adj : ""}</span>` : "")
             + `</div>`
@@ -4376,11 +4412,15 @@
       const ph = sum.phase_hits || [];
       const kh = sum.kind_hits || [];
       const pkh = sum.phase_kind_hits || [];
+      const dh = sum.desk_hits || [];
       const gates = sum.gate_kills || [];
       const sellBias = sum.sell_bias || {};
       const hints = sum.tune_hints || [];
       const kindLine = kh.length
         ? ("品种 " + kh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
+        : "";
+      const deskLine = dh.length
+        ? ("来源 " + dh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
         : "";
       const crossLine = pkh.length
         ? ("交叉 " + pkh.slice(0, 8).map((p) =>
@@ -4415,18 +4455,19 @@
       const hintHtml = hints.length
         ? (`<ul class="tune-hints">` + hints.map((h) => `<li>${h}</li>`).join("") + `</ul>`)
         : "";
-      document.getElementById("revPhase").innerHTML = (ph.length || kh.length || gates.length || sellLine || wbLine)
+      document.getElementById("revPhase").innerHTML = (ph.length || kh.length || dh.length || gates.length || sellLine || wbLine)
         ? (`<div class="hd">命中率分桶（跨日）<button type="button" class="q" data-term="相位命中">?</button></div>`
           + (ph.length
             ? `<div>相位 ${ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · ")}</div>`
             : "")
           + (kindLine ? `<div class="meta" style="margin-top:4px">${kindLine}</div>` : "")
+          + (deskLine ? `<div class="meta" style="margin-top:4px">${deskLine}</div>` : "")
           + (crossLine ? `<div class="meta" style="margin-top:4px">${crossLine}</div>` : "")
           + (gateLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="闸门归因">?</button> ${gateLine}</div>` : "")
           + (sellLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="卖点闭环">?</button> ${sellLine}</div>` : "")
           + (wbLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="白盒特征权重">?</button> ${wbLine}</div>` : "")
           + hintHtml)
-        : `<div class="hd">命中率分桶（跨日）</div><span class="meta">有隔日打分后按相位 / ETF·个股汇总</span>`;
+        : `<div class="hd">命中率分桶（跨日）</div><span class="meta">有隔日打分后按相位 / ETF·个股 / 来源汇总</span>`;
       const hist = sum.history || [];
       document.getElementById("revHist").innerHTML = hist.length
         ? `<div class="hd">近 ${hist.length} 日命中率（有打分日）</div>${hitRateSpark(hist, viewDate)}`
@@ -4442,14 +4483,40 @@
       ].join("");
       const type = (document.getElementById("revType") || {}).value || "";
       const kind = (document.getElementById("revKind") || {}).value || "";
+      const srcFilter = (document.getElementById("revSource") || {}).value || "";
       const main = ((document.getElementById("revMain") || {}).value || "").trim();
+      const hideWait = !!(document.getElementById("revHideWait") || {}).checked;
+      const srcOf = (r) => {
+        if (r.desk_source) return r.desk_source;
+        const st = String(r.signal_type || "");
+        if (st === "buy_side") return "side";
+        if (st === "buy_link") return "link";
+        if (st === "buy_trial") return "watch_trial";
+        if (st === "sell") return "sell";
+        return "main";
+      };
+      const isPaperWait = (r) => {
+        const st = String(r.signal_type || "");
+        if (st === "sell") return false;
+        if (Number(r.ready || 0) || Number(r.traded || 0)) return false;
+        const flags = r.price_flags || [];
+        if (flags.includes("miss_pullback") || flags.includes("chase_hit") || flags.includes("stop_hit") || flags.includes("in_band")) {
+          return false;
+        }
+        // Pure 盯回踩: not near-entry / not gated / still waiting.
+        const near = !!(r.near_entry || (r.payload && r.payload.near_entry));
+        const gated = (r.confirm_fail || (r.payload && r.payload.confirm_fail) || []).length > 0;
+        return !near && !gated;
+      };
       const rows = (lastReview.signals || []).filter((r) => {
         if (type === "buy") {
           const st = String(r.signal_type || "");
           if (st === "sell" || !(st === "buy" || st.startsWith("buy_"))) return false;
         } else if (type && r.signal_type !== type) return false;
         if (kind && (r.kind || "") !== kind) return false;
+        if (srcFilter && srcOf(r) !== srcFilter) return false;
         if (main && !(String(r.mainline || "").includes(main))) return false;
+        if (hideWait && isPaperWait(r)) return false;
         return true;
       });
       const cols = visibleRevCols();
@@ -5447,6 +5514,10 @@
       return String(d).replace(/[^\d-]/g, "") || new Date().toISOString().slice(0, 10);
     }
     document.getElementById("revApply").addEventListener("click", () => paintReview(lastReview));
+    ["revSource", "revHideWait", "revType", "revKind"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("change", () => paintReview(lastReview));
+    });
     document.getElementById("revHitMode").addEventListener("change", async () => {
       const mode = document.getElementById("revHitMode").value || "traded";
       try {

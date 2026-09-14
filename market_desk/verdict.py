@@ -3375,6 +3375,7 @@ def _sell_theme_context(row: dict[str, Any], verdict: dict[str, Any]) -> dict[st
             "lifecycle": life if tied else "",
             "fade": bool(tied and fade),
             "carrier_falling": bool(tied and (verdict.get("carrier") or {}).get("falling")),
+            "carrier_pct": (verdict.get("carrier") or {}).get("pct") if tied else None,
             "matched_names": [main.get("name")] if tied and main.get("name") else [],
         }
 
@@ -3388,6 +3389,7 @@ def _sell_theme_context(row: dict[str, Any], verdict: dict[str, Any]) -> dict[st
             "lifecycle": "",
             "fade": False,
             "carrier_falling": False,
+            "carrier_pct": None,
             "matched_names": [],
         }
 
@@ -3423,6 +3425,7 @@ def _sell_theme_context(row: dict[str, Any], verdict: dict[str, Any]) -> dict[st
         "carrier_falling": bool(
             tied_primary and (verdict.get("carrier") or {}).get("falling")
         ),
+        "carrier_pct": (verdict.get("carrier") or {}).get("pct") if tied_primary else None,
         "matched_names": [str(t.get("name")) for t in matches_sorted if t.get("name")],
     }
 
@@ -3776,6 +3779,20 @@ def _sell_item(
     )
     day_weak = day_pct_f is not None and day_pct_f <= float(SELL_DAY_WEAK_PCT)
     partial_done = int(row.get("day_sold_qty") or 0) > 0
+    carrier_pct = theme_ctx.get("carrier_pct")
+    vs_carrier = None
+    carrier_rel_strong = False
+    carrier_rel_weak = False
+    try:
+        if day_pct_f is not None and carrier_pct is not None:
+            vs_carrier = round(float(day_pct_f) - float(carrier_pct), 2)
+            if vs_carrier >= float(SELL_VS_INDEX_EDGE):
+                carrier_rel_strong = True
+                rel_strong = True
+            elif vs_carrier <= -float(SELL_VS_INDEX_EDGE):
+                carrier_rel_weak = True
+    except (TypeError, ValueError):
+        vs_carrier = None
     soft_exit = (phase_panic and not panic_rel_strong) or (mainline_fade and on_mainline)
     t1_locked = is_t1_locked(row, trade_date)
     buy_day = position_buy_day(row)
@@ -4129,6 +4146,10 @@ def _sell_item(
                 reason_parts.append(f"波段口径 {band['mode_zh']}")
             if on_mainline and theme_role and theme_role != "primary" and theme_label:
                 reason_parts.append(f"卖侧归属「{theme_label}」（{ {'side':'支线','hot':'热点同伴'}.get(theme_role, theme_role) }）")
+            if carrier_rel_strong and vs_carrier is not None:
+                reason_parts.append(f"强于主线载体 {vs_carrier:+.1f}pt，先不轻减")
+            elif carrier_rel_weak and vs_carrier is not None:
+                reason_parts.append(f"弱于主线载体 {vs_carrier:+.1f}pt")
 
     # Already trimmed today: do not keep nagging half on soft/take; keep stop/clear.
     if (
@@ -4140,9 +4161,9 @@ def _sell_item(
         ready = False
         exit_mode = "hold"
         sell_pct = 0
-        role_label = "今日已减·余仓持有"
+        role_label = "今日已减·盯止损"
         sell_price = target
-        reason_parts.insert(0, "今日已减过仓，余仓改盯止损/结构清仓，不再重复先减")
+        reason_parts.insert(0, "今日已减，余仓盯止损")
 
     if t1_locked and ready:
         ready = False
@@ -4202,6 +4223,13 @@ def _sell_item(
         "on_sell_theme": on_mainline,
         "sell_theme": theme_label or None,
         "sell_theme_role": theme_role or None,
+        "rel_strong": rel_strong,
+        "panic_rel_strong": panic_rel_strong,
+        "carrier_falling": bool(theme_ctx.get("carrier_falling")),
+        "carrier_rel_strong": carrier_rel_strong,
+        "carrier_rel_weak": carrier_rel_weak,
+        "vs_carrier": vs_carrier,
+        "partial_done": partial_done,
     }
 
 
