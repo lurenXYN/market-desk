@@ -3853,16 +3853,26 @@ def decorate_positions(
             pnl_pct = round((last / buy - 1.0) * 100.0, 2) if last and buy else None
             # Session P&L: vs buy if bought today; else vs yesterday close (+ today realized).
             prev = q.get("prev")
+            pct_q = q.get("pct")
+            # Recover prev from last/pct when quote feed omits yesterday close.
+            if prev in (None, 0, "") and last is not None and pct_q is not None:
+                try:
+                    pct_f = float(pct_q)
+                    if pct_f > -99.999:
+                        prev = float(last) / (1.0 + pct_f / 100.0)
+                except (TypeError, ValueError):
+                    prev = q.get("prev")
             buy_day = str(row.get("last_buy_date") or row.get("created_at") or "")[:10]
             bought_today = bool(day and buy_day and buy_day == day)
             day_mtm = None
             try:
                 if last is not None and qty > 0 and bought_today and buy > 0:
                     day_mtm = (float(last) - buy) * qty
-                elif last is not None and prev not in (None, 0) and qty > 0:
+                elif last is not None and prev not in (None, 0, "") and qty > 0:
                     day_mtm = (float(last) - float(prev)) * qty
-                elif q.get("pct") is not None and cost and not bought_today:
-                    day_mtm = float(cost) * float(q.get("pct")) / 100.0
+                elif pct_q is not None and prev not in (None, 0, "") and qty > 0 and not bought_today:
+                    # pct on yesterday MV — never on cost (would mix in overnight gap vs cost).
+                    day_mtm = float(prev) * qty * float(pct_q) / 100.0
             except (TypeError, ValueError):
                 day_mtm = None
             if day_mtm is not None or day_realized:

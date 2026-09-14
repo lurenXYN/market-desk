@@ -3334,19 +3334,31 @@
       const floatPnl = sum.floating_pnl != null ? sum.floating_pnl : sum.pnl;
       const floatPct = sum.floating_pct != null ? sum.floating_pct : sum.pnl_pct;
       const realized = sum.realized_pnl ?? 0;
-      // Prefer server day_pnl (sum of row session P&L). Never fall back to floating+realized.
-      let dayPnl = sum.day_pnl;
-      if (dayPnl == null && (d.positions || []).length) {
-        let acc = 0;
-        let any = false;
-        for (const p of d.positions) {
-          if (p.day_pnl == null) continue;
-          acc += Number(p.day_pnl) || 0;
-          any = true;
+      // Always prefer sum of row session P&L so a stale summary cannot show floating as 当日盈亏.
+      let dayPnl = null;
+      let dayBasis = 0;
+      let dayAny = false;
+      for (const p of (d.positions || [])) {
+        if (p.day_pnl == null || p.day_pnl === "") continue;
+        dayPnl = (dayPnl == null ? 0 : dayPnl) + (Number(p.day_pnl) || 0);
+        dayAny = true;
+        const qty = Number(p.qty || 0);
+        const sold = Number(p.day_sold_qty || 0);
+        const buy = Number(p.buy_price || 0);
+        const prev = Number(p.prev || 0);
+        if (qty > 0) {
+          if (p.bought_today && buy > 0) dayBasis += buy * qty;
+          else if (prev > 0) dayBasis += prev * qty;
+          else if (buy > 0) dayBasis += buy * qty;
+        } else if (sold > 0 && buy > 0) {
+          dayBasis += buy * sold;
         }
-        dayPnl = any ? acc : null;
       }
-      const dayPct = sum.day_pnl_pct;
+      if (!dayAny) dayPnl = sum.day_pnl != null ? sum.day_pnl : null;
+      else dayPnl = Math.round(dayPnl * 100) / 100;
+      let dayPct = null;
+      if (dayPnl != null && dayBasis > 0) dayPct = Math.round((dayPnl / dayBasis) * 10000) / 100;
+      else if (sum.day_pnl_pct != null && !dayAny) dayPct = sum.day_pnl_pct;
       const pnlCls = (dayPnl || 0) >= 0 ? "up" : "down";
       const floatCls = (floatPnl || 0) >= 0 ? "up" : "down";
       const realCls = (realized || 0) >= 0 ? "up" : "down";
