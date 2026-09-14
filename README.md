@@ -56,10 +56,13 @@ chmod +x start.sh
 ```bash
 chmod +x start.sh deploy/install-systemd.sh
 # 默认安装到 /opt/market-desk，绑定 0.0.0.0:8765
+# root 或普通用户(+sudo)均可
 ./deploy/install-systemd.sh
 
 # 可选环境变量：
 # INSTALL_DIR=/home/you/market-desk HOST=127.0.0.1 PORT=8765 SERVICE_USER=you ./deploy/install-systemd.sh
+# INSTALL_DIR="$PWD" ./deploy/install-systemd.sh   # 就地用当前克隆目录
+# 缺 rsync 时：apt install -y rsync
 ```
 
 浏览器打开：http://127.0.0.1:8765/
