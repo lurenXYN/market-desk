@@ -507,6 +507,12 @@
       box-shadow: inset 3px 0 0 #c9a227;
     }
     .linkbox .k { color: #eab308; font-size: 12px; letter-spacing: 0.12em; }
+    .trialbox {
+      margin-top: 10px; padding: 14px 16px;
+      border: 1px solid #2a4a3a; border-radius: 8px; background: #0e1612;
+      box-shadow: inset 3px 0 0 #3ecf8e;
+    }
+    .trialbox .k { color: #3ecf8e; font-size: 12px; letter-spacing: 0.12em; }
     .favdesk {
       margin-top: 10px; padding: 14px 16px;
       border: 1px solid #1e3a5f; border-radius: 8px; background: #0e1520;
@@ -1800,7 +1806,7 @@
         border-radius: 12px;
         background: #0c1218;
       }
-      .buybox, .sellbox, .sidebox, .favdesk {
+      .buybox, .sellbox, .sidebox, .linkbox, .trialbox, .favdesk {
         border-radius: 12px;
       }
     }
@@ -1995,6 +2001,14 @@
             <div class="buyline" id="linkline">暂无联动</div>
             <div class="buymeta" id="linkmeta"></div>
             <div class="rec-grid" id="linkItems"></div>
+          </div>
+          <div class="trialbox" id="trialbox" hidden>
+            <div class="k">自选可试探<button type="button" class="q" data-term="自选可试探">?</button>
+              <span class="meta" id="trialNote"></span>
+            </div>
+            <div class="buyline" id="trialline">暂无可试探自选</div>
+            <div class="buymeta" id="trialmeta"></div>
+            <div class="rec-grid" id="trialItems"></div>
           </div>
           <div class="favdesk" id="favDesk" hidden>
             <div class="k">看好板块 · 推荐买卖<button type="button" class="q" data-term="看好板块买卖">?</button>
@@ -2263,7 +2277,7 @@
           <thead>
             <tr>
               <th>状态</th><th>名称</th><th>代码</th><th>买价</th><th>股数</th>
-              <th>成本</th><th>现价/卖价</th><th>市值</th>
+              <th>成本</th><th>现价/卖价</th><th>市值</th><th>日线</th>
               <th>当日盈亏</th><th>浮盈</th><th>已实现</th><th></th>
             </tr>
           </thead>
@@ -2567,6 +2581,16 @@
         : `<button type="button" class="${halfCls.trim()} sell-half" data-id="${it.id || ""}" data-qty="${halfQ}" data-last="${it.last ?? ""}">减半 ${halfQ}股</button>
            <button type="button" class="${clearCls.trim()} sell-clear" data-id="${it.id || ""}" data-qty="${clearQ}" data-last="${it.last ?? ""}">清仓 ${clearQ}股</button>
            <button type="button" class="pos-btn sell-go">去仓位</button>`;
+      let trendHtml = "";
+      if (it.trend_ok) {
+        trendHtml = `<div class="trend-ok">日线 · 上升趋势（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>`;
+      } else if (it.trend_pending) {
+        trendHtml = `<div class="trend-warn">日线 · ${it.trend || it.daily_trend || "暂未取到"}（不据此否决）</div>`;
+      } else if (it.trend_down) {
+        trendHtml = `<div class="trend-warn">日线 · 下降趋势</div>`;
+      } else if (it.trend || it.daily_trend) {
+        trendHtml = `<div class="trend-warn">日线 · ${it.trend || it.daily_trend}</div>`;
+      }
       return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
@@ -2577,6 +2601,7 @@
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div><div class="lab">浮盈</div><div class="val">${pnlHtml}</div></div>
         </div>
+        ${trendHtml}
         <div class="rec-why">${it.reason || ""}</div>
         <div class="rev-actions" style="margin-top:8px">${actions}</div>
       </article>`;
@@ -2926,6 +2951,24 @@
         } else {
           linkBox.hidden = true;
           document.getElementById("linkItems").innerHTML = "";
+        }
+      }
+      const trialRec = v.watch_trial_recommend || null;
+      const trialBox = document.getElementById("trialbox");
+      if (trialBox) {
+        if (trialRec && (trialRec.items || []).length) {
+          trialBox.hidden = false;
+          document.getElementById("trialline").textContent =
+            trialRec.text || trialRec.title || "自选可试探";
+          document.getElementById("trialmeta").textContent =
+            trialRec.size_note || "观察页可试探同步副卡，小仓不改顶栏";
+          const tn = document.getElementById("trialNote");
+          if (tn) tn.textContent = `· ${(trialRec.items || []).length}只`;
+          document.getElementById("trialItems").innerHTML =
+            (trialRec.items || []).map(recCard).join("");
+        } else {
+          trialBox.hidden = true;
+          document.getElementById("trialItems").innerHTML = "";
         }
       }
       const favDesk = d.favorite_desk || {};
@@ -3433,7 +3476,7 @@
       const riskNote = sum.risk_note ? `<span class="bans">${sum.risk_note}</span>` : "";
       const closedBit = sum.closed_count ? ` · 今日已平 ${sum.closed_count}` : "";
       document.getElementById("posSum").innerHTML =
-        `<span class="day-primary">当日盈亏 <b class="${pnlCls}">${fmtMoney(dayPnl)}${dayPct == null ? "" : " (" + (dayPct > 0 ? "+" : "") + dayPct + "%)"}</b></span>` +
+        `<span class="day-primary">当日盈亏（相对昨收） <b class="${pnlCls}">${fmtMoney(dayPnl)}${dayPct == null ? "" : " (" + (dayPct > 0 ? "+" : "") + dayPct + "%)"}</b></span>` +
         `<span>持仓 <b>${sum.count ?? 0}</b>${closedBit}</span>` +
         `<span>成本 <b>${fmtMoney(sum.cost)}</b></span>` +
         `<span>市值 <b>${fmtMoney(sum.market)}</b></span>` +
@@ -3480,6 +3523,11 @@
             <button type="button" class="pos-del pos-trim" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">自定义</button>
             <button type="button" class="pos-del" data-id="${p.id}">删除</button>`;
         const dayCls = dayRow == null ? "" : ((Number(dayRow) || 0) >= 0 ? "up" : "down");
+        let trendCell = "—";
+        if (p.trend_ok) trendCell = `<span class="up">上升</span>`;
+        else if (p.trend_down) trendCell = `<span class="down">下降</span>`;
+        else if (p.trend_pending) trendCell = `<span class="meta">未取到</span>`;
+        else if (p.daily_trend || p.trend) trendCell = `<span class="meta">${p.daily_trend || p.trend}</span>`;
         return `
         <tr class="${closed ? "pos-closed" : ""}">
           <td data-label="状态">${p.status || (closed ? "今日已平" : "持仓")}</td>
@@ -3490,12 +3538,13 @@
           <td data-label="成本">${fmtMoney(p.cost)}</td>
           <td data-label="现价">${p.last ?? "—"}${closed ? "" : (p.last_pct == null ? "" : " " + fmtPct(p.last_pct))}${p.last_sell_price != null && !closed && p.day_sold_qty ? ` / 卖${p.last_sell_price}` : ""}</td>
           <td data-label="市值">${fmtMoney(p.market)}</td>
+          <td data-label="日线">${closed ? "—" : trendCell}</td>
           <td data-label="当日" class="${dayCls}">${dayRow == null ? "—" : fmtMoney(dayRow)}</td>
           <td data-label="浮盈" class="${(p.pnl || 0) >= 0 ? "up" : "down"}">${closed ? "—" : fmtMoney(p.pnl)}${closed || p.pnl_pct == null ? "" : ` (${(p.pnl_pct > 0 ? "+" : "") + p.pnl_pct}%)`}</td>
           <td data-label="已实现" class="${realizedRow >= 0 ? "up" : "down"}">${realizedRow ? fmtMoney(realizedRow) : "—"}</td>
           <td class="m-actions">${actions}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="12" class="meta">暂无仓位，先记账</td></tr>`;
+      }).join("") || `<tr><td colspan="13" class="meta">暂无仓位，先记账</td></tr>`;
       paintAuctionStrategy(d);
       paintEmotionWave(d);
       paintSeasonality(d);
@@ -4907,7 +4956,7 @@
         alert("钉自选失败");
       }
     }
-    ["buybox", "sidebox", "linkbox", "favDesk"].forEach((id) => {
+    ["buybox", "sidebox", "linkbox", "trialbox", "favDesk"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("click", onDeskRecClick);
     });

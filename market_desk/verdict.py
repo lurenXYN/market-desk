@@ -452,9 +452,10 @@ def build_verdict(
         )
     if link_info and link_info.get("name"):
         sim_pct = int(round(float(link_info.get("sim") or 0) * 100))
+        why = str(link_info.get("why") or "主线暂无现买点")
         narrative = (
             narrative.rstrip("。")
-            + f"；主线暂无现买点，联动相似板块「{link_info.get('name')}」"
+            + f"；{why}，联动相似板块「{link_info.get('name')}」"
             + (f"（相似{sim_pct}%）" if sim_pct else "")
             + "，小仓盯回踩不改主线。"
         )
@@ -1122,6 +1123,37 @@ def _build_side_branch(
     return info, rec
 
 
+def _mainline_needs_link(recommend: dict[str, Any] | None) -> tuple[bool, str]:
+    """Decide whether soft sibling-board cards should surface.
+
+    Triggers when sticky mainline has no ready entry, or every priced card hugs
+    the chase band (overheated / near 不追价) even if some ready flags linger.
+    """
+    from market_desk.config import BOARD_LINK_CHASE_RATIO
+
+    items = list((recommend or {}).get("items") or [])
+    if not items:
+        return True, "主线暂无卡片"
+    if not any(bool(i.get("ready")) for i in items):
+        return True, "主线暂无现买点"
+    priced = 0
+    at_chase = 0
+    for item in items:
+        last = item.get("last")
+        chase = item.get("chase_price")
+        if last is None or chase is None:
+            continue
+        try:
+            priced += 1
+            if float(last) >= float(chase) * float(BOARD_LINK_CHASE_RATIO):
+                at_chase += 1
+        except (TypeError, ValueError):
+            continue
+    if priced > 0 and at_chase >= priced:
+        return True, "主线全贴不追价/过热"
+    return False, ""
+
+
 def _build_link_branch(
     *,
     hot: list[dict[str, Any]] | None,
@@ -1136,7 +1168,7 @@ def _build_link_branch(
     orphan: bool | str = False,
     phase: str = "",
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Build soft sibling-board cards when sticky mainline has no ready entry.
+    """Build soft sibling-board cards when sticky mainline lacks a calm entry.
 
     Does not switch sticky mainline or upgrade hero action; cards stay observation
     path with an extra size damp (BOARD_LINK_SIZE_MULT).
@@ -1147,7 +1179,8 @@ def _build_link_branch(
     main_name = str(main.get("name") or "").strip()
     if not main_name or stock_block:
         return None, None
-    if any(bool(i.get("ready")) for i in ((recommend or {}).get("items") or [])):
+    need_link, link_why = _mainline_needs_link(recommend)
+    if not need_link:
         return None, None
 
     peers = list(main.get("similar_peers") or [])
@@ -1251,9 +1284,10 @@ def _build_link_branch(
     rec["buy"] = False
     rec["link"] = True
     rec["link_sim"] = round(chosen_sim, 2)
+    rec["link_why"] = link_why
     rec["title"] = f"板块联动 · {peer_name}"
     rec["size_note"] = _join_hint(
-        f"主线暂无现买点；相似板块回踩可小仓（建议再×{BOARD_LINK_SIZE_MULT:g}），不改 sticky 主线",
+        f"{link_why}；相似板块回踩可小仓（建议再×{BOARD_LINK_SIZE_MULT:g}），不改 sticky 主线",
         f"相似 {int(round(chosen_sim * 100))}%"
         + (f" · 载体近似 {vehicle.get('name')}" if soft and vehicle.get("name") else ""),
     )
@@ -1278,6 +1312,7 @@ def _build_link_branch(
         "carrier_name": vehicle.get("name"),
         "pool_codes": _pool_codes_from_board(chosen),
         "mainline_name": main_name,
+        "why": link_why,
     }
     return info, rec
 
@@ -1511,6 +1546,77 @@ def _position_tied_to_board(
     if board_name and held_board and (board_name in held_board or held_board in board_name):
         return True
     return False
+
+
+def build_watch_trial_recommend(
+    watchlist: list[dict[str, Any]] | None,
+    *,
+    playbook: dict[str, Any] | None = None,
+    adapt: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Build observe-only desk cards for watchlist rows marked 可试探.
+
+    Same soft tier as board linkage: does not upgrade hero action or sticky mainline.
+    """
+    from market_desk.config import WATCH_TRIAL_MAX_ITEMS, WATCH_TRIAL_SIZE_MULT
+
+    items: list[dict[str, Any]] = []
+    for row in watchlist or []:
+        if str(row.get("observe_status") or "") != "可试探":
+            continue
+        code = normalize_code(row.get("code"))
+        if not code:
+            continue
+        etf = _is_etf_code(code)
+        digits = 3 if etf else 2
+        last = row.get("last")
+        suggest = row.get("suggest_price")
+        stop = row.get("stop_price")
+        chase = row.get("chase_price")
+        buy = suggest if suggest not in (None, "") else last
+        kind = "etf" if etf else "stock"
+        note = str(row.get("observe_note") or "靠近建议价且作战台未锁买")
+        items.append(
+            {
+                "kind": kind,
+                "kind_label": "ETF" if etf else "个股",
+                "role": "alt",
+                "role_label": "自选·可试探",
+                "code": code,
+                "name": row.get("name") or code,
+                "last": _px(last, digits),
+                "pct": None
+                if row.get("last_pct") is None
+                else round(float(row["last_pct"]), 2),
+                "buy_price": _px(buy, digits),
+                "wait_price": _px(suggest, digits),
+                "stop_price": _px(stop, digits),
+                "chase_price": _px(chase, digits),
+                "ready": False,
+                "watch_trial": True,
+                "reason": f"{note}；小仓试探，不改顶栏结论",
+                "qty": 100,
+            }
+        )
+        if len(items) >= int(WATCH_TRIAL_MAX_ITEMS):
+            break
+    if not items:
+        return None
+    rec: dict[str, Any] = {
+        "title": "自选可试探",
+        "text": f"自选可试探 · {len(items)}只",
+        "buy": False,
+        "watch_trial": True,
+        "items": items,
+        "size_note": (
+            f"观察页「可试探」同步副卡；建议再×{float(WATCH_TRIAL_SIZE_MULT):g}，"
+            "不改 sticky 主线 / 顶栏"
+        ),
+    }
+    trial_adapt = dict(adapt or {})
+    trial_adapt["watch_trial"] = True
+    trial_adapt["watch_trial_mult"] = float(WATCH_TRIAL_SIZE_MULT)
+    return _attach_risk_sizing(rec, playbook=playbook, adapt=trial_adapt)
 
 
 def build_favorite_desk_plans(
@@ -2095,6 +2201,37 @@ def apply_stock_daily_trends(
     del overrides  # Manual overrides removed; trend is informational + ready gate.
     from market_desk.config import STOCK_TREND_DOWN_PENALTY, STOCK_TREND_UP_BONUS
 
+    def _apply_trend_size_soft(item: dict[str, Any]) -> None:
+        """Soft-scale suggested lot size after daily trend classify."""
+        from market_desk.config import TREND_SIZE_DOWN_MULT, TREND_SIZE_UP_MULT
+
+        mult = None
+        if item.get("trend_ok"):
+            mult = float(TREND_SIZE_UP_MULT)
+        elif item.get("trend_down"):
+            mult = float(TREND_SIZE_DOWN_MULT)
+        if mult is None or abs(mult - 1.0) < 0.01:
+            return
+        try:
+            qty = int(item.get("qty") or 0)
+        except (TypeError, ValueError):
+            return
+        if qty <= 0:
+            return
+        new_qty = max(100, int(round(qty * mult / 100.0) * 100))
+        if new_qty == qty:
+            item["trend_size_mult"] = round(mult, 3)
+            return
+        item["qty"] = new_qty
+        item["trend_size_mult"] = round(mult, 3)
+        plan = item.get("risk_plan")
+        if isinstance(plan, dict):
+            plan = dict(plan)
+            plan["qty"] = new_qty
+            tip = "日线上升略加仓" if mult > 1.0 else "日线下降略减仓"
+            plan["note"] = _join_hint(str(plan.get("note") or ""), tip)
+            item["risk_plan"] = plan
+
     rec = dict(recommend or {})
     items = list(rec.get("items") or [])
     if not items:
@@ -2202,6 +2339,7 @@ def apply_stock_daily_trends(
 
         marked["trend_adj"] = round(trend_adj, 1)
         marked["score"] = round(base_score + trend_adj, 1)
+        _apply_trend_size_soft(marked)
         out_items.append(marked)
 
     # Keep ETF first; re-rank stocks by score after trend nudge.
@@ -2899,6 +3037,19 @@ def _attach_risk_sizing(
                 "key": "board_link",
                 "label": "板块联动",
                 "mult": max(0.5, min(1.0, link_m)),
+            }
+        )
+
+    if adapt.get("watch_trial"):
+        try:
+            wt_m = float(adapt.get("watch_trial_mult") or 0.75)
+        except (TypeError, ValueError):
+            wt_m = 0.75
+        factors.append(
+            {
+                "key": "watch_trial",
+                "label": "自选试探",
+                "mult": max(0.5, min(1.0, wt_m)),
             }
         )
 
@@ -4021,6 +4172,13 @@ def _sell_item(
         "last_buy_date": buy_day or None,
         "daily_trend": None if not trend else trend.get("label"),
         "daily_trend_zh": None if not trend else trend.get("label"),
+        "trend": None if not trend else trend.get("label"),
+        "trend_ok": bool(trend.get("up")) and not bool(trend.get("down")),
+        "trend_down": bool(trend.get("down")),
+        "trend_pending": (trend.get("quality") in ("fetch_fail", "thin")) if trend else True,
+        "ma5": None if not trend else trend.get("ma5"),
+        "ma10": None if not trend else trend.get("ma10"),
+        "ma20": None if not trend else trend.get("ma20"),
         "band_mode": band["mode"],
         "band_mode_zh": band["mode_zh"],
         "stop_pct": stop_pct,
@@ -4172,6 +4330,37 @@ def decorate_positions(
         else:
             item["peak_price"] = row.get("peak_price")
             item["peak_dirty"] = False
+        out.append(item)
+    return out
+
+
+def attach_position_daily_trends(
+    positions: list[dict[str, Any]] | None,
+    trends_by_code: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Attach daily-trend labels onto position rows for the 仓位 tab / sell cards."""
+    trends = trends_by_code or {}
+    out: list[dict[str, Any]] = []
+    for row in positions or []:
+        item = dict(row)
+        code = normalize_code(item.get("code"))
+        trend = trends.get(code) if code else None
+        if not trend:
+            item.setdefault("daily_trend", None)
+            item.setdefault("trend_ok", False)
+            item.setdefault("trend_down", False)
+            out.append(item)
+            continue
+        label = trend.get("label")
+        item["daily_trend"] = label
+        item["daily_trend_zh"] = label
+        item["trend"] = label
+        item["trend_ok"] = bool(trend.get("up")) and not bool(trend.get("down"))
+        item["trend_down"] = bool(trend.get("down"))
+        item["trend_pending"] = trend.get("quality") in ("fetch_fail", "thin")
+        item["ma5"] = trend.get("ma5")
+        item["ma10"] = trend.get("ma10")
+        item["ma20"] = trend.get("ma20")
         out.append(item)
     return out
 

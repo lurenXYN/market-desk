@@ -123,12 +123,14 @@ from market_desk.verdict import (
     apply_size_cap_gate,
     apply_stock_daily_trends,
     attach_board_etf_trends,
+    attach_position_daily_trends,
     build_deltas,
     build_desk_gate_summary,
     build_favorite_desk_plans,
     build_risk_overview,
     build_sell_advice,
     build_verdict,
+    build_watch_trial_recommend,
     decorate_positions,
     mark_pullback_entries,
     position_summary,
@@ -206,15 +208,6 @@ class DeskEngine:
             + list(self.snapshot.get("pin_boards") or [])
             + list(self.snapshot.get("favorite_boards") or []),
         )
-        self.snapshot["positions"] = positions
-        self.snapshot["position_summary"] = position_summary(positions)
-        cap = float(
-            ((self.snapshot.get("verdict") or {}).get("playbook") or {}).get("size_cap_pct")
-            or 100
-        )
-        self.snapshot["risk_overview"] = build_risk_overview(
-            positions, size_cap_pct=cap
-        )
         peaks = {
             int(r["id"]): float(r["peak_price"])
             for r in positions
@@ -227,6 +220,16 @@ class DeskEngine:
                 log.exception("touch position peaks failed")
         trends = self._cached_trends_for(
             [normalize_code(r.get("code")) for r in positions if r.get("code")]
+        )
+        positions = attach_position_daily_trends(positions, trends)
+        self.snapshot["positions"] = positions
+        self.snapshot["position_summary"] = position_summary(positions)
+        cap = float(
+            ((self.snapshot.get("verdict") or {}).get("playbook") or {}).get("size_cap_pct")
+            or 100
+        )
+        self.snapshot["risk_overview"] = build_risk_overview(
+            positions, size_cap_pct=cap
         )
         self.snapshot["sell_advice"] = build_sell_advice(
             positions,
@@ -648,6 +651,23 @@ class DeskEngine:
                 verdict.update(aligned)
                 desk_gate_summary = build_desk_gate_summary(verdict, phase=phase)
                 watchlist = _annotate_watchlist_observe(watchlist, verdict)
+                watch_trial = build_watch_trial_recommend(
+                    watchlist,
+                    playbook=verdict.get("playbook"),
+                    adapt=verdict.get("adapt"),
+                )
+                if watch_trial:
+                    await self._apply_watch_trial_trends(
+                        client, watch_trial, trade_date_dash
+                    )
+                    for item in watch_trial.get("items") or []:
+                        item["ready"] = False
+                        if item.get("wait_price") is not None:
+                            item["buy_price"] = item.get("wait_price")
+                    watch_trial["buy"] = False
+                verdict["watch_trial_recommend"] = watch_trial
+                pos_trends = self._cached_trends_for(pos_codes)
+                positions = attach_position_daily_trends(positions, pos_trends)
                 updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
                 try:
                     self._persist_session_context(
@@ -751,7 +771,7 @@ class DeskEngine:
                         verdict,
                         phase,
                         trade_date=trade_date_dash,
-                        trends_by_code=self._cached_trends_for(pos_codes),
+                        trends_by_code=pos_trends,
                         similar=similar,
                         metrics=metrics,
                     ),
@@ -1312,6 +1332,31 @@ class DeskEngine:
                 if item.get("wait_price") is not None:
                     item["buy_price"] = item.get("wait_price")
             verdict["link_recommend"]["buy"] = False
+
+    async def _apply_watch_trial_trends(
+        self,
+        client: httpx.AsyncClient,
+        watch_trial: dict[str, Any],
+        trade_date: str,
+    ) -> None:
+        """Attach daily trends onto watchlist trial desk cards."""
+        codes = [
+            str(x.get("code") or "")
+            for x in (watch_trial.get("items") or [])
+            if x.get("kind") in ("stock", "etf") and x.get("code")
+        ]
+        codes = list(dict.fromkeys(codes))
+        if not codes:
+            return
+        closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
+            client, codes, trade_date
+        )
+        overrides = load_trend_overrides(trade_date)
+        updated = apply_stock_daily_trends(
+            watch_trial, closes_by_code, fetch_ok_by_code, overrides
+        )
+        watch_trial.clear()
+        watch_trial.update(updated)
 
     async def _apply_recommend_holders(
         self,

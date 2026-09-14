@@ -272,14 +272,17 @@ STOCK_CROSS_CONFIRM_BONUS = 2.0    # extra when that board status is 确认中
 STOCK_CROSS_BOARD_CAP = 12.0
 
 # Daily trend score nudge after kline classify (unclear / missing → 0).
-STOCK_TREND_UP_BONUS = 8.0
-STOCK_TREND_DOWN_PENALTY = 8.0
+STOCK_TREND_UP_BONUS = 12.0
+STOCK_TREND_DOWN_PENALTY = 12.0
+# Soft size scale after trend classify (lot-rounded qty on buy cards).
+TREND_SIZE_UP_MULT = 1.10
+TREND_SIZE_DOWN_MULT = 0.75
 # Mainline carrier ETF daily-trend nudge (same once-per-day closes).
-MAINLINE_ETF_TREND_UP = 6.0
-MAINLINE_ETF_TREND_DOWN = 6.0
+MAINLINE_ETF_TREND_UP = 9.0
+MAINLINE_ETF_TREND_DOWN = 9.0
 # Soft-mapped carrier: smaller adj only; never unlocks ready buys.
-MAINLINE_SOFT_ETF_TREND_UP = 2.5
-MAINLINE_SOFT_ETF_TREND_DOWN = 3.0
+MAINLINE_SOFT_ETF_TREND_UP = 3.5
+MAINLINE_SOFT_ETF_TREND_DOWN = 4.0
 # Ending / 退潮 incumbent: easier for challenger to take sticky mainline.
 MAINLINE_FADE_SWITCH_MULT = 0.55
 
@@ -411,10 +414,14 @@ THEME_REP_MIN_SAMPLES = 2       # mild adj before this; full after
 THEME_REP_ADJ_MIN = -12.0
 THEME_REP_ADJ_MAX = 8.0         # room for sticky persist bonus
 THEME_SIM_PEER_MIN = 0.45       # show peers above this
-# Soft board-linkage buys: similar peer cards when mainline has no ready entry.
+# Soft board-linkage buys: similar peer cards when mainline has no ready / overheated.
 BOARD_LINK_SIM_MIN = 0.45       # reuse peer floor; raise to be stricter
 BOARD_LINK_SIZE_MULT = 0.75     # extra size damp vs mainline risk plan
 BOARD_LINK_MAX_STOCKS = 2
+BOARD_LINK_CHASE_RATIO = 0.997  # last ≥ chase * this → counts as hug-chase
+# Watchlist「可试探」desk side cards (same soft tier as board link).
+WATCH_TRIAL_SIZE_MULT = 0.75
+WATCH_TRIAL_MAX_ITEMS = 4
 # Smarter affinity: weight strong members / leaders / board co-move.
 THEME_MEMBER_SIM_WEIGHT = 0.40  # unweighted Jaccard share (fallback mix)
 THEME_WEIGHTED_MEMBER_WEIGHT = 0.35  # pct/leader-weighted Jaccard
