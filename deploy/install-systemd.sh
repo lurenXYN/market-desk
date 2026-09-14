@@ -64,6 +64,41 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+ensure_python_venv() {
+  # Return 0 if ``python3 -m venv`` can create a usable environment.
+  local probe
+  probe="$(mktemp -d)"
+  if python3 -m venv "$probe/v" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    return 0
+  fi
+  rm -rf "$probe"
+
+  local py_ver
+  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  echo "python3-venv missing (ensurepip unavailable)."
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "Installing python3-venv / python${py_ver}-venv ..."
+    run_root apt-get update -y
+    run_root apt-get install -y "python${py_ver}-venv" python3-venv python3-pip || \
+      run_root apt-get install -y python3-venv python3-pip
+  else
+    echo "Install the distro venv package, then re-run."
+    echo "  Debian/Ubuntu: apt install -y python${py_ver}-venv"
+    exit 1
+  fi
+
+  probe="$(mktemp -d)"
+  if ! python3 -m venv "$probe/v" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    echo "Still cannot create venv after apt install. Check: apt install -y python${py_ver}-venv"
+    exit 1
+  fi
+  rm -rf "$probe"
+}
+
+ensure_python_venv
+
 if [[ "$ROOT" != "$INSTALL_DIR" ]] && ! command -v rsync >/dev/null 2>&1; then
   echo "rsync not found. Install: apt install -y rsync"
   echo "Or run with INSTALL_DIR=\"$ROOT\" to use this clone in place."
@@ -106,10 +141,16 @@ else
 fi
 
 echo "Creating venv + installing deps..."
+# Drop a half-created .venv left by a previous ensurepip failure.
+if [[ -d "$INSTALL_DIR/.venv" && ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
+  echo "Removing broken .venv at $INSTALL_DIR/.venv"
+  run_root rm -rf "$INSTALL_DIR/.venv"
+fi
 run_as_service_user "
   set -euo pipefail
   cd '$INSTALL_DIR'
   if [[ ! -x .venv/bin/python ]]; then
+    rm -rf .venv
     python3 -m venv .venv
   fi
   .venv/bin/python -m pip install -q -U pip

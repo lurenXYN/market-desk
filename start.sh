@@ -12,7 +12,12 @@ if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
   echo "Creating venv with python3..."
-  python3 -m venv .venv
+  if ! python3 -m venv .venv; then
+    py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    echo "venv failed. On Debian/Ubuntu: apt install -y python${py_ver}-venv"
+    rm -rf .venv
+    exit 1
+  fi
   PYTHON_BIN="$ROOT/.venv/bin/python"
 elif command -v python >/dev/null 2>&1; then
   echo "Creating venv with python..."

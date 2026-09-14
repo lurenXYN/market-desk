@@ -62,7 +62,9 @@ chmod +x start.sh deploy/install-systemd.sh
 # 可选环境变量：
 # INSTALL_DIR=/home/you/market-desk HOST=127.0.0.1 PORT=8765 SERVICE_USER=you ./deploy/install-systemd.sh
 # INSTALL_DIR="$PWD" ./deploy/install-systemd.sh   # 就地用当前克隆目录
-# 缺 rsync 时：apt install -y rsync
+# 缺依赖时（Debian/Ubuntu）：
+#   apt install -y python3-venv python3-pip rsync
+# 脚本在 root 下也会尝试自动 apt 安装 python3-venv
 ```
 
 浏览器打开：http://127.0.0.1:8765/
