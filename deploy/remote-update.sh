@@ -67,9 +67,12 @@ else
 fi
 
 echo "==> ensure venv + pip install"
-if [[ -d "$INSTALL_DIR/.venv" && ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
-  echo "Removing broken .venv"
-  run_root rm -rf "$INSTALL_DIR/.venv"
+if [[ -d "$INSTALL_DIR/.venv" ]]; then
+  if [[ ! -x "$INSTALL_DIR/.venv/bin/python" ]] \
+    || ! "$INSTALL_DIR/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    echo "Removing broken/pip-less .venv"
+    run_root rm -rf "$INSTALL_DIR/.venv"
+  fi
 fi
 
 run_root bash -lc "
@@ -78,6 +81,14 @@ run_root bash -lc "
   if [[ ! -x .venv/bin/python ]]; then
     rm -rf .venv
     python3 -m venv .venv
+  fi
+  if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    .venv/bin/python -m ensurepip --upgrade || true
+  fi
+  if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+    .venv/bin/python /tmp/get-pip.py
+    rm -f /tmp/get-pip.py
   fi
   .venv/bin/python -m pip install -q -U pip
   .venv/bin/python -m pip install -q -r requirements.txt

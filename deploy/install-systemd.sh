@@ -64,37 +64,77 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+venv_has_pip() {
+  # Return 0 when the given venv python can run pip.
+  local py="$1"
+  [[ -x "$py" ]] && "$py" -m pip --version >/dev/null 2>&1
+}
+
 ensure_python_venv() {
-  # Return 0 if ``python3 -m venv`` can create a usable environment.
-  local probe
+  # Ensure ``python3 -m venv`` creates an environment that includes pip.
+  local probe py_ver
+  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
   probe="$(mktemp -d)"
-  if python3 -m venv "$probe/v" >/dev/null 2>&1; then
+  if python3 -m venv "$probe/v" >/dev/null 2>&1 && venv_has_pip "$probe/v/bin/python"; then
     rm -rf "$probe"
     return 0
   fi
   rm -rf "$probe"
 
-  local py_ver
-  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-  echo "python3-venv missing (ensurepip unavailable)."
+  echo "python3-venv / ensurepip incomplete (venv without pip is common on Debian)."
   if command -v apt-get >/dev/null 2>&1; then
-    echo "Installing python3-venv / python${py_ver}-venv ..."
+    echo "Installing python${py_ver}-venv python3-venv python3-pip ..."
     run_root apt-get update -y
     run_root apt-get install -y "python${py_ver}-venv" python3-venv python3-pip || \
       run_root apt-get install -y python3-venv python3-pip
   else
-    echo "Install the distro venv package, then re-run."
-    echo "  Debian/Ubuntu: apt install -y python${py_ver}-venv"
+    echo "Install the distro venv + pip packages, then re-run."
+    echo "  Debian/Ubuntu: apt install -y python${py_ver}-venv python3-pip"
     exit 1
   fi
 
   probe="$(mktemp -d)"
   if ! python3 -m venv "$probe/v" >/dev/null 2>&1; then
     rm -rf "$probe"
-    echo "Still cannot create venv after apt install. Check: apt install -y python${py_ver}-venv"
+    echo "Still cannot create venv. Check: apt install -y python${py_ver}-venv"
     exit 1
   fi
-  rm -rf "$probe"
+  if ! venv_has_pip "$probe/v/bin/python"; then
+    # Some images still ship venv without ensurepip; bootstrap inside probe then require get-pip later.
+    "$probe/v/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+  fi
+  if ! venv_has_pip "$probe/v/bin/python"; then
+    rm -rf "$probe"
+    echo "venv still has no pip after apt install. Will try ensurepip/get-pip during setup."
+  else
+    rm -rf "$probe"
+  fi
+}
+
+bootstrap_venv_pip() {
+  # Ensure INSTALL_DIR/.venv exists and has a working pip module.
+  local py="$INSTALL_DIR/.venv/bin/python"
+  if [[ -x "$py" ]] && venv_has_pip "$py"; then
+    return 0
+  fi
+  echo "Bootstrapping pip inside $INSTALL_DIR/.venv ..."
+  run_as_service_user "
+    set -euo pipefail
+    cd '$INSTALL_DIR'
+    if [[ ! -x .venv/bin/python ]]; then
+      rm -rf .venv
+      python3 -m venv .venv
+    fi
+    if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+      .venv/bin/python -m ensurepip --upgrade || true
+    fi
+    if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+      curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+      .venv/bin/python /tmp/get-pip.py
+      rm -f /tmp/get-pip.py
+    fi
+    .venv/bin/python -m pip --version
+  "
 }
 
 ensure_python_venv
@@ -141,10 +181,12 @@ else
 fi
 
 echo "Creating venv + installing deps..."
-# Drop a half-created .venv left by a previous ensurepip failure.
-if [[ -d "$INSTALL_DIR/.venv" && ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
-  echo "Removing broken .venv at $INSTALL_DIR/.venv"
-  run_root rm -rf "$INSTALL_DIR/.venv"
+# Drop broken / pip-less venv left by earlier failures.
+if [[ -d "$INSTALL_DIR/.venv" ]]; then
+  if [[ ! -x "$INSTALL_DIR/.venv/bin/python" ]] || ! venv_has_pip "$INSTALL_DIR/.venv/bin/python"; then
+    echo "Removing broken/pip-less .venv at $INSTALL_DIR/.venv"
+    run_root rm -rf "$INSTALL_DIR/.venv"
+  fi
 fi
 run_as_service_user "
   set -euo pipefail
@@ -153,6 +195,11 @@ run_as_service_user "
     rm -rf .venv
     python3 -m venv .venv
   fi
+"
+bootstrap_venv_pip
+run_as_service_user "
+  set -euo pipefail
+  cd '$INSTALL_DIR'
   .venv/bin/python -m pip install -q -U pip
   .venv/bin/python -m pip install -q -r requirements.txt
 "
