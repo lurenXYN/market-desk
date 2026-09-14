@@ -2760,9 +2760,11 @@
             + `</div>`
             + (top ? `<div class="top">池内前三：${top}</div>` : "")
             + ((why.similar_peers || []).length
-              ? `<div class="top">相似板块：${(why.similar_peers || []).slice(0, 3).map((p) =>
-                  `${p.name} ${Math.round((p.sim || 0) * 100)}%`
-                ).join(" · ")} <button type="button" class="q" data-term="板块相似度">?</button></div>`
+              ? `<div class="top">相似板块：${(why.similar_peers || []).slice(0, 3).map((p) => {
+                  const whyBits = (p.why || []).slice(0, 2).join("·");
+                  return `${p.name} ${Math.round((p.sim || 0) * 100)}%`
+                    + (whyBits ? `<span class="meta">（${whyBits}）</span>` : "");
+                }).join(" · ")} <button type="button" class="q" data-term="板块相似度">?</button></div>`
               : "");
         } else {
           whyEl.hidden = true;
@@ -3267,7 +3269,10 @@
           <div class="meta" style="margin-top:4px">${
             (b.rep_label ? `信誉 ${b.rep_label}${b.rep_adj ? ` (${b.rep_adj > 0 ? "+" : ""}${b.rep_adj})` : ""}` : "")
             + ((b.similar_peers || []).length
-              ? `${b.rep_label ? " · " : ""}相似 ${(b.similar_peers || []).slice(0, 2).map((p) => p.name).join("/")}`
+              ? `${b.rep_label ? " · " : ""}相似 ${(b.similar_peers || []).slice(0, 2).map((p) => {
+                  const tip = (p.why || []).slice(0, 2).join("·");
+                  return tip ? `${p.name}(${tip})` : p.name;
+                }).join("/")}`
               : "")
           }</div>
           <div class="note">${b.note || ""}</div>

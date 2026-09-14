@@ -9,6 +9,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **板块相似度智能化** — 成分加权/活跃股/龙头互含/涨跌同向 + why 文案。*(2026-09-14)*
 - [x] **板块联动买点（软）** — 主线无 ready 时从相似同伴挖回踩副卡，仓位×0.75，不改 sticky。*(2026-09-14)*
 - [x] **当日盈亏汇总修复** — 汇总=各行 day_pnl（非浮盈）；今日新买按买价计。*(2026-09-14)*
 - [x] **自选观察即时反馈** — 观察页切片含 watchlist；POST 后立即刷列表。*(2026-09-14)*

@@ -1,7 +1,7 @@
 """Board affinity (similarity) and theme reputation (anti one-day wonder).
 
-Similarity combines canonical theme groups with constituent-code overlap so
-sibling boards (and near-theme concepts) share identity. Reputation records
+Similarity blends theme families with smarter constituent overlap: weighted
+members, top movers, leader cross-hit, and board co-move. Reputation records
 whether a sticky theme persisted or faded the next session, then soft-feeds
 ``mainline_score`` — never a hard buy ban.
 """
@@ -11,8 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from market_desk.config import (
+    THEME_COMOVE_BONUS,
     THEME_FADE_PCT_MAX,
     THEME_FADE_ZT_DROP,
+    THEME_LEADER_CROSS_BONUS,
     THEME_MEMBER_SIM_WEIGHT,
     THEME_PERSIST_PCT_MIN,
     THEME_PERSIST_ZT_MIN,
@@ -27,21 +29,78 @@ from market_desk.config import (
     THEME_SIM_PEER_MIN,
     THEME_SIM_POS_INHERIT,
     THEME_SIM_POS_INHERIT_MIN,
+    THEME_TOP_K,
+    THEME_TOP_OVERLAP_WEIGHT,
+    THEME_WEIGHTED_MEMBER_WEIGHT,
 )
 from market_desk.filters import normalize_code
 from market_desk.mainline import same_theme, theme_key
 
 
-def _member_codes(board: dict[str, Any] | None) -> set[str]:
-    """Collect normalized constituent codes from pool/members."""
-    out: set[str] = set()
+def _member_rows(board: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return constituent rows from pool/members (dicts only)."""
+    out: list[dict[str, Any]] = []
     b = board or {}
     for key in ("pool", "members"):
         for row in b.get(key) or []:
-            code = normalize_code((row or {}).get("code"))
-            if code:
-                out.add(code)
+            if isinstance(row, dict) and normalize_code(row.get("code")):
+                out.append(row)
     return out
+
+
+def _member_codes(board: dict[str, Any] | None) -> set[str]:
+    """Collect normalized constituent codes from pool/members."""
+    return {normalize_code(r.get("code")) for r in _member_rows(board)}
+
+
+def _member_weights(
+    board: dict[str, Any] | None,
+    *,
+    extra_leaders: set[str] | None = None,
+) -> dict[str, float]:
+    """Weight constituents by day strength; leaders get a boost."""
+    leaders = set(extra_leaders or set())
+    code = normalize_code((board or {}).get("leader_code"))
+    if code:
+        leaders.add(code)
+    weights: dict[str, float] = {}
+    for row in _member_rows(board):
+        c = normalize_code(row.get("code"))
+        if not c:
+            continue
+        try:
+            pct = abs(float(row.get("pct"))) if row.get("pct") is not None else 0.0
+        except (TypeError, ValueError):
+            pct = 0.0
+        w = 1.0 + min(pct, 12.0) / 4.0
+        if c in leaders:
+            w += 2.5
+        try:
+            mv = float(row.get("mv_yi")) if row.get("mv_yi") is not None else 0.0
+            if mv >= 200:
+                w += 0.4
+            elif mv >= 80:
+                w += 0.2
+        except (TypeError, ValueError):
+            pass
+        weights[c] = max(weights.get(c, 0.0), w)
+    return weights
+
+
+def _top_mover_codes(board: dict[str, Any] | None, k: int) -> set[str]:
+    """Codes of the top-|pct| constituents (active overlap lens)."""
+    scored: list[tuple[float, str]] = []
+    for row in _member_rows(board):
+        c = normalize_code(row.get("code"))
+        if not c:
+            continue
+        try:
+            pct = abs(float(row.get("pct"))) if row.get("pct") is not None else 0.0
+        except (TypeError, ValueError):
+            pct = 0.0
+        scored.append((pct, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return {c for _, c in scored[: max(1, int(k))]}
 
 
 def jaccard(a: set[str], b: set[str]) -> float:
@@ -54,29 +113,169 @@ def jaccard(a: set[str], b: set[str]) -> float:
     return inter / float(len(a | b))
 
 
-def board_similarity(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float:
-    """Score how related two board cards are in [0, 1].
-
-    Exact same theme_key → at least 0.85; member overlap can push to 1.0.
-    Different themes still score via constituent Jaccard (cross-listed concepts).
-    """
-    if not a or not b:
+def weighted_jaccard(wa: dict[str, float], wb: dict[str, float]) -> float:
+    """Return weight-aware Jaccard on two code→weight maps."""
+    if not wa or not wb:
         return 0.0
+    keys = set(wa) | set(wb)
+    inter = 0.0
+    union = 0.0
+    for c in keys:
+        a = float(wa.get(c) or 0.0)
+        b = float(wb.get(c) or 0.0)
+        inter += min(a, b)
+        union += max(a, b)
+    if union <= 0:
+        return 0.0
+    return inter / union
+
+
+def _board_pct(board: dict[str, Any] | None) -> float | None:
+    """Parse board-level day percent change."""
+    try:
+        if (board or {}).get("pct") is None:
+            return None
+        return float(board.get("pct"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _comove_score(pa: float | None, pb: float | None) -> float:
+    """Return 0..1 alignment of two board day moves (same sign + similar size)."""
+    if pa is None or pb is None:
+        return 0.0
+    if pa == 0 and pb == 0:
+        return 0.55
+    if pa * pb <= 0:
+        return 0.0
+    mag = min(abs(pa), abs(pb))
+    spread = abs(abs(pa) - abs(pb))
+    base = min(1.0, mag / 2.5)
+    damp = max(0.0, 1.0 - spread / 4.0)
+    return max(0.0, min(1.0, 0.35 + 0.65 * base * damp))
+
+
+def board_similarity_detail(
+    a: dict[str, Any] | None,
+    b: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Explain and score how related two board cards are.
+
+    Blends theme family, full-pool Jaccard, strength-weighted member overlap,
+    top-mover overlap, leader cross-hit, and board-level co-movement.
+    """
+    empty: dict[str, Any] = {
+        "sim": 0.0,
+        "theme_hit": False,
+        "jac": 0.0,
+        "wjac": 0.0,
+        "top_jac": 0.0,
+        "leader_hit": False,
+        "comove": 0.0,
+        "why": [],
+        "shared_n": 0,
+    }
+    if not a or not b:
+        return empty
     na = str(a.get("name") or "").strip()
     nb = str(b.get("name") or "").strip()
-    if not na or not nb or na == nb:
-        return 1.0 if na and na == nb else 0.0
+    if not na or not nb:
+        return empty
+    if na == nb:
+        return {
+            **empty,
+            "sim": 1.0,
+            "theme_hit": True,
+            "jac": 1.0,
+            "wjac": 1.0,
+            "why": ["同名板块"],
+        }
+
     theme_hit = same_theme(na, nb)
     codes_a = _member_codes(a)
     codes_b = _member_codes(b)
+    shared = codes_a & codes_b
     jac = jaccard(codes_a, codes_b)
-    if theme_hit:
-        return min(1.0, 0.85 + jac * 0.15)
-    # Soft name containment (东方通信 vs 通信设备) without group hit.
-    soft = 0.0
+
+    lead_a = normalize_code(a.get("leader_code"))
+    lead_b = normalize_code(b.get("leader_code"))
+    leaders = {c for c in (lead_a, lead_b) if c}
+    wa = _member_weights(a, extra_leaders=leaders)
+    wb = _member_weights(b, extra_leaders=leaders)
+    wjac = weighted_jaccard(wa, wb)
+
+    top_k = int(THEME_TOP_K)
+    top_jac = jaccard(_top_mover_codes(a, top_k), _top_mover_codes(b, top_k))
+
+    leader_hit = False
+    if lead_a and lead_b and lead_a == lead_b:
+        leader_hit = True
+    elif lead_a and lead_a in codes_b:
+        leader_hit = True
+    elif lead_b and lead_b in codes_a:
+        leader_hit = True
+
+    pa, pb = _board_pct(a), _board_pct(b)
+    comove = _comove_score(pa, pb)
+
+    soft_name = 0.0
     if len(na) >= 2 and len(nb) >= 2 and (na in nb or nb in na):
-        soft = 0.35
-    return min(1.0, jac * float(THEME_MEMBER_SIM_WEIGHT) + soft)
+        soft_name = 0.28
+
+    why: list[str] = []
+    if theme_hit:
+        why.append("同主题族")
+    if soft_name:
+        why.append("名称包含")
+    if shared:
+        why.append(f"共用{len(shared)}只成分")
+    if wjac >= 0.12:
+        why.append("强势股重合")
+    if top_jac >= 0.15:
+        why.append("活跃股重合")
+    if leader_hit:
+        why.append("龙头互含")
+    if comove >= 0.45:
+        why.append("涨跌同向")
+
+    if theme_hit:
+        sim = (
+            0.78
+            + 0.10 * max(jac, wjac)
+            + 0.06 * top_jac
+            + (float(THEME_LEADER_CROSS_BONUS) if leader_hit else 0.0)
+            + 0.04 * comove
+        )
+    else:
+        sim = (
+            soft_name
+            + float(THEME_MEMBER_SIM_WEIGHT) * jac
+            + float(THEME_WEIGHTED_MEMBER_WEIGHT) * wjac
+            + float(THEME_TOP_OVERLAP_WEIGHT) * top_jac
+            + (float(THEME_LEADER_CROSS_BONUS) if leader_hit else 0.0)
+            + float(THEME_COMOVE_BONUS) * comove
+        )
+        # Thin name-only / co-move without stock evidence stays weak.
+        if not shared and not leader_hit and soft_name < 0.2 and comove < 0.5:
+            sim *= 0.35
+
+    sim = max(0.0, min(1.0, round(float(sim), 4)))
+    return {
+        "sim": sim,
+        "theme_hit": theme_hit,
+        "jac": round(jac, 3),
+        "wjac": round(wjac, 3),
+        "top_jac": round(top_jac, 3),
+        "leader_hit": leader_hit,
+        "comove": round(comove, 3),
+        "why": why[:4],
+        "shared_n": len(shared),
+    }
+
+
+def board_similarity(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float:
+    """Score how related two board cards are in [0, 1]."""
+    return float(board_similarity_detail(a, b).get("sim") or 0.0)
 
 
 def compute_rep_adj(
@@ -146,7 +345,8 @@ def attach_board_affinity(
         for j, other in enumerate(cards):
             if i == j:
                 continue
-            sim = board_similarity(board, other)
+            detail = board_similarity_detail(board, other)
+            sim = float(detail.get("sim") or 0)
             if sim < float(THEME_SIM_PEER_MIN):
                 continue
             peers.append(
@@ -155,6 +355,11 @@ def attach_board_affinity(
                     "bk": other.get("bk"),
                     "sim": round(sim, 2),
                     "theme": theme_key(str(other.get("name") or "")),
+                    "why": list(detail.get("why") or [])[:3],
+                    "shared_n": int(detail.get("shared_n") or 0),
+                    "leader_hit": bool(detail.get("leader_hit")),
+                    "wjac": detail.get("wjac"),
+                    "comove": detail.get("comove"),
                 }
             )
         peers.sort(key=lambda x: float(x.get("sim") or 0), reverse=True)
