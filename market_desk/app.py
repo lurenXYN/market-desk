@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -20,11 +20,18 @@ from market_desk.auth import (
     admin_reject,
     change_password,
     ensure_bootstrap_admin,
+    is_guest,
+    login_guest,
     login_user,
     logout_token,
     register_user,
 )
-from market_desk.deps import current_admin_required, current_user_optional, current_user_required
+from market_desk.deps import (
+    current_admin_required,
+    current_member_required,
+    current_user_optional,
+    current_user_required,
+)
 from market_desk.settings import get_settings_for_user
 
 from market_desk.config import STATIC_DIR
@@ -33,14 +40,15 @@ from market_desk.db import (
     add_favorite_board,
     add_stock_blacklist,
     add_watchlist,
+    apply_signal_user_meta,
     delete_favorite_board,
     delete_favorite_board_by_bk,
     delete_position,
     delete_signal,
     delete_stock_blacklist,
     delete_watchlist,
-    export_backup_payload,
-    import_backup_payload,
+    export_user_backup_payload,
+    import_user_backup_payload,
     is_t1_locked,
     load_favorite_boards,
     load_positions,
@@ -257,14 +265,31 @@ def auth_login(body: AuthCredIn, response: Response) -> dict:
     return {"ok": True, "user": user, "expires_at": expires.strftime("%Y-%m-%d %H:%M:%S")}
 
 
+@app.post("/api/auth/guest")
+def auth_guest(response: Response) -> dict:
+    """Enter as the shared guest account (view-only personal layer)."""
+    try:
+        user, token, expires = login_guest()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=14 * 24 * 3600,
+        path="/",
+    )
+    return {"ok": True, "user": user, "expires_at": expires.strftime("%Y-%m-%d %H:%M:%S")}
+
+
 @app.post("/api/auth/logout")
 def auth_logout(
     response: Response,
-    user: dict | None = Depends(current_user_optional),
+    desk_sid: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict:
-    """Clear the session cookie."""
-    # Best-effort: drop cookie; token cleanup happens on next resolve if expired.
-    del user
+    """Clear the session cookie and invalidate the token."""
+    logout_token(desk_sid)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
 
@@ -278,7 +303,7 @@ def auth_me(user: dict | None = Depends(current_user_optional)) -> dict:
 @app.post("/api/auth/password")
 def auth_password(
     body: PasswordChangeIn,
-    user: dict = Depends(current_user_required),
+    user: dict = Depends(current_member_required),
 ) -> dict:
     """Change the logged-in user's password."""
     try:
@@ -318,15 +343,13 @@ def admin_user_reject(uid: int, admin: dict = Depends(current_admin_required)) -
 @app.get("/api/snapshot")
 def snapshot(
     view: str | None = Query(default=None),
-    user: dict | None = Depends(current_user_optional),
+    user: dict = Depends(current_user_required),
 ) -> JSONResponse:
-    """Return market snapshot plus the caller's personal layer when logged in."""
-    uid = int(user["id"]) if user else None
+    """Return market snapshot plus the caller's personal layer when allowed."""
+    uid = int(user["id"])
     full = engine.snapshot_for_user(uid)
-    if user:
-        full["auth_user"] = user
-    else:
-        full["auth_user"] = None
+    full["auth_user"] = user
+    full["personal_locked"] = bool(is_guest(user) or full.get("personal_locked"))
     if view:
         # Reuse slice keys on the already-personalized payload.
         engine.snapshot, prev = full, engine.snapshot
@@ -336,13 +359,18 @@ def snapshot(
             engine.snapshot = prev
         sliced["auth_user"] = full.get("auth_user")
         sliced["auth_required_personal"] = full.get("auth_required_personal")
+        sliced["personal_locked"] = full.get("personal_locked")
         return JSONResponse(sliced)
     return JSONResponse(full)
 
 
 @app.get("/api/fund-flow")
-async def fund_flow(force: bool = Query(default=False)) -> dict:
+async def fund_flow(
+    force: bool = Query(default=False),
+    user: dict = Depends(current_user_required),
+) -> dict:
     """Refresh East Money week/month fund-flow boards for the funds tab."""
+    del user
     return await engine.refresh_fund_flow(force=force)
 
 
@@ -356,20 +384,34 @@ def health() -> dict:
 async def review(
     date: str | None = Query(default=None),
     vs_ml: str | None = Query(default=None, description="live or day"),
+    user: dict = Depends(current_user_required),
 ) -> dict:
     """Return one trade-date's signals with scored outcomes for the review tab."""
-    return await engine.build_review(view_date=date, vs_mainline_mode=vs_ml)
+    # Guest sees paper signals only (no fill overlays); members get per-user meta.
+    uid = None if is_guest(user) else int(user["id"])
+    return await engine.build_review(
+        view_date=date, vs_mainline_mode=vs_ml, user_id=uid
+    )
 
 
 @app.get("/api/review/zt-ytd")
-async def review_zt_ytd(date: str | None = Query(default=None)) -> dict:
+async def review_zt_ytd(
+    date: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
     """Return calendar-year limit-up counts for the review day's equities."""
+    del user
     return await engine.build_review_zt_ytd(view_date=date)
 
 
 @app.get("/api/chart/{code}")
-async def chart(code: str, signal_at: str | None = Query(default=None)) -> dict:
+async def chart(
+    code: str,
+    signal_at: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
     """Return intraday + daily series and a Xueqiu deep-link for one ticker."""
+    snap = engine.snapshot_for_user(int(user["id"]))
     c = normalize_code(code)
     if len(c) != 6 or not c.isdigit():
         raise HTTPException(400, "code must be a 6-digit ticker")
@@ -381,24 +423,24 @@ async def chart(code: str, signal_at: str | None = Query(default=None)) -> dict:
     closes = [float(b["close"]) for b in bars]
     trend = classify_daily_trend(closes, fetch_ok=bool(closes))
     name = ""
-    for row in engine.snapshot.get("positions") or []:
+    for row in snap.get("positions") or []:
         if normalize_code(row.get("code")) == c:
             name = str(row.get("name") or "")
             break
     if not name:
-        rec = ((engine.snapshot.get("verdict") or {}).get("recommend") or {}).get("items") or []
+        rec = ((snap.get("verdict") or {}).get("recommend") or {}).get("items") or []
         for item in rec:
             if normalize_code(item.get("code")) == c:
                 name = str(item.get("name") or "")
                 break
     if not name:
-        for w in engine.snapshot.get("watch") or []:
+        for w in snap.get("watch") or []:
             if normalize_code(w.get("code")) == c:
                 name = str(w.get("name") or "")
                 break
     sig = (signal_at or "").strip() or None
     if not sig:
-        today = str(engine.snapshot.get("trade_date") or "")
+        today = str(snap.get("trade_date") or "")
         for row in load_signals(limit=120):
             if normalize_code(row.get("code")) != c:
                 continue
@@ -422,7 +464,7 @@ async def chart(code: str, signal_at: str | None = Query(default=None)) -> dict:
 
 
 @app.get("/api/positions")
-def list_positions(user: dict = Depends(current_user_required)) -> dict:
+def list_positions(user: dict = Depends(current_member_required)) -> dict:
     """Return recorded positions with the last known marks."""
     snap = engine.snapshot_for_user(int(user["id"]))
     return {
@@ -433,7 +475,7 @@ def list_positions(user: dict = Depends(current_user_required)) -> dict:
 
 
 @app.post("/api/positions")
-def create_position(body: PositionIn, user: dict = Depends(current_user_required)) -> dict:
+def create_position(body: PositionIn, user: dict = Depends(current_member_required)) -> dict:
     """Record a buy: code, price and share count."""
     code = normalize_code(body.code)
     if len(code) != 6 or not code.isdigit():
@@ -460,7 +502,7 @@ def create_position(body: PositionIn, user: dict = Depends(current_user_required
 
 
 @app.delete("/api/positions/{pid}")
-def remove_position(pid: int, user: dict = Depends(current_user_required)) -> dict:
+def remove_position(pid: int, user: dict = Depends(current_member_required)) -> dict:
     """Delete a recorded position."""
     if not delete_position(pid, user_id=int(user["id"])):
         raise HTTPException(404, "position not found")
@@ -473,7 +515,9 @@ def remove_position(pid: int, user: dict = Depends(current_user_required)) -> di
 
 
 @app.post("/api/positions/{pid}/trim")
-def trim_position_api(pid: int, body: TrimIn, user: dict = Depends(current_user_required)) -> dict:
+def trim_position_api(
+    pid: int, body: TrimIn, user: dict = Depends(current_member_required)
+) -> dict:
     """Sell/reduce shares on a recorded position (local book only).
 
     When a same-day sell signal exists in review, auto-mark it traded and fill
@@ -502,7 +546,9 @@ def trim_position_api(pid: int, body: TrimIn, user: dict = Depends(current_user_
         fill_price=row.get("sell_price") if row.get("sell_price") is not None else body.sell_price,
         fill_qty=trimmed,
         note=note,
+        user_id=int(user["id"]),
     )
+    engine.clear_review_cache()
     # Soft reputation write-back from realized chunk PnL%.
     feedback = None
     try:
@@ -536,7 +582,11 @@ def trim_position_api(pid: int, body: TrimIn, user: dict = Depends(current_user_
 
 
 @app.post("/api/review/{sid}")
-def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
+def annotate_signal(
+    sid: int,
+    body: SignalMetaIn,
+    user: dict = Depends(current_member_required),
+) -> dict:
     """Mark a signal as traded / not traded, or attach a note / fill."""
     ok = update_signal_meta(
         sid,
@@ -545,14 +595,18 @@ def annotate_signal(sid: int, body: SignalMetaIn) -> dict:
         note=body.note,
         fill_price=body.fill_price,
         fill_qty=body.fill_qty,
+        user_id=int(user["id"]),
     )
     if not ok:
         raise HTTPException(404, "signal not found")
+    engine.clear_review_cache()
     return {"ok": True, "id": sid}
 
 
 @app.post("/api/review/{sid}/trade")
-def trade_signal(sid: int, body: SignalTradeIn, user: dict = Depends(current_user_required)) -> dict:
+def trade_signal(
+    sid: int, body: SignalTradeIn, user: dict = Depends(current_member_required)
+) -> dict:
     """Mark traded; optionally book a buy or trim a sell into local positions."""
     row = load_signal(sid)
     if not row:
@@ -587,7 +641,7 @@ def trade_signal(sid: int, body: SignalTradeIn, user: dict = Depends(current_use
             and is_buy_signal(s.get("signal_type"))
             and normalize_code(s.get("code")) == code
             and int(s.get("traded") or 0)
-            for s in load_signals(limit=120)
+            for s in apply_signal_user_meta(load_signals(limit=120), int(user["id"]))
         )
         if bought_today:
             raise HTTPException(
@@ -602,6 +656,7 @@ def trade_signal(sid: int, body: SignalTradeIn, user: dict = Depends(current_use
         note=note or None,
         fill_price=fill_px,
         fill_qty=fill_qty,
+        user_id=int(user["id"]),
     )
 
     booked: dict[str, Any] | None = None
@@ -652,8 +707,14 @@ def trade_signal(sid: int, body: SignalTradeIn, user: dict = Depends(current_use
                 trade_date=str(row.get("trade_date") or "")[:10] or None,
                 user_id=int(user["id"]),
             )
-            update_signal_meta(sid, fill_qty=qty, fill_price=fill_px or float(pos.get("buy_price") or 0) or None)
+            update_signal_meta(
+                sid,
+                fill_qty=qty,
+                fill_price=fill_px or float(pos.get("buy_price") or 0) or None,
+                user_id=int(user["id"]),
+            )
 
+    engine.clear_review_cache()
     snap = engine.snapshot_for_user(int(user["id"]))
     rows = snap.get("positions") or []
     book_summary: dict[str, Any] | None = None
@@ -706,16 +767,16 @@ def trade_signal(sid: int, body: SignalTradeIn, user: dict = Depends(current_use
 
 
 @app.get("/api/settings")
-def read_settings(user: dict | None = Depends(current_user_optional)) -> dict:
-    """Return runtime settings (merged with user private knobs when logged in)."""
-    uid = int(user["id"]) if user else None
+def read_settings(user: dict = Depends(current_user_required)) -> dict:
+    """Return runtime settings (merged with user private knobs when allowed)."""
+    uid = None if is_guest(user) else int(user["id"])
     return {"ok": True, "settings": get_settings_for_user(uid), "auth_user": user}
 
 
 @app.post("/api/settings")
 def write_settings(
     body: SettingsIn,
-    user: dict = Depends(current_user_required),
+    user: dict = Depends(current_member_required),
 ) -> dict:
     """Patch settings: private keys per user; global keys require admin."""
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -732,16 +793,21 @@ def write_settings(
 
 
 @app.delete("/api/review/{sid}")
-def remove_signal(sid: int) -> dict:
-    """Delete one review signal permanently."""
+def remove_signal(sid: int, user: dict = Depends(current_admin_required)) -> dict:
+    """Delete one review signal permanently (admin only)."""
+    del user
     if not delete_signal(sid):
         raise HTTPException(404, "signal not found")
+    engine.clear_review_cache()
     return {"ok": True, "id": sid}
 
 
 @app.post("/api/trend-override")
-def trend_override(body: TrendOverrideIn) -> dict:
+def trend_override(
+    body: TrendOverrideIn, user: dict = Depends(current_member_required)
+) -> dict:
     """Accept a manual up/down trend judgment on the battle desk."""
+    del user
     code = normalize_code(body.code)
     if len(code) != 6 or not code.isdigit():
         raise HTTPException(400, "code must be a 6-digit ticker")
@@ -752,8 +818,11 @@ def trend_override(body: TrendOverrideIn) -> dict:
 
 
 @app.post("/api/theme-reputation")
-def theme_reputation_adjust(body: ThemeRepIn) -> dict:
+def theme_reputation_adjust(
+    body: ThemeRepIn, user: dict = Depends(current_member_required)
+) -> dict:
     """Set, nudge, or clear a manual theme reputation adjustment."""
+    del user
     theme = (body.theme_key or "").strip()
     if not theme:
         raise HTTPException(400, "theme_key required")
@@ -772,14 +841,14 @@ def theme_reputation_adjust(body: ThemeRepIn) -> dict:
 
 
 @app.get("/api/watchlist")
-def list_watchlist(user: dict = Depends(current_user_required)) -> dict:
+def list_watchlist(user: dict = Depends(current_member_required)) -> dict:
     """Return personal watchlist rows with last known marks."""
     rows = engine.sync_watchlist(user_id=int(user["id"]))
     return {"ok": True, "watchlist": rows}
 
 
 @app.post("/api/watchlist")
-def create_watchlist(body: WatchlistIn, user: dict = Depends(current_user_required)) -> dict:
+def create_watchlist(body: WatchlistIn, user: dict = Depends(current_member_required)) -> dict:
     """Add or refresh one personal watchlist ticker."""
     code = normalize_code(body.code)
     if len(code) != 6 or not code.isdigit():
@@ -797,7 +866,7 @@ def create_watchlist(body: WatchlistIn, user: dict = Depends(current_user_requir
 
 
 @app.delete("/api/watchlist/{item_id}")
-def remove_watchlist(item_id: int, user: dict = Depends(current_user_required)) -> dict:
+def remove_watchlist(item_id: int, user: dict = Depends(current_member_required)) -> dict:
     """Delete one personal watchlist row."""
     if not delete_watchlist(item_id, user_id=int(user["id"])):
         raise HTTPException(404, "watchlist item not found")
@@ -805,7 +874,7 @@ def remove_watchlist(item_id: int, user: dict = Depends(current_user_required)) 
 
 
 @app.get("/api/favorite-boards")
-def list_favorite_boards(user: dict = Depends(current_user_required)) -> dict:
+def list_favorite_boards(user: dict = Depends(current_member_required)) -> dict:
     """Return personally favored boards from the live snapshot."""
     rows = engine.sync_favorite_boards(user_id=int(user["id"]))
     return {
@@ -818,7 +887,7 @@ def list_favorite_boards(user: dict = Depends(current_user_required)) -> dict:
 @app.post("/api/favorite-boards")
 def create_favorite_board(
     body: FavoriteBoardIn,
-    user: dict = Depends(current_user_required),
+    user: dict = Depends(current_member_required),
 ) -> dict:
     """Add or refresh one favored sector board."""
     bk = str(body.bk or "").strip().upper()
@@ -838,7 +907,7 @@ def create_favorite_board(
 
 
 @app.delete("/api/favorite-boards/by-bk/{bk}")
-def remove_favorite_board_bk(bk: str, user: dict = Depends(current_user_required)) -> dict:
+def remove_favorite_board_bk(bk: str, user: dict = Depends(current_member_required)) -> dict:
     """Delete one favored board by East Money board code."""
     if not delete_favorite_board_by_bk(bk, user_id=int(user["id"])):
         raise HTTPException(404, "favorite board not found")
@@ -846,7 +915,7 @@ def remove_favorite_board_bk(bk: str, user: dict = Depends(current_user_required
 
 
 @app.delete("/api/favorite-boards/{item_id}")
-def remove_favorite_board(item_id: int, user: dict = Depends(current_user_required)) -> dict:
+def remove_favorite_board(item_id: int, user: dict = Depends(current_member_required)) -> dict:
     """Delete one favored board by id."""
     if not delete_favorite_board(item_id, user_id=int(user["id"])):
         raise HTTPException(404, "favorite board not found")
@@ -854,8 +923,9 @@ def remove_favorite_board(item_id: int, user: dict = Depends(current_user_requir
 
 
 @app.get("/api/blacklist")
-def list_blacklist() -> dict:
+def list_blacklist(user: dict = Depends(current_user_required)) -> dict:
     """Return the active stock blacklist."""
+    del user
     rows = load_stock_blacklist()
     snap = (engine.snapshot or {}).get("stock_blacklist") or {}
     return {
@@ -867,8 +937,11 @@ def list_blacklist() -> dict:
 
 
 @app.post("/api/blacklist")
-def create_blacklist(body: BlacklistIn) -> dict:
+def create_blacklist(
+    body: BlacklistIn, user: dict = Depends(current_admin_required)
+) -> dict:
     """Manually add one ticker to the blacklist."""
+    del user
     code = normalize_code(body.code)
     if len(code) != 6 or not code.isdigit():
         raise HTTPException(400, "code must be a 6-digit ticker")
@@ -893,8 +966,9 @@ def create_blacklist(body: BlacklistIn) -> dict:
 
 
 @app.delete("/api/blacklist/{code}")
-def remove_blacklist(code: str) -> dict:
+def remove_blacklist(code: str, user: dict = Depends(current_admin_required)) -> dict:
     """Remove one ticker from the blacklist."""
+    del user
     c = normalize_code(code)
     if not delete_stock_blacklist(c):
         raise HTTPException(404, "blacklist item not found")
@@ -909,41 +983,51 @@ def remove_blacklist(code: str) -> dict:
 
 
 @app.get("/api/report/today")
-async def report_today() -> dict:
+async def report_today(user: dict = Depends(current_user_required)) -> dict:
     """Return today's markdown journal for copy / download."""
-    review = await engine.build_review()
-    text = build_daily_report(snapshot=engine.snapshot, review=review)
+    uid = None if is_guest(user) else int(user["id"])
+    snap = engine.snapshot_for_user(int(user["id"]))
+    review = await engine.build_review(user_id=uid)
+    text = build_daily_report(snapshot=snap, review=review)
     return {"ok": True, "markdown": text, "summary": review.get("summary")}
 
 
 @app.get("/api/report/eod")
-async def report_eod(date: str | None = Query(default=None)) -> dict:
+async def report_eod(
+    date: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
     """Return the compact end-of-day one-pager (phase / switches / exec / P&L)."""
-    review = await engine.build_review(view_date=date)
-    brief = build_eod_onepager(snapshot=engine.snapshot, review=review)
+    uid = None if is_guest(user) else int(user["id"])
+    snap = engine.snapshot_for_user(int(user["id"]))
+    review = await engine.build_review(view_date=date, user_id=uid)
+    brief = build_eod_onepager(snapshot=snap, review=review)
     return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
 
 
 @app.get("/api/report/morning")
-def report_morning() -> dict:
+def report_morning(user: dict = Depends(current_user_required)) -> dict:
     """Return the rule-based morning decision brief."""
-    brief = (engine.snapshot or {}).get("morning_brief") or build_morning_brief(
-        engine.snapshot
-    )
+    snap = engine.snapshot_for_user(int(user["id"]))
+    brief = snap.get("morning_brief") or build_morning_brief(snap)
     return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
 
 
 @app.get("/api/backup")
-def backup_export() -> dict:
-    """Export local desk data as JSON."""
-    return {"ok": True, "backup": export_backup_payload()}
+def backup_export(user: dict = Depends(current_member_required)) -> dict:
+    """Export this user's personal desk data as JSON."""
+    return {"ok": True, "backup": export_user_backup_payload(int(user["id"]))}
 
 
 @app.post("/api/backup/import")
-def backup_import(body: BackupIn) -> dict:
-    """Import a previously exported JSON backup."""
+def backup_import(
+    body: BackupIn, user: dict = Depends(current_member_required)
+) -> dict:
+    """Import a previously exported JSON backup into this user's books."""
     try:
-        counts = import_backup_payload(body.payload, replace=bool(body.replace))
+        counts = import_user_backup_payload(
+            int(user["id"]), body.payload, replace=bool(body.replace)
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     from market_desk.settings import get_settings

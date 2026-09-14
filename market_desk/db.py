@@ -433,6 +433,46 @@ def _ensure_auth_and_user_scope(conn: sqlite3.Connection) -> None:
     # watchlist: rebuild if still globally unique on code
     _migrate_watchlist_user_scope(conn)
     _migrate_favorite_boards_user_scope(conn)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signal_user_meta (
+            user_id INTEGER NOT NULL,
+            signal_id INTEGER NOT NULL,
+            skipped INTEGER NOT NULL DEFAULT 0,
+            traded INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            fill_price REAL,
+            fill_qty INTEGER,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, signal_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_signal_user_meta_signal "
+        "ON signal_user_meta(signal_id)"
+    )
+    # One-shot: copy legacy global traded/fill flags onto admin (user_id=1).
+    legacy = conn.execute(
+        "SELECT COUNT(*) AS n FROM signal_user_meta"
+    ).fetchone()
+    if legacy and int(legacy["n"] or 0) == 0:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO signal_user_meta(
+                user_id, signal_id, skipped, traded, note, fill_price, fill_qty, updated_at
+            )
+            SELECT 1, id,
+                   COALESCE(skipped, 0), COALESCE(traded, 0), note,
+                   fill_price, fill_qty, datetime('now','localtime')
+            FROM signals
+            WHERE COALESCE(traded, 0) != 0
+               OR COALESCE(skipped, 0) != 0
+               OR fill_price IS NOT NULL
+               OR fill_qty IS NOT NULL
+               OR (note IS NOT NULL AND note != '')
+            """
+        )
 
 
 def _migrate_watchlist_user_scope(conn: sqlite3.Connection) -> None:
@@ -2078,6 +2118,7 @@ def sync_sell_fill_from_trim(
     fill_price: float | None,
     fill_qty: int,
     note: str | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Mark today's sell signal traded and fill price/qty after a desk trim.
 
@@ -2094,20 +2135,28 @@ def sync_sell_fill_from_trim(
     row = find_signal(day, c, "sell")
     if not row:
         return None
+    # Prefer this user's prior fill qty when accumulating partials.
+    if user_id is not None:
+        meta_map = load_signal_user_meta_map(int(user_id))
+        um = meta_map.get(int(row["id"])) or {}
+        prev_traded = int(um.get("traded") or 0)
+        prev_qty = int(um.get("fill_qty") or 0) if prev_traded else 0
+        prev_note = str(um.get("note") or "").strip()
+    else:
+        prev_traded = int(row.get("traded") or 0)
+        prev_qty = int(row.get("fill_qty") or 0) if prev_traded else 0
+        prev_note = str(row.get("note") or "").strip()
     px = float(fill_price) if fill_price is not None and float(fill_price) > 0 else None
     if px is None:
         try:
             px = float(row.get("price") or row.get("last") or 0) or None
         except (TypeError, ValueError):
             px = None
-    prev_note = str(row.get("note") or "").strip()
     note_to_set = None
     if not prev_note and note:
         note_to_set = note
-    elif not int(row.get("traded") or 0) and note:
+    elif not prev_traded and note:
         note_to_set = note
-    prev_qty = int(row.get("fill_qty") or 0) if int(row.get("traded") or 0) else 0
-    # Accumulate same-day partials (half then clear) into one fill qty.
     total_qty = prev_qty + qty if prev_qty > 0 else qty
     ok = update_signal_meta(
         int(row["id"]),
@@ -2116,6 +2165,7 @@ def sync_sell_fill_from_trim(
         note=note_to_set,
         fill_price=px,
         fill_qty=total_qty,
+        user_id=user_id,
     )
     if not ok:
         return None
@@ -2216,8 +2266,23 @@ def update_signal_meta(
     note: str | None = None,
     fill_price: float | None = None,
     fill_qty: int | None = None,
+    user_id: int | None = None,
 ) -> bool:
-    """Update user review flags and optional fill fields on a signal row."""
+    """Update per-user review flags / fill fields for one signal.
+
+    When ``user_id`` is omitted, falls back to legacy columns on ``signals``
+    (single-user / migration path only).
+    """
+    if user_id is not None:
+        return upsert_signal_user_meta(
+            int(user_id),
+            int(signal_id),
+            skipped=skipped,
+            traded=traded,
+            note=note,
+            fill_price=fill_price,
+            fill_qty=fill_qty,
+        )
     with _connect() as conn:
         row = conn.execute(
             "SELECT id, note, skipped, traded, fill_price, fill_qty FROM signals WHERE id = ?",
@@ -2227,7 +2292,6 @@ def update_signal_meta(
             return False
         new_skipped = int(row["skipped"] or 0) if skipped is None else int(skipped)
         new_traded = int(row["traded"] or 0) if traded is None else int(traded)
-        # Keep traded / skipped mutually exclusive when either is set explicitly.
         if traded is not None and int(traded):
             new_skipped = 0
             new_traded = 1
@@ -2247,6 +2311,144 @@ def update_signal_meta(
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def upsert_signal_user_meta(
+    user_id: int,
+    signal_id: int,
+    *,
+    skipped: int | None = None,
+    traded: int | None = None,
+    note: str | None = None,
+    fill_price: float | None = None,
+    fill_qty: int | None = None,
+) -> bool:
+    """Insert or patch one user's traded / fill annotation for a signal."""
+    uid = int(user_id)
+    sid = int(signal_id)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        exists = conn.execute(
+            "SELECT id FROM signals WHERE id = ?", (sid,)
+        ).fetchone()
+        if not exists:
+            return False
+        row = conn.execute(
+            """
+            SELECT skipped, traded, note, fill_price, fill_qty
+            FROM signal_user_meta
+            WHERE user_id = ? AND signal_id = ?
+            """,
+            (uid, sid),
+        ).fetchone()
+        if row:
+            new_skipped = int(row["skipped"] or 0) if skipped is None else int(skipped)
+            new_traded = int(row["traded"] or 0) if traded is None else int(traded)
+            new_note = row["note"] if note is None else note
+            new_fill_px = row["fill_price"] if fill_price is None else float(fill_price)
+            new_fill_qty = row["fill_qty"] if fill_qty is None else int(fill_qty)
+        else:
+            new_skipped = 0 if skipped is None else int(skipped)
+            new_traded = 0 if traded is None else int(traded)
+            new_note = note
+            new_fill_px = None if fill_price is None else float(fill_price)
+            new_fill_qty = None if fill_qty is None else int(fill_qty)
+        if traded is not None and int(traded):
+            new_skipped = 0
+            new_traded = 1
+        if skipped is not None and int(skipped):
+            new_traded = 0
+            new_skipped = 1
+        conn.execute(
+            """
+            INSERT INTO signal_user_meta(
+                user_id, signal_id, skipped, traded, note, fill_price, fill_qty, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, signal_id) DO UPDATE SET
+                skipped = excluded.skipped,
+                traded = excluded.traded,
+                note = excluded.note,
+                fill_price = excluded.fill_price,
+                fill_qty = excluded.fill_qty,
+                updated_at = excluded.updated_at
+            """,
+            (
+                uid,
+                sid,
+                new_skipped,
+                new_traded,
+                new_note,
+                new_fill_px,
+                new_fill_qty,
+                now,
+            ),
+        )
+        conn.commit()
+    return True
+
+
+def load_signal_user_meta_map(user_id: int) -> dict[int, dict[str, Any]]:
+    """Return ``signal_id -> meta`` for one user."""
+    uid = int(user_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT signal_id, skipped, traded, note, fill_price, fill_qty, updated_at
+            FROM signal_user_meta
+            WHERE user_id = ?
+            """,
+            (uid,),
+        ).fetchall()
+    out: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        out[int(row["signal_id"])] = dict(row)
+    return out
+
+
+def apply_signal_user_meta(
+    rows: list[dict[str, Any]] | None,
+    user_id: int | None,
+) -> list[dict[str, Any]]:
+    """Overlay per-user traded / fill fields onto shared signal rows.
+
+    Without ``user_id``, clear personal flags so anonymous clients never see
+    another user's fills.
+    """
+    src = list(rows or [])
+    if user_id is None:
+        cleaned: list[dict[str, Any]] = []
+        for raw in src:
+            item = dict(raw)
+            item["skipped"] = 0
+            item["traded"] = 0
+            item["note"] = None
+            item["fill_price"] = None
+            item["fill_qty"] = None
+            cleaned.append(item)
+        return cleaned
+    meta = load_signal_user_meta_map(int(user_id))
+    out: list[dict[str, Any]] = []
+    for raw in src:
+        item = dict(raw)
+        # Start from blank personal fields; only show this user's annotations.
+        item["skipped"] = 0
+        item["traded"] = 0
+        item["note"] = None
+        item["fill_price"] = None
+        item["fill_qty"] = None
+        try:
+            sid = int(item.get("id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        hit = meta.get(sid)
+        if hit:
+            item["skipped"] = int(hit.get("skipped") or 0)
+            item["traded"] = int(hit.get("traded") or 0)
+            item["note"] = hit.get("note")
+            item["fill_price"] = hit.get("fill_price")
+            item["fill_qty"] = hit.get("fill_qty")
+        out.append(item)
+    return out
 
 
 def save_review_digest(trade_date: str, payload: dict[str, Any]) -> None:
@@ -2987,6 +3189,229 @@ def export_backup_payload() -> dict[str, Any]:
         "settings": settings,
         "trend_override": overrides,
     }
+
+
+def export_user_backup_payload(user_id: int) -> dict[str, Any]:
+    """Export one user's personal books / fills / private settings."""
+    uid = int(user_id)
+    with _connect() as conn:
+        positions = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM positions WHERE user_id = ? ORDER BY id", (uid,)
+            ).fetchall()
+        ]
+        watchlist = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY id", (uid,)
+            ).fetchall()
+        ]
+        favorite_boards = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM favorite_boards WHERE user_id = ? ORDER BY id", (uid,)
+            ).fetchall()
+        ]
+        signal_user_meta = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM signal_user_meta WHERE user_id = ? ORDER BY signal_id",
+                (uid,),
+            ).fetchall()
+        ]
+        # Personal knobs live in settings as key user:{id}:runtime
+        setting_key = f"user:{uid}:runtime"
+        user_settings_row = conn.execute(
+            "SELECT key, value, updated_at FROM settings WHERE key = ?",
+            (setting_key,),
+        ).fetchone()
+        user_settings = [dict(user_settings_row)] if user_settings_row else []
+    return {
+        "version": 2,
+        "scope": "user",
+        "user_id": uid,
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "positions": positions,
+        "watchlist": watchlist,
+        "favorite_boards": favorite_boards,
+        "signal_user_meta": signal_user_meta,
+        "user_settings": user_settings,
+    }
+
+
+def import_user_backup_payload(
+    user_id: int, payload: dict[str, Any], *, replace: bool = False
+) -> dict[str, int]:
+    """Import personal data into one user. Never touches other users' rows."""
+    if not isinstance(payload, dict):
+        raise ValueError("backup payload must be an object")
+    uid = int(user_id)
+    counts = {
+        "positions": 0,
+        "watchlist": 0,
+        "favorite_boards": 0,
+        "signal_user_meta": 0,
+        "user_settings": 0,
+    }
+    with _connect() as conn:
+        if replace:
+            conn.execute("DELETE FROM positions WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM watchlist WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM favorite_boards WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM signal_user_meta WHERE user_id = ?", (uid,))
+            conn.execute(
+                "DELETE FROM settings WHERE key = ?", (f"user:{uid}:runtime",)
+            )
+        for row in payload.get("positions") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO positions(
+                    user_id, code, name, buy_price, qty, note, created_at, last_buy_date,
+                    closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
+                    peak_price, entry_board
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uid,
+                    str(row.get("code") or "").zfill(6),
+                    row.get("name") or "",
+                    float(row.get("buy_price") or 0),
+                    int(row.get("qty") or 0),
+                    row.get("note") or "",
+                    row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    row.get("last_buy_date") or str(row.get("created_at") or "")[:10] or None,
+                    row.get("closed_date"),
+                    row.get("last_sell_date"),
+                    row.get("last_sell_price"),
+                    int(row.get("day_sold_qty") or 0),
+                    float(row.get("day_realized_pnl") or 0),
+                    row.get("peak_price"),
+                    row.get("entry_board"),
+                ),
+            )
+            counts["positions"] += 1
+        for row in payload.get("watchlist") or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """
+                INSERT INTO watchlist(
+                    user_id, code, name, note, suggest_price, stop_price, chase_price,
+                    first_seen_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, code) DO UPDATE SET
+                    name = excluded.name,
+                    note = excluded.note,
+                    stop_price = excluded.stop_price,
+                    chase_price = excluded.chase_price
+                """,
+                (
+                    uid,
+                    str(row.get("code") or "").zfill(6),
+                    row.get("name") or "",
+                    row.get("note") or "",
+                    row.get("suggest_price"),
+                    row.get("stop_price"),
+                    row.get("chase_price"),
+                    row.get("first_seen_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["watchlist"] += 1
+        for row in payload.get("favorite_boards") or []:
+            if not isinstance(row, dict):
+                continue
+            bk = str(row.get("bk") or "").strip().upper()
+            if not bk.startswith("BK"):
+                continue
+            conn.execute(
+                """
+                INSERT INTO favorite_boards(user_id, bk, name, kind, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, bk) DO UPDATE SET
+                    name = excluded.name,
+                    kind = excluded.kind,
+                    note = excluded.note
+                """,
+                (
+                    uid,
+                    bk,
+                    row.get("name") or "",
+                    row.get("kind") or "",
+                    row.get("note") or "",
+                    row.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["favorite_boards"] += 1
+        for row in payload.get("signal_user_meta") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                sid = int(row.get("signal_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if sid <= 0:
+                continue
+            exists = conn.execute(
+                "SELECT id FROM signals WHERE id = ?", (sid,)
+            ).fetchone()
+            if not exists:
+                continue
+            conn.execute(
+                """
+                INSERT INTO signal_user_meta(
+                    user_id, signal_id, skipped, traded, note, fill_price, fill_qty, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, signal_id) DO UPDATE SET
+                    skipped = excluded.skipped,
+                    traded = excluded.traded,
+                    note = excluded.note,
+                    fill_price = excluded.fill_price,
+                    fill_qty = excluded.fill_qty,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    uid,
+                    sid,
+                    int(row.get("skipped") or 0),
+                    int(row.get("traded") or 0),
+                    row.get("note"),
+                    row.get("fill_price"),
+                    row.get("fill_qty"),
+                    row.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["signal_user_meta"] += 1
+        for row in payload.get("user_settings") or []:
+            if not isinstance(row, dict):
+                continue
+            # Accept either the namespaced settings key or a bare runtime blob.
+            key = str(row.get("key") or "").strip() or f"user:{uid}:runtime"
+            if not key.startswith(f"user:{uid}:"):
+                key = f"user:{uid}:runtime"
+            conn.execute(
+                """
+                INSERT INTO settings(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    key,
+                    row.get("value")
+                    if isinstance(row.get("value"), str)
+                    else json.dumps(row.get("value"), ensure_ascii=False),
+                    row.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            counts["user_settings"] += 1
+        conn.commit()
+    return counts
 
 
 def import_backup_payload(payload: dict[str, Any], *, replace: bool = False) -> dict[str, int]:

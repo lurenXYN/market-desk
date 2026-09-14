@@ -230,13 +230,26 @@ class DeskEngine:
             verdict = dict(verdict)
             verdict.pop("size_cap", None)
         base["verdict"] = verdict
+        base["auth_required_personal"] = False
+        base["personal_locked"] = False
         if user_id is None:
             base["auth_required_personal"] = True
+            base["personal_locked"] = True
             base["auth_user"] = None
+            return base
+        from market_desk.auth import is_guest, public_user
+        from market_desk.db import get_user_by_id
+
+        row = get_user_by_id(int(user_id))
+        pub = public_user(row)
+        if is_guest(pub):
+            # Guest shares an empty personal layer; no books / fills.
+            base["personal_locked"] = True
+            base["auth_user"] = pub
             return base
         from market_desk.personal import attach_personal_layer
 
-        return attach_personal_layer(
+        layered = attach_personal_layer(
             base,
             int(user_id),
             trends_for=self._cached_trends_for,
@@ -245,6 +258,9 @@ class DeskEngine:
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
         )
+        layered["personal_locked"] = False
+        layered["auth_user"] = pub
+        return layered
 
     def _decorate_favorite_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Attach live board cards onto favorite rows (user-scoped)."""
@@ -880,6 +896,7 @@ class DeskEngine:
         limit: int = 180,
         view_date: str | None = None,
         vs_mainline_mode: str | None = None,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         """Score pending historical signals then return one trade-date review payload."""
         import time
@@ -887,7 +904,8 @@ class DeskEngine:
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         day = str(view_date or today).strip()[:10] or today
         mode_key = str(vs_mainline_mode or "").strip().lower() or "auto"
-        cache_key = f"{day}|{mode_key}|{limit}"
+        uid_key = "none" if user_id is None else str(int(user_id))
+        cache_key = f"{day}|{mode_key}|{limit}|u:{uid_key}"
         now_m = time.monotonic()
         hit = self._review_cache.get(cache_key)
         ttl = 45.0 if day == today else 3600.0
@@ -946,10 +964,15 @@ class DeskEngine:
             ).get("name"),
             vs_mainline_mode=vs_mainline_mode,
             holders=holders,
+            user_id=user_id,
         )
         payload["cache_hit"] = False
         self._review_cache[cache_key] = (now_m, payload)
         return payload
+
+    def clear_review_cache(self) -> None:
+        """Drop cached review payloads after personal trade annotations change."""
+        self._review_cache.clear()
 
     async def refresh_fund_flow(self, *, force: bool = False) -> dict[str, Any]:
         """Fetch East Money day/week/month fund-flow boards (funds tab on demand)."""

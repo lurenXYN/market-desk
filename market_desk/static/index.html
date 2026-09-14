@@ -1869,6 +1869,15 @@
       padding: 16px;
     }
     .auth-mask[hidden] { display: none !important; }
+    body.guest-mode .rev-actions .rev-trade,
+    body.guest-mode .rev-actions .rev-skip,
+    body.guest-mode .pos-btn,
+    body.guest-mode button.book-pos,
+    body.guest-mode #backupExport,
+    body.guest-mode #backupImport {
+      opacity: 0.45;
+      pointer-events: none;
+    }
     .auth-card {
       width: min(420px, 100%);
       background: #121820;
@@ -1905,16 +1914,16 @@
   </style>
 </head>
 <body>
-  <div class="auth-mask" id="authMask" hidden>
+  <div class="auth-mask" id="authMask">
     <div class="auth-card">
       <h2 id="authTitle">登录作战台</h2>
-      <div class="meta" id="authHint">仓位 / 自选 / 账户资金按账号隔离；盘面公用。</div>
+      <div class="meta" id="authHint">必须登录。游客可看盘面与纸面复盘；仓位 / 自选 / 成交记账需正式账号（注册后管理员同意）。</div>
       <label>用户名<input id="authUser" autocomplete="username" /></label>
       <label>密码<input id="authPass" type="password" autocomplete="current-password" /></label>
       <div class="auth-actions">
+        <button type="button" id="authGuestBtn">游客进入</button>
         <button type="button" id="authLoginBtn">登录</button>
         <button type="button" id="authRegisterBtn">注册</button>
-        <button type="button" id="authCloseBtn">先看盘面</button>
       </div>
       <div class="auth-msg" id="authMsg"></div>
       <div class="admin-users" id="adminUsers" hidden></div>
@@ -1930,7 +1939,7 @@
           <span id="pageClock" style="margin-left:10px"></span>
           <span class="auth-user" id="authUserChip">
             <span id="authUserLabel">未登录</span>
-            <button type="button" id="authOpenBtn">登录</button>
+            <button type="button" id="authSwitchBtn" hidden>切换账号</button>
             <button type="button" id="authLogoutBtn" hidden>退出</button>
             <button type="button" id="authAdminBtn" hidden>审批</button>
           </span>
@@ -5017,7 +5026,12 @@
       ].filter(Boolean).join("");
     }
     function applyMain(tab) {
-      currentMain = tab || "desk";
+      let next = tab || "desk";
+      if (next === "pos" && typeof canPersonal === "function" && !canPersonal()) {
+        showAuth("仓位需要正式账号（可先游客看盘，再注册）");
+        next = currentMain && currentMain !== "pos" ? currentMain : "desk";
+      }
+      currentMain = next;
       document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
         el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
       );
@@ -5049,11 +5063,16 @@
       return live ? 20000 : 60000;
     }
     async function tick(force) {
+      if (!authUser) return;
       try {
         const view = snapshotViewForTab(currentMain);
         const r = await fetch("/api/snapshot?view=" + encodeURIComponent(view), {
           credentials: "same-origin",
         });
+        if (r.status === 401) {
+          paintAuthUser(null);
+          return;
+        }
         const d = await r.json();
         if (!d.ok && !d.updated_at) {
           document.getElementById("stamp").textContent = d.error || "等待首包";
@@ -5063,8 +5082,8 @@
         lastData = Object.assign({}, lastData || {}, d);
         if (d.glossary) GLOSSARY = d.glossary;
         if (d.auth_user !== undefined) paintAuthUser(d.auth_user);
-        // Unauthenticated: never keep stale personal rows from a prior merge/login.
-        if (!d.auth_user) {
+        // Guest / locked: never keep stale personal rows.
+        if (!d.auth_user || d.personal_locked) {
           lastData.positions = Array.isArray(d.positions) ? d.positions : [];
           lastData.watchlist = Array.isArray(d.watchlist) ? d.watchlist : [];
           lastData.favorite_boards = Array.isArray(d.favorite_boards) ? d.favorite_boards : [];
@@ -5088,25 +5107,45 @@
     }
 
     let authUser = null;
+    function isGuestUser(u) {
+      return !!(u && (u.is_guest || u.role === "guest" || u.can_personal === false));
+    }
+    function canPersonal() {
+      return !!(authUser && !isGuestUser(authUser));
+    }
     function paintAuthUser(user) {
       authUser = user || null;
       const label = document.getElementById("authUserLabel");
-      const loginBtn = document.getElementById("authOpenBtn");
+      const switchBtn = document.getElementById("authSwitchBtn");
       const logoutBtn = document.getElementById("authLogoutBtn");
       const adminBtn = document.getElementById("authAdminBtn");
       if (!label) return;
       if (authUser) {
-        label.innerHTML = `<b>${authUser.username}</b>`
-          + (authUser.role === "admin" ? " · 管理员" : "");
-        if (loginBtn) loginBtn.hidden = true;
+        const tag = isGuestUser(authUser)
+          ? " · 游客"
+          : (authUser.role === "admin" ? " · 管理员" : "");
+        label.innerHTML = `<b>${authUser.username}</b>${tag}`;
+        if (switchBtn) switchBtn.hidden = false;
         if (logoutBtn) logoutBtn.hidden = false;
         if (adminBtn) adminBtn.hidden = authUser.role !== "admin";
+        document.getElementById("authMask").hidden = true;
+        applyGuestUi();
       } else {
         label.textContent = "未登录";
-        if (loginBtn) loginBtn.hidden = false;
+        if (switchBtn) switchBtn.hidden = true;
         if (logoutBtn) logoutBtn.hidden = true;
         if (adminBtn) adminBtn.hidden = true;
+        showAuth("请登录或游客进入");
       }
+    }
+    function applyGuestUi() {
+      const locked = !canPersonal();
+      document.querySelectorAll('#navTabs [data-main="pos"]').forEach((el) => {
+        el.hidden = locked;
+        el.title = locked ? "游客不可用仓位，请注册正式账号" : "";
+      });
+      // Hide personal write affordances on review when guest.
+      document.body.classList.toggle("guest-mode", locked);
     }
     function showAuth(msg) {
       const mask = document.getElementById("authMask");
@@ -5128,7 +5167,8 @@
       }
       box.innerHTML = (d.users || []).map((u) => {
         const pending = u.status === "pending";
-        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}</span>`
+        const guest = u.is_guest || u.role === "guest";
+        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}${guest ? " · 游客" : ""}</span>`
           + (pending
             ? `<span><button type="button" data-approve="${u.id}">同意</button> `
               + `<button type="button" data-reject="${u.id}">拒绝</button></span>`
@@ -5167,10 +5207,23 @@
       }
       return d;
     }
-    document.getElementById("authOpenBtn")?.addEventListener("click", () => showAuth(""));
-    document.getElementById("authCloseBtn")?.addEventListener("click", () => {
-      document.getElementById("authMask").hidden = true;
-    });
+    async function enterAsGuest() {
+      const msg = document.getElementById("authMsg");
+      try {
+        const r = await fetch("/api/auth/guest", {
+          method: "POST", credentials: "same-origin",
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) throw new Error(d.detail || "游客登录失败");
+        paintAuthUser(d.user);
+        if (msg) msg.textContent = "已以游客进入";
+        tick(true);
+      } catch (e) {
+        if (msg) msg.textContent = String(e.message || e);
+      }
+    }
+    document.getElementById("authSwitchBtn")?.addEventListener("click", () => showAuth("切换账号"));
+    document.getElementById("authGuestBtn")?.addEventListener("click", () => enterAsGuest());
     document.getElementById("authLoginBtn")?.addEventListener("click", async () => {
       const msg = document.getElementById("authMsg");
       try {
@@ -5195,7 +5248,6 @@
     document.getElementById("authLogoutBtn")?.addEventListener("click", async () => {
       await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
       paintAuthUser(null);
-      // Drop cached personal rows immediately (don't wait for next tick merge).
       if (lastData) {
         lastData.positions = [];
         lastData.watchlist = [];
@@ -5205,17 +5257,33 @@
         lastData.sell_advice = { items: [], text: "" };
         paintVisible(lastData);
       }
-      tick(true);
     });
     document.getElementById("authAdminBtn")?.addEventListener("click", () => {
       showAuth("待审批用户");
       refreshAdminUsers();
     });
-    // Soft-gate: opening 仓位 while logged out prompts login.
+    // Soft-gate: 仓位 / 个人写入对游客拦截。
     const _posTab = document.querySelector('#navTabs [data-main="pos"]');
-    _posTab?.addEventListener("click", () => {
-      if (!authUser) showAuth("仓位页需要登录");
+    _posTab?.addEventListener("click", (ev) => {
+      if (!canPersonal()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showAuth("仓位需要正式账号（可先游客看盘，再注册）");
+      }
     });
+
+    // Boot: require session before polling.
+    (async function bootAuth() {
+      try {
+        const r = await fetch("/api/auth/me", { credentials: "same-origin" });
+        const d = await r.json().catch(() => ({}));
+        if (d.user) {
+          paintAuthUser(d.user);
+          return;
+        }
+      } catch (e) {}
+      paintAuthUser(null);
+    })();
 
     try {
       const saved = localStorage.getItem("desk-main-tab");

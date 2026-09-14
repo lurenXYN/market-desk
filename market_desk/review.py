@@ -14,6 +14,7 @@ from market_desk.db import (
     load_signals,
     load_signals_for_date,
     mark_signal_outcome,
+    apply_signal_user_meta,
     save_review_digest,
     upsert_signal,
 )
@@ -1455,18 +1456,14 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
         )
 
     alerts: list[tuple[str, str, str]] = []
-    day_rows = load_signals_for_date(trade_date)
-    traded_codes = {
-        normalize_code(r.get("code"))
-        for r in day_rows
-        if int(r.get("traded") or 0)
-    }
+    traded_codes: set[str] = set()
     open_codes = {
         normalize_code(r.get("code"))
         for r in (snapshot.get("positions") or [])
         if isinstance(r, dict) and int(r.get("qty") or 0) > 0
     }
     # Already bought → entry / chase bands are noise; keep stop only.
+    # Multi-user: do not trust shared signals.traded; owned = open positions only.
     owned_codes = {c for c in (traded_codes | open_codes) if c}
 
     for p in plans:
@@ -1677,8 +1674,13 @@ def build_review_payload(
     vs_mainline_mode: str | None = None,
     holders: dict[str, dict[str, Any]] | None = None,
     zt_ytd: dict[str, Any] | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
-    """Load one trade-date's signals plus global summary for the review tab."""
+    """Load one trade-date's signals plus global summary for the review tab.
+
+    ``user_id`` overlays per-user traded / fill annotations. Shared digest
+    history is saved without personal fills so users do not pollute each other.
+    """
     calendar_today = datetime.now().strftime("%Y-%m-%d")
     day = str(trade_date or calendar_today).strip()[:10] or calendar_today
     live_ml = str(live_mainline or "").strip() or None
@@ -1711,12 +1713,18 @@ def build_review_payload(
     day_phase = phase
     if not day_phase and day_rows:
         day_phase = str(day_rows[0].get("phase") or "") or None
-    digest = build_today_digest(day_rows, trade_date=day, phase=day_phase)
+    # Persist paper digest (no personal traded/fills) for shared history charts.
+    paper_day = apply_signal_user_meta(day_rows, None)
+    paper_digest = build_today_digest(paper_day, trade_date=day, phase=day_phase)
     if day == calendar_today or day_rows:
         try:
-            save_review_digest(day, digest)
+            save_review_digest(day, paper_digest)
         except Exception:
             pass
+    # Overlay this user's traded / fill / note flags for the live payload.
+    day_rows = apply_signal_user_meta(day_rows, user_id)
+    global_rows = apply_signal_user_meta(global_rows, user_id)
+    digest = build_today_digest(day_rows, trade_date=day, phase=day_phase)
     summary = summarize_signals(global_rows)
     dates = list_signal_trade_dates(limit=40)
     if calendar_today not in dates:
