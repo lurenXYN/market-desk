@@ -1021,6 +1021,10 @@
     .tag.fade { background: #1b2030; color: var(--muted); }
     .tag.ice { background: #082028; color: var(--ice); }
     .tag.contagion { background: #2a1a10; color: var(--climax); }
+    .tag.obs-ok { background: #0f2a1c; color: var(--down); }
+    .tag.obs-warn { background: #2a2410; color: var(--climax); }
+    .tag.obs-bad { background: #2a1515; color: var(--up); }
+    .tag.obs-muted { background: #1b2030; color: var(--muted); }
     .members { margin: 8px 0 0; padding: 0; list-style: none; color: var(--muted); }
     .members li { display: flex; justify-content: space-between; padding: 2px 0; }
     .pin-row { margin-top: 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -2160,7 +2164,7 @@
     <section class="tab-panel" id="panel-watch" hidden>
       <section class="card">
         <h2 style="text-transform:none">自选观察池<button type="button" class="q" data-term="自选">?</button></h2>
-        <p class="meta">手动钉票：锁定首次时间与建议价，可设止损/不追；触及会弹通知。</p>
+        <p class="meta">手动钉票：锁定首次时间与建议价，可设止损/不追。盘中自动对照价带与作战台闸门，给出「可试探 / 到位·闸门未开 / 勿追」等软提示（不自动下单、不改顶栏结论）。</p>
         <form class="pos-form" id="wlForm" style="grid-template-columns: 90px 120px 90px 90px 90px 1fr auto;">
           <label>代码<input name="code" placeholder="600519" maxlength="6" required /></label>
           <label>名称<input name="name" placeholder="可空" /></label>
@@ -2175,7 +2179,7 @@
           <thead>
             <tr>
               <th>名称</th><th>代码</th><th>首次</th><th>建议价</th><th>止损</th><th>不追</th>
-              <th>现价</th><th>当日%</th><th></th>
+              <th>现价</th><th>当日%</th><th>观察</th><th></th>
             </tr>
           </thead>
           <tbody id="wlBody"></tbody>
@@ -3278,6 +3282,13 @@
           : `<li class="hdrow"><span>名称</span><span>代码</span><span>涨跌</span><span>标签</span><span>原因</span><span>板块</span><span></span></li><li><span class="meta">暂无异动</span></li>`;
       document.getElementById("wlBody").innerHTML = (d.watchlist || []).map((w) => {
         const t = (w.first_seen_at || "").slice(0, 16);
+        const obs = w.observe_status || "观察中";
+        const tone = w.observe_tone || "slate";
+        const obsCls = tone === "green" ? "obs-ok"
+          : tone === "red" ? "obs-bad"
+          : tone === "amber" ? "obs-warn"
+          : "obs-muted";
+        const obsTip = (w.observe_note || "").replace(/"/g, "&quot;");
         return `<tr>
           <td data-label="名称">${tickerHtml(w.name, w.code)}</td>
           <td data-label="代码">${w.code || ""}</td>
@@ -3287,9 +3298,10 @@
           <td data-label="不追">${w.chase_price ?? "—"}</td>
           <td data-label="现价">${w.last ?? "—"}</td>
           <td data-label="当日%">${fmtPct(w.last_pct)}</td>
+          <td data-label="观察" title="${obsTip}"><span class="tag ${obsCls}">${obs}</span></td>
           <td class="m-actions"><button type="button" class="pos-del wl-del" data-id="${w.id}">删除</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="9" class="meta">暂无自选。上方填代码加入。</td></tr>`;
+      }).join("") || `<tr><td colspan="10" class="meta">暂无自选。上方填代码加入。</td></tr>`;
       const bl = d.stock_blacklist || {};
       const blItems = bl.items || [];
       const blMeta = document.getElementById("blMeta");
@@ -3322,7 +3334,18 @@
       const floatPnl = sum.floating_pnl != null ? sum.floating_pnl : sum.pnl;
       const floatPct = sum.floating_pct != null ? sum.floating_pct : sum.pnl_pct;
       const realized = sum.realized_pnl ?? 0;
-      const dayPnl = sum.day_pnl != null ? sum.day_pnl : ((floatPnl || 0) + realized);
+      // Prefer server day_pnl (sum of row session P&L). Never fall back to floating+realized.
+      let dayPnl = sum.day_pnl;
+      if (dayPnl == null && (d.positions || []).length) {
+        let acc = 0;
+        let any = false;
+        for (const p of d.positions) {
+          if (p.day_pnl == null) continue;
+          acc += Number(p.day_pnl) || 0;
+          any = true;
+        }
+        dayPnl = any ? acc : null;
+      }
       const dayPct = sum.day_pnl_pct;
       const pnlCls = (dayPnl || 0) >= 0 ? "up" : "down";
       const floatCls = (floatPnl || 0) >= 0 ? "up" : "down";
@@ -4382,7 +4405,16 @@
       const floatPnl = pos.floating_pnl != null ? pos.floating_pnl : pos.pnl;
       const realized = pos.realized_pnl != null ? pos.realized_pnl : 0;
       let dayPnl = pos.day_pnl;
-      if (dayPnl == null && floatPnl != null) dayPnl = Number(floatPnl) + Number(realized || 0);
+      if (dayPnl == null && Array.isArray(lastData && lastData.positions)) {
+        let acc = 0;
+        let any = false;
+        for (const p of lastData.positions) {
+          if (p.day_pnl == null) continue;
+          acc += Number(p.day_pnl) || 0;
+          any = true;
+        }
+        if (any) dayPnl = acc;
+      }
       const money = (v) => {
         if (v == null || v === "") return "—";
         const n = Number(v);
@@ -4408,7 +4440,7 @@
           ? (`漏买 ${missed.length}：` + missed.slice(0, 6).map((m) =>
             `${m.name || m.code}@${m.price ?? "—"}`).join(" / "))
           : "漏买：无",
-        `今日盈亏 ${money(dayPnl)}（浮盈 ${money(floatPnl)} + 已实现 ${money(realized)}）`
+        `今日盈亏 ${money(dayPnl)}（相对昨收/今日买价；浮盈 ${money(floatPnl)} · 已实现 ${money(realized)}）`
           + (pos.day_pnl_pct != null ? ` · ${pos.day_pnl_pct}%` : ""),
       ];
       if (isTodayView() && switches.length) {
@@ -4683,8 +4715,13 @@
           alert("钉自选失败");
           return;
         }
+        const body = await r.json().catch(() => ({}));
         pin.textContent = "已钉";
         pin.disabled = true;
+        if (Array.isArray(body.watchlist)) {
+          lastData = Object.assign({}, lastData || {}, { watchlist: body.watchlist });
+          paintVisible(lastData);
+        }
         await tick();
       } catch (e) {
         alert("钉自选失败");
@@ -4778,8 +4815,13 @@
           alert("钉自选失败");
           return;
         }
+        const body = await r.json().catch(() => ({}));
         pin.textContent = "已钉";
         pin.disabled = true;
+        if (Array.isArray(body.watchlist)) {
+          lastData = Object.assign({}, lastData || {}, { watchlist: body.watchlist });
+          paintVisible(lastData);
+        }
         await tick();
       } catch (e) {
         alert("钉自选失败");
@@ -5007,13 +5049,19 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
+        const body = await r.json().catch(() => ({}));
         if (!r.ok) {
-          alert("加入自选失败");
+          alert(typeof body.detail === "string" ? body.detail : "加入自选失败");
           return;
         }
         f.reset();
-        await tick();
+        // Immediate list feedback from API payload (do not wait for next slice tick).
+        if (Array.isArray(body.watchlist)) {
+          lastData = Object.assign({}, lastData || {}, { watchlist: body.watchlist });
+          paintVisible(lastData);
+        }
         applyMain("watch");
+        await tick();
       } catch (e) {
         alert("加入自选失败");
       }
@@ -5024,7 +5072,12 @@
       const id = del.getAttribute("data-id");
       if (!id) return;
       if (!confirm("删除这条自选？")) return;
-      await fetch("/api/watchlist/" + id, { method: "DELETE" });
+      const r = await fetch("/api/watchlist/" + id, { method: "DELETE" });
+      const body = await r.json().catch(() => ({}));
+      if (Array.isArray(body.watchlist)) {
+        lastData = Object.assign({}, lastData || {}, { watchlist: body.watchlist });
+        paintVisible(lastData);
+      }
       await tick();
     });
     const blForm = document.getElementById("blForm");
@@ -5138,8 +5191,16 @@
           alert("加入自选失败");
           return;
         }
-        await tick();
+        const body = await r.json().catch(() => ({}));
+        btn.textContent = "已自选";
+        btn.disabled = true;
+        btn.classList.add("in");
+        if (Array.isArray(body.watchlist)) {
+          lastData = Object.assign({}, lastData || {}, { watchlist: body.watchlist });
+          paintVisible(lastData);
+        }
         applyMain("watch");
+        await tick();
       } catch (e) {
         alert("加入自选失败");
       }

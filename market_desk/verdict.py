@@ -3851,13 +3851,17 @@ def decorate_positions(
             market = round(last * qty, 2) if last is not None else None
             pnl = round(market - cost, 2) if market is not None else None
             pnl_pct = round((last / buy - 1.0) * 100.0, 2) if last and buy else None
-            # Session P&L vs yesterday close (+ today realized from partial sells).
+            # Session P&L: vs buy if bought today; else vs yesterday close (+ today realized).
             prev = q.get("prev")
+            buy_day = str(row.get("last_buy_date") or row.get("created_at") or "")[:10]
+            bought_today = bool(day and buy_day and buy_day == day)
             day_mtm = None
             try:
-                if last is not None and prev not in (None, 0) and qty > 0:
+                if last is not None and qty > 0 and bought_today and buy > 0:
+                    day_mtm = (float(last) - buy) * qty
+                elif last is not None and prev not in (None, 0) and qty > 0:
                     day_mtm = (float(last) - float(prev)) * qty
-                elif q.get("pct") is not None and cost:
+                elif q.get("pct") is not None and cost and not bought_today:
                     day_mtm = float(cost) * float(q.get("pct")) / 100.0
             except (TypeError, ValueError):
                 day_mtm = None
@@ -3874,6 +3878,9 @@ def decorate_positions(
         item["low"] = q.get("low")
         item["open"] = None if closed else q.get("open")
         item["prev"] = None if closed else q.get("prev")
+        item["bought_today"] = False if closed else bool(
+            day and str(row.get("last_buy_date") or row.get("created_at") or "")[:10] == day
+        )
         item["cost"] = cost
         item["market"] = market
         item["pnl"] = pnl
@@ -3935,17 +3942,32 @@ def position_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     floating = round(market - cost, 2) if marked else None
     floating_pct = round((market / cost - 1.0) * 100.0, 2) if marked and cost else None
     realized = round(sum(float(r.get("day_realized_pnl") or 0) for r in rows), 2)
-    day_total = round((floating or 0) + realized, 2) if marked or realized else (realized if realized else None)
+    # Day P&L = sum of row day_pnl (vs 昨收/今日买价 + 已实现), NOT floating+realized.
+    day_parts = [r for r in rows if r.get("day_pnl") is not None]
+    day_total = (
+        round(sum(float(r.get("day_pnl") or 0) for r in day_parts), 2) if day_parts else None
+    )
     day_total_pct = None
-    if day_total is not None and cost:
-        # Percent vs remaining open cost; closed-only days use realized alone.
-        day_total_pct = round(day_total / cost * 100.0, 2)
-    elif day_total is not None and not open_rows and realized:
-        closed_cost = sum(
-            float(r.get("buy_price") or 0) * int(r.get("day_sold_qty") or 0) for r in closed_rows
-        )
-        if closed_cost:
-            day_total_pct = round(day_total / closed_cost * 100.0, 2)
+    day_basis = 0.0
+    for r in open_rows:
+        qty = int(r.get("qty") or 0)
+        if qty <= 0:
+            continue
+        buy = float(r.get("buy_price") or 0)
+        prev = r.get("prev")
+        if r.get("bought_today") and buy > 0:
+            day_basis += buy * qty
+        elif prev not in (None, 0, "") and float(prev) > 0:
+            day_basis += float(prev) * qty
+        elif buy > 0:
+            day_basis += buy * qty
+    for r in closed_rows:
+        sold = int(r.get("day_sold_qty") or 0)
+        buy = float(r.get("buy_price") or 0)
+        if sold > 0 and buy > 0:
+            day_basis += buy * sold
+    if day_total is not None and day_basis > 0:
+        day_total_pct = round(day_total / day_basis * 100.0, 2)
     notes: list[str] = []
     if len(open_rows) > POSITION_MAX_NAMES:
         notes.append(f"持仓只数 {len(open_rows)} 超过软上限 {POSITION_MAX_NAMES}")

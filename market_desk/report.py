@@ -275,8 +275,11 @@ def build_eod_onepager(
     if realized is None:
         realized = 0
     day_pnl = pos.get("day_pnl")
-    if day_pnl is None and float_pnl is not None:
-        day_pnl = float(float_pnl) + float(realized or 0)
+    if day_pnl is None:
+        rows = snap.get("positions") or []
+        parts = [r for r in rows if isinstance(r, dict) and r.get("day_pnl") is not None]
+        if parts:
+            day_pnl = round(sum(float(r.get("day_pnl") or 0) for r in parts), 2)
 
     switches = list(snap.get("mainline_switches") or [])
     # When viewing a non-today review day, prefer digest switch count.
@@ -328,7 +331,7 @@ def build_eod_onepager(
         return f"{n:+.2f}" if n != 0 else "0.00"
 
     bullets.append(
-        f"今日盈亏 {_money(day_pnl)}（浮盈 {_money(float_pnl)} + 已实现 {_money(realized)}）"
+        f"今日盈亏 {_money(day_pnl)}（相对昨收/今日买价；浮盈 {_money(float_pnl)} · 已实现 {_money(realized)}）"
         + (f" · {pos.get('day_pnl_pct')}%" if pos.get("day_pnl_pct") is not None else "")
     )
 

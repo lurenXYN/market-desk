@@ -247,7 +247,11 @@ class DeskEngine:
                 code = str(row.get("code") or "").zfill(6)
                 if row.get("last") is not None:
                     qmap[code] = {"price": row.get("last"), "pct": row.get("last_pct"), "name": row.get("name")}
-        rows = _decorate_watchlist(load_watchlist(), qmap)
+        rows = _decorate_watchlist(
+            load_watchlist(),
+            qmap,
+            verdict=self.snapshot.get("verdict"),
+        )
         self.snapshot["watchlist"] = rows
         return rows
 
@@ -632,6 +636,7 @@ class DeskEngine:
                 verdict.clear()
                 verdict.update(aligned)
                 desk_gate_summary = build_desk_gate_summary(verdict, phase=phase)
+                watchlist = _annotate_watchlist_observe(watchlist, verdict)
                 updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
                 try:
                     self._persist_session_context(
@@ -1043,7 +1048,7 @@ class DeskEngine:
                 "theme_memory",
             ),
             "funds": ("fund_flow",),
-            "watch": ("watch", "stock_blacklist"),
+            "watch": ("watch", "watchlist", "stock_blacklist"),
             "auction": ("auction", "auction_strategy"),
             "pos": (
                 "positions",
@@ -1962,6 +1967,8 @@ def _minutes(now: datetime) -> int:
 def _decorate_watchlist(
     rows: list[dict[str, Any]],
     quotes: dict[str, dict[str, Any]],
+    *,
+    verdict: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Attach live quote fields onto personal watchlist rows."""
     out: list[dict[str, Any]] = []
@@ -1973,6 +1980,79 @@ def _decorate_watchlist(
         item["name"] = item.get("name") or q.get("name") or code
         item["last"] = q.get("price")
         item["last_pct"] = q.get("pct")
+        out.append(item)
+    return _annotate_watchlist_observe(out, verdict)
+
+
+def _annotate_watchlist_observe(
+    rows: list[dict[str, Any]],
+    verdict: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Attach soft buy-readiness labels for personal watchlist observation."""
+    from market_desk.config import BUY_DEMOTE_LOCK_NOTES, STOCK_NEAR_ENTRY_DOWN, STOCK_NEAR_ENTRY_UP
+
+    v = verdict if isinstance(verdict, dict) else {}
+    action = str(v.get("action") or "")
+    notes = {str(n) for n in (v.get("algo_notes") or []) if n}
+    gate_locked = bool(notes & set(BUY_DEMOTE_LOCK_NOTES)) or action in (
+        "观望",
+        "现金",
+        "禁追",
+    )
+    desk_buyable = action in ("可买入", "可小仓") and not gate_locked
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        last = item.get("last")
+        suggest = item.get("suggest_price")
+        stop = item.get("stop_price")
+        chase = item.get("chase_price")
+        status = "观察中"
+        tone = "slate"
+        note = "盯价带，未到动手条件"
+        try:
+            last_f = float(last) if last not in (None, "") else None
+        except (TypeError, ValueError):
+            last_f = None
+        if last_f is None:
+            status, tone, note = "待行情", "slate", "等待报价刷新"
+        else:
+            try:
+                stop_f = float(stop) if stop not in (None, "") else None
+            except (TypeError, ValueError):
+                stop_f = None
+            try:
+                chase_f = float(chase) if chase not in (None, "") else None
+            except (TypeError, ValueError):
+                chase_f = None
+            try:
+                sug_f = float(suggest) if suggest not in (None, "") else None
+            except (TypeError, ValueError):
+                sug_f = None
+            if stop_f is not None and last_f <= stop_f:
+                status, tone, note = "触及止损", "red", "现价≤止损，不宜按原计划买"
+            elif chase_f is not None and last_f >= chase_f:
+                status, tone, note = "勿追", "amber", "现价≥不追价，等回落"
+            elif sug_f is not None and sug_f > 0:
+                up = sug_f * (1.0 + float(STOCK_NEAR_ENTRY_UP))
+                down = sug_f * (1.0 - float(STOCK_NEAR_ENTRY_DOWN))
+                near = down <= last_f <= up
+                if near:
+                    if desk_buyable:
+                        status, tone, note = "可试探", "green", "靠近建议价且作战台未锁买"
+                    elif gate_locked or action in ("观望", "观察回踩", "观察"):
+                        status, tone, note = "到位·闸门未开", "amber", "价带到位，但市场闸门未开"
+                    else:
+                        status, tone, note = "回踩到位", "amber", "靠近建议价，仍需对照作战台"
+                elif last_f < down:
+                    status, tone, note = "等回踩", "slate", "现价低于建议带，继续等"
+                elif last_f > up:
+                    status, tone, note = "偏高", "slate", "高于建议带，勿追"
+            elif not sug_f:
+                status, tone, note = "观察中", "slate", "未设建议价，仅盯行情"
+        item["observe_status"] = status
+        item["observe_tone"] = tone
+        item["observe_note"] = note
         out.append(item)
     return out
 
