@@ -8,6 +8,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **复盘落库加宽** — 观察回踩全量；支线/联动/自选试探分类型入库（buy_side/link/trial）。*(2026-09-14)*
 - [x] **趋势分权加重** — 个股 ±12、主线 ETF ±9；上升×1.10 / 下降×0.75 软仓位。*(2026-09-14)*
 - [x] **自选可试探进作战台副卡** — watch_trial_recommend，仓位×0.75，不改顶栏。*(2026-09-14)*
 - [x] **主线过热也出联动** — 无 ready 或全贴不追价触发。*(2026-09-14)*

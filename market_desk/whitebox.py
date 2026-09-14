@@ -149,10 +149,12 @@ def _label_win(row: dict[str, Any]) -> int:
 
 def _scored_buys(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Filter scored buy rows respecting hit_rate_mode."""
+    from market_desk.review import is_buy_signal
+
     mode = str(setting("hit_rate_mode", "traded") or "traded").strip().lower()
     out: list[dict[str, Any]] = []
     for row in rows or []:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue

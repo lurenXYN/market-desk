@@ -212,10 +212,12 @@ def count_missed_by_context(missed: list[dict[str, Any]] | None) -> dict[str, in
 
 def _buy_scored(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Return scored buy rows respecting hit_rate_mode (newest last)."""
+    from market_desk.review import is_buy_signal
+
     mode = str(setting("hit_rate_mode", "traded") or "traded").strip().lower()
     out: list[dict[str, Any]] = []
     for row in rows or []:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -272,8 +274,10 @@ def build_context_gate_bias(
     false_kills: dict[str, int] = {}
     true_kills: dict[str, int] = {}
     matched = 0
+    from market_desk.review import is_buy_signal
+
     for row in rows or []:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -808,12 +812,12 @@ def build_exec_size_bias(
             rows = load_signals(limit=240)
     except Exception:
         rows = []
-    from market_desk.review import build_exec_score
+    from market_desk.review import build_exec_score, is_buy_signal
 
     traded = [
         r
         for r in (rows or [])
-        if str(r.get("signal_type") or "") == "buy" and int(r.get("traded") or 0)
+        if is_buy_signal(r.get("signal_type")) and int(r.get("traded") or 0)
     ]
     # Prefer chronological tail so recent discipline matters most.
     traded = sorted(

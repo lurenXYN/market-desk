@@ -28,6 +28,20 @@ _LIVE_LOOKBACK_SEC = 60.0
 _LIVE_KEEP_SEC = 240.0
 _LIVE_FLAT_PCT = 0.08  # treat |Δ| below this as flat
 
+# Buy-family signal_type values (UNIQUE key includes type so sources coexist).
+BUY_SIGNAL_TYPES = frozenset({"buy", "buy_side", "buy_link", "buy_trial"})
+
+
+def is_buy_signal(sig_type: Any) -> bool:
+    """Return True for main / side / link / trial buy signal types."""
+    t = str(sig_type or "").strip().lower()
+    return t in BUY_SIGNAL_TYPES or (t.startswith("buy_") and t != "buy_sell")
+
+
+def is_sell_signal(sig_type: Any) -> bool:
+    """Return True for sell review signals."""
+    return str(sig_type or "").strip().lower() == "sell"
+
 
 def note_quote_ticks(quotes: dict[str, Any] | list[Any] | None) -> None:
     """Record latest prices so review can compare against ~1 minute ago."""
@@ -277,7 +291,15 @@ def enrich_signals_with_boards(
 
 
 def record_session_signals(snapshot: dict[str, Any]) -> int:
-    """Persist buy/sell recommendations for the current session. Return insert/update count."""
+    """Persist buy/sell recommendations for the current session. Return insert/update count.
+
+    Buy sources (all paper cards with a price):
+      - recommend → signal_type ``buy`` (含观察回踩全量)
+      - side_recommend → ``buy_side``
+      - link_recommend → ``buy_link``
+      - watch_trial_recommend → ``buy_trial``
+    Sell: ready items from sell_advice → ``sell``.
+    """
     trade_date = snapshot.get("trade_date") or ""
     if not trade_date:
         return 0
@@ -302,39 +324,37 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         trade_ctx = {}
     n = 0
 
-    rec = verdict.get("recommend") or {}
-    # Log buys that matter for review: 可买入 always; 观察回踩 only near-entry/ready
-    # (full wait-list dumps make the review panel too noisy).
-    if rec.get("items"):
-        for item in rec.get("items") or []:
+    def _log_buy_items(
+        items: list[dict[str, Any]] | None,
+        *,
+        signal_type: str,
+        desk_source: str,
+        action_label: str,
+        board_fallback: str = "",
+    ) -> int:
+        """Upsert one buy-family recommend list; return rows written."""
+        written = 0
+        for item in items or []:
             code = normalize_code(item.get("code"))
             if not code:
                 continue
-            ready = bool(item.get("ready"))
-            near = bool(item.get("near_entry"))
-            buyable = action in ("可买入", "可小仓") or bool(rec.get("buy"))
-            gated = bool(item.get("confirm_fail"))
-            # Log gated cards too so review can attribute which confirm gate killed ready.
-            if not (buyable or ready or near or gated):
-                continue
             kind = item.get("kind") or "stock"
-            if kind == "etf" and not ready and not buyable and not near and not gated:
-                continue
             price = num(item.get("buy_price"))
             if price is None:
                 price = num(item.get("last"))
             if price is None:
                 continue
             board_names = lookup_code_boards(code, board_cards)
-            if not board_names and mainline:
-                board_names = [mainline]
+            fb = board_fallback or mainline
+            if not board_names and fb:
+                board_names = [fb]
             board_cmp = compare_boards_to_mainline(board_names, mainline)
             upsert_signal(
                 {
                     "trade_date": trade_date,
                     "signaled_at": signaled_at,
-                    "signal_type": "buy",
-                    "action": action,
+                    "signal_type": signal_type,
+                    "action": action_label,
                     "phase": phase,
                     "mainline": mainline,
                     "code": code,
@@ -344,6 +364,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "last": num(item.get("last")),
                     "ready": 1 if item.get("ready") else 0,
                     "payload": {
+                        "desk_source": desk_source,
+                        "role_label": item.get("role_label"),
                         "wait_price": item.get("wait_price"),
                         "stop_price": item.get("stop_price"),
                         "chase_price": item.get("chase_price"),
@@ -358,6 +380,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "block_ready": bool(item.get("block_ready")),
                         "near_entry": bool(item.get("near_entry")),
                         "size_cap_block": bool(item.get("size_cap_block")),
+                        "link_board": bool(item.get("link_board")),
+                        "watch_trial": bool(item.get("watch_trial")),
                         "board_names": board_cmp["boards"],
                         "vs_mainline": board_cmp["vs_mainline"],
                         "board_match": board_cmp["match"],
@@ -365,7 +389,46 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     },
                 }
             )
-            n += 1
+            written += 1
+        return written
+
+    rec = verdict.get("recommend") or {}
+    n += _log_buy_items(
+        list(rec.get("items") or []),
+        signal_type="buy",
+        desk_source="main",
+        action_label=action or "观察回踩",
+        board_fallback=mainline,
+    )
+
+    side_rec = verdict.get("side_recommend") or {}
+    side_name = str((verdict.get("side_mainline") or {}).get("name") or "").strip()
+    n += _log_buy_items(
+        list(side_rec.get("items") or []),
+        signal_type="buy_side",
+        desk_source="side",
+        action_label=f"观察支线·{side_name}" if side_name else "观察支线",
+        board_fallback=side_name or mainline,
+    )
+
+    link_rec = verdict.get("link_recommend") or {}
+    link_name = str((verdict.get("link_mainline") or {}).get("name") or "").strip()
+    n += _log_buy_items(
+        list(link_rec.get("items") or []),
+        signal_type="buy_link",
+        desk_source="link",
+        action_label=f"板块联动·{link_name}" if link_name else "板块联动",
+        board_fallback=link_name or mainline,
+    )
+
+    trial_rec = verdict.get("watch_trial_recommend") or {}
+    n += _log_buy_items(
+        list(trial_rec.get("items") or []),
+        signal_type="buy_trial",
+        desk_source="watch_trial",
+        action_label="自选可试探",
+        board_fallback=mainline,
+    )
 
     sell = snapshot.get("sell_advice") or {}
     for item in sell.get("items") or []:
@@ -449,7 +512,19 @@ def score_signal_with_closes(
     day3 = after[min(2, len(after) - 1)]
     peak = max(after)
     trough = min(after)
-    if sig_type == "buy":
+    if is_sell_signal(sig_type):
+        # Sell: positive means avoiding further drop (price fell after sell).
+        d1 = (price / day1 - 1.0) * 100.0
+        d3 = (price / day3 - 1.0) * 100.0
+        mfe = (price / trough - 1.0) * 100.0
+        mae = (price / peak - 1.0) * 100.0
+        if d1 >= 1.0:
+            label = "卖后回落"
+        elif d1 <= -1.5:
+            label = "卖后继续涨"
+        else:
+            label = "平淡"
+    else:
         d1 = (day1 / price - 1.0) * 100.0
         d3 = (day3 / price - 1.0) * 100.0
         mfe = (peak / price - 1.0) * 100.0
@@ -462,18 +537,6 @@ def score_signal_with_closes(
             label = "三日红"
         elif d3 <= -2.0:
             label = "三日绿"
-        else:
-            label = "平淡"
-    else:
-        # Sell: positive means avoiding further drop (price fell after sell).
-        d1 = (price / day1 - 1.0) * 100.0
-        d3 = (price / day3 - 1.0) * 100.0
-        mfe = (price / trough - 1.0) * 100.0
-        mae = (price / peak - 1.0) * 100.0
-        if d1 >= 1.0:
-            label = "卖后回落"
-        elif d1 <= -1.5:
-            label = "卖后继续涨"
         else:
             label = "平淡"
 
@@ -502,8 +565,8 @@ def summarize_signals(
     if mode not in ("traded", "all"):
         mode = "traded"
     active = [r for r in rows if not int(r.get("skipped") or 0)]
-    buys = [r for r in active if r.get("signal_type") == "buy"]
-    sells = [r for r in active if r.get("signal_type") == "sell"]
+    buys = [r for r in active if is_buy_signal(r.get("signal_type"))]
+    sells = [r for r in active if is_sell_signal(r.get("signal_type"))]
     scored_buys_all = [r for r in buys if r.get("outcome_label")]
     scored_buys = (
         [r for r in scored_buys_all if int(r.get("traded") or 0)]
@@ -558,8 +621,8 @@ def build_today_digest(
 ) -> dict[str, Any]:
     """Build a same-day review digest for the summary strip."""
     today_rows = [r for r in rows if str(r.get("trade_date") or "") == trade_date]
-    buys = [r for r in today_rows if r.get("signal_type") == "buy" and not int(r.get("skipped") or 0)]
-    sells = [r for r in today_rows if r.get("signal_type") == "sell" and not int(r.get("skipped") or 0)]
+    buys = [r for r in today_rows if is_buy_signal(r.get("signal_type")) and not int(r.get("skipped") or 0)]
+    sells = [r for r in today_rows if is_sell_signal(r.get("signal_type")) and not int(r.get("skipped") or 0)]
     scored = [r for r in buys if r.get("outcome_label")]
     hit = sum(1 for r in scored if (r.get("outcome_label") or "") in {"次日红", "三日红"})
     miss = sum(
@@ -601,7 +664,7 @@ def build_today_digest(
 
 def classify_fill_execution(row: dict[str, Any]) -> str | None:
     """Classify a traded buy fill versus the original suggest / chase band."""
-    if str(row.get("signal_type") or "") != "buy":
+    if not is_buy_signal(row.get("signal_type")):
         return None
     if not int(row.get("traded") or 0):
         return None
@@ -655,7 +718,7 @@ def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     traded_buys = [
         r
         for r in rows
-        if str(r.get("signal_type") or "") == "buy" and int(r.get("traded") or 0)
+        if is_buy_signal(r.get("signal_type")) and int(r.get("traded") or 0)
     ]
     etf = [r for r in traded_buys if str(r.get("kind") or "") == "etf"]
     stock = [r for r in traded_buys if str(r.get("kind") or "") != "etf"]
@@ -675,7 +738,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
     for row in rows:
         if str(row.get("trade_date") or "") != trade_date:
             continue
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         skipped = int(row.get("skipped") or 0)
         traded = int(row.get("traded") or 0)
@@ -713,7 +776,7 @@ def build_phase_hit_rates(
     mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
     buckets: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -746,7 +809,7 @@ def build_kind_hit_rates(
     mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
     buckets: dict[str, list[dict[str, Any]]] = {"etf": [], "stock": []}
     for row in rows:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -783,7 +846,7 @@ def build_phase_kind_hit_rates(
     mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
     buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -932,7 +995,7 @@ def build_gate_kill_stats(
     false_kills: dict[str, int] = {}
     true_kills: dict[str, int] = {}
     for row in rows or []:
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -1316,7 +1379,7 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
             }
         )
     for row in load_signals_for_date(trade_date):
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
             continue
@@ -1498,7 +1561,7 @@ def enrich_signals_with_live_marks(
             labels.append("回踩区间")
         # Ideal entry never touched today, yet price already ran higher.
         miss_pullback = (
-            str(item.get("signal_type") or "") == "buy"
+            is_buy_signal(item.get("signal_type"))
             and last is not None
             and sig_px is not None
             and day_low is not None
@@ -1533,7 +1596,7 @@ def enrich_signals_with_live_marks(
         item["price_flags"] = flags
         item["price_mark"] = " / ".join(labels) if labels else ""
         # Buying caution for same-day signals.
-        if str(item.get("signal_type") or "") == "buy":
+        if is_buy_signal(item.get("signal_type")):
             if "stop_hit" in flags:
                 item["buy_caution"] = "现价已到止损带，当日不宜再按原计划买"
             elif "chase_hit" in flags:
@@ -1659,6 +1722,12 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         item["wait_price"] = num(payload.get("wait_price"))
     if item.get("stop_price") is None:
         item["stop_price"] = num(payload.get("stop_price"))
+    if not item.get("desk_source"):
+        item["desk_source"] = payload.get("desk_source") or (
+            "main"
+            if is_buy_signal(item.get("signal_type"))
+            else ("sell" if is_sell_signal(item.get("signal_type")) else None)
+        )
     return item
 
 

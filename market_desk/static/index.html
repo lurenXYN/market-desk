@@ -4444,7 +4444,10 @@
       const kind = (document.getElementById("revKind") || {}).value || "";
       const main = ((document.getElementById("revMain") || {}).value || "").trim();
       const rows = (lastReview.signals || []).filter((r) => {
-        if (type && r.signal_type !== type) return false;
+        if (type === "buy") {
+          const st = String(r.signal_type || "");
+          if (st === "sell" || !(st === "buy" || st.startsWith("buy_"))) return false;
+        } else if (type && r.signal_type !== type) return false;
         if (kind && (r.kind || "") !== kind) return false;
         if (main && !(String(r.mainline || "").includes(main))) return false;
         return true;
@@ -4454,8 +4457,15 @@
         `<th class="col-${id}">${revColLabel(id)}</th>`
       ).join("");
       const colspan = Math.max(cols.length, 1);
+      const buyTypeLabel = (st) => ({
+        buy: "买",
+        buy_side: "买·支线",
+        buy_link: "买·联动",
+        buy_trial: "买·自选",
+        sell: "卖",
+      })[st] || (st === "sell" ? "卖" : "买");
       document.getElementById("revBody").innerHTML = rows.map((r) => {
-        const typ = r.signal_type === "sell" ? "卖" : "买";
+        const typ = buyTypeLabel(r.signal_type || "buy");
         const skipped = !!Number(r.skipped || 0);
         const traded = !!Number(r.traded || 0);
         let label = r.outcome_label || "待隔日";
@@ -4495,7 +4505,7 @@
           const buyDay = String((pos && (pos.last_buy_date || pos.created_at)) || "").slice(0, 10);
           if (day && buyDay && day === buyDay) t1Locked = true;
           const sameBuy = (lastReview.signals || []).some((s) =>
-            s.signal_type === "buy"
+            (s.signal_type === "buy" || String(s.signal_type || "").startsWith("buy_"))
             && String(s.trade_date || "").slice(0, 10) === day
             && String(s.code || "").replace(/\D/g, "").padStart(6, "0") === code
             && Number(s.traded || 0)
@@ -4969,12 +4979,14 @@
         await loadReview(true, "");
       } catch (e) { /* ignore */ }
       const day = (lastData && lastData.trade_date) || (lastReview && lastReview.view_date) || "";
-      const sig = ((lastReview && lastReview.signals) || []).find((s) =>
-        s.signal_type === "buy"
-        && String(s.code || "").replace(/\D/g, "").padStart(6, "0") === norm
-        && (!day || String(s.trade_date || "").slice(0, 10) === String(day).slice(0, 10))
-        && !Number(s.traded || 0)
-      );
+      const buyCands = ((lastReview && lastReview.signals) || []).filter((s) => {
+        const st = String(s.signal_type || "");
+        return (st === "buy" || st.startsWith("buy_"))
+          && String(s.code || "").replace(/\D/g, "").padStart(6, "0") === norm
+          && (!day || String(s.trade_date || "").slice(0, 10) === String(day).slice(0, 10))
+          && !Number(s.traded || 0);
+      });
+      const sig = buyCands.find((s) => s.signal_type === "buy") || buyCands[0];
       if (sig && sig.id) {
         const r = await fetch("/api/review/" + sig.id + "/trade", {
           method: "POST",

@@ -43,6 +43,7 @@ from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
 from market_desk.lots import clear_sell_qty, half_sell_qty
 from market_desk.report import build_daily_report, build_eod_onepager, build_morning_brief
+from market_desk.review import is_buy_signal, is_sell_signal
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
 
@@ -417,12 +418,12 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
     note = (body.note if body.note is not None else "复盘已交易").strip()
     fill_px = float(body.price) if body.price is not None else None
     fill_qty = int(body.qty) if body.qty is not None else None
-    if fill_px is None and sig_type == "buy":
+    if fill_px is None and is_buy_signal(sig_type):
         fill_px = float(row.get("price") or row.get("last") or 0) or None
-    if fill_qty is None and sig_type == "buy":
+    if fill_qty is None and is_buy_signal(sig_type):
         fill_qty = 100
 
-    if sig_type == "sell" and code:
+    if is_sell_signal(sig_type) and code:
         trade_day = str(
             row.get("trade_date") or engine.snapshot.get("trade_date") or ""
         )[:10]
@@ -438,7 +439,7 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
             )
         bought_today = any(
             str(s.get("trade_date") or "")[:10] == trade_day
-            and str(s.get("signal_type") or "") == "buy"
+            and is_buy_signal(s.get("signal_type"))
             and normalize_code(s.get("code")) == code
             and int(s.get("traded") or 0)
             for s in load_signals(limit=120)
@@ -460,7 +461,7 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
 
     booked: dict[str, Any] | None = None
     if body.book and code:
-        if sig_type == "buy":
+        if is_buy_signal(sig_type):
             px = float(fill_px or 0)
             if px <= 0:
                 raise HTTPException(400, "missing buy price")
@@ -509,7 +510,7 @@ def trade_signal(sid: int, body: SignalTradeIn) -> dict:
     rows = engine.sync_positions()
     book_summary: dict[str, Any] | None = None
     if booked:
-        if sig_type == "buy":
+        if is_buy_signal(sig_type):
             book_summary = {
                 "side": "buy",
                 "code": code,

@@ -228,7 +228,7 @@ def build_daily_report(
         lines.extend(["", "## 今日已交易"])
         for r in traded[:20]:
             lines.append(
-                f"- {'买' if r.get('signal_type') == 'buy' else '卖'} "
+                f"- {'卖' if r.get('signal_type') == 'sell' else '买'} "
                 f"{r.get('name') or ''} {r.get('code')} "
                 f"建议 {r.get('price')} 成交 {r.get('fill_price') or '—'}×{r.get('fill_qty') or '—'}"
             )
