@@ -1360,6 +1360,7 @@ class DeskEngine:
                 now,
                 trading_day=bool(current.get("trading_day", True)),
                 open_mute_minutes=int(setting("open_mute_minutes", 5)),
+                tail_mute_minutes=int(setting("tail_mute_minutes", 30)),
             ),
         )
         chosen, latched = select_toasts_for_round(

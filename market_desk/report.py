@@ -381,3 +381,168 @@ def build_eod_onepager(
         "realized_pnl": realized,
         "markdown": markdown,
     }
+
+
+def build_tomorrow_brief(
+    *,
+    snapshot: dict[str, Any] | None,
+    review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an after-close 'tomorrow watch' brief (observe-only, no buy gates).
+
+    Soft narrative only: risk-first sells, bans, mainline watch posture, similar-day
+    bias, watchlist notes, and a few review hints. Never flips ready / action.
+    """
+    from market_desk.calendar import add_trading_days
+
+    snap = snapshot or {}
+    rev = review or {}
+    summary = rev.get("summary") or {}
+    today = summary.get("today") or {}
+    verdict = snap.get("verdict") or {}
+    ml = verdict.get("mainline") or {}
+    pb = verdict.get("playbook") or {}
+    sim = snap.get("similar_days") or {}
+    pos = snap.get("position_summary") or snap.get("risk_overview") or {}
+    sell = snap.get("sell_advice") or {}
+    sell_items = [
+        x for x in (sell.get("items") or [])
+        if isinstance(x, dict)
+    ]
+    bans = [
+        b for b in (verdict.get("bans") or [])
+        if isinstance(b, dict) or isinstance(b, str)
+    ]
+    watch = [
+        w for w in (snap.get("watchlist") or [])
+        if isinstance(w, dict)
+    ]
+    missed = summary.get("missed_buys") or []
+    hints = summary.get("tune_hints") or []
+    day = str(today.get("date") or snap.get("trade_date") or "")[:10]
+    next_day = None
+    if day:
+        try:
+            next_day = add_trading_days(day, 1)
+        except Exception:
+            next_day = None
+    next_s = next_day.isoformat() if next_day else "下一交易日"
+
+    phase = snap.get("phase") or today.get("phase") or "—"
+    action = verdict.get("action") or "观望"
+    board = ml.get("name") or "未明"
+    status = ml.get("status") or "—"
+
+    risk_rows: list[str] = []
+    for it in sell_items:
+        urg = str(it.get("urgency") or it.get("action") or "").strip()
+        if urg not in ("stop", "take", "trim", "止损", "止盈", "减仓", "清仓"):
+            # Also accept ready sell cards.
+            if not it.get("ready"):
+                continue
+        name = it.get("name") or it.get("code") or "—"
+        why = it.get("reason") or it.get("note") or urg or "关注"
+        risk_rows.append(f"{name}：{why}")
+    if len(risk_rows) > 5:
+        risk_rows = risk_rows[:5]
+
+    ban_bits: list[str] = []
+    for b in bans[:6]:
+        if isinstance(b, str):
+            ban_bits.append(b)
+        else:
+            ban_bits.append(str(b.get("name") or b.get("code") or b.get("reason") or b))
+
+    bullets: list[str] = []
+    bullets.append(f"对照日 {day or '—'} → 看点日 {next_s}")
+    bullets.append(f"相位 {phase} · 结论 {action} · 主线 {board}（{status}）")
+
+    if risk_rows:
+        bullets.append("持仓风险优先：" + "；".join(risk_rows))
+    elif pos.get("count"):
+        bullets.append(
+            f"持仓 {pos.get('count')} 只"
+            + (f" · {pos.get('risk_note')}" if pos.get("risk_note") else " · 无紧急卖点，开盘先核对强弱")
+        )
+    else:
+        bullets.append("持仓：空仓 — 开盘默认只看不买，等回踩再谈试错")
+
+    if ban_bits:
+        bullets.append("禁追/回避：" + " / ".join(ban_bits))
+
+    do = pb.get("do") or "先认主线，不追尖"
+    dont = pb.get("dont") or "不抄冷门、不摊平"
+    bullets.append(f"主线观察：{do}；不做：{dont}（观察级，非可现买指令）")
+
+    if sim.get("bias") or sim.get("gate"):
+        bullets.append(
+            f"相似日倾向：{sim.get('bias') or '—'}（gate={sim.get('gate') or '—'}，n={sim.get('n') or 0}）"
+        )
+
+    watch_bits: list[str] = []
+    for w in watch[:5]:
+        nm = w.get("name") or w.get("code") or "—"
+        st = w.get("soft_status") or w.get("note") or w.get("band_note") or ""
+        watch_bits.append(f"{nm}{(' · ' + st) if st else ''}")
+    if watch_bits:
+        bullets.append("自选观察：" + "；".join(watch_bits))
+
+    if missed:
+        bits = [
+            f"{m.get('name') or m.get('code')}"
+            for m in missed[:4]
+        ]
+        bullets.append("复盘漏买对照：" + " / ".join(bits) + " — 明日勿报复性追回")
+    if hints:
+        bullets.append("调参提示：" + str(hints[0]))
+
+    # Soft posture score → focus line only.
+    cool = str(sim.get("gate") or "").lower() in ("cool", "urgent", "block")
+    has_risk = bool(risk_rows) or (
+        pos.get("day_pnl") is not None and float(pos.get("day_pnl") or 0) < 0
+    )
+    if has_risk or cool or action == "观望":
+        focus = f"{next_s}默认：先处理风险与禁追，主线只观察回踩，不在开盘尖上动手。"
+        posture = "defend"
+    elif action in ("可买入", "可小仓", "观察回踩"):
+        focus = f"{next_s}默认：认主线 {board}，等回踩/价带；开盘不追高，清单外不新开。"
+        posture = "watch_pullback"
+    else:
+        focus = f"{next_s}默认：按收盘结论「{action}」执行观察清单，先核对持仓再谈进攻。"
+        posture = "neutral"
+
+    title = f"明日看点 · {next_s}"
+    as_of = snap.get("updated_at")
+    lines_md = [
+        f"# {title}",
+        "",
+        f"_基于 {day or '—'} 收盘快照 · 更新于 {as_of or '—'}_",
+        "",
+        f"**焦点：** {focus}",
+        "",
+        "## 要点",
+    ]
+    for b in bullets:
+        lines_md.append(f"- {b}")
+    lines_md.extend(
+        [
+            "",
+            "---",
+            "_由 market-desk 规则生成，仅供次日观察，不构成投资建议；不改可买入闸门。_",
+        ]
+    )
+    return {
+        "title": title,
+        "as_of": as_of,
+        "from_date": day,
+        "next_date": next_s,
+        "focus": focus,
+        "posture": posture,
+        "bullets": bullets,
+        "phase": phase,
+        "mainline": board,
+        "action": action,
+        "risk_n": len(risk_rows),
+        "ban_n": len(ban_bits),
+        "markdown": "\n".join(lines_md),
+    }

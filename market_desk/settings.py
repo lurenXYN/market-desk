@@ -55,6 +55,8 @@ DEFAULTS: dict[str, Any] = {
     "side_mainline_gap": float(cfg.SIDE_MAINLINE_GAP),
     # Mute buy pricing / buy toasts for N minutes after 09:30; 0 = off.
     "open_mute_minutes": int(cfg.OPEN_MUTE_MINUTES),
+    # Mute buy/decision toasts for N minutes before 15:00; 0 = off. Risk kept.
+    "tail_mute_minutes": 30,
     # Review hit-rate: traded (executed only) | all (paper signals too).
     "hit_rate_mode": "traded",
     # Phase temperature cutoffs (see classify_phase).
@@ -198,6 +200,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
     out["side_mainline_gap"] = max(0.0, min(40.0, float(out.get("side_mainline_gap") or 0.0)))
     out["open_mute_minutes"] = max(0, min(30, int(out["open_mute_minutes"])))
+    out["tail_mute_minutes"] = max(0, min(90, int(out.get("tail_mute_minutes") or 0)))
     hit_mode = str(out.get("hit_rate_mode") or "traded").strip().lower()
     if hit_mode not in ("traded", "all"):
         hit_mode = "traded"

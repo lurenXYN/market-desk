@@ -66,7 +66,12 @@ from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
 from market_desk.lots import clear_sell_qty, half_sell_qty
-from market_desk.report import build_daily_report, build_eod_onepager, build_morning_brief
+from market_desk.report import (
+    build_daily_report,
+    build_eod_onepager,
+    build_morning_brief,
+    build_tomorrow_brief,
+)
 from market_desk.review import is_buy_signal, is_sell_signal
 from market_desk.lhb import build_positions_lhb
 from market_desk.settings import get_settings, update_settings
@@ -125,6 +130,7 @@ class SettingsIn(BaseModel):
     decision_alerts: bool | None = None
     alert_mode: str | None = None
     open_mute_minutes: int | None = None
+    tail_mute_minutes: int | None = None
     daily_loss_cap_pct: float | None = None
     cool_after_losses: int | None = None
     target_total_cost: float | None = None
@@ -1141,6 +1147,19 @@ async def report_eod(
     snap = engine.snapshot_for_user(int(user["id"]))
     review = await engine.build_review(view_date=date, user_id=uid)
     brief = build_eod_onepager(snapshot=snap, review=review)
+    return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
+
+
+@app.get("/api/report/tomorrow")
+async def report_tomorrow(
+    date: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return after-close tomorrow-watch brief (observe-only, no buy gates)."""
+    uid = None if is_guest(user) else int(user["id"])
+    snap = engine.snapshot_for_user(int(user["id"]))
+    review = await engine.build_review(view_date=date, user_id=uid)
+    brief = build_tomorrow_brief(snapshot=snap, review=review)
     return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
 
 

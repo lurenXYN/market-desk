@@ -175,12 +175,14 @@ def is_buy_quiet_window(
     *,
     trading_day: bool | None = None,
     open_mute_minutes: int = 5,
+    tail_mute_minutes: int = 30,
 ) -> bool:
     """
     Return True when buy/entry/mainline noise should be muted.
 
     Quiet during auction (09:15–09:30), configured open mute after 09:30,
-    lunch, after close, and non-trading days.
+    lunch, late-session tail mute before close, after close, and non-trading days.
+    Risk toasts still pass via ``filter_alerts_for_policy``.
     """
     if trading_day is False:
         return True
@@ -192,7 +194,11 @@ def is_buy_quiet_window(
         return True
     if 9 * 60 + 30 <= minutes <= 11 * 60 + 30:
         return False
+    # Afternoon session: quiet only in the configured tail before 15:00.
     if 13 * 60 <= minutes <= 15 * 60:
+        tail = max(0, min(90, int(tail_mute_minutes or 0)))
+        if tail and minutes >= 15 * 60 - tail:
+            return True
         return False
     return True
 

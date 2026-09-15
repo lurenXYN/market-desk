@@ -236,6 +236,14 @@ def build_elliott_scenarios(
         },
         "scenarios": top,
         "catalog_n": len(scored),
+        "chart": _build_elliott_chart(
+            series,
+            pivots,
+            fine_pivots,
+            last,
+            primary=primary,
+            scenarios=top,
+        ),
         "primary": {
             "id": primary.get("id"),
             "title": primary.get("title"),
@@ -291,74 +299,453 @@ def _normalize_bars(bars: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+def _build_elliott_chart(
+    series: list[dict[str, Any]],
+    pivots: list[dict[str, Any]],
+    fine_pivots: list[dict[str, Any]],
+    last: float,
+    *,
+    primary: dict[str, Any] | None,
+    scenarios: list[dict[str, Any]] | None = None,
+    window: int = 120,
+) -> dict[str, Any]:
+    """Pack closes + zigzag pivots for the observe-only Elliott SVG board.
+
+    ``window`` keeps the most recent bars so the line stays readable. Pivot
+    indices are remapped into that window (points before the window are dropped).
+    Wave numbers prefer Top1; if Top1 is triangle/complex (hard to number), fall
+    back to the first Top5 impulse/ABC scenario that maps cleanly.
+    """
+    win = max(40, min(int(window or 120), 240))
+    slice_bars = series[-win:] if len(series) > win else list(series)
+    offset = max(0, len(series) - len(slice_bars))
+    closes: list[float] = []
+    dates: list[str] = []
+    for b in slice_bars:
+        try:
+            closes.append(round(float(b["close"]), 2))
+        except (TypeError, ValueError, KeyError):
+            continue
+        dates.append(str(b.get("date") or "")[:10])
+
+    def _pack_pivots(src: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for p in src or []:
+            try:
+                idx = int(p.get("index"))
+                px = float(p.get("price"))
+            except (TypeError, ValueError):
+                continue
+            local = idx - offset
+            if local < 0 or local >= len(closes):
+                continue
+            out.append(
+                {
+                    "i": local,
+                    "price": round(px, 2),
+                    "kind": p.get("kind") or "",
+                    "date": str(p.get("date") or "")[:10],
+                }
+            )
+        if len(out) > limit:
+            out = out[-limit:]
+        return out
+
+    coarse = _pack_pivots(pivots, 14)
+    fine = _pack_pivots(fine_pivots, 18)
+    # If coarse zigzag is too sparse in-window, draw fine pivots as the main zig.
+    draw_pivots = coarse if len(coarse) >= 4 else (fine if len(fine) >= 4 else coarse)
+
+    inv_px = None
+    levels_out: list[dict[str, Any]] = []
+    if primary:
+        for lv in primary.get("levels") or []:
+            try:
+                px = float(lv.get("price"))
+            except (TypeError, ValueError):
+                continue
+            if px <= 0:
+                continue
+            levels_out.append(
+                {
+                    "price": round(px, 2),
+                    "tag": str(lv.get("tag") or lv.get("role") or ""),
+                    "vs_last_pct": lv.get("vs_last_pct"),
+                }
+            )
+        inv_txt = str(primary.get("invalidation") or "")
+        digits: list[str] = []
+        cur = ""
+        for ch in inv_txt:
+            if ch.isdigit() or ch == ".":
+                cur += ch
+            elif cur:
+                digits.append(cur)
+                cur = ""
+        if cur:
+            digits.append(cur)
+        for raw in digits:
+            try:
+                v = float(raw)
+            except ValueError:
+                continue
+            if 100 < v < 20000:
+                inv_px = round(v, 2)
+                break
+
+    sub_pri = ((primary or {}).get("subwaves") or {}).get("primary") or {}
+    label_src, wave_marks, wave_marks_note = _pick_wave_mark_source(
+        primary,
+        scenarios,
+        pivots=pivots,
+        fine_pivots=fine_pivots,
+        last=last,
+        offset=offset,
+        n_closes=len(closes),
+    )
+    scenario_marks: dict[str, Any] = {}
+    for row in scenarios or []:
+        sid = str(row.get("id") or "")
+        if not sid or sid not in _WAVE_MARK_SPEC:
+            continue
+        marks: list[dict[str, Any]] = []
+        note = ""
+        for src in (pivots, fine_pivots):
+            marks, note = _build_wave_marks(
+                sid,
+                src,
+                last,
+                offset=offset,
+                n_closes=len(closes),
+                title=str(row.get("title") or ""),
+                wave=str(row.get("wave") or ""),
+            )
+            if len(marks) >= 2:
+                break
+        if marks:
+            scenario_marks[sid] = {
+                "marks": marks,
+                "note": note,
+                "title": row.get("title") or "",
+                "wave": row.get("wave") or "",
+            }
+    return {
+        "closes": closes,
+        "dates": dates,
+        "pivots": draw_pivots,
+        "fine_pivots": fine if draw_pivots is not fine else [],
+        "last": round(float(last), 2) if last else None,
+        "invalidation": inv_px,
+        "levels": levels_out[:4],
+        "primary_title": (primary or {}).get("title") or "",
+        "primary_wave": (primary or {}).get("wave") or "",
+        "subwave_label": sub_pri.get("label") or "",
+        "wave_marks": wave_marks,
+        "wave_marks_note": wave_marks_note,
+        "wave_marks_from": (label_src or {}).get("title") or "",
+        "wave_marks_id": (label_src or {}).get("id") or "",
+        "scenario_marks": scenario_marks,
+    }
+
+
+def _pick_wave_mark_source(
+    primary: dict[str, Any] | None,
+    scenarios: list[dict[str, Any]] | None,
+    *,
+    pivots: list[dict[str, Any]],
+    fine_pivots: list[dict[str, Any]],
+    last: float,
+    offset: int,
+    n_closes: int,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
+    """Choose which scenario's count to paint; skip triangle/complex when possible."""
+    soft = {"triangle", "complex"}
+    ordered: list[dict[str, Any]] = []
+    if primary:
+        ordered.append(primary)
+    for row in scenarios or []:
+        if row is primary:
+            continue
+        ordered.append(row)
+
+    # Prefer countable impulse/ABC first when Top1 is soft-structure.
+    if primary and str(primary.get("id") or "") in soft:
+        countable = [
+            r
+            for r in ordered
+            if str(r.get("id") or "") not in soft and str(r.get("id") or "") in _WAVE_MARK_SPEC
+        ]
+        ordered = countable + [r for r in ordered if r not in countable]
+
+    for row in ordered:
+        sid = str(row.get("id") or "")
+        if sid not in _WAVE_MARK_SPEC:
+            continue
+        for src in (pivots, fine_pivots):
+            marks, note = _build_wave_marks(
+                sid,
+                src,
+                last,
+                offset=offset,
+                n_closes=n_closes,
+                title=str(row.get("title") or ""),
+                wave=str(row.get("wave") or ""),
+            )
+            if len(marks) >= 2:
+                if primary and row is not primary:
+                    note = (
+                        f"Top1 是盘整难标号，图上数字改按「{row.get('title') or sid}」标注"
+                        f"（契合 {row.get('fit')}；仍是多解示意）。"
+                    )
+                return row, marks, note
+    if primary:
+        marks, note = _build_wave_marks(
+            str(primary.get("id") or ""),
+            pivots,
+            last,
+            offset=offset,
+            n_closes=n_closes,
+            title=str(primary.get("title") or ""),
+            wave=str(primary.get("wave") or ""),
+        )
+        return primary, marks, note
+    return None, [], "暂无浪序标注。"
+
+
+# Top1 id → how many waves to paint on the zigzag (end-of-wave labels).
+_WAVE_MARK_SPEC: dict[str, dict[str, Any]] = {
+    "imp_up_w1": {"mode": "impulse", "bull": True, "n": 1, "labels": ["1"]},
+    "imp_up_w2": {"mode": "impulse", "bull": True, "n": 2, "labels": ["1", "2"]},
+    "imp_up_w3": {"mode": "impulse", "bull": True, "n": 3, "labels": ["1", "2", "3"]},
+    "imp_up_w4": {"mode": "impulse", "bull": True, "n": 4, "labels": ["1", "2", "3", "4"]},
+    "imp_up_w5": {"mode": "impulse", "bull": True, "n": 5, "labels": ["1", "2", "3", "4", "5"]},
+    "imp_dn_w1": {"mode": "impulse", "bull": False, "n": 1, "labels": ["1"]},
+    "imp_dn_w2": {"mode": "impulse", "bull": False, "n": 2, "labels": ["1", "2"]},
+    "imp_dn_w3": {"mode": "impulse", "bull": False, "n": 3, "labels": ["1", "2", "3"]},
+    "imp_dn_w4": {"mode": "impulse", "bull": False, "n": 4, "labels": ["1", "2", "3", "4"]},
+    "imp_dn_w5": {"mode": "impulse", "bull": False, "n": 5, "labels": ["1", "2", "3", "4", "5"]},
+    "corr_a": {"mode": "abc", "n": 1, "labels": ["A"]},
+    "corr_b": {"mode": "abc", "n": 2, "labels": ["A", "B"]},
+    "corr_c": {"mode": "abc", "n": 3, "labels": ["A", "B", "C"]},
+    "triangle": {"mode": "triangle", "n": 5, "labels": ["a", "b", "c", "d", "e"]},
+}
+
+
+def _alternating_chain(
+    pivots: list[dict[str, Any]],
+    need: int,
+    start_kind: str,
+) -> list[dict[str, Any]]:
+    """Return the most recent alternating pivot chain of length ``need``.
+
+    Scans windows from the right so a completed wave ending a few pivots ago
+    still wins over a dangling newer swing that breaks the start kind.
+    """
+    if need < 2 or not pivots or len(pivots) < need:
+        # Still allow shorter fallbacks via caller using a smaller ``need``.
+        if need < 2 or not pivots:
+            return []
+    best: list[dict[str, Any]] = []
+    upper = len(pivots)
+    for end in range(upper - 1, need - 2, -1):
+        start = end - need + 1
+        if start < 0:
+            continue
+        chunk = pivots[start : end + 1]
+        if str(chunk[0].get("kind") or "") != start_kind:
+            continue
+        ok = True
+        expect = start_kind
+        for p in chunk:
+            if str(p.get("kind") or "") != expect:
+                ok = False
+                break
+            expect = "high" if expect == "low" else "low"
+        if ok:
+            return list(chunk)
+    return best
+
+
+def _build_wave_marks(
+    scenario_id: str,
+    pivots: list[dict[str, Any]],
+    last: float,
+    *,
+    offset: int,
+    n_closes: int,
+    title: str = "",
+    wave: str = "",
+) -> tuple[list[dict[str, Any]], str]:
+    """Map Top1 scenario onto zigzag pivots as readable wave-number marks.
+
+    Each mark sits at the end of a wave (pivot) or at the last bar when the
+    current wave is still in progress. Observe-only; not a unique Elliott count.
+    """
+    spec = _WAVE_MARK_SPEC.get(scenario_id)
+    if not spec:
+        return [], "当前主情景是复合/盘整，折线不强制标 1-2-3。"
+    n = int(spec["n"])
+    labels = list(spec["labels"])
+    mode = str(spec["mode"])
+    if mode == "impulse":
+        start_kind = "low" if spec.get("bull") else "high"
+    elif mode == "abc":
+        start_kind = "high"
+    else:
+        start_kind = "high"
+
+    # Prefer full chain (start + end of each wave). Else start + ends of prior
+    # waves only — pin the current label on the latest close.
+    full = _alternating_chain(pivots, n + 1, start_kind)
+    partial = _alternating_chain(pivots, n, start_kind) if not full else []
+    chain = full or partial
+    if len(chain) < 2:
+        return [], "枢轴不够，暂时标不出完整浪序；请看下方卡片标题。"
+
+    marks: list[dict[str, Any]] = []
+    for wi, lab in enumerate(labels):
+        end_pos = wi + 1  # index in chain
+        is_current = wi == n - 1
+        if end_pos < len(chain):
+            p = chain[end_pos]
+            try:
+                local_i = int(p["index"]) - offset
+                px = float(p["price"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if local_i < 0 or local_i >= n_closes:
+                continue
+            marks.append(
+                {
+                    "i": local_i,
+                    "price": round(px, 2),
+                    "label": lab,
+                    "current": is_current,
+                    "date": str(p.get("date") or "")[:10],
+                }
+            )
+        elif is_current and n_closes > 0:
+            marks.append(
+                {
+                    "i": n_closes - 1,
+                    "price": round(float(last), 2) if last else None,
+                    "label": lab,
+                    "current": True,
+                    "date": "",
+                    "in_progress": True,
+                }
+            )
+
+    if not marks:
+        return [], "未能把主情景对齐到折线拐点。"
+    head = title or wave or scenario_id
+    note = (
+        f"图上大号数字/字母 = 按 Top1「{head}」标的浪序"
+        f"（多解示意；加粗带圈的是「现在更像」的这一浪）。"
+    )
+    return marks, note
+
+
 def _zigzag_pivots(
     series: list[dict[str, Any]],
     *,
     min_move_pct: float,
 ) -> list[dict[str, Any]]:
-    """Build alternating high/low pivots with a minimum percentage swing."""
-    if len(series) < 5:
+    """Build alternating high/low pivots with a minimum percentage swing.
+
+    A pivot is confirmed only after an opposite retrace of ``min_move_pct``.
+    Extremes for the *next* hunt are taken strictly from bars after the last
+    pivot index, so the scanner cannot stall on the pivot bar itself.
+    """
+    n = len(series)
+    if n < 5:
         return []
+
     pivots: list[dict[str, Any]] = []
-    # Seed with first bar as tentative low/high anchor.
-    mode = "low"  # next confirmed extreme we hunt
-    anchor_i = 0
-    anchor_px = float(series[0]["low"])
-    extreme_i = 0
-    extreme_px = float(series[0]["high"])
+    hunting: str | None = None  # "high" or "low"
+    last_i = -1
+    last_px = 0.0
+    ext_high_i = -1
+    ext_high = 0.0
+    ext_low_i = -1
+    ext_low = 0.0
 
     def _push(kind: str, idx: int, px: float) -> None:
         if pivots and pivots[-1]["kind"] == kind:
-            # Keep the more extreme same-kind pivot.
             prev = pivots[-1]
             if kind == "high" and px >= float(prev["price"]):
                 pivots[-1] = _pivot(kind, idx, px, series)
             elif kind == "low" and px <= float(prev["price"]):
                 pivots[-1] = _pivot(kind, idx, px, series)
             return
+        if pivots and int(pivots[-1]["index"]) >= idx:
+            return
         pivots.append(_pivot(kind, idx, px, series))
+
+    first_low = float(series[0]["low"])
+    first_high = float(series[0]["high"])
+    boot_high_i, boot_high = 0, first_high
+    boot_low_i, boot_low = 0, first_low
 
     for i, bar in enumerate(series):
         hi = float(bar["high"])
         lo = float(bar["low"])
-        if mode == "low":
-            # Climbing toward a high pivot.
-            if hi >= extreme_px:
-                extreme_px = hi
-                extreme_i = i
-            retrace = (extreme_px - lo) / extreme_px * 100.0 if extreme_px > 0 else 0.0
-            if retrace >= min_move_pct and extreme_i > anchor_i:
-                _push("high", extreme_i, extreme_px)
-                mode = "high"
-                anchor_i = extreme_i
-                anchor_px = extreme_px
-                extreme_i = i
-                extreme_px = lo
-        else:
-            if lo <= extreme_px:
-                extreme_px = lo
-                extreme_i = i
-            bounce = (hi - extreme_px) / extreme_px * 100.0 if extreme_px > 0 else 0.0
-            if bounce >= min_move_pct and extreme_i > anchor_i:
-                _push("low", extreme_i, extreme_px)
-                mode = "low"
-                anchor_i = extreme_i
-                anchor_px = extreme_px
-                extreme_i = i
-                extreme_px = hi
 
-    # Close out the last extreme if it moved enough from prior pivot.
-    if pivots:
-        last_kind = pivots[-1]["kind"]
-        last_px = float(pivots[-1]["price"])
-        if last_kind == "high" and mode == "high":
-            move = (last_px - extreme_px) / last_px * 100.0 if last_px else 0.0
-            if move >= min_move_pct * 0.8:
-                _push("low", extreme_i, extreme_px)
-        elif last_kind == "low" and mode == "low":
-            move = (extreme_px - last_px) / last_px * 100.0 if last_px else 0.0
-            if move >= min_move_pct * 0.8:
-                _push("high", extreme_i, extreme_px)
+        if hunting is None:
+            if hi >= boot_high:
+                boot_high, boot_high_i = hi, i
+            if lo <= boot_low:
+                boot_low, boot_low_i = lo, i
+            up = (boot_high - first_low) / first_low * 100.0 if first_low > 0 else 0.0
+            dn = (first_high - boot_low) / first_high * 100.0 if first_high > 0 else 0.0
+            if up >= min_move_pct and boot_high_i > 0:
+                _push("low", 0, first_low)
+                last_i, last_px = 0, first_low
+                hunting = "high"
+                ext_high_i, ext_high = -1, 0.0
+            elif dn >= min_move_pct and boot_low_i > 0:
+                _push("high", 0, first_high)
+                last_i, last_px = 0, first_high
+                hunting = "low"
+                ext_low_i, ext_low = -1, 0.0
+            continue
+
+        # Only bars AFTER the last confirmed pivot feed the next extreme.
+        if i <= last_i:
+            continue
+        if hunting == "high":
+            if ext_high_i < 0 or hi >= ext_high:
+                ext_high, ext_high_i = hi, i
+            retrace = (ext_high - lo) / ext_high * 100.0 if ext_high > 0 else 0.0
+            if retrace >= min_move_pct and ext_high_i > last_i:
+                _push("high", ext_high_i, ext_high)
+                last_i, last_px = ext_high_i, ext_high
+                hunting = "low"
+                if i > ext_high_i:
+                    ext_low_i, ext_low = i, lo
+                else:
+                    ext_low_i, ext_low = -1, 0.0
+        else:
+            if ext_low_i < 0 or lo <= ext_low:
+                ext_low, ext_low_i = lo, i
+            bounce = (hi - ext_low) / ext_low * 100.0 if ext_low > 0 else 0.0
+            if bounce >= min_move_pct and ext_low_i > last_i:
+                _push("low", ext_low_i, ext_low)
+                last_i, last_px = ext_low_i, ext_low
+                hunting = "high"
+                if i > ext_low_i:
+                    ext_high_i, ext_high = i, hi
+                else:
+                    ext_high_i, ext_high = -1, 0.0
+
+    if hunting == "high" and ext_high_i > last_i and last_px > 0:
+        move = (ext_high - last_px) / last_px * 100.0
+        if move >= min_move_pct * 0.8:
+            _push("high", ext_high_i, ext_high)
+    elif hunting == "low" and ext_low_i > last_i and last_px > 0:
+        move = (last_px - ext_low) / last_px * 100.0
+        if move >= min_move_pct * 0.8:
+            _push("low", ext_low_i, ext_low)
     return pivots
 
 

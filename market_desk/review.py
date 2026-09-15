@@ -1026,6 +1026,43 @@ def build_desk_source_hit_rates(
     return out
 
 
+def build_theme_hit_rates(
+    rows: list[dict[str, Any]],
+    *,
+    hit_mode: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Aggregate buy hit-rate by signal mainline / theme label."""
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if not is_buy_signal(row.get("signal_type")):
+            continue
+        if int(row.get("skipped") or 0):
+            continue
+        if mode == "traded" and not int(row.get("traded") or 0):
+            continue
+        if not row.get("outcome_label"):
+            continue
+        theme = str(row.get("mainline") or "").strip() or "未标主线"
+        buckets.setdefault(theme, []).append(row)
+    out: list[dict[str, Any]] = []
+    for theme, items in sorted(buckets.items(), key=lambda x: (-len(x[1]), x[0])):
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
+        out.append(
+            {
+                "theme": theme,
+                "label": theme,
+                "scored_n": len(items),
+                "hit_n": hit,
+                "hit_rate": round(100.0 * hit / len(items), 1),
+            }
+        )
+        if len(out) >= max(3, int(limit or 8)):
+            break
+    return out
+
+
 def build_phase_hit_rates(
     rows: list[dict[str, Any]],
     *,
@@ -2130,6 +2167,7 @@ def build_review_payload(
     summary["kind_hits"] = build_kind_hit_rates(global_rows)
     summary["phase_kind_hits"] = build_phase_kind_hit_rates(global_rows)
     summary["desk_hits"] = build_desk_source_hit_rates(global_rows)
+    summary["theme_hits"] = build_theme_hit_rates(global_rows)
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
