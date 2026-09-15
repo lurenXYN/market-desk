@@ -413,7 +413,12 @@ def attach_board_affinity(
 
 
 def theme_stats_from_boards(rows: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
-    """Aggregate board_daily-like rows into theme → strength stats."""
+    """Aggregate board_daily-like rows into theme → strength stats.
+
+    Sibling boards in one theme (e.g. 煤炭 / 动力煤) often share the same
+    limit-up stocks. Using ``max(zt_n)`` instead of a sum avoids double-counting
+    those stocks when grading fade / persist.
+    """
     out: dict[str, dict[str, Any]] = {}
     for row in rows or []:
         name = str(row.get("name") or "").strip()
@@ -434,11 +439,14 @@ def theme_stats_from_boards(rows: list[dict[str, Any]] | None) -> dict[str, dict
                 "pct": pct,
                 "status": status,
                 "names": [name],
+                "board_n": 1,
             }
             continue
-        cur["zt_n"] = int(cur.get("zt_n") or 0) + zt
+        # Do not sum zt_n across sibling boards — overlapping members inflate.
+        cur["zt_n"] = max(int(cur.get("zt_n") or 0), zt)
         cur["pct"] = max(float(cur.get("pct") or 0), pct)
         cur["names"] = list(dict.fromkeys(list(cur.get("names") or []) + [name]))
+        cur["board_n"] = int(cur.get("board_n") or 0) + 1
         if status == "退潮" or (status and not cur.get("status")):
             cur["status"] = status
         elif status == "尖峰禁追" and cur.get("status") not in ("退潮",):

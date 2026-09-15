@@ -830,9 +830,9 @@ def trend_override(
 
 @app.post("/api/theme-reputation")
 def theme_reputation_adjust(
-    body: ThemeRepIn, user: dict = Depends(current_member_required)
+    body: ThemeRepIn, user: dict = Depends(current_admin_required)
 ) -> dict:
-    """Set, nudge, or clear a manual theme reputation adjustment."""
+    """Set, nudge, or clear a manual theme reputation adjustment (admin only)."""
     del user
     theme = (body.theme_key or "").strip()
     if not theme:

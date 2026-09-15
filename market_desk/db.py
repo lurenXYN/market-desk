@@ -1855,6 +1855,34 @@ def load_positions(*, user_id: int | None = None) -> list[dict[str, Any]]:
     return [_position_item(row) for row in rows]
 
 
+def load_all_book_codes() -> list[str]:
+    """Return distinct codes from every user's open/closed positions and watchlist.
+
+    Used by the shared engine refresh to fetch marks without loading any
+    personal rows into the public snapshot.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT code FROM (
+              SELECT code FROM positions
+              WHERE IFNULL(qty, 0) > 0 OR closed_date IS NOT NULL
+              UNION
+              SELECT code FROM watchlist
+            )
+            WHERE code IS NOT NULL AND TRIM(code) != ''
+            """
+        ).fetchall()
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        code = str(row["code"] or "").strip().zfill(6)
+        if len(code) != 6 or code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+    return out
+
 
 def position_buy_day(row: dict[str, Any] | None) -> str:
     """Return YYYY-MM-DD of the latest buy for a position row."""

@@ -28,14 +28,12 @@ from market_desk.backup_store import write_auto_backup
 from market_desk.settings import setting
 from market_desk.db import (
     init_db,
+    load_all_book_codes,
     load_auction,
     load_board_hist_map,
     load_daily,
     load_favorite_boards,
-    load_fund_flow_for_dates,
-    list_fund_flow_dates,
     load_mainline_switches,
-    load_positions,
     load_session_segments,
     load_signals_for_date,
     load_trend_overrides,
@@ -45,8 +43,6 @@ from market_desk.db import (
     save_auction,
     save_board_daily,
     save_daily,
-    save_fund_flow_daily,
-    touch_position_peaks,
     try_add_mainline_switch,
     upsert_session_segment,
 )
@@ -131,7 +127,6 @@ from market_desk.verdict import (
     build_sell_advice,
     build_verdict,
     build_watch_trial_recommend,
-    decorate_positions,
     finalize_recommend_buy_ux,
     mark_pullback_entries,
     position_summary,
@@ -174,6 +169,8 @@ class DeskEngine:
         self._review_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._fund_flow_full_at: float = 0.0
         self._fund_flow_lock = asyncio.Lock()
+        # Live marks for all users' position / watchlist codes (not in public snap).
+        self._book_quotes: dict[str, dict[str, Any]] = {}
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -201,6 +198,7 @@ class DeskEngine:
         layered = attach_personal_layer(
             self.snapshot,
             int(user_id),
+            book_quotes=self._book_quotes,
             trends_for=self._cached_trends_for,
             decorate_watchlist=lambda rows, quotes, verdict: _decorate_watchlist(
                 rows, quotes, verdict=verdict
@@ -252,6 +250,7 @@ class DeskEngine:
         layered = attach_personal_layer(
             base,
             int(user_id),
+            book_quotes=self._book_quotes,
             trends_for=self._cached_trends_for,
             decorate_watchlist=lambda rows, quotes, verdict: _decorate_watchlist(
                 rows, quotes, verdict=verdict
@@ -299,7 +298,8 @@ class DeskEngine:
         if user_id is None:
             self.snapshot["watchlist"] = []
             return []
-        qmap = dict(quotes or {})
+        qmap = dict(self._book_quotes or {})
+        qmap.update(quotes or {})
         rows = _decorate_watchlist(
             load_watchlist(user_id=int(user_id)),
             qmap,
@@ -381,22 +381,6 @@ class DeskEngine:
                 etfs = etfs or []
                 indices = indices or []
                 yesterday_zt = yesterday_zt or []
-                try:
-                    save_fund_flow_daily(
-                        trade_date_dash,
-                        list(flow_ind_d or []) + list(flow_con_d or []),
-                    )
-                except Exception:
-                    log.exception("save fund_flow_daily failed")
-                stored_dates = list_fund_flow_dates(trade_date_dash, limit=40)
-                if trade_date_dash not in stored_dates and (flow_ind_d or flow_con_d):
-                    stored_dates = [trade_date_dash] + stored_dates
-                stored_rows = load_fund_flow_for_dates(stored_dates)
-                if trade_date_dash not in {str(r.get("trade_date")) for r in stored_rows}:
-                    for r in list(flow_ind_d or []) + list(flow_con_d or []):
-                        row = dict(r)
-                        row["trade_date"] = trade_date_dash
-                        stored_rows.append(row)
                 prev_flow = (self.snapshot or {}).get("fund_flow") or {}
                 prev_periods = (prev_flow.get("api_raw") or {}) if isinstance(prev_flow, dict) else {}
                 fund_flow = build_fund_flow_board(
@@ -409,8 +393,6 @@ class DeskEngine:
                         "month": (prev_periods.get("month") or {"industry": [], "concept": []}),
                     },
                     trade_date=trade_date_dash,
-                    stored_dates=stored_dates,
-                    stored_rows=stored_rows,
                 )
                 fund_flow["api_raw"] = {
                     "day": {
@@ -448,11 +430,8 @@ class DeskEngine:
                 fav_cards = await self._favorite_cards(client, boards, fav_rows, ctx)
                 _mark_favorite_flags(hot_cards + pin_cards + ice_cards + fav_cards, fav_rows)
                 purge_stale_closed_positions(trade_date_dash)
-                pos_rows = load_positions()
-                wl_rows = load_watchlist()
-                need_codes = [str(r.get("code") or "") for r in pos_rows] + [
-                    str(r.get("code") or "") for r in wl_rows
-                ]
+                # Multi-user: fetch marks for every book's codes; never load rows here.
+                need_codes = load_all_book_codes()
                 pos_quote_map = await _safe(
                     fetch_quotes,
                     client,
@@ -481,23 +460,17 @@ class DeskEngine:
             save_board_daily(trade_date_dash, hot_cards + pin_cards + ice_cards + fav_cards)
             if not isinstance(pos_quote_map, dict):
                 pos_quote_map = {}
-            positions = decorate_positions(
-                pos_rows,
-                pos_quote_map,
-                trade_date=trade_date_dash,
-                boards=hot_cards + pin_cards + fav_cards,
-            )
-            peaks = {
-                int(r["id"]): float(r["peak_price"])
-                for r in positions
-                if r.get("peak_dirty") and r.get("id") and r.get("peak_price")
-            }
-            if peaks:
-                try:
-                    touch_position_peaks(peaks)
-                except Exception:
-                    log.exception("touch position peaks failed")
-            watchlist = _decorate_watchlist(wl_rows, pos_quote_map)
+            # Normalize keys; keep marks on the engine for snapshot_for_user.
+            book_quotes: dict[str, dict[str, Any]] = {}
+            for raw_code, q in pos_quote_map.items():
+                code = normalize_code(raw_code) or str(raw_code or "").zfill(6)
+                if code and isinstance(q, dict):
+                    book_quotes[code] = dict(q)
+                    book_quotes[code]["code"] = code
+            self._book_quotes = book_quotes
+            # Shared snap stays empty; personal layer decorates per user.
+            positions: list[dict[str, Any]] = []
+            watchlist: list[dict[str, Any]] = []
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
             history_prev = load_daily(20)
@@ -552,13 +525,9 @@ class DeskEngine:
                 ),
             )
             prev = self.snapshot if self.snapshot.get("ok") else None
-            # Day-once daily closes: carrier ETFs + open positions before mainline pick.
+            # Day-once daily closes: carrier ETFs + all book codes before mainline pick.
             etf_codes = _board_etf_codes(hot_cards + pin_cards + fav_cards)
-            pos_codes = [
-                normalize_code(r.get("code"))
-                for r in positions
-                if normalize_code(r.get("code"))
-            ]
+            pos_codes = [c for c in (self._book_quotes or {}) if c]
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 await self._resolve_daily_closes(
                     client, list(dict.fromkeys(etf_codes + pos_codes)), trade_date_dash
@@ -1012,17 +981,6 @@ class DeskEngine:
                     _safe(fetch_board_fund_flow, client, "industry", 80, "month", errors=errors, label="flow-hy-m"),
                     _safe(fetch_board_fund_flow, client, "concept", 80, "month", errors=errors, label="flow-gn-m"),
                 )
-            try:
-                save_fund_flow_daily(
-                    trade_date_dash,
-                    list(flow_ind_d or []) + list(flow_con_d or []),
-                )
-            except Exception:
-                log.exception("save fund_flow_daily failed")
-            stored_dates = list_fund_flow_dates(trade_date_dash, limit=40)
-            if trade_date_dash not in stored_dates and (flow_ind_d or flow_con_d):
-                stored_dates = [trade_date_dash] + stored_dates
-            stored_rows = load_fund_flow_for_dates(stored_dates)
             api_raw = {
                 "day": {
                     "industry": list(flow_ind_d or []),
@@ -1040,8 +998,6 @@ class DeskEngine:
             fund_flow = build_fund_flow_board(
                 api_raw,
                 trade_date=trade_date_dash,
-                stored_dates=stored_dates,
-                stored_rows=stored_rows,
             )
             fund_flow["api_raw"] = api_raw
             fund_flow["full_ready"] = True

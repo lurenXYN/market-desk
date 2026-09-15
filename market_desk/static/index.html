@@ -2363,7 +2363,6 @@
         <div class="fund-grid" id="fundBody">
           <div class="meta">等待资金流…</div>
         </div>
-        <div id="fundDiff" style="margin-top:14px"></div>
       </section>
     </section>
 
@@ -3294,8 +3293,13 @@
           if (settle.fades != null) bits.push(`熄火 ${settle.fades}`);
           if (settle.persists != null) bits.push(`续热 ${settle.persists}`);
           if (settle.mainline) bits.push(`昨主线 ${settle.mainline}`);
-          if (themeMemNote) themeMemNote.textContent = (bits.join(" · ") || "按主题记忆软调主线分") + " · 可手动 ±1 / 清零";
+          if (themeMemNote) {
+            const canAdj = !!(authUser && authUser.role === "admin");
+            themeMemNote.textContent = (bits.join(" · ") || "按主题记忆软调主线分")
+              + (canAdj ? " · admin 可手动 ±1 / 清零" : " · 手调仅管理员");
+          }
           setModStamp("themeMemStamp", d.updated_at, { label: "刷新" });
+          const canAdj = !!(authUser && authUser.role === "admin");
           themeMemBody.innerHTML = reps.slice(0, 8).map((r) => {
             const adj = Number(r.score_adj) || 0;
             const auto = Number(r.auto_adj != null ? r.auto_adj : adj) || 0;
@@ -3307,15 +3311,18 @@
             const manTxt = man === 0 ? "" : `<span class="man">手调 ${man > 0 ? "+" : ""}${man}</span>`;
             const tradeTxt = trade === 0 ? "" : `<span class="man">成交 ${trade > 0 ? "+" : ""}${trade}</span>`;
             const key = String(r.theme_key || "").replace(/"/g, "&quot;");
+            const adjRow = canAdj
+              ? `<div class="adj-row">
+                <button type="button" class="adj-btn" data-theme-adj="-1" title="手动 −1">−1</button>
+                <button type="button" class="adj-btn" data-theme-adj="1" title="手动 +1">+1</button>
+                <button type="button" class="adj-btn clear" data-theme-clear="1" title="清除手调" ${man === 0 ? "disabled" : ""}>清手调</button>
+              </div>`
+              : "";
             return `<div class="theme-mem-item ${cls}" data-theme="${key}">
               <div class="name">${r.theme_key || "—"}</div>
               <div class="lab">${r.label || "中性"} · ${adjTxt}</div>
               <div class="meta">自动 ${autoTxt} · fade ${r.fade_n ?? 0} / persist ${r.persist_n ?? 0}${manTxt ? " · " + manTxt : ""}${tradeTxt ? " · " + tradeTxt : ""}</div>
-              <div class="adj-row">
-                <button type="button" class="adj-btn" data-theme-adj="-1" title="手动 −1">−1</button>
-                <button type="button" class="adj-btn" data-theme-adj="1" title="手动 +1">+1</button>
-                <button type="button" class="adj-btn clear" data-theme-clear="1" title="清除手调" ${man === 0 ? "disabled" : ""}>清手调</button>
-              </div>
+              ${adjRow}
             </div>`;
           }).join("");
         }
@@ -4020,11 +4027,9 @@
       const sum = document.getElementById("fundSum");
       const statsEl = document.getElementById("fundStats");
       const spot = document.getElementById("fundSpot");
-      const diffEl = document.getElementById("fundDiff");
       const body = document.getElementById("fundBody");
       if (!note || !sum || !spot || !body) return;
-      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "")
-        + (box.day_skew_note ? (" " + box.day_skew_note) : "");
+      note.textContent = (box.disclaimer || "") + (box.note ? (" " + box.note) : "");
       const stampKind = box.full_ready
         ? "全日"
         : (box.refreshed_kind === "day" ? "当日" : "");
@@ -4040,30 +4045,20 @@
       if (!meta.some((m) => m.id === fundPeriod)) fundPeriod = box.default_period || "em_day";
       if (chips) {
         chips.innerHTML = meta.map((m) => {
-          const src = m.source === "local" ? "local" : "api";
-          const tag = m.source === "local" ? "本地" : "东财";
-          return `<button type="button" class="g-chip${m.id === fundPeriod ? " on" : ""}" data-fund-period="${m.id}" title="${m.hint || ""}">${m.label}<span class="fund-src ${src}">${tag}</span></button>`;
+          return `<button type="button" class="g-chip${m.id === fundPeriod ? " on" : ""}" data-fund-period="${m.id}" title="${m.hint || ""}">${m.label}</button>`;
         }).join("");
       }
       const periodBox = ((box.periods || {})[fundPeriod]) || box;
       const tot = periodBox.totals || {};
       const st = periodBox.stats || {};
       const cmp = box.compare || {};
-      const storage = box.storage || {};
-      const srcTag = periodBox.source === "local"
-        ? `<span class="fund-src local">本地累加</span>`
-        : `<span class="fund-src api">东财接口</span>`;
       sum.innerHTML =
-        `<span>周期 <b>${periodBox.label || fundPeriod}</b> ${srcTag}</span>`
+        `<span>周期 <b>${periodBox.label || fundPeriod}</b></span>`
         + `<span class="meta">${periodBox.hint || ""}</span>`
-        + (periodBox.range ? `<span>区间 <b>${periodBox.range}</b>（${periodBox.day_n ?? "—"} 日）</span>` : "")
         + `<span>行业 <b>${tot.industry_n ?? "—"}</b></span>`
         + `<span>概念 <b>${tot.concept_n ?? "—"}</b></span>`
         + `<span>流入前部 <b class="up">${tot.industry_in_yi ?? "—"}</b> 亿</span>`
-        + `<span>流出尾部 <b class="down">${tot.industry_out_yi ?? "—"}</b> 亿</span>`
-        + `<span class="meta">本地库 ${storage.stored_n ?? 0} 日`
-        + (storage.stored_from ? `（${storage.stored_from} → ${storage.stored_to}）` : "")
-        + `</span>`;
+        + `<span>流出尾部 <b class="down">${tot.industry_out_yi ?? "—"}</b> 亿</span>`;
       if (statsEl) {
         statsEl.innerHTML =
           `<span>净额(前+尾) <b class="${(st.industry_net_yi || 0) >= 0 ? "up" : "down"}">${st.industry_net_yi ?? "—"}</b> 亿</span>`
@@ -4072,35 +4067,6 @@
           + `<span>Top5 占正流入 <b>${st.top5_share_pct ?? "—"}%</b></span>`
           + `<span>大资金 行业${st.big_money_industry_n ?? "—"} / 概念${st.big_money_concept_n ?? "—"}</span>`
           + `<span class="meta">${cmp.note || ""}</span>`;
-      }
-      if (diffEl) {
-        const diffs = box.diffs || [];
-        diffEl.innerHTML = diffs.length
-          ? diffs.map((df) => {
-            const rows = (df.rows || []).slice(0, 12);
-            const tr = rows.map((r) => {
-              const dlt = r.delta_yi;
-              const dCls = dlt == null ? "" : (dlt >= 0 ? "up" : "down");
-              return `<tr>
-                <td>${r.name || ""}${r.only ? ` <span class="meta">${r.only}</span>` : ""}</td>
-                <td class="${(Number(r.api_yi) || 0) >= 0 ? "up" : "down"}">${r.api_yi ?? "—"}</td>
-                <td class="${(Number(r.local_yi) || 0) >= 0 ? "up" : "down"}">${r.local_yi ?? "—"}</td>
-                <td class="${dCls}">${dlt == null ? "—" : ((dlt > 0 ? "+" : "") + dlt)}</td>
-              </tr>`;
-            }).join("") || `<tr><td colspan="4" class="meta">本地样本不足，差异暂空（多跑几日会有）</td></tr>`;
-            return `<div class="fund-diff">
-              <h3>${df.title || ""} <button type="button" class="q" data-term="大资金流向">?</button></h3>
-              <div class="meta" style="margin-bottom:6px">${df.note || ""}
-                · 东财Top5：${(df.api_top5 || []).join("、") || "—"}
-                · 本地Top5：${(df.local_top5 || []).join("、") || "—"}
-              </div>
-              <table class="fund-table">
-                <thead><tr><th>行业</th><th>东财亿</th><th>本地亿</th><th>本地−东财</th></tr></thead>
-                <tbody>${tr}</tbody>
-              </table>
-            </div>`;
-          }).join("")
-          : "";
       }
       const lights = periodBox.spotlight || [];
       spot.innerHTML = lights.length
@@ -4117,7 +4083,7 @@
         const list = rows || [];
         if (!list.length) {
           return `<section class="card mid" style="margin:0"><h2 style="text-transform:none">${title}</h2>
-            <div class="meta">${periodBox.source === "local" && !(periodBox.day_n > 0) ? "本地尚无该窗口样本" : "暂无数据"}</div></section>`;
+            <div class="meta">暂无数据</div></section>`;
         }
         const head = `<tr><th>#</th><th>板块</th><th>涨跌%</th><th>主力亿</th><th>超大亿</th><th>主力%</th><th>龙头</th></tr>`;
         const bodyRows = list.map((r, i) => {
@@ -5247,6 +5213,13 @@
         }
         if (d.glossary) GLOSSARY = d.glossary;
         if (d.auth_user !== undefined) paintAuthUser(d.auth_user);
+        // Always replace personal books when the slice carries them (keep marks fresh).
+        if (Array.isArray(d.positions)) lastData.positions = d.positions;
+        if (Array.isArray(d.watchlist)) lastData.watchlist = d.watchlist;
+        if (Array.isArray(d.favorite_boards)) lastData.favorite_boards = d.favorite_boards;
+        if (d.position_summary) lastData.position_summary = d.position_summary;
+        if (d.risk_overview) lastData.risk_overview = d.risk_overview;
+        if (d.sell_advice) lastData.sell_advice = d.sell_advice;
         // Guest / locked: never keep stale personal rows.
         if (!d.auth_user || d.personal_locked) {
           lastData.positions = Array.isArray(d.positions) ? d.positions : [];
@@ -5681,6 +5654,10 @@
     document.getElementById("themeMemBody")?.addEventListener("click", async (ev) => {
       const btn = ev.target.closest("[data-theme-adj], [data-theme-clear]");
       if (!btn || btn.disabled) return;
+      if (!(authUser && authUser.role === "admin")) {
+        alert("题材手调仅管理员可用");
+        return;
+      }
       const card = btn.closest("[data-theme]");
       const theme = card && card.getAttribute("data-theme");
       if (!theme) return;

@@ -43,12 +43,14 @@ def attach_personal_layer(
     snapshot: dict[str, Any],
     user_id: int,
     *,
+    book_quotes: dict[str, dict[str, Any]] | None = None,
     trends_for=None,
     decorate_watchlist=None,
     decorate_favorites=None,
 ) -> dict[str, Any]:
     """Return a deep-copied snapshot with one user's positions / watch / risk.
 
+    ``book_quotes`` is the shared engine mark map (all users' book codes).
     ``trends_for``, ``decorate_watchlist``, ``decorate_favorites`` are callables
     provided by DeskEngine to reuse its caches / helpers.
     """
@@ -60,16 +62,32 @@ def attach_personal_layer(
         if len(trade_date) == 8
         else trade_date[:10]
     )
-    quotes = _quote_map_from_rows(list(out.get("positions") or []))
+    quotes: dict[str, dict[str, Any]] = {}
+    # Shared refresh marks first (authoritative live last/pct/prev).
+    for code, q in (book_quotes or {}).items():
+        c = normalize_code(code) or str(code or "").zfill(6)
+        if not c or not isinstance(q, dict):
+            continue
+        quotes[c] = dict(q)
+        quotes[c]["code"] = c
+    # Fallback: any leftover decorated rows on the snapshot (usually empty).
+    for code, q in _quote_map_from_rows(list(out.get("positions") or [])).items():
+        if code not in quotes or quotes[code].get("price") is None:
+            quotes[code] = q
     # Prefer live quotes already on market cards when available.
     for pool in ("etfs", "hot_boards", "pin_boards"):
         for row in out.get(pool) or []:
             code = normalize_code(row.get("code") or row.get("leader_code"))
-            if code and code not in quotes and row.get("price") is not None:
+            if not code:
+                continue
+            price = row.get("price") if row.get("price") is not None else row.get("last")
+            if price is None:
+                continue
+            if code not in quotes or quotes[code].get("price") is None:
                 quotes[code] = {
                     "code": code,
                     "name": row.get("name") or row.get("leader_name") or "",
-                    "price": row.get("price") or row.get("last"),
+                    "price": price,
                     "pct": row.get("pct"),
                     "high": row.get("high"),
                     "low": row.get("low"),
