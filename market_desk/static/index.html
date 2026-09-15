@@ -1581,6 +1581,56 @@
     }
     .pos-sum .day-primary b { font-size: 22px; font-weight: 800; }
     .pos-sum .muted-sec { color: var(--muted); font-size: 13px; }
+    .pos-lhb {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(148, 163, 184, 0.25);
+    }
+    .pos-lhb .hd {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-bottom: 6px; font-size: 14px;
+    }
+    .pos-lhb .hd b { font-size: 15px; }
+    .pos-lhb-card {
+      margin: 10px 0; padding: 10px 12px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.35);
+    }
+    .pos-lhb-card .title {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+      margin-bottom: 4px;
+    }
+    .pos-lhb-card .title b { font-size: 14px; }
+    .pos-lhb-card .hints { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+    .pos-lhb-seats {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    }
+    @media (max-width: 720px) {
+      .pos-lhb-seats { grid-template-columns: 1fr; }
+    }
+    .pos-lhb-seats h4 {
+      margin: 0 0 4px; font-size: 12px; color: var(--muted); font-weight: 600;
+    }
+    .pos-lhb-seats ul {
+      list-style: none; margin: 0; padding: 0; font-size: 12px;
+    }
+    .pos-lhb-seats li {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+      padding: 3px 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.15);
+    }
+    .pos-lhb-seats .seat-name { flex: 1 1 140px; min-width: 0; }
+    .lhb-tag {
+      display: inline-block; font-size: 11px; padding: 0 6px;
+      border-radius: 4px; border: 1px solid rgba(148, 163, 184, 0.35);
+      color: #cbd5e1; white-space: nowrap;
+    }
+    .lhb-tag.institution { border-color: #38bdf8; color: #7dd3fc; }
+    .lhb-tag.northbound { border-color: #a78bfa; color: #c4b5fd; }
+    .lhb-tag.smash { border-color: #f87171; color: #fca5a5; }
+    .lhb-tag.quant { border-color: #34d399; color: #6ee7b7; }
+    .lhb-tag.hot_money { border-color: #fbbf24; color: #fde68a; }
+    .lhb-tag.prop, .lhb-tag.product { border-color: #94a3b8; color: #cbd5e1; }
     tr.pos-closed { opacity: 0.72; }
     tr.pos-closed td:first-child { color: var(--muted); }
     .pos-del {
@@ -2406,6 +2456,16 @@
           </thead>
           <tbody id="posBody"></tbody>
         </table>
+        <div class="pos-lhb" id="posLhb">
+          <div class="hd">
+            <b>持仓龙虎榜</b>
+            <button type="button" class="q" data-term="持仓龙虎榜">?</button>
+            <button type="button" class="copy-btn" id="posLhbRefresh" title="重新拉取">刷新</button>
+            <span class="meta" id="posLhbMeta"></span>
+          </div>
+          <p class="meta" id="posLhbNote">仅对照账上持仓；席位风格为网络常见口碑标签。</p>
+          <div id="posLhbBody"><div class="meta">打开仓位页后加载…</div></div>
+        </div>
       </section>
     </section>
 
@@ -3744,6 +3804,7 @@
           <td class="m-actions">${actions}</td>
         </tr>`;
       }).join("") || `<tr><td colspan="13" class="meta">暂无仓位，先记账</td></tr>`;
+      if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
       paintAuctionStrategy(d);
       paintEmotionWave(d);
       paintSeasonality(d);
@@ -5025,6 +5086,102 @@
         det.event ? `<li class="warn">${det.event}</li>` : "",
       ].filter(Boolean).join("");
     }
+    let _posLhbKey = "";
+    let _posLhbLoading = false;
+    function _fmtLhbAmt(yi, wan) {
+      if (yi != null && Math.abs(Number(yi)) >= 0.01) return Number(yi).toFixed(2) + "亿";
+      if (wan != null) return Number(wan).toFixed(0) + "万";
+      return "—";
+    }
+    function _seatLi(s) {
+      const tag = s.style_label
+        ? `<span class="lhb-tag ${s.style || ""}" title="${(s.style_note || "").replace(/"/g, "&quot;")}">${s.style_label}</span>`
+        : "";
+      const sideAmt = s.side === "buy"
+        ? _fmtLhbAmt(s.buy_yi, s.buy_wan)
+        : _fmtLhbAmt(s.sell_yi, s.sell_wan);
+      const short = (s.name || "").replace(/证券股份有限公司|股份有限公司|有限责任公司|证券营业部/g, "");
+      return `<li>${tag}<span class="seat-name" title="${s.name || ""}">${short || s.name || "—"}</span>`
+        + `<span class="meta">${sideAmt}</span></li>`;
+    }
+    function paintPosLhb(payload) {
+      const body = document.getElementById("posLhbBody");
+      const meta = document.getElementById("posLhbMeta");
+      const note = document.getElementById("posLhbNote");
+      if (!body) return;
+      if (meta) meta.textContent = payload.note || "";
+      if (note) note.textContent = payload.disclaimer || "席位风格为网络常见口碑标签，非官方分类。";
+      const items = payload.items || [];
+      if (!items.length) {
+        body.innerHTML = `<div class="meta">${payload.note || "暂无持仓龙虎数据"}</div>`;
+        return;
+      }
+      body.innerHTML = items.map((it) => {
+        if (!it.on_list) {
+          return `<div class="pos-lhb-card"><div class="title"><b>${it.name || ""}</b>`
+            + `<span class="meta">${it.code || ""}</span></div>`
+            + `<div class="meta">${it.note || "近端未上榜"}</div></div>`;
+        }
+        const netCls = (Number(it.net_yi) || 0) >= 0 ? "up" : "down";
+        const chg = it.change_pct == null ? "" : ` · ${fmtPct(it.change_pct)}`;
+        const hints = (it.summary && it.summary.hints || []).join(" · ");
+        const styleLine = (it.summary && it.summary.style_line) || "—";
+        const buys = (it.buys || []).map(_seatLi).join("") || `<li class="meta">无买入席位</li>`;
+        const sells = (it.sells || []).map(_seatLi).join("") || `<li class="meta">无卖出席位</li>`;
+        return `<div class="pos-lhb-card">`
+          + `<div class="title"><b>${it.name || ""}</b><span class="meta">${it.code || ""}</span>`
+          + `<span class="meta">${it.trade_date || ""}</span>`
+          + `<span class="${netCls}">净买 ${it.net_yi == null ? "—" : it.net_yi + "亿"}</span>${chg}</div>`
+          + `<div class="meta">${it.reason || "—"} · 风格 ${styleLine}</div>`
+          + (hints ? `<div class="hints">${hints}</div>` : "")
+          + `<div class="pos-lhb-seats"><div><h4>买入席位</h4><ul>${buys}</ul></div>`
+          + `<div><h4>卖出席位</h4><ul>${sells}</ul></div></div></div>`;
+      }).join("");
+    }
+    async function ensurePosLhb(force) {
+      const box = document.getElementById("posLhb");
+      if (!box) return;
+      if (typeof canPersonal === "function" && !canPersonal()) {
+        box.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      const openCodes = (lastData && lastData.positions || [])
+        .filter((p) => Number(p.qty || 0) > 0)
+        .map((p) => String(p.code || "").padStart(6, "0"))
+        .sort()
+        .join(",");
+      if (!force && openCodes === _posLhbKey && document.getElementById("posLhbBody")?.dataset.ready === "1") {
+        return;
+      }
+      if (_posLhbLoading) return;
+      _posLhbLoading = true;
+      const body = document.getElementById("posLhbBody");
+      if (body && force) body.innerHTML = `<div class="meta">拉取龙虎榜…</div>`;
+      try {
+        const r = await fetch("/api/positions/lhb" + (force ? "?force=1" : ""), {
+          credentials: "same-origin",
+        });
+        if (r.status === 401 || r.status === 403) {
+          box.hidden = true;
+          return;
+        }
+        const d = await r.json().catch(() => ({}));
+        if (!d.ok) {
+          if (body) body.innerHTML = `<div class="meta">${d.detail || "龙虎榜暂不可用"}</div>`;
+          return;
+        }
+        _posLhbKey = openCodes;
+        paintPosLhb(d);
+        if (body) body.dataset.ready = "1";
+      } catch (e) {
+        if (body) body.innerHTML = `<div class="meta">龙虎榜拉取失败</div>`;
+      } finally {
+        _posLhbLoading = false;
+      }
+    }
+    document.getElementById("posLhbRefresh")?.addEventListener("click", () => ensurePosLhb(true));
+
     function applyMain(tab) {
       let next = tab || "desk";
       if (next === "pos" && typeof canPersonal === "function" && !canPersonal()) {
@@ -5041,6 +5198,7 @@
       });
       if (currentMain === "review") loadReview(false);
       if (currentMain === "funds") ensureFundFlowFull();
+      if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
       try { localStorage.setItem("desk-main-tab", currentMain); } catch (e) {}
       // Reschedule poll cadence for the active tab.
       if (lastData) scheduleTick(!!lastData.live);
@@ -5079,7 +5237,14 @@
           document.getElementById("dataAge").textContent = d.error || "等待首包";
           return;
         }
-        lastData = Object.assign({}, lastData || {}, d);
+        const prevUid = authUser && authUser.id;
+        const nextUid = d.auth_user && d.auth_user.id;
+        // Account switch / first pack: replace cache so another user's books never linger.
+        if (force || !lastData || (prevUid != null && nextUid != null && prevUid !== nextUid)) {
+          lastData = d;
+        } else {
+          lastData = Object.assign({}, lastData || {}, d);
+        }
         if (d.glossary) GLOSSARY = d.glossary;
         if (d.auth_user !== undefined) paintAuthUser(d.auth_user);
         // Guest / locked: never keep stale personal rows.
@@ -5207,6 +5372,28 @@
       }
       return d;
     }
+    async function refreshAfterAuth(user, okMsg) {
+      /** Clear cached desk state and reload snapshot / review for the new session. */
+      const msg = document.getElementById("authMsg");
+      paintAuthUser(user);
+      if (msg && okMsg) msg.textContent = okMsg;
+      lastData = null;
+      if (currentMain === "pos" && !canPersonal()) {
+        applyMain("desk");
+      } else {
+        await tick(true);
+      }
+      if (currentMain === "review") {
+        try { await loadReview(true, ""); } catch (e) {}
+      }
+      if (currentMain === "pos") {
+        try { await ensurePosLhb(true); } catch (e) {}
+      }
+      const settingsPanel = document.getElementById("settingsPanel");
+      if (settingsPanel && !settingsPanel.hidden) {
+        try { await openSettings(); } catch (e) {}
+      }
+    }
     async function enterAsGuest() {
       const msg = document.getElementById("authMsg");
       try {
@@ -5215,9 +5402,7 @@
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || d.ok === false) throw new Error(d.detail || "游客登录失败");
-        paintAuthUser(d.user);
-        if (msg) msg.textContent = "已以游客进入";
-        tick(true);
+        await refreshAfterAuth(d.user, "已以游客进入");
       } catch (e) {
         if (msg) msg.textContent = String(e.message || e);
       }
@@ -5228,10 +5413,7 @@
       const msg = document.getElementById("authMsg");
       try {
         const d = await authRequest("/api/auth/login");
-        paintAuthUser(d.user);
-        msg.textContent = "登录成功";
-        document.getElementById("authMask").hidden = true;
-        tick(true);
+        await refreshAfterAuth(d.user, "登录成功");
       } catch (e) {
         msg.textContent = String(e.message || e);
       }
@@ -5247,16 +5429,8 @@
     });
     document.getElementById("authLogoutBtn")?.addEventListener("click", async () => {
       await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+      lastData = null;
       paintAuthUser(null);
-      if (lastData) {
-        lastData.positions = [];
-        lastData.watchlist = [];
-        lastData.favorite_boards = [];
-        lastData.position_summary = {};
-        lastData.risk_overview = {};
-        lastData.sell_advice = { items: [], text: "" };
-        paintVisible(lastData);
-      }
     });
     document.getElementById("authAdminBtn")?.addEventListener("click", () => {
       showAuth("待审批用户");

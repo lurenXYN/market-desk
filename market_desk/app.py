@@ -66,6 +66,7 @@ from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
 from market_desk.lots import clear_sell_qty, half_sell_qty
 from market_desk.report import build_daily_report, build_eod_onepager, build_morning_brief
 from market_desk.review import is_buy_signal, is_sell_signal
+from market_desk.lhb import build_positions_lhb
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
 
@@ -472,6 +473,16 @@ def list_positions(user: dict = Depends(current_member_required)) -> dict:
         "positions": snap.get("positions") or [],
         "summary": snap.get("position_summary"),
     }
+
+
+@app.get("/api/positions/lhb")
+async def positions_lhb(
+    force: bool = Query(default=False),
+    user: dict = Depends(current_member_required),
+) -> dict:
+    """Return dragon-tiger seats for the caller's open positions (view-only)."""
+    snap = engine.snapshot_for_user(int(user["id"]))
+    return await build_positions_lhb(snap.get("positions") or [], force=force)
 
 
 @app.post("/api/positions")
