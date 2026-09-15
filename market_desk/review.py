@@ -1898,6 +1898,26 @@ def enrich_signals_with_trends(
     return out
 
 
+def review_trends_fingerprint(
+    trade_date: str,
+    rows: list[dict[str, Any]] | None,
+    *,
+    calendar_day: str,
+) -> str:
+    """Build a cache key for review trend chips (calendar day + signal set)."""
+    import hashlib
+
+    day = str(trade_date or "").strip()[:10]
+    cal = str(calendar_day or "").strip()[:10]
+    ids = sorted(
+        int(r["id"])
+        for r in (rows or [])
+        if r.get("id") is not None
+    )
+    digest = hashlib.sha1(",".join(str(i) for i in ids).encode("utf-8")).hexdigest()[:12]
+    return f"{cal}|{day}|n{len(ids)}|{digest}"
+
+
 def build_review_payload(
     limit: int = 180,
     quotes: dict[str, dict[str, Any]] | None = None,

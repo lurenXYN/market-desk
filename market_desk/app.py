@@ -409,6 +409,16 @@ async def review_zt_ytd(
     return await engine.build_review_zt_ytd(view_date=date)
 
 
+@app.get("/api/review/trends")
+async def review_trends(
+    date: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return daily up/down/sideways classifications for review-day tickers."""
+    del user
+    return await engine.build_review_trends(view_date=date)
+
+
 @app.get("/api/chart/{code}")
 async def chart(
     code: str,

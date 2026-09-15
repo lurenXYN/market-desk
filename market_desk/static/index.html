@@ -2544,6 +2544,7 @@
       <section class="card">
         <h2 style="text-transform:none">信号复盘<button type="button" class="q" data-term="信号复盘">?</button>
           <span class="mod-stamp" id="revStamp" title="复盘主表刷新时间"></span>
+          <span class="mod-stamp" id="revTrendStamp" title="日线趋势 chip 异步补齐时间"></span>
           <span class="mod-stamp" id="revZtStamp" title="年内涨停列异步补齐时间"></span>
         </h2>
         <p class="rev-note">按交易日浏览。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。进入可买带或触及止损/不追会弹系统通知。</p>
@@ -4255,8 +4256,12 @@
     let reviewLoadedAt = 0;
     let reviewZtLoading = false;
     let reviewZtSeq = 0;
+    let reviewTrendSeq = 0;
+    let reviewTrendFp = "";
+    let reviewTrendBy = null;
     let reviewRefreshedAt = "";
     let reviewZtRefreshedAt = "";
+    let reviewTrendRefreshedAt = "";
     let chartCode = "";
     let chartSignalAt = "";
 
@@ -4484,7 +4489,10 @@
         chips.push(`<span class="rev-chip up" title="日线上升">上升</span>`);
       } else if (r.trend_down) {
         chips.push(`<span class="rev-chip down" title="日线下降">下降</span>`);
-      } else if (r.daily_trend && !r.trend_pending) {
+      } else if (r.trend_pending) {
+        const tip = r.daily_trend || "日线样本不足或未取到";
+        chips.push(`<span class="rev-chip" title="${escAttr(tip)}">待验</span>`);
+      } else if (r.daily_trend) {
         chips.push(`<span class="rev-chip" title="${escAttr(r.daily_trend)}">震荡</span>`);
       }
       const vs = r.vs_mainline;
@@ -5190,6 +5198,72 @@
       return !!(view && cal && view === cal);
     }
 
+    function applyReviewTrendsByCode(by) {
+      const src = by || {};
+      for (const row of (lastReview.signals || [])) {
+        const code = String(row.code || "").padStart(6, "0");
+        const hit = src[code] || src[String(row.code || "")];
+        if (!hit) {
+          row.daily_trend = "";
+          row.trend_ok = false;
+          row.trend_down = false;
+          row.trend_pending = true;
+          continue;
+        }
+        row.daily_trend = hit.label || hit.trend || "";
+        row.trend_ok = !!(hit.up || hit.trend_ok);
+        row.trend_down = !!(hit.down || hit.trend_down);
+        row.trend_pending = hit.quality === "fetch_fail" || hit.quality === "thin" || !!hit.trend_pending;
+        if (hit.ma5 != null) row.ma5 = hit.ma5;
+        if (hit.ma20 != null) row.ma20 = hit.ma20;
+      }
+      if (lastReview) lastReview.trends_ready = true;
+    }
+
+    async function loadReviewTrends(date, seq, wantFp) {
+      const want = String(date || "").trim();
+      if (!want) return;
+      if (wantFp && reviewTrendFp === wantFp && reviewTrendBy) {
+        applyReviewTrendsByCode(reviewTrendBy);
+        setModStamp("revTrendStamp", reviewTrendRefreshedAt || "缓存", {
+          label: "日线趋势",
+          title: "日线趋势命中本地缓存（同日且信号集未变）",
+        });
+        paintReview(lastReview);
+        return;
+      }
+      setModStamp("revTrendStamp", null, { loading: true, label: "日线趋势" });
+      try {
+        const r = await fetch("/api/review/trends?date=" + encodeURIComponent(want));
+        const d = await r.json();
+        if (seq !== reviewTrendSeq) return;
+        const view = lastReview.view_date
+          || (lastReview.summary || {}).view_date
+          || reviewViewDate
+          || "";
+        if (view && d.trade_date && view !== d.trade_date) return;
+        reviewTrendBy = d.by_code || {};
+        reviewTrendFp = d.fingerprint || wantFp || "";
+        applyReviewTrendsByCode(reviewTrendBy);
+        reviewTrendRefreshedAt = d.refreshed_at || new Date().toTimeString().slice(0, 8);
+        setModStamp("revTrendStamp", reviewTrendRefreshedAt, {
+          label: "日线趋势",
+          title: d.cache_hit ? "日线趋势命中服务端缓存" : "日线趋势已补齐",
+        });
+        paintReview(lastReview);
+      } catch (e) {
+        if (seq !== reviewTrendSeq) return;
+        setModStamp("revTrendStamp", reviewTrendRefreshedAt || null, {
+          label: "日线趋势",
+          stale: true,
+          title: "日线趋势补齐失败",
+        });
+        if (lastReview && (lastReview.signals || []).length) {
+          paintReview(lastReview);
+        }
+      }
+    }
+
     async function loadReviewZtYtd(date, seq) {
       const want = String(date || "").trim();
       if (!want) {
@@ -5267,7 +5341,15 @@
           label: "复盘",
           title: d.cache_hit ? "命中复盘缓存" : "复盘主表已刷新",
         });
+        if (!d.trends_ready) {
+          for (const row of (d.signals || [])) {
+            if (row.trend_ok || row.trend_down || row.daily_trend) continue;
+            row.trend_pending = true;
+          }
+        }
         paintReview(d);
+        const tSeq = ++reviewTrendSeq;
+        loadReviewTrends(day, tSeq, d.trends_fp || "");
         loadReviewZtYtd(day, seq);
       } catch (e) {
         const n = Math.max(visibleRevCols().length, 1);

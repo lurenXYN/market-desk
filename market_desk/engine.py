@@ -165,6 +165,8 @@ class DeskEngine:
         self._index_bars: list[dict[str, Any]] = []
         # code -> {"day": trade_date, "year": int, "count": int}
         self._zt_ytd_cache: dict[str, dict[str, Any]] = {}
+        # Review daily-trend chips: fingerprint -> payload (calendar day + signal set).
+        self._review_trend_cache: dict[str, dict[str, Any]] = {}
         # Review payloads: key -> (monotonic_ts, payload)
         self._review_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._fund_flow_full_at: float = 0.0
@@ -893,6 +895,13 @@ class DeskEngine:
         if hit and now_m - hit[0] < ttl:
             cached = dict(hit[1])
             cached["cache_hit"] = True
+            if not cached.get("trends_fp"):
+                from market_desk.review import review_trends_fingerprint
+
+                cached["trends_fp"] = review_trends_fingerprint(
+                    day, load_signals_for_date(day), calendar_day=today
+                )
+            cached["trends_ready"] = False
             return cached
 
         pending = load_unscored_signals(today, limit=80)
@@ -953,7 +962,7 @@ class DeskEngine:
                 async def _holders() -> dict[str, dict[str, Any]]:
                     return await fetch_holder_stats_many(client, stock_codes)
 
-                # zt_ytd is heavy (per-code daily bars); load via /api/review/zt-ytd.
+                # zt_ytd / daily-trend chips load async (see /api/review/zt-ytd, /trends).
                 _, _, quotes, holders = await asyncio.gather(
                     _score_pending(),
                     _migrate_outcome_labels(),
@@ -966,11 +975,8 @@ class DeskEngine:
         phase = None
         if day == today and self.snapshot:
             phase = self.snapshot.get("phase")
-        trend_codes = live_codes or [str(r.get("code") or "") for r in day_rows]
-        try:
-            review_trends = self._cached_trends_for(trend_codes)
-        except Exception:
-            review_trends = {}
+        from market_desk.review import review_trends_fingerprint
+
         payload = build_review_payload(
             limit=limit,
             quotes=quotes,
@@ -984,8 +990,12 @@ class DeskEngine:
             vs_mainline_mode=vs_mainline_mode,
             holders=holders,
             user_id=user_id,
-            trends=review_trends or None,
+            trends=None,
         )
+        payload["trends_fp"] = review_trends_fingerprint(
+            day, day_rows or load_signals_for_date(day), calendar_day=today
+        )
+        payload["trends_ready"] = False
         payload["cache_hit"] = False
         self._review_cache[cache_key] = (now_m, payload)
         return payload
@@ -993,6 +1003,58 @@ class DeskEngine:
     def clear_review_cache(self) -> None:
         """Drop cached review payloads after personal trade annotations change."""
         self._review_cache.clear()
+
+    async def build_review_trends(
+        self,
+        view_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Classify daily trends for one review day's codes (async chips).
+
+        Cached by calendar day + signal-id fingerprint: refetch only when the
+        session day rolls or that view day's signal set changes.
+        """
+        from market_desk.review import review_trends_fingerprint
+
+        today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        day = str(view_date or today).strip()[:10] or today
+        day_rows = load_signals_for_date(day)
+        fp = review_trends_fingerprint(day, day_rows, calendar_day=today)
+        hit = self._review_trend_cache.get(fp)
+        if hit:
+            out = dict(hit)
+            out["cache_hit"] = True
+            return out
+
+        codes = [str(r.get("code") or "") for r in day_rows if r.get("code")]
+        by_code: dict[str, dict[str, Any]] = {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                if codes:
+                    closes_by_code, ok_by_code = await self._resolve_daily_closes(
+                        client, codes, today
+                    )
+                    by_code = classify_many(closes_by_code, ok_by_code)
+        except Exception:
+            log.exception("review trends fetch failed")
+
+        payload = {
+            "trade_date": day,
+            "calendar_day": today,
+            "fingerprint": fp,
+            "by_code": by_code,
+            "cache_hit": False,
+            "refreshed_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        self._review_trend_cache[fp] = dict(payload)
+        # Drop stale fingerprints for other calendar days to bound memory.
+        stale = [
+            k
+            for k in self._review_trend_cache
+            if not str(k).startswith(f"{today}|")
+        ]
+        for k in stale:
+            self._review_trend_cache.pop(k, None)
+        return payload
 
     async def refresh_fund_flow(self, *, force: bool = False) -> dict[str, Any]:
         """Fetch East Money day/week/month fund-flow boards (funds tab on demand)."""
