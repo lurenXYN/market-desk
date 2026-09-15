@@ -4084,6 +4084,49 @@ def _exit_band_params(
     return band
 
 
+def _yday_buy_weak(
+    *,
+    buy_day: str | None,
+    trade_date: str | None,
+    t1_locked: bool,
+    day_pct: float | None,
+) -> dict[str, Any]:
+    """Detect prior-day buys facing a weak session (anti panic full-exit window).
+
+    Active when the bag is first sellable (not T+1), bought within a few calendar
+    days, and today's change is at/below the weak threshold.
+    """
+    from market_desk.config import (
+        SELL_YDAY_BUY_MAX_AGE_DAYS,
+        SELL_YDAY_BUY_WEAK_PCT,
+    )
+
+    out: dict[str, Any] = {
+        "active": False,
+        "age_days": None,
+        "weak_pct": float(SELL_YDAY_BUY_WEAK_PCT),
+    }
+    if t1_locked or day_pct is None:
+        return out
+    day = str(trade_date or "").strip()[:10]
+    bought = str(buy_day or "").strip()[:10]
+    if not day or not bought or bought >= day:
+        return out
+    try:
+        from datetime import datetime
+
+        age = (datetime.strptime(day, "%Y-%m-%d") - datetime.strptime(bought, "%Y-%m-%d")).days
+    except ValueError:
+        return out
+    out["age_days"] = age
+    if age < 1 or age > int(SELL_YDAY_BUY_MAX_AGE_DAYS):
+        return out
+    if float(day_pct) > float(SELL_YDAY_BUY_WEAK_PCT):
+        return out
+    out["active"] = True
+    return out
+
+
 def _sell_item(
     row: dict[str, Any],
     verdict: dict[str, Any],
@@ -4102,6 +4145,9 @@ def _sell_item(
 
     Daily trend (once per day): if stop band hits but trend is still up and price
     holds above MA20, soften to half; clear downtrend / MA20 break stays hard stop.
+
+    Prior-day buy + weak session (「昨买今弱」): prefer half first and raise the
+    hard-clear bar so open weakness does not panic-exit the whole bag.
 
     Stop width and pullback thresholds adapt via ``_exit_band_params`` (mainline /
     lifecycle / phase / daily trend).
@@ -4209,6 +4255,12 @@ def _sell_item(
     soft_exit = (phase_panic and not panic_rel_strong) or (mainline_fade and on_mainline)
     t1_locked = is_t1_locked(row, trade_date)
     buy_day = position_buy_day(row)
+    yday_weak = _yday_buy_weak(
+        buy_day=buy_day,
+        trade_date=trade_date,
+        t1_locked=t1_locked,
+        day_pct=day_pct_f,
+    )
     hold_qty = int(row.get("qty") or 0)
     trend = trend or {}
     ma20 = trend.get("ma20")
@@ -4526,6 +4578,27 @@ def _sell_item(
                     )
         except (TypeError, ValueError, ZeroDivisionError):
             pass
+
+    # 「昨买今弱」: if nothing fired yet, start with a half trim (not a full dump).
+    if (
+        not ready
+        and yday_weak.get("active")
+        and last is not None
+        and not partial_done
+        and not rel_strong
+        and not (at_tip and day_pct_f is not None and day_pct_f >= 0)
+    ):
+        urgency = "trim"
+        ready = True
+        exit_mode = "half"
+        role_label = "昨买今弱·先减半"
+        sell_price = float(last)
+        sell_pct = 50
+        reason_parts.append(
+            f"昨买窗内（持仓约 {yday_weak.get('age_days')} 日）当日 "
+            f"{_fmt_pct(day_pct_f)}≤{yday_weak.get('weak_pct')}%，默认先减一半"
+        )
+
     if not ready and last is not None:
         role_label = "继续持有"
         sell_price = target
@@ -4563,6 +4636,34 @@ def _sell_item(
                 reason_parts.append(f"强于主线载体 {vs_carrier:+.1f}pt，先不轻减")
             elif carrier_rel_weak and vs_carrier is not None:
                 reason_parts.append(f"弱于主线载体 {vs_carrier:+.1f}pt")
+
+    # 「昨买今弱」: demote panic clears to half unless loss is clearly deeper.
+    if ready and yday_weak.get("active") and exit_mode == "clear":
+        from market_desk.config import SELL_YDAY_BUY_CLEAR_EXTRA
+
+        keep_clear = False
+        clear_floor = float(pnl_stop) + float(SELL_YDAY_BUY_CLEAR_EXTRA)
+        if urgency == "stop" and pnl_pct is not None and float(pnl_pct) <= clear_floor:
+            keep_clear = True
+        elif (
+            urgency == "take"
+            and pullback is not None
+            and pullback >= pb_deep
+            and pnl_pct is not None
+            and float(pnl_pct) >= take_deep_pnl
+        ):
+            keep_clear = True
+        if not keep_clear:
+            exit_mode = "half"
+            sell_pct = 50
+            if "清仓" in role_label:
+                role_label = role_label.replace("清仓", "先减")
+            if "昨买今弱" not in role_label:
+                role_label = f"昨买今弱·{role_label}"
+            reason_parts.insert(
+                0,
+                f"昨买今弱：默认先减一半；清仓需更深亏（约≤{clear_floor:.1f}%）或深结构回撤",
+            )
 
     # Already trimmed today: do not keep nagging half on soft/take; keep stop/clear.
     if (

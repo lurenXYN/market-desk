@@ -420,6 +420,10 @@ PHASE_CLIMAX_TEMP = 72
 # Gap-and-fade blacklist: high open then fade from open.
 GAP_FADE_OPEN_PCT = 2.5          # open vs prev close
 GAP_FADE_DROP_PCT = 1.5          # last below open by at least this %
+# Bought yesterday (sellable window) + weak session: prefer half, raise clear bar.
+SELL_YDAY_BUY_MAX_AGE_DAYS = 3   # calendar days after buy still「昨买窗」(covers weekend)
+SELL_YDAY_BUY_WEAK_PCT = -1.0    # day change ≤ this →「今弱」
+SELL_YDAY_BUY_CLEAR_EXTRA = -1.5 # hard clear only if pnl ≤ pnl_stop + this
 # Theme reputation / board affinity (soft mainline score feed).
 THEME_FADE_ZT_DROP = 0.45       # next-day zt ≤ prior * this → fade candidate
 THEME_FADE_PCT_MAX = 0.5        # and/or weak pct with thin zt
@@ -428,6 +432,8 @@ THEME_PERSIST_PCT_MIN = 1.5
 THEME_REP_MIN_SAMPLES = 2       # mild adj before this; full after
 THEME_REP_ADJ_MIN = -12.0
 THEME_REP_ADJ_MAX = 8.0         # room for sticky persist bonus
+# Bump when compute_rep_adj / outcome weights change; startup rebuilds auto_adj.
+THEME_REP_FORMULA_VERSION = 2
 THEME_SIM_PEER_MIN = 0.45       # show peers above this
 # Soft board-linkage buys: similar peer cards when mainline has no ready / overheated.
 BOARD_LINK_SIM_MIN = 0.45       # reuse peer floor; raise to be stricter
@@ -453,8 +459,12 @@ THEME_SIM_INHERIT_MIN = 0.70    # only inherit from strong peers
 THEME_SIM_POS_INHERIT = 0.22    # milder positive inheritance
 THEME_SIM_POS_INHERIT_MIN = 0.80
 THEME_REP_DECAY = 0.85          # per older outcome when refreshing adj
-THEME_REP_EARLY_MULT = 0.25     # scale adj before MIN_SAMPLES
-THEME_REP_STREAK_BONUS = 1.8    # extra when newest 2+ outcomes are persist
+THEME_REP_EARLY_MULT = 0.35     # legacy; compute_rep_adj now uses conf curve
+THEME_REP_STREAK_BONUS = 1.5    # |bonus| for 2+ same-side streak (persist or fade)
+THEME_REP_RATE_SCALE = 7.5      # (persist_rate - fade_rate) * scale → primary adj
+THEME_REP_CONF_DENOM = 3.5      # conf = min(1, sample_w / denom); softens thin samples
+THEME_REP_EXTREME_RATE = 0.65   # lopsided habit bonus/penalty kicks in above this
+THEME_REP_NEWEST_TIP = 0.55     # extra nudge from the most recent outcome
 THEME_MANUAL_ADJ_MIN = -8.0
 THEME_MANUAL_ADJ_MAX = 8.0
 

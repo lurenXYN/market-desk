@@ -175,6 +175,18 @@ class DeskEngine:
     def start(self) -> None:
         """Create tables and start the polling task."""
         init_db()
+        try:
+            from market_desk.theme_memory import rebuild_all_theme_reputation
+
+            mig = rebuild_all_theme_reputation()
+            if not mig.get("skipped"):
+                log.info(
+                    "theme reputation formula v%s rebuilt %s themes",
+                    mig.get("version"),
+                    mig.get("rebuilt"),
+                )
+        except Exception:
+            log.exception("theme reputation formula migration failed")
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:

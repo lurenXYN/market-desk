@@ -1531,6 +1531,20 @@ def load_theme_outcomes_for_theme(theme_key: str, limit: int = 12) -> list[dict[
     return [dict(r) for r in rows]
 
 
+def list_theme_outcome_keys() -> list[str]:
+    """Return distinct theme keys that have at least one day outcome."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT theme_key
+            FROM theme_day_outcome
+            WHERE theme_key IS NOT NULL AND theme_key <> ''
+            ORDER BY theme_key
+            """
+        ).fetchall()
+    return [str(r["theme_key"]) for r in rows if r["theme_key"]]
+
+
 _POS_SELECT = """
     id, user_id, code, name, buy_price, qty, note, created_at, last_buy_date,
     closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,

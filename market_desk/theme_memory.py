@@ -20,9 +20,12 @@ from market_desk.config import (
     THEME_PERSIST_ZT_MIN,
     THEME_REP_ADJ_MAX,
     THEME_REP_ADJ_MIN,
+    THEME_REP_CONF_DENOM,
     THEME_REP_DECAY,
-    THEME_REP_EARLY_MULT,
+    THEME_REP_EXTREME_RATE,
     THEME_REP_MIN_SAMPLES,
+    THEME_REP_NEWEST_TIP,
+    THEME_REP_RATE_SCALE,
     THEME_REP_STREAK_BONUS,
     THEME_SIM_INHERIT,
     THEME_SIM_INHERIT_MIN,
@@ -278,6 +281,47 @@ def board_similarity(a: dict[str, Any] | None, b: dict[str, Any] | None) -> floa
     return float(board_similarity_detail(a, b).get("sim") or 0.0)
 
 
+def _outcome_event_weight(row: dict[str, Any] | None) -> float:
+    """Scale one fade/persist event by how informative the heat change was.
+
+    Strong prior boards that collapse hard weigh more as fades; growing
+    next-day limit-ups weigh more as persists. Barely-alive persists weigh less.
+    """
+    r = row or {}
+    try:
+        zt = int(r.get("zt_n") or 0)
+    except (TypeError, ValueError):
+        zt = 0
+    try:
+        nzt = int(r.get("next_zt_n") or 0)
+    except (TypeError, ValueError):
+        nzt = 0
+    try:
+        npct = float(r.get("next_pct") or 0)
+    except (TypeError, ValueError):
+        npct = 0.0
+    # Prior heat: thin themes are less diagnostic.
+    heat = 0.75 + min(max(zt, 0), 10) / 10.0 * 0.50  # 0.75..1.25
+    outcome = str(r.get("outcome") or "")
+    if outcome == "fade":
+        if zt >= 2:
+            ratio = nzt / float(zt)
+            if ratio <= 0.35:
+                heat *= 1.20
+            elif ratio <= 0.55:
+                heat *= 1.08
+        if npct <= -1.0:
+            heat *= 1.08
+    elif outcome == "persist":
+        if nzt >= max(zt, int(THEME_PERSIST_ZT_MIN)) and nzt >= zt:
+            heat *= 1.12
+        elif zt >= 3 and nzt <= max(1, zt - 2):
+            heat *= 0.85  # survived on paper, but clearly cooled
+        if npct >= float(THEME_PERSIST_PCT_MIN) + 1.0:
+            heat *= 1.05
+    return max(0.55, min(1.45, heat))
+
+
 def compute_rep_adj(
     fade_n: float,
     persist_n: float,
@@ -287,26 +331,34 @@ def compute_rep_adj(
 ) -> float:
     """Map fade/persist weights into a soft mainline score adjustment.
 
-    Persist is weighted more symmetrically vs fade so sticky themes can earn a
-    meaningful bonus; optional ``streak_bonus`` covers consecutive recent persist.
+    Primary signal is the net persist−fade rate (symmetric). Thin samples are
+    shrunk by a confidence curve; lopsided habits and streaks add a small tip.
+    Raw counts are no longer double-counted on top of the rate (avoids slamming
+    −12 after a few fades while persist struggles to climb).
     """
     f = max(0.0, float(fade_n))
     p = max(0.0, float(persist_n))
     n = float(sample_n) if sample_n is not None else (f + p)
     if n <= 0:
         return 0.0
-    if n < float(THEME_REP_MIN_SAMPLES):
-        adj = (-1.5 * f + 1.2 * p) * float(THEME_REP_EARLY_MULT)
-    else:
-        fade_rate = f / float(n) if n else 0.0
-        persist_rate = p / float(n) if n else 0.0
-        adj = (
-            -fade_rate * 10.0
-            - f * 1.2
-            + persist_rate * 8.0
-            + p * 1.2
-            + max(0.0, float(streak_bonus))
-        )
+    fade_rate = f / n
+    persist_rate = p / n
+    net = persist_rate - fade_rate  # [-1, 1]
+    adj = net * float(THEME_REP_RATE_SCALE)
+
+    extreme = float(THEME_REP_EXTREME_RATE)
+    if n >= float(THEME_REP_MIN_SAMPLES):
+        if fade_rate >= extreme:
+            adj -= min(2.5, (fade_rate - 0.50) * 5.0)
+        if persist_rate >= extreme:
+            adj += min(2.0, (persist_rate - 0.50) * 4.0)
+
+    # Continuous confidence: 1 sample ≈0.3×, ~3.5 weight ≈ full.
+    denom = max(1.0, float(THEME_REP_CONF_DENOM))
+    conf = min(1.0, n / denom)
+    adj *= 0.30 + 0.70 * conf
+
+    adj += float(streak_bonus or 0.0)
     return max(float(THEME_REP_ADJ_MIN), min(float(THEME_REP_ADJ_MAX), round(adj, 2)))
 
 
@@ -317,13 +369,13 @@ def label_for_rep(fade_n: float, persist_n: float, adj: float) -> str:
         return "样本不足"
     if n < float(THEME_REP_MIN_SAMPLES):
         return "观察中"
-    if adj <= -6:
+    if adj <= -5:
         return "易一日游"
     if adj <= -2:
         return "偏一日游"
     if adj >= 4:
         return "偏粘"
-    if adj >= 2:
+    if adj >= 1.5:
         return "偏续热"
     return "中性"
 
@@ -606,22 +658,41 @@ def _refresh_theme_rep_from_outcomes(theme: str, limit: int = 12) -> None:
     raw_persist = 0
     decay = float(THEME_REP_DECAY)
     for i, r in enumerate(rows):
-        w = decay ** i
+        w = (decay ** i) * _outcome_event_weight(r)
         if r.get("outcome") == "fade":
             fade_w += w
             raw_fade += 1
         elif r.get("outcome") == "persist":
             persist_w += w
             raw_persist += 1
+    streak_side = ""
     streak = 0
     for r in rows:
-        if r.get("outcome") == "persist":
+        oc = str(r.get("outcome") or "")
+        if oc not in ("fade", "persist"):
+            break
+        if not streak_side:
+            streak_side = oc
+            streak = 1
+            continue
+        if oc == streak_side:
             streak += 1
         else:
             break
-    streak_bonus = float(THEME_REP_STREAK_BONUS) if streak >= 2 else 0.0
-    if streak >= 3:
-        streak_bonus += float(THEME_REP_STREAK_BONUS) * 0.5
+    streak_bonus = 0.0
+    if streak >= 2 and streak_side in ("fade", "persist"):
+        mag = float(THEME_REP_STREAK_BONUS)
+        if streak >= 3:
+            mag *= 1.4
+        streak_bonus = mag if streak_side == "persist" else -mag
+    # Newest tip: small push from the latest graded day (independent of streak).
+    if rows:
+        newest = str(rows[0].get("outcome") or "")
+        tip = float(THEME_REP_NEWEST_TIP)
+        if newest == "persist":
+            streak_bonus += tip
+        elif newest == "fade":
+            streak_bonus -= tip
     sample_w = fade_w + persist_w
     adj = compute_rep_adj(
         fade_w, persist_w, sample_n=sample_w, streak_bonus=streak_bonus
@@ -637,10 +708,65 @@ def _refresh_theme_rep_from_outcomes(theme: str, limit: int = 12) -> None:
             "score_adj": adj,
             "last_fade_date": last_fade,
             "last_persist_date": last_persist,
-            "label": label_for_rep(fade_w, persist_w, adj),
+            "label": label_for_rep(raw_fade, raw_persist, adj),
         },
         preserve_manual=True,
     )
+
+
+def rebuild_all_theme_reputation(
+    *,
+    force: bool = False,
+    limit_per_theme: int = 12,
+) -> dict[str, Any]:
+    """Recompute every theme's ``auto_adj`` from stored day outcomes.
+
+    Compatibility path when the scoring formula changes: historical rows in
+    ``theme_day_outcome`` stay the source of truth; ``manual_adj`` / ``trade_adj``
+    are preserved by ``upsert_theme_reputation(preserve_manual=True)``.
+
+    Skips work when settings already record the current
+    ``THEME_REP_FORMULA_VERSION`` unless ``force`` is set.
+    """
+    from market_desk.config import THEME_REP_FORMULA_VERSION
+    from market_desk.db import (
+        list_theme_outcome_keys,
+        load_setting,
+        load_theme_reputation,
+        save_setting,
+    )
+
+    ver = int(THEME_REP_FORMULA_VERSION)
+    key = "theme_rep_formula_v"
+    if not force:
+        try:
+            cur = int(load_setting(key) or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        if cur == ver:
+            return {"ok": True, "skipped": True, "version": ver, "rebuilt": 0}
+
+    # Themes with a reputation row, plus any theme that only exists in outcomes.
+    themes: set[str] = set()
+    for r in load_theme_reputation():
+        t = str(r.get("theme_key") or "").strip()
+        if t:
+            themes.add(t)
+    for t in list_theme_outcome_keys():
+        if t:
+            themes.add(str(t).strip())
+
+    rebuilt = 0
+    for theme in sorted(themes):
+        _refresh_theme_rep_from_outcomes(theme, limit=limit_per_theme)
+        rebuilt += 1
+    save_setting(key, ver)
+    return {
+        "ok": True,
+        "skipped": False,
+        "version": ver,
+        "rebuilt": rebuilt,
+    }
 
 
 def reputation_map() -> dict[str, dict[str, Any]]:
