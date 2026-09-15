@@ -620,8 +620,23 @@ def score_signal_with_closes(
     signal: dict[str, Any],
     closes: list[float],
     dates: list[str] | None = None,
+    *,
+    opens: list[float | None] | None = None,
+    lows: list[float | None] | None = None,
+    highs: list[float | None] | None = None,
 ) -> dict[str, Any] | None:
-    """Score a buy/sell signal against subsequent daily closes. Return outcome fields or None."""
+    """Score a buy/sell signal against subsequent daily bars. Return outcome fields or None.
+
+    Buy labels use next-session **close** vs entry (fill else plan price) — not the
+    open. A close that is ≥+1% but stabbed deeply on the day-low (or opened strong
+    then faded) is marked ``次日虚红`` / ``次日冲高回落`` and does not count as a hit.
+    """
+    from market_desk.config import (
+        OUTCOME_FAKE_RED_CLOSE_MAX,
+        OUTCOME_FAKE_RED_LOW_PCT,
+        OUTCOME_FAKE_RED_OPEN_PCT,
+    )
+
     price = num(signal.get("fill_price"))
     if price is None or price <= 0:
         price = num(signal.get("price"))
@@ -632,10 +647,19 @@ def score_signal_with_closes(
 
     # Prefer closes strictly after the signal date when dates are available.
     after: list[float] = []
+    after_opens: list[float | None] = []
+    after_lows: list[float | None] = []
+    after_highs: list[float | None] = []
     if dates and len(dates) == len(closes) and trade_date:
-        for d, px in zip(dates, closes):
+        for i, (d, px) in enumerate(zip(dates, closes)):
             if str(d) > trade_date:
                 after.append(float(px))
+                if opens and i < len(opens):
+                    after_opens.append(opens[i])
+                if lows and i < len(lows):
+                    after_lows.append(lows[i])
+                if highs and i < len(highs):
+                    after_highs.append(highs[i])
         if not after:
             return None
     else:
@@ -647,6 +671,8 @@ def score_signal_with_closes(
     day3 = after[min(2, len(after) - 1)]
     peak = max(after)
     trough = min(after)
+    day1_open = after_opens[0] if after_opens else None
+    day1_low = after_lows[0] if after_lows else None
     if is_sell_signal(sig_type):
         # Sell: positive means avoiding further drop (price fell after sell).
         d1 = (price / day1 - 1.0) * 100.0
@@ -664,8 +690,48 @@ def score_signal_with_closes(
         d3 = (day3 / price - 1.0) * 100.0
         mfe = (peak / price - 1.0) * 100.0
         mae = (trough / price - 1.0) * 100.0
+        # Prefer intraday low for MAE when available (T+1 path you could feel).
+        if day1_low is not None and float(day1_low) > 0:
+            try:
+                day_mae = (float(day1_low) / price - 1.0) * 100.0
+                mae = min(mae, day_mae)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
         if d1 >= 1.0:
             label = "次日红"
+            if day1_low is not None and float(day1_low) > 0:
+                try:
+                    low_pct = (float(day1_low) / price - 1.0) * 100.0
+                    if low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
+                        label = "次日虚红"
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+        elif (
+            day1_open is not None
+            and float(day1_open) > 0
+            and d1 < float(OUTCOME_FAKE_RED_CLOSE_MAX)
+        ):
+            try:
+                open_pct = (float(day1_open) / price - 1.0) * 100.0
+                if open_pct >= float(OUTCOME_FAKE_RED_OPEN_PCT):
+                    label = "次日冲高回落"
+                elif d1 <= -1.5:
+                    label = "次日绿"
+                elif d3 >= 2.0:
+                    label = "三日红"
+                elif d3 <= -2.0:
+                    label = "三日绿"
+                else:
+                    label = "平淡"
+            except (TypeError, ValueError, ZeroDivisionError):
+                if d1 <= -1.5:
+                    label = "次日绿"
+                elif d3 >= 2.0:
+                    label = "三日红"
+                elif d3 <= -2.0:
+                    label = "三日绿"
+                else:
+                    label = "平淡"
         elif d1 <= -1.5:
             label = "次日绿"
         elif d3 >= 2.0:
@@ -683,6 +749,10 @@ def score_signal_with_closes(
         "outcome_label": label,
         "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+# Labels that count as a buy "hit" for rate / soft feedback.
+BUY_HIT_LABELS = frozenset({"次日红", "三日红"})
 
 
 def summarize_signals(
@@ -734,8 +804,8 @@ def summarize_signals(
         "buy_scored_all": len(scored_buys_all),
         "sell_total": len(sells),
         "sell_scored": len(scored_sells),
-        "buy_hit_rate": _rate(scored_buys, {"次日红", "三日红"}),
-        "buy_hit_rate_all": _rate(scored_buys_all, {"次日红", "三日红"}),
+        "buy_hit_rate": _rate(scored_buys, BUY_HIT_LABELS),
+        "buy_hit_rate_all": _rate(scored_buys_all, BUY_HIT_LABELS),
         "sell_hit_rate": _rate(scored_sells, {"卖后回落"}),
         "buy_avg_day1": _avg(scored_buys, "outcome_day1_pct"),
         "buy_avg_day3": _avg(scored_buys, "outcome_day3_pct"),
@@ -759,7 +829,7 @@ def build_today_digest(
     buys = [r for r in today_rows if is_buy_signal(r.get("signal_type")) and not int(r.get("skipped") or 0)]
     sells = [r for r in today_rows if is_sell_signal(r.get("signal_type")) and not int(r.get("skipped") or 0)]
     scored = [r for r in buys if r.get("outcome_label")]
-    hit = sum(1 for r in scored if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+    hit = sum(1 for r in scored if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
     miss = sum(
         1
         for r in buys
@@ -942,7 +1012,7 @@ def build_desk_source_hit_rates(
         items = buckets[key]
         if not items:
             continue
-        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
         out.append(
             {
                 "source": key,
@@ -976,7 +1046,7 @@ def build_phase_hit_rates(
         buckets.setdefault(phase, []).append(row)
     out: list[dict[str, Any]] = []
     for phase, items in sorted(buckets.items(), key=lambda x: (-len(x[1]), x[0])):
-        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
         out.append(
             {
                 "phase": phase,
@@ -1012,7 +1082,7 @@ def build_kind_hit_rates(
         items = buckets[kind]
         if not items:
             continue
-        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
         out.append(
             {
                 "kind": kind,
@@ -1049,7 +1119,7 @@ def build_phase_kind_hit_rates(
     for (phase, kind), items in sorted(
         buckets.items(), key=lambda x: (-len(x[1]), x[0][0], x[0][1])
     ):
-        hit = sum(1 for r in items if (r.get("outcome_label") or "") in {"次日红", "三日红"})
+        hit = sum(1 for r in items if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
         out.append(
             {
                 "phase": phase,
@@ -1207,7 +1277,7 @@ def build_gate_kill_stats(
             kills[bucket] = kills.get(bucket, 0) + 1
             if ready_now or not label:
                 continue
-            if label in {"次日红", "三日红"}:
+            if label in BUY_HIT_LABELS:
                 false_kills[bucket] = false_kills.get(bucket, 0) + 1
             elif label in {"次日绿", "三日绿"}:
                 true_kills[bucket] = true_kills.get(bucket, 0) + 1
@@ -1804,6 +1874,30 @@ def enrich_signals_with_live_marks(
     return out
 
 
+def enrich_signals_with_trends(
+    rows: list[dict[str, Any]] | None,
+    trends: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Attach compact daily-trend fields for review chips (non-destructive)."""
+    out: list[dict[str, Any]] = []
+    src = trends or {}
+    for raw in rows or []:
+        item = dict(raw)
+        code = normalize_code(item.get("code"))
+        tr = src.get(code) if code else None
+        if isinstance(tr, dict) and tr:
+            item["daily_trend"] = str(tr.get("label") or tr.get("trend") or "")
+            item["trend_ok"] = bool(tr.get("up") or tr.get("trend_ok"))
+            item["trend_down"] = bool(tr.get("down") or tr.get("trend_down"))
+            item["trend_pending"] = bool(tr.get("quality") in ("fetch_fail", "thin") or tr.get("trend_pending"))
+            if tr.get("ma5") is not None:
+                item["ma5"] = tr.get("ma5")
+            if tr.get("ma20") is not None:
+                item["ma20"] = tr.get("ma20")
+        out.append(item)
+    return out
+
+
 def build_review_payload(
     limit: int = 180,
     quotes: dict[str, dict[str, Any]] | None = None,
@@ -1816,6 +1910,7 @@ def build_review_payload(
     holders: dict[str, dict[str, Any]] | None = None,
     zt_ytd: dict[str, Any] | None = None,
     user_id: int | None = None,
+    trends: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Load one trade-date's signals plus global summary for the review tab.
 
@@ -1847,6 +1942,8 @@ def build_review_payload(
     day_rows = enrich_signals_with_boards(
         day_rows, boards, live_mainline=compare_ml
     )
+    if trends:
+        day_rows = enrich_signals_with_trends(day_rows, trends)
     if holders:
         day_rows = enrich_signals_with_holders(day_rows, holders)
     if zt_ytd:
@@ -1950,12 +2047,18 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
 def apply_outcomes(
     rows: list[dict[str, Any]],
     closes_map: dict[str, tuple[list[str], list[float]]],
+    *,
+    overwrite: bool = False,
 ) -> int:
-    """Write scored outcomes for signals that have forward closes. Return update count."""
+    """Write scored outcomes for signals that have forward closes. Return update count.
+
+    When ``overwrite`` is True, re-score rows that already have a label (used by
+    formula-version migrations such as OHLC fake-red labels).
+    """
     n = 0
     today = datetime.now().strftime("%Y-%m-%d")
     for row in rows:
-        if row.get("outcome_label"):
+        if row.get("outcome_label") and not overwrite:
             continue
         if str(row.get("trade_date") or "") >= today:
             continue
@@ -1963,8 +2066,19 @@ def apply_outcomes(
         packed = closes_map.get(code)
         if not packed:
             continue
-        dates, closes = packed
-        outcome = score_signal_with_closes(row, closes, dates)
+        if len(packed) >= 3:
+            dates, closes, ohlc = packed[0], packed[1], packed[2] or {}
+        else:
+            dates, closes = packed[0], packed[1]
+            ohlc = {}
+        outcome = score_signal_with_closes(
+            row,
+            closes,
+            dates,
+            opens=list(ohlc.get("open") or []) or None,
+            lows=list(ohlc.get("low") or []) or None,
+            highs=list(ohlc.get("high") or []) or None,
+        )
         if not outcome:
             continue
         if mark_signal_outcome(int(row["id"]), outcome):

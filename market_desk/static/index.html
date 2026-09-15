@@ -475,6 +475,33 @@
     .rev-hist svg { width: 100%; height: 56px; display: block; }
     .rev-fill { font-size: 12px; color: var(--muted); }
     .rev-fill b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .rev-chips {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+    .rev-chip {
+      display: inline-block;
+      font-size: 11px;
+      line-height: 1.2;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #151c28;
+      font-weight: 600;
+    }
+    .rev-chip.up { color: var(--up); border-color: #5a2a2a; background: #1a1014; }
+    .rev-chip.down { color: var(--down, #38bdf8); border-color: #1e3a5f; background: #0c1a28; }
+    th.rev-sort {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th.rev-sort:hover { color: var(--text); }
+    th.rev-sort .sort-ind { color: var(--muted); font-size: 10px; margin-left: 2px; }
     .rev-fill-ed {
       display: flex;
       flex-wrap: wrap;
@@ -3646,8 +3673,11 @@
           <div class="tag-row">${tags}</div>
           <div class="meta" style="margin-top:4px">${
             (b.rep_label ? `信誉 ${b.rep_label}${b.rep_adj ? ` (${b.rep_adj > 0 ? "+" : ""}${b.rep_adj})` : ""}` : "")
+            + (b.rep_persist_rate != null
+              ? `${b.rep_label ? " · " : ""}续热 ${b.rep_persist_rate}%（n=${b.rep_sample_n || 0}）`
+              : "")
             + ((b.similar_peers || []).length
-              ? `${b.rep_label ? " · " : ""}相似 ${(b.similar_peers || []).slice(0, 2).map((p) => {
+              ? `${(b.rep_label || b.rep_persist_rate != null) ? " · " : ""}相似 ${(b.similar_peers || []).slice(0, 2).map((p) => {
                   const tip = (p.why || []).slice(0, 2).join("·");
                   return tip ? `${p.name}(${tip})` : p.name;
                 }).join("/")}`
@@ -4401,6 +4431,7 @@
       { id: "ops", label: "操作" },
     ];
     const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({ id: c.id, on: true }));
+    let revSort = { id: "", dir: 1 }; // dir: 1 asc, -1 desc
 
     function fmtHolderNum(n) {
       if (n == null || Number.isNaN(Number(n))) return "—";
@@ -4446,6 +4477,68 @@
 
     function revColLabel(id) {
       return (REV_COL_CATALOG.find((c) => c.id === id) || {}).label || id;
+    }
+    function revSideChips(r) {
+      const chips = [];
+      if (r.trend_ok) {
+        chips.push(`<span class="rev-chip up" title="日线上升">上升</span>`);
+      } else if (r.trend_down) {
+        chips.push(`<span class="rev-chip down" title="日线下降">下降</span>`);
+      } else if (r.daily_trend && !r.trend_pending) {
+        chips.push(`<span class="rev-chip" title="${escAttr(r.daily_trend)}">震荡</span>`);
+      }
+      const vs = r.vs_mainline;
+      if (vs && vs !== "—") {
+        const cls = r.board_match === true ? "up" : (r.board_match === false ? "down" : "");
+        const tip = r.vs_mainline_of ? `对照「${r.vs_mainline_of}」` : "对照主线";
+        chips.push(`<span class="rev-chip ${cls}" title="${escAttr(tip)}">${escAttr(vs)}</span>`);
+      }
+      return chips.length ? ` <span class="rev-chips">${chips.join("")}</span>` : "";
+    }
+    function revSortValue(r, id) {
+      if (id === "date") return String(r.signaled_at || r.trade_date || "");
+      if (id === "type") return String(r.signal_type || "");
+      if (id === "name") return String(r.name || r.code || "");
+      if (id === "code") return String(r.code || "");
+      if (id === "price") {
+        const n = Number(r.price);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (id === "fill") {
+        const n = Number(r.fill_price);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (id === "chase") {
+        const v = r.chase_price != null ? r.chase_price : (r.payload && r.payload.chase_price);
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (id === "day1") return r.outcome_day1_pct == null ? null : Number(r.outcome_day1_pct);
+      if (id === "day3") return r.outcome_day3_pct == null ? null : Number(r.outcome_day3_pct);
+      if (id === "result") return String(r.outcome_label || "");
+      if (id === "vs_ml") return String(r.vs_mainline || "");
+      if (id === "phase") return String(r.phase || "");
+      if (id === "mainline") return String(r.mainline || "");
+      if (id === "board") return String(r.board_text || ((r.boards || []).join("/")) || "");
+      if (id === "holder_n") return r.holder_num == null ? null : Number(r.holder_num);
+      if (id === "holder_chg") return r.holder_chg_pct == null ? null : Number(r.holder_chg_pct);
+      if (id === "holder_avg") return r.holder_avg_wan == null ? null : Number(r.holder_avg_wan);
+      if (id === "zt_ytd") return r.zt_ytd == null ? null : Number(r.zt_ytd);
+      return "";
+    }
+    function applyRevSort(rows) {
+      const id = revSort.id;
+      if (!id || id === "ops") return rows;
+      const dir = revSort.dir || 1;
+      return [...rows].sort((a, b) => {
+        const va = revSortValue(a, id);
+        const vb = revSortValue(b, id);
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+        return String(va).localeCompare(String(vb), "zh") * dir;
+      });
     }
 
     function visibleRevCols() {
@@ -4610,7 +4703,11 @@
           ? `<span class="rev-type-sell">卖</span>`
           : ctx.typ;
       }
-      if (col === "name") return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
+      if (col === "name") {
+        return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}`
+          + revSideChips(r)
+          + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
+      }
       if (col === "code") return r.code || "";
       if (col === "price") return `${r.price ?? "—"}${ctx.devHtml}`;
       if (col === "fill") {
@@ -4899,7 +4996,7 @@
         // Pure 盯回踩 paper: waiting far from band, no gate fail, no live flag.
         return true;
       };
-      const rows = (lastReview.signals || []).filter((r) => {
+      const rows = applyRevSort((lastReview.signals || []).filter((r) => {
         if (type === "buy") {
           const st = String(r.signal_type || "");
           if (st === "sell" || !(st === "buy" || st.startsWith("buy_"))) return false;
@@ -4909,7 +5006,7 @@
         if (main && !(String(r.mainline || "").includes(main))) return false;
         if (hideWait && isPaperWait(r)) return false;
         return true;
-      });
+      }));
       const hiddenWaitN = hideWait
         ? (lastReview.signals || []).filter((r) => {
             if (type === "buy") {
@@ -4930,9 +5027,14 @@
           : "隐藏纯盯回踩";
       }
       const cols = visibleRevCols();
-      document.getElementById("revHead").innerHTML = cols.map((id) =>
-        `<th class="col-${id}">${revColLabel(id)}</th>`
-      ).join("");
+      document.getElementById("revHead").innerHTML = cols.map((id) => {
+        if (id === "ops") return `<th class="col-${id}">${revColLabel(id)}</th>`;
+        const on = revSort.id === id;
+        const ind = on ? (revSort.dir > 0 ? "▲" : "▼") : "";
+        return `<th class="col-${id} rev-sort" data-sort="${id}">${revColLabel(id)}`
+          + (ind ? `<span class="sort-ind">${ind}</span>` : "")
+          + `</th>`;
+      }).join("");
       const colspan = Math.max(cols.length, 1);
       const buyTypeLabel = (st) => ({
         buy: "买",
@@ -6265,6 +6367,22 @@
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", () => paintReview(lastReview));
     });
+    const revHeadEl = document.getElementById("revHead");
+    if (revHeadEl) {
+      revHeadEl.addEventListener("click", (ev) => {
+        const th = ev.target && ev.target.closest ? ev.target.closest("th.rev-sort") : null;
+        if (!th) return;
+        const col = th.getAttribute("data-sort");
+        if (!col) return;
+        if (revSort.id === col) {
+          revSort.dir = -revSort.dir;
+        } else {
+          revSort.id = col;
+          revSort.dir = -1; // first click: descending
+        }
+        paintReview(lastReview);
+      });
+    }
     document.getElementById("revHitMode").addEventListener("change", async () => {
       const mode = document.getElementById("revHitMode").value || "traded";
       try {

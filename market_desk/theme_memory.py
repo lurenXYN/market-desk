@@ -454,13 +454,18 @@ def attach_board_affinity(
         board["rep_own_adj"] = own_adj
         board["rep_auto_adj"] = auto_adj
         board["rep_manual_adj"] = manual_adj
-        board["rep_label"] = label_for_rep(
-            float(own.get("fade_n") or 0),
-            float(own.get("persist_n") or 0),
-            own_adj,
-        )
-        board["rep_fade_n"] = int(own.get("fade_n") or 0)
-        board["rep_persist_n"] = int(own.get("persist_n") or 0)
+        fade_n = int(own.get("fade_n") or 0)
+        persist_n = int(own.get("persist_n") or 0)
+        sample_n = fade_n + persist_n
+        board["rep_fade_n"] = fade_n
+        board["rep_persist_n"] = persist_n
+        board["rep_sample_n"] = sample_n
+        # Historical next-day heat rate (persist / graded days); None if thin.
+        if sample_n >= int(THEME_REP_MIN_SAMPLES):
+            board["rep_persist_rate"] = round(100.0 * persist_n / float(sample_n), 1)
+        else:
+            board["rep_persist_rate"] = None
+        board["rep_label"] = label_for_rep(fade_n, persist_n, own_adj)
     return cards
 
 

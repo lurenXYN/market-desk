@@ -898,6 +898,8 @@ class DeskEngine:
         pending = load_unscored_signals(today, limit=80)
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
+        day_rows: list[dict[str, Any]] = []
+        live_codes: list[str] = []
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 day_rows = load_signals_for_date(day)
@@ -915,6 +917,36 @@ class DeskEngine:
                     packed = await fetch_daily_klines_many(client, codes, limit=40)
                     apply_outcomes(pending, packed)
 
+                async def _migrate_outcome_labels() -> None:
+                    """Re-score labeled rows once when OHLC fake-red formula bumps."""
+                    from market_desk.config import OUTCOME_FORMULA_VERSION
+                    from market_desk.db import load_setting, load_signals, save_setting
+
+                    ver = int(OUTCOME_FORMULA_VERSION)
+                    try:
+                        cur = int(load_setting("outcome_formula_v") or 0)
+                    except (TypeError, ValueError):
+                        cur = 0
+                    if cur >= ver:
+                        return
+                    rows = [
+                        r
+                        for r in load_signals(limit=220)
+                        if r.get("outcome_label")
+                        and str(r.get("trade_date") or "") < today
+                    ]
+                    if rows:
+                        codes = [str(r.get("code") or "") for r in rows]
+                        packed = await fetch_daily_klines_many(client, codes, limit=40)
+                        n = apply_outcomes(rows, packed, overwrite=True)
+                        log.info(
+                            "outcome formula v%s rescore updated %s / %s rows",
+                            ver,
+                            n,
+                            len(rows),
+                        )
+                    save_setting("outcome_formula_v", ver)
+
                 async def _quotes() -> dict[str, dict[str, Any]]:
                     return await fetch_quotes(client, live_codes)
 
@@ -922,8 +954,9 @@ class DeskEngine:
                     return await fetch_holder_stats_many(client, stock_codes)
 
                 # zt_ytd is heavy (per-code daily bars); load via /api/review/zt-ytd.
-                _, quotes, holders = await asyncio.gather(
+                _, _, quotes, holders = await asyncio.gather(
                     _score_pending(),
+                    _migrate_outcome_labels(),
                     _quotes(),
                     _holders(),
                 )
@@ -933,6 +966,11 @@ class DeskEngine:
         phase = None
         if day == today and self.snapshot:
             phase = self.snapshot.get("phase")
+        trend_codes = live_codes or [str(r.get("code") or "") for r in day_rows]
+        try:
+            review_trends = self._cached_trends_for(trend_codes)
+        except Exception:
+            review_trends = {}
         payload = build_review_payload(
             limit=limit,
             quotes=quotes,
@@ -946,6 +984,7 @@ class DeskEngine:
             vs_mainline_mode=vs_mainline_mode,
             holders=holders,
             user_id=user_id,
+            trends=review_trends or None,
         )
         payload["cache_hit"] = False
         self._review_cache[cache_key] = (now_m, payload)

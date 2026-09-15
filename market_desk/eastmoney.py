@@ -685,10 +685,30 @@ async def fetch_daily_klines(
     client: httpx.AsyncClient,
     code: str,
     limit: int = 60,
-) -> tuple[list[str], list[float]]:
-    """Fetch adjusted daily dates and closes (oldest → newest)."""
+) -> tuple[list[str], list[float], dict[str, list[float | None]]]:
+    """Fetch adjusted daily dates, closes, and parallel OHLC lists (oldest → newest)."""
     bars = await fetch_daily_bars(client, code, limit=limit)
-    return [b["date"] for b in bars], [float(b["close"]) for b in bars]
+    dates: list[str] = []
+    closes: list[float] = []
+    opens: list[float | None] = []
+    highs: list[float | None] = []
+    lows: list[float | None] = []
+    for b in bars:
+        dates.append(str(b.get("date") or ""))
+        closes.append(float(b["close"]))
+        try:
+            opens.append(float(b["open"]) if b.get("open") is not None else None)
+        except (TypeError, ValueError):
+            opens.append(None)
+        try:
+            highs.append(float(b["high"]) if b.get("high") is not None else None)
+        except (TypeError, ValueError):
+            highs.append(None)
+        try:
+            lows.append(float(b["low"]) if b.get("low") is not None else None)
+        except (TypeError, ValueError):
+            lows.append(None)
+    return dates, closes, {"open": opens, "high": highs, "low": lows}
 
 
 async def fetch_minute_trends(
@@ -740,7 +760,7 @@ async def fetch_daily_closes(
     limit: int = 60,
 ) -> list[float]:
     """Fetch adjusted daily closes for trend checks (oldest → newest)."""
-    _dates, closes = await fetch_daily_klines(client, code, limit=limit)
+    _dates, closes, _ohlc = await fetch_daily_klines(client, code, limit=limit)
     return closes
 
 
@@ -751,7 +771,13 @@ async def fetch_daily_closes_many(
 ) -> dict[str, list[float]]:
     """Fetch daily closes for several codes concurrently."""
     packed = await fetch_daily_klines_many(client, codes, limit=limit)
-    return {code: closes for code, (_dates, closes) in packed.items()}
+    out: dict[str, list[float]] = {}
+    for code, triple in packed.items():
+        if not triple:
+            continue
+        _dates, closes = triple[0], triple[1]
+        out[code] = closes
+    return out
 
 
 async def fetch_daily_klines_many(
@@ -760,8 +786,8 @@ async def fetch_daily_klines_many(
     limit: int = 60,
     *,
     concurrency: int = 6,
-) -> dict[str, tuple[list[str], list[float]]]:
-    """Fetch daily dates+closes for several codes with a concurrency cap."""
+) -> dict[str, tuple[list[str], list[float], dict[str, list[float | None]]]]:
+    """Fetch daily dates+closes+OHLC for several codes with a concurrency cap."""
     uniq: list[str] = []
     seen: set[str] = set()
     for raw in codes:
@@ -774,12 +800,14 @@ async def fetch_daily_klines_many(
         return {}
     sem = asyncio.Semaphore(max(1, int(concurrency or 6)))
 
-    async def _one(code: str) -> tuple[list[str], list[float]]:
+    async def _one(
+        code: str,
+    ) -> tuple[list[str], list[float], dict[str, list[float | None]]]:
         async with sem:
             return await fetch_daily_klines(client, code, limit=limit)
 
     results = await asyncio.gather(*[_one(code) for code in uniq])
-    return {code: pair for code, pair in zip(uniq, results)}
+    return {code: triple for code, triple in zip(uniq, results)}
 
 
 # Shareholder counts move quarterly; cache aggressively to keep review snappy.

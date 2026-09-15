@@ -2206,23 +2206,53 @@ def build_item_buy_progress(item: dict[str, Any] | None) -> dict[str, Any]:
             soft_flags.append(text)
 
     off_fail = next((f for f in hard if "离日高" in f), None)
+    off_ok: bool | None = None
+    off_detail = "待验"
+    try:
+        last = it.get("last")
+        high = it.get("high")
+        if last is not None and high not in (None, 0) and float(high) > 0:
+            from market_desk.config import ETF_OFF_HIGH_MIN, STOCK_OFF_HIGH_MIN
+
+            kind = str(it.get("kind") or "stock")
+            dist = (float(high) - float(last)) / float(high) * 100.0
+            need = float(ETF_OFF_HIGH_MIN if kind == "etf" else STOCK_OFF_HIGH_MIN)
+            try:
+                from market_desk.adapt import resolve_gate_mult
+
+                need *= max(0.75, min(1.25, float(resolve_gate_mult("off_high", 1.0))))
+            except Exception:
+                pass
+            if dist + 1e-9 < need:
+                off_ok = False
+                off_detail = f"仅{dist:.2f}%（需≥{need:.2f}%）"
+            else:
+                off_ok = True
+                off_detail = f"已离{dist:.2f}%"
+    except (TypeError, ValueError, ZeroDivisionError):
+        off_ok = None
+        off_detail = "无日高"
     if off_fail:
+        off_ok = False
+        off_detail = str(off_fail)
+    if off_ok is False:
         steps.append(
             {
                 "key": "off_high",
                 "label": "离日高",
                 "ok": False,
-                "detail": off_fail,
+                "detail": off_detail,
             }
         )
-        missing.append("离日高")
+        if "离日高" not in missing:
+            missing.append("离日高")
     else:
         steps.append(
             {
                 "key": "off_high",
                 "label": "离日高",
-                "ok": True if near or bool(it.get("ready")) else None,
-                "detail": "已过" if (near or it.get("ready")) and not off_fail else "待验",
+                "ok": off_ok,
+                "detail": off_detail,
             }
         )
 

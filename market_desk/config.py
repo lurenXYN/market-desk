@@ -201,6 +201,13 @@ ETF_OFF_HIGH_MIN = 0.40
 STOCK_OFF_HIGH_MIN = 0.75
 ETF_NEAR_HIGH_PCT = 0.40
 STOCK_NEAR_HIGH_PCT = 0.50
+# Buy outcome quality: close green but day-low stabbed / open faded → not a hit.
+OUTCOME_FAKE_RED_LOW_PCT = -2.0   # day1 low vs entry ≤ this → 次日虚红
+OUTCOME_FAKE_RED_OPEN_PCT = 1.5   # day1 open ≥ this and close weak → 次日冲高回落
+OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
+# Bump when buy outcome label semantics change; review refresh migrates old rows.
+OUTCOME_FORMULA_VERSION = 2
+
 # Wait price as a fraction of last (shallower wait → nearer entry tags).
 ETF_WAIT_GAP = 0.9955   # ~0.45% below last
 STOCK_WAIT_GAP = 0.9915  # ~0.85% below last
