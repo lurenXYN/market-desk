@@ -56,6 +56,8 @@ from market_desk.db import (
     load_signals,
     load_stock_blacklist,
     load_watchlist,
+    sync_position_buy_fill,
+    sync_position_sell_fill,
     sync_sell_fill_from_trim,
     trim_position,
     update_signal_meta,
@@ -96,6 +98,8 @@ class SignalMetaIn(BaseModel):
     note: str | None = None
     fill_price: float | None = Field(default=None, gt=0)
     fill_qty: int | None = Field(default=None, gt=0)
+    # When editing fill_price/fill_qty, also rewrite the matching local book lot.
+    sync_book: bool = False
 
 
 class SignalTradeIn(BaseModel):
@@ -598,7 +602,27 @@ def annotate_signal(
     body: SignalMetaIn,
     user: dict = Depends(current_member_required),
 ) -> dict:
-    """Mark a signal as traded / not traded, or attach a note / fill."""
+    """Mark a signal as traded / not traded, or attach a note / fill.
+
+    When ``sync_book`` is set with a fill edit, reverse the prior fill on the
+    local position book and apply the new price/qty (buy average or sell trim).
+    """
+    uid = int(user["id"])
+    row = load_signal(sid)
+    if not row:
+        raise HTTPException(404, "signal not found")
+    annotated = apply_signal_user_meta([row], uid)[0]
+    old_px = annotated.get("fill_price")
+    old_qty = annotated.get("fill_qty")
+    try:
+        old_px_f = float(old_px) if old_px not in (None, "") else None
+    except (TypeError, ValueError):
+        old_px_f = None
+    try:
+        old_qty_i = int(old_qty) if old_qty not in (None, "") else None
+    except (TypeError, ValueError):
+        old_qty_i = None
+
     ok = update_signal_meta(
         sid,
         skipped=None if body.skipped is None else (1 if body.skipped else 0),
@@ -606,12 +630,81 @@ def annotate_signal(
         note=body.note,
         fill_price=body.fill_price,
         fill_qty=body.fill_qty,
-        user_id=int(user["id"]),
+        user_id=uid,
     )
     if not ok:
         raise HTTPException(404, "signal not found")
+
+    booked: dict[str, Any] | None = None
+    book_summary: dict[str, Any] | None = None
+    if body.sync_book and body.fill_price is not None and body.fill_qty is not None:
+        code = normalize_code(annotated.get("code"))
+        name = str(annotated.get("name") or code)
+        sig_type = str(annotated.get("signal_type") or "buy")
+        new_px = float(body.fill_price)
+        new_qty = int(body.fill_qty)
+        try:
+            if is_buy_signal(sig_type):
+                booked = sync_position_buy_fill(
+                    code,
+                    name,
+                    old_price=old_px_f,
+                    old_qty=old_qty_i,
+                    new_price=new_px,
+                    new_qty=new_qty,
+                    user_id=uid,
+                    note="复盘改成交",
+                    entry_board=str(annotated.get("mainline") or ""),
+                )
+                book_summary = {
+                    "side": "buy",
+                    "code": code,
+                    "name": name,
+                    "qty": int(booked.get("qty") or new_qty),
+                    "price": float(booked.get("buy_price") or new_px),
+                    "message": (
+                        f"已同步仓位 {name or code}：成交改成 {new_qty}股 @ {new_px}；"
+                        f"持仓现 {int(booked.get('qty') or 0)}股 / 成本 "
+                        f"{booked.get('buy_price')}"
+                    ),
+                }
+            elif is_sell_signal(sig_type):
+                booked = sync_position_sell_fill(
+                    code,
+                    old_price=old_px_f,
+                    old_qty=old_qty_i,
+                    new_price=new_px,
+                    new_qty=new_qty,
+                    user_id=uid,
+                    trade_date=str(annotated.get("trade_date") or "")[:10] or None,
+                )
+                book_summary = {
+                    "side": "sell",
+                    "code": code,
+                    "name": name,
+                    "qty": int(booked.get("trimmed") or new_qty),
+                    "left": int(booked.get("qty") or 0),
+                    "price": booked.get("sell_price") or new_px,
+                    "message": (
+                        f"已同步仓位卖出 {name or code}：成交改成 "
+                        f"{int(booked.get('trimmed') or new_qty)}股 @ {new_px}；"
+                        f"剩余 {int(booked.get('qty') or 0)}股"
+                    ),
+                }
+            else:
+                raise HTTPException(400, "unknown signal type for book sync")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     engine.clear_review_cache()
-    return {"ok": True, "id": sid}
+    out: dict[str, Any] = {"ok": True, "id": sid}
+    if booked is not None:
+        snap = engine.snapshot_for_user(uid)
+        out["booked"] = booked
+        out["book_summary"] = book_summary
+        out["positions"] = snap.get("positions") or []
+        out["summary"] = snap.get("position_summary")
+    return out
 
 
 @app.post("/api/review/{sid}/trade")

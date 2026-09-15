@@ -475,6 +475,51 @@
     .rev-hist svg { width: 100%; height: 56px; display: block; }
     .rev-fill { font-size: 12px; color: var(--muted); }
     .rev-fill b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .rev-fill-ed {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      min-width: 240px;
+      max-width: 360px;
+      padding: 4px 0;
+    }
+    .rev-fill-ed .hint {
+      flex: 1 1 100%;
+      color: var(--muted);
+      font-size: 11px;
+      margin: 0;
+    }
+    .rev-fill-ed label.num {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--muted);
+    }
+    .rev-fill-ed input[type="number"] {
+      width: 78px;
+      background: #151c28;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 3px 6px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .rev-fill-ed label.sync {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .rev-fill-ed .rev-col-btn.primary {
+      border-color: #164e63;
+      color: var(--ice);
+      background: #082028;
+    }
     .rev-exec, .rev-phase, .risk-box {
       margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line);
       border-radius: 8px; background: #0e141c; font-size: 13px;
@@ -4442,6 +4487,122 @@
       if (pq) return pq;
       return "";
     }
+    function escAttr(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/'/g, "&#39;");
+    }
+    function closeOpenFillEditors() {
+      document.querySelectorAll("#revBody .rev-fill-ed").forEach((ed) => {
+        const cell = ed.closest("td");
+        if (cell && cell.dataset.prevHtml != null) {
+          cell.innerHTML = cell.dataset.prevHtml;
+          delete cell.dataset.prevHtml;
+        }
+      });
+    }
+    function openFillEditor(btn) {
+      const cell = btn.closest("td");
+      if (!cell) return;
+      closeOpenFillEditors();
+      const id = btn.getAttribute("data-id") || "";
+      const code = btn.getAttribute("data-code") || "";
+      const name = btn.getAttribute("data-name") || code;
+      const typ = btn.getAttribute("data-type") || "buy";
+      const px0 = btn.getAttribute("data-price") || "";
+      const suggest0 = btn.getAttribute("data-suggest") || "";
+      const qty0 = btn.getAttribute("data-qty") || "100";
+      const hasFill = btn.textContent.trim() === "改";
+      const hintBits = [
+        name ? `${name} ${code}` : code,
+        suggest0 ? `建议价 ${suggest0}` : "",
+        hasFill ? "改正后可勾选同步仓位" : "填写后可勾选写入/同步仓位",
+      ].filter(Boolean);
+      cell.dataset.prevHtml = cell.innerHTML;
+      cell.innerHTML = `
+        <div class="rev-fill-ed" data-id="${escAttr(id)}" data-type="${escAttr(typ)}">
+          <p class="hint">${hintBits.map(escAttr).join(" · ")}</p>
+          <label class="num">价<input type="number" class="rev-fill-px" step="0.001" min="0.001" value="${escAttr(px0)}" /></label>
+          <label class="num">量<input type="number" class="rev-fill-qty" step="1" min="1" value="${escAttr(qty0)}" /></label>
+          <label class="sync" title="买：冲正成本/股数；卖：冲正减仓"><input type="checkbox" class="rev-fill-sync" checked />同步仓位</label>
+          <button type="button" class="rev-col-btn primary rev-fill-save">保存</button>
+          <button type="button" class="rev-col-btn rev-fill-cancel">取消</button>
+        </div>`;
+      const pxInput = cell.querySelector(".rev-fill-px");
+      if (pxInput) {
+        pxInput.focus();
+        pxInput.select();
+      }
+      const ed = cell.querySelector(".rev-fill-ed");
+      if (ed) {
+        ed.addEventListener("keydown", (kev) => {
+          if (kev.key === "Enter") {
+            kev.preventDefault();
+            saveFillEditor(ed);
+          } else if (kev.key === "Escape") {
+            kev.preventDefault();
+            if (cell.dataset.prevHtml != null) {
+              cell.innerHTML = cell.dataset.prevHtml;
+              delete cell.dataset.prevHtml;
+            }
+          }
+        });
+      }
+    }
+    async function saveFillEditor(ed) {
+      const id = ed.getAttribute("data-id");
+      if (!id) return;
+      const typ = ed.getAttribute("data-type") || "buy";
+      const pxEl = ed.querySelector(".rev-fill-px");
+      const qtyEl = ed.querySelector(".rev-fill-qty");
+      const syncEl = ed.querySelector(".rev-fill-sync");
+      const fillPx = Number(pxEl && pxEl.value);
+      const fillQty = Number(qtyEl && qtyEl.value);
+      if (!(fillPx > 0) || !(fillQty > 0)) {
+        alert("请填写有效成交价和数量");
+        return;
+      }
+      const syncBook = !!(syncEl && syncEl.checked);
+      const saveBtn = ed.querySelector(".rev-fill-save");
+      if (saveBtn) saveBtn.disabled = true;
+      try {
+        const r = await fetch("/api/review/" + id, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            traded: true,
+            skipped: false,
+            fill_price: fillPx,
+            fill_qty: fillQty,
+            sync_book: syncBook,
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          alert(typeof d.detail === "string" ? d.detail : "改成交失败");
+          if (saveBtn) saveBtn.disabled = false;
+          return;
+        }
+        if (syncBook && d.book_summary && d.book_summary.message) {
+          alert(d.book_summary.message);
+        } else if (syncBook) {
+          alert(
+            String(typ).indexOf("sell") >= 0
+              ? "已改成交并同步仓位卖出"
+              : "已改成交并同步仓位"
+          );
+        }
+      } catch (e) {
+        alert("改成交失败");
+        if (saveBtn) saveBtn.disabled = false;
+        return;
+      }
+      reviewLoadedAt = 0;
+      await loadReview(true);
+      await tick();
+    }
     function revCellHtml(col, r, ctx) {
       if (col === "date") return revSignalTime(r);
       if (col === "type") {
@@ -4456,11 +4617,14 @@
         const fp = r.fill_price;
         const fq = r.fill_qty;
         const defPx = revTradeDefaultPx(r);
+        const typ = r.signal_type || "buy";
+        const code = r.code || "";
+        const name = r.name || code;
         if (fp == null && fq == null) {
-          return `<button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-price="${defPx}" data-suggest="${r.price ?? ""}" data-qty="${revTradeDefaultQty(r) || 100}">填成交</button>`;
+          return `<button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-type="${escAttr(typ)}" data-code="${escAttr(code)}" data-name="${escAttr(name)}" data-price="${escAttr(defPx)}" data-suggest="${escAttr(r.price ?? "")}" data-qty="${escAttr(revTradeDefaultQty(r) || 100)}">填成交</button>`;
         }
         return `<div class="rev-fill"><b>${fp ?? "—"}</b> × ${fq ?? "—"}
-          <button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-price="${fp ?? ""}" data-suggest="${r.price ?? ""}" data-qty="${fq || 100}" style="margin-left:4px;padding:1px 6px">改</button></div>`;
+          <button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-type="${escAttr(typ)}" data-code="${escAttr(code)}" data-name="${escAttr(name)}" data-price="${escAttr(fp ?? "")}" data-suggest="${escAttr(r.price ?? "")}" data-qty="${escAttr(fq || 100)}" style="margin-left:4px;padding:1px 6px">改</button></div>`;
       }
       if (col === "chase") {
         const chase = r.chase_price != null ? r.chase_price
@@ -6781,31 +6945,23 @@
       }
       const fillEdit = ev.target.closest(".rev-fill-edit");
       if (fillEdit) {
-        const id = fillEdit.getAttribute("data-id");
-        if (!id) return;
-        const px0 = fillEdit.getAttribute("data-price") || "";
-        const suggest0 = fillEdit.getAttribute("data-suggest") || "";
-        const qty0 = fillEdit.getAttribute("data-qty") || "100";
-        const hint = [
-          px0 ? `默认现价 ${px0}` : "请填实际成交价",
-          suggest0 ? `计划建议价 ${suggest0}` : "",
-        ].filter(Boolean).join("；");
-        const pxIn = prompt(`成交价（${hint}）`, px0);
-        if (pxIn === null || !String(pxIn).trim()) return;
-        const qtyIn = prompt("成交数量", qty0);
-        if (qtyIn === null || !String(qtyIn).trim()) return;
-        await fetch("/api/review/" + id, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            traded: true,
-            skipped: false,
-            fill_price: Number(pxIn),
-            fill_qty: Number(qtyIn),
-          }),
-        });
-        reviewLoadedAt = 0;
-        await loadReview(true);
+        openFillEditor(fillEdit);
+        return;
+      }
+      const fillCancel = ev.target.closest(".rev-fill-cancel");
+      if (fillCancel) {
+        const ed = fillCancel.closest(".rev-fill-ed");
+        const cell = ed && ed.closest("td");
+        if (cell && cell.dataset.prevHtml != null) {
+          cell.innerHTML = cell.dataset.prevHtml;
+          delete cell.dataset.prevHtml;
+        }
+        return;
+      }
+      const fillSave = ev.target.closest(".rev-fill-save");
+      if (fillSave) {
+        const ed = fillSave.closest(".rev-fill-ed");
+        if (ed) await saveFillEditor(ed);
         return;
       }
       const skip = ev.target.closest(".rev-skip");

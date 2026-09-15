@@ -1789,6 +1789,244 @@ def trim_position(
         return item
 
 
+def sync_position_buy_fill(
+    code: str,
+    name: str,
+    *,
+    old_price: float | None,
+    old_qty: int | None,
+    new_price: float,
+    new_qty: int,
+    user_id: int,
+    note: str = "",
+    entry_board: str = "",
+) -> dict[str, Any]:
+    """Correct an open book lot after a review buy fill is edited.
+
+    Reverses the previous fill contribution (when present), then applies the
+    new price/qty. If no open row exists, inserts the new lot.
+    """
+    uid = int(user_id)
+    code = str(code or "").zfill(6)
+    new_q = int(new_qty)
+    new_p = float(new_price)
+    if new_q <= 0 or new_p <= 0:
+        raise ValueError("new buy fill must have positive price and qty")
+    old_q = int(old_qty or 0)
+    old_p = float(old_price or 0)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    buy_day = now[:10]
+    board = str(entry_board or "").strip() or None
+    with _connect() as conn:
+        existing = conn.execute(
+            f"""
+            SELECT {_POS_SELECT}
+            FROM positions
+            WHERE code = ? AND user_id = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (code, uid),
+        ).fetchone()
+        if not existing or int(existing["qty"] or 0) <= 0:
+            if existing and int(existing["qty"] or 0) <= 0:
+                conn.execute(
+                    """
+                    UPDATE positions
+                    SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
+                        closed_date = NULL, created_at = ?, peak_price = ?, entry_board = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (
+                        name or existing["name"] or code,
+                        new_p,
+                        new_q,
+                        note or existing["note"] or "",
+                        buy_day,
+                        now,
+                        new_p,
+                        board or (str(existing["entry_board"] or "").strip() or None),
+                        int(existing["id"]),
+                        uid,
+                    ),
+                )
+                conn.commit()
+                return {
+                    "id": int(existing["id"]),
+                    "code": code,
+                    "name": name or existing["name"] or code,
+                    "buy_price": new_p,
+                    "qty": new_q,
+                    "reopened": True,
+                    "corrected": True,
+                }
+            cur = conn.execute(
+                """
+                INSERT INTO positions(
+                    user_id, code, name, buy_price, qty, note, created_at, last_buy_date,
+                    closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
+                    peak_price, entry_board
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?, ?)
+                """,
+                (uid, code, name or code, new_p, new_q, note, now, buy_day, new_p, board),
+            )
+            conn.commit()
+            return {
+                "id": int(cur.lastrowid),
+                "code": code,
+                "name": name or code,
+                "buy_price": new_p,
+                "qty": new_q,
+                "inserted": True,
+                "corrected": True,
+            }
+
+        hold = int(existing["qty"] or 0)
+        avg = float(existing["buy_price"] or 0)
+        # Undo prior fill contribution when we still have those shares.
+        if old_q > 0 and old_p > 0:
+            undo = min(old_q, hold)
+            if undo >= hold:
+                hold = 0
+                avg = 0.0
+            else:
+                cost = avg * hold - old_p * undo
+                hold -= undo
+                avg = (cost / hold) if hold > 0 else 0.0
+                if avg < 0:
+                    avg = 0.0
+        if hold <= 0:
+            hold = new_q
+            avg = new_p
+        else:
+            cost = avg * hold + new_p * new_q
+            hold = hold + new_q
+            avg = cost / float(hold)
+        merged_note = (existing["note"] or "") or note
+        if note and existing["note"] and note not in str(existing["note"]):
+            merged_note = f"{existing['note']}；{note}"
+        conn.execute(
+            """
+            UPDATE positions
+            SET name = ?, buy_price = ?, qty = ?, note = ?, last_buy_date = ?,
+                closed_date = NULL, entry_board = COALESCE(?, entry_board)
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                name or existing["name"] or code,
+                round(avg, 4),
+                hold,
+                merged_note,
+                buy_day,
+                board,
+                int(existing["id"]),
+                uid,
+            ),
+        )
+        conn.commit()
+        return {
+            "id": int(existing["id"]),
+            "code": code,
+            "name": name or existing["name"] or code,
+            "buy_price": round(avg, 4),
+            "qty": hold,
+            "corrected": True,
+        }
+
+
+def sync_position_sell_fill(
+    code: str,
+    *,
+    old_price: float | None,
+    old_qty: int | None,
+    new_price: float,
+    new_qty: int,
+    user_id: int,
+    trade_date: str | None = None,
+) -> dict[str, Any]:
+    """Correct a local book after a review sell fill is edited.
+
+    Restores the previous sell qty, then re-trims at the new price/qty.
+    """
+    uid = int(user_id)
+    code = str(code or "").zfill(6)
+    new_q = int(new_qty)
+    new_p = float(new_price)
+    if new_q <= 0 or new_p <= 0:
+        raise ValueError("new sell fill must have positive price and qty")
+    old_q = int(old_qty or 0)
+    old_p = float(old_price or 0)
+    day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {_POS_SELECT}
+            FROM positions
+            WHERE code = ? AND user_id = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (code, uid),
+        ).fetchone()
+        if not row:
+            raise ValueError("no local position to sync this sell fill")
+        hold = int(row["qty"] or 0)
+        buy = float(row["buy_price"] or 0)
+        day_sold = int(row["day_sold_qty"] or 0)
+        day_pnl = float(row["day_realized_pnl"] or 0)
+        last_sell = str(row["last_sell_date"] or "")[:10]
+        last_px = row["last_sell_price"]
+        # Undo prior sell contribution on the same book day when possible.
+        if old_q > 0:
+            hold += old_q
+            if last_sell == day:
+                day_sold = max(0, day_sold - old_q)
+                undo_px = old_p if old_p > 0 else float(last_px or buy or 0)
+                day_pnl = round(day_pnl - (undo_px - buy) * old_q, 2)
+                if day_sold <= 0:
+                    day_sold = 0
+                    day_pnl = 0.0
+                    last_sell = ""
+                    last_px = None
+        sell = min(new_q, hold)
+        if sell <= 0:
+            raise ValueError("position qty is zero after reversing prior sell")
+        left = hold - sell
+        chunk = round((new_p - buy) * sell, 2)
+        if last_sell == day or (not last_sell and day_sold > 0):
+            day_sold = day_sold + sell
+            day_pnl = round(day_pnl + chunk, 2)
+        else:
+            day_sold = sell
+            day_pnl = chunk
+        closed_date = day if left <= 0 else None
+        conn.execute(
+            """
+            UPDATE positions
+            SET qty = ?, closed_date = ?, last_sell_date = ?, last_sell_price = ?,
+                day_sold_qty = ?, day_realized_pnl = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (left, closed_date, day, round(new_p, 4), day_sold, day_pnl, int(row["id"]), uid),
+        )
+        conn.commit()
+        item = _position_item(
+            {
+                **dict(row),
+                "qty": left,
+                "closed_date": closed_date,
+                "last_sell_date": day,
+                "last_sell_price": round(new_p, 4),
+                "day_sold_qty": day_sold,
+                "day_realized_pnl": day_pnl,
+            }
+        )
+        item["trimmed"] = sell
+        item["sell_price"] = round(new_p, 4)
+        item["realized_chunk"] = chunk
+        item["corrected"] = True
+        return item
+
+
 def delete_position(pid: int, *, user_id: int | None = None) -> bool:
     """Delete a position by id. Return True if a row was removed."""
     with _connect() as conn:
