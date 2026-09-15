@@ -264,6 +264,15 @@ BUY_GATE_TIGHTEN_MULT = 1.12
 MAINLINE_LEADER_STRUCT_BONUS = 4.0   # 1–2板龙 + 跟风结构
 MAINLINE_LEADER_PAIR_BONUS = 2.0     # extra when 二板龙 + 卡位/跟风
 MAINLINE_LEADER_MAINBOARD_BONUS = 1.5
+# Breadth: absolute limit-up count with soft diminishing returns (20 still ≫ 4).
+MAINLINE_ZT_UNIT = 6.0              # points per zt in the first band
+MAINLINE_ZT_SOFT_START = 12         # beyond this, marginal zt is cheaper
+MAINLINE_ZT_SOFT_UNIT = 3.0
+MAINLINE_ZT_TAIL_START = 18         # beyond this, tiny tail credits only
+MAINLINE_ZT_TAIL_UNIT = 1.0
+# Thin niches: damp so 金属钨(4) cannot beat 计算机(20) on status alone.
+MAINLINE_THIN_ZT_MAX = 4
+MAINLINE_THIN_PEN_PER = 5.0         # (MAX+1 - zt_n) * this when zt ≤ MAX
 
 # Stock recommend: cross-board membership resonance (cap keeps pullback quality first).
 STOCK_CROSS_BOARD_BASE = 2.0       # per extra hot board beyond the scoring board

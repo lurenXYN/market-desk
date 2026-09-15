@@ -1659,11 +1659,15 @@ class DeskEngine:
         now: datetime,
         errors: list[str],
     ) -> list[dict[str, Any]]:
-        cursor = now.date() - timedelta(days=1)
+        """Fetch prior-session limit-ups with today's follow-through.
+
+        East Money ``getYesterdayZTPool`` takes an *as-of* date (usually today):
+        it returns the previous session's seal list scored as of that date.
+        Passing yesterday's calendar day would load T-2 seals — wrong for the
+        auction strategy tab.
+        """
+        cursor = now.date()
         for _ in range(10):
-            if not is_trading_day(cursor):
-                cursor -= timedelta(days=1)
-                continue
             key = cursor.strftime("%Y%m%d")
             rows = await _safe(
                 fetch_yesterday_zt, client, key, errors=errors, label=f"yzt-{key}"
@@ -1671,6 +1675,8 @@ class DeskEngine:
             if rows:
                 return rows
             cursor -= timedelta(days=1)
+            while cursor.weekday() >= 5:
+                cursor -= timedelta(days=1)
         return []
 
     async def _ensure_index_bars(

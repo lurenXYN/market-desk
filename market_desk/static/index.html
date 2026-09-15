@@ -2668,13 +2668,14 @@
               data-code="${it.code || ""}"
               data-name="${it.name || ""}"
               data-price="${buy ?? ""}"
+              data-suggest="${buy ?? ""}"
               data-last="${it.last ?? ""}"
               data-qty="${qtyForBook}"
               title="确认后写入本地仓位；若有当日买入信号会同步记已交易">记入仓位</button>
             <button type="button" class="pos-btn rec-pos"
               data-code="${it.code || ""}"
               data-name="${it.name || ""}"
-              data-price="${buy ?? ""}"
+              data-price="${it.last ?? buy ?? ""}"
               data-qty="${qtyForBook}"
               title="只带到仓位页表单，不自动保存">填到仓位页</button>
             ${pinBtn}
@@ -4427,6 +4428,20 @@
       }
       return raw;
     }
+    function revTradeDefaultPx(r) {
+      // Prefer actual fill / live last. Never silently use plan suggest (r.price).
+      if (r.fill_price != null && r.fill_price !== "") return r.fill_price;
+      if (r.live_last != null && r.live_last !== "") return r.live_last;
+      if (r.last != null && r.last !== "") return r.last;
+      return "";
+    }
+    function revTradeDefaultQty(r) {
+      if (r.fill_qty) return r.fill_qty;
+      if (r.plan_qty) return r.plan_qty;
+      const pq = r.payload && r.payload.qty;
+      if (pq) return pq;
+      return "";
+    }
     function revCellHtml(col, r, ctx) {
       if (col === "date") return revSignalTime(r);
       if (col === "type") {
@@ -4440,11 +4455,12 @@
       if (col === "fill") {
         const fp = r.fill_price;
         const fq = r.fill_qty;
+        const defPx = revTradeDefaultPx(r);
         if (fp == null && fq == null) {
-          return `<button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-price="${r.live_last != null ? r.live_last : (r.price ?? "")}" data-qty="${r.fill_qty || 100}">填成交</button>`;
+          return `<button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-price="${defPx}" data-suggest="${r.price ?? ""}" data-qty="${revTradeDefaultQty(r) || 100}">填成交</button>`;
         }
         return `<div class="rev-fill"><b>${fp ?? "—"}</b> × ${fq ?? "—"}
-          <button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-price="${fp ?? ""}" data-qty="${fq || 100}" style="margin-left:4px;padding:1px 6px">改</button></div>`;
+          <button type="button" class="rev-col-btn rev-fill-edit" data-id="${r.id}" data-price="${fp ?? ""}" data-suggest="${r.price ?? ""}" data-qty="${fq || 100}" style="margin-left:4px;padding:1px 6px">改</button></div>`;
       }
       if (col === "chase") {
         const chase = r.chase_price != null ? r.chase_price
@@ -4463,9 +4479,16 @@
         const tag = r.vs_mainline || "—";
         const match = r.board_match;
         const cls = match === true ? "up" : (match === false ? "down" : "meta");
-        const of = r.vs_mainline_of
-          ? `相对「${r.vs_mainline_of}」`
-          : "相对对照主线";
+        const bits = [];
+        const role = r.vs_compare_role || r.desk_source || "";
+        const roleLab = role === "side" ? "支线" : (role === "link" ? "联动" : (role === "watch_trial" ? "自选试探" : "主线"));
+        if (r.vs_mainline_of) bits.push(`对照${roleLab}「${r.vs_mainline_of}」`);
+        if (r.vs_sticky_of && r.vs_sticky_of !== r.vs_mainline_of) {
+          bits.push(`盘面主线「${r.vs_sticky_of}」${r.vs_sticky ? "·" + r.vs_sticky : ""}`);
+        } else if (!r.vs_mainline_of && r.vs_sticky_of) {
+          bits.push(`相对盘面主线「${r.vs_sticky_of}」`);
+        }
+        const of = bits.join("；") || "相对对照主线";
         return `<span class="${cls}" title="${of}">${tag}</span>`;
       }
       if (col === "phase") return r.phase || "—";
@@ -4515,7 +4538,7 @@
         const t1 = !!ctx.t1Locked;
         const tradeBtn = t1
           ? `<button type="button" class="rev-trade" disabled title="当日买入，隔日才能卖（T+1）">T+1不可卖</button>`
-          : `<button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${r.fill_price != null ? r.fill_price : (r.live_last != null ? r.live_last : (r.price ?? ""))}" data-qty="${r.fill_qty || ""}">已交易</button>`;
+          : `<button type="button" class="rev-trade${ctx.traded ? " on" : ""}" data-id="${r.id}" data-type="${r.signal_type || "buy"}" data-code="${r.code || ""}" data-name="${r.name || ""}" data-price="${revTradeDefaultPx(r)}" data-suggest="${r.price ?? ""}" data-qty="${revTradeDefaultQty(r)}">已交易</button>`;
         return `<div class="rev-actions">
           ${tradeBtn}
           <button type="button" class="rev-skip${ctx.skipped ? " on" : ""}" data-id="${r.id}">未交易</button>
@@ -5499,10 +5522,16 @@
         const code = (bookBtn.dataset.code || "").trim();
         const name = (bookBtn.dataset.name || "").trim();
         if (!code) return;
-        let px = bookBtn.dataset.price || bookBtn.dataset.last || "";
+        // Default to live last; plan suggest is only a hint in the prompt.
+        let px = bookBtn.dataset.last || bookBtn.dataset.price || "";
+        const suggest = bookBtn.dataset.suggest || bookBtn.dataset.price || "";
         let qty = Number(bookBtn.dataset.qty || 100) || 100;
+        const hint = [
+          px ? `默认现价 ${px}` : "请填写实际成交价",
+          suggest && String(suggest) !== String(px) ? `计划建议价 ${suggest}` : "",
+        ].filter(Boolean).join("；");
         const pxIn = prompt(
-          `${name || code}\n成交价（默认建议价 ${px || "—"}；可改成实际成交）`,
+          `${name || code}\n成交价（${hint}）`,
           px || ""
         );
         if (pxIn === null) return;
@@ -6632,6 +6661,7 @@
         const code = trade.getAttribute("data-code") || "";
         const name = trade.getAttribute("data-name") || code;
         let px = trade.getAttribute("data-price") || "";
+        const suggest = trade.getAttribute("data-suggest") || "";
         const prefQty = trade.getAttribute("data-qty") || "";
         let book = true;
         let qty = typ === "buy" ? (prefQty ? Number(prefQty) : 100) : undefined;
@@ -6657,7 +6687,7 @@
           } else {
             book = true;
             const mode = String(ans).trim() === "2" ? "clear" : "half";
-            const pxIn = prompt(`卖出价（默认现价 ${px || ""}）`, px || "");
+            const pxIn = prompt(`卖出价（默认现价 ${px || "请手填"}）`, px || "");
             if (pxIn === null) return;
             if (String(pxIn).trim()) px = String(pxIn).trim();
             try {
@@ -6690,14 +6720,22 @@
             return;
           }
         } else {
-          const pxIn = prompt(`${name} ${code}\n成交价（默认 ${px || "建议价"}）`, px || "");
+          const hint = [
+            px ? `默认现价 ${px}` : "请填写实际成交价",
+            suggest ? `计划建议价 ${suggest}` : "",
+          ].filter(Boolean).join("；");
+          const pxIn = prompt(`${name} ${code}\n成交价（${hint}）`, px || "");
           if (pxIn === null) return;
           if (String(pxIn).trim()) px = String(pxIn).trim();
+          if (!String(px).trim()) {
+            alert("请填写实际成交价（不要用空的建议价默认）");
+            return;
+          }
           const qtyDef = String(qty || 100);
           const qtyIn = prompt("成交数量（默认 " + qtyDef + "）", qtyDef);
           if (qtyIn === null) return;
           if (String(qtyIn).trim()) qty = Number(qtyIn);
-          book = confirm(`按 ${px || "建议价"} × ${qty} 写入仓位？\n取消=只标记成交，不改仓位`);
+          book = confirm(`按 ${px} × ${qty} 写入仓位？\n取消=只标记成交，不改仓位`);
         }
         try {
           const r = await fetch("/api/review/" + id + "/trade", {
@@ -6746,8 +6784,13 @@
         const id = fillEdit.getAttribute("data-id");
         if (!id) return;
         const px0 = fillEdit.getAttribute("data-price") || "";
+        const suggest0 = fillEdit.getAttribute("data-suggest") || "";
         const qty0 = fillEdit.getAttribute("data-qty") || "100";
-        const pxIn = prompt("成交价", px0);
+        const hint = [
+          px0 ? `默认现价 ${px0}` : "请填实际成交价",
+          suggest0 ? `计划建议价 ${suggest0}` : "",
+        ].filter(Boolean).join("；");
+        const pxIn = prompt(`成交价（${hint}）`, px0);
         if (pxIn === null || !String(pxIn).trim()) return;
         const qtyIn = prompt("成交数量", qty0);
         if (qtyIn === null || !String(qtyIn).trim()) return;

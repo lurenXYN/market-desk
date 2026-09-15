@@ -117,7 +117,12 @@ async def fetch_zb_pool(client: httpx.AsyncClient, trade_date: str) -> list[dict
 async def fetch_yesterday_zt(
     client: httpx.AsyncClient, zt_date: str
 ) -> list[dict[str, Any]]:
-    """Fetch yesterday's limit-ups with today's follow-through stats."""
+    """Fetch the prior-session limit-up pool as of ``zt_date``.
+
+    ``zt_date`` is the East Money *as-of* day (usually today). The API returns
+    stocks that sealed on the previous session, with follow-through stats for
+    ``zt_date`` (open/last pct used by the auction strategy board).
+    """
     url = _zt_url("getYesterdayZTPool", zt_date, "&sort=zdp:desc")
     payload = await _get_json(client, url)
     if payload.get("data") is None:
@@ -140,8 +145,8 @@ async def fetch_yesterday_zt(
 
 
 async def previous_trade_date(client: httpx.AsyncClient, today: date) -> str:
-    """Walk backward until yesterday's limit-up pool responds."""
-    cursor = today - timedelta(days=1)
+    """Return an as-of date whose yesterday-ZT pool is non-empty (prefer today)."""
+    cursor = today
     for _ in range(10):
         if cursor.weekday() >= 5:
             cursor -= timedelta(days=1)
@@ -154,7 +159,7 @@ async def previous_trade_date(client: httpx.AsyncClient, today: date) -> str:
         if rows:
             return key
         cursor -= timedelta(days=1)
-    return (today - timedelta(days=1)).strftime("%Y%m%d")
+    return today.strftime("%Y%m%d")
 
 
 def _quote_from_diff(item: dict[str, Any]) -> dict[str, Any] | None:

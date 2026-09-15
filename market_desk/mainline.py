@@ -14,9 +14,48 @@ from market_desk.config import (
     MAINLINE_THEME_FADE_SKIP,
     MAINLINE_THEME_GROUPS,
     MAINLINE_THEME_SWITCH_MULT,
+    MAINLINE_THIN_PEN_PER,
+    MAINLINE_THIN_ZT_MAX,
+    MAINLINE_ZT_SOFT_START,
+    MAINLINE_ZT_SOFT_UNIT,
+    MAINLINE_ZT_TAIL_START,
+    MAINLINE_ZT_TAIL_UNIT,
+    MAINLINE_ZT_UNIT,
 )
 from market_desk.filters import is_main_board
 from market_desk.settings import setting
+
+
+def zt_breadth_points(zt_n: int | float | None) -> float:
+    """Map limit-up count into mainline points with soft diminishing returns.
+
+    Absolute breadth still dominates: 20 ≫ 4. Soft bands avoid one mega-board
+    from running away forever after ~12 seals.
+    """
+    n = max(0, int(zt_n or 0))
+    unit = float(MAINLINE_ZT_UNIT)
+    soft_start = int(MAINLINE_ZT_SOFT_START)
+    soft_unit = float(MAINLINE_ZT_SOFT_UNIT)
+    tail_start = int(MAINLINE_ZT_TAIL_START)
+    tail_unit = float(MAINLINE_ZT_TAIL_UNIT)
+    if n <= soft_start:
+        return float(n) * unit
+    if n <= tail_start:
+        return float(soft_start) * unit + float(n - soft_start) * soft_unit
+    return (
+        float(soft_start) * unit
+        + float(tail_start - soft_start) * soft_unit
+        + float(n - tail_start) * tail_unit
+    )
+
+
+def thin_board_penalty(zt_n: int | float | None) -> float:
+    """Return a positive penalty for thin niches (subtracted from the score)."""
+    n = max(0, int(zt_n or 0))
+    cap = int(MAINLINE_THIN_ZT_MAX)
+    if n > cap:
+        return 0.0
+    return float(cap + 1 - n) * float(MAINLINE_THIN_PEN_PER)
 
 
 def leader_structure_adj(board: dict[str, Any] | None) -> float:
@@ -48,7 +87,12 @@ def leader_structure_adj(board: dict[str, Any] | None) -> float:
 
 
 def mainline_score(board: dict[str, Any]) -> float:
-    """Score a hot board for mainline ranking, with multi-day persistence."""
+    """Score a hot board for mainline ranking, with multi-day persistence.
+
+    Breadth (absolute limit-up count) is the primary diffusion signal: a board
+    with ~20 seals should beat a 4-name niche even if the niche prints a strong
+    status label. Thin boards take an extra penalty; mega boards soft-cap.
+    """
     status = board.get("status") or ""
     zt_n = int(board.get("zt_n") or 0)
     rank = {
@@ -57,9 +101,11 @@ def mainline_score(board: dict[str, Any]) -> float:
         "观察": 12.0,
         "退潮": -25.0,
     }.get(status, 0.0)
-    # Thin「确认中」(only 2 limit-ups) is fragile — dampen so niche spikes lose to real themes.
+    # Thin「确认中」is fragile — dampen so niche spikes lose to real themes.
     if status == "确认中" and zt_n < 3:
         rank = 36.0
+    elif status == "确认中" and zt_n <= int(MAINLINE_THIN_ZT_MAX):
+        rank = 42.0
     hist = list(board.get("hist") or [])
     # Reward boards that stayed hot across recent sessions (anti one-day wonder).
     persist = 0
@@ -75,6 +121,7 @@ def mainline_score(board: dict[str, Any]) -> float:
     zb_pen = float(board.get("zb_n") or 0) * 3.0
     explode_pen = min(float(board.get("explode_sum") or 0), 8.0) * 1.5
     late_pen = float(board.get("late_seal_n") or 0) * 2.0
+    thin_pen = thin_board_penalty(zt_n)
     # Ladder completeness inside the board: reward fill, cut broken high boards.
     if board.get("ladder_gap"):
         ladder_adj = -8.0
@@ -98,7 +145,7 @@ def mainline_score(board: dict[str, Any]) -> float:
     rep_adj = float(board.get("rep_adj") or 0.0)
     return (
         rank
-        + float(zt_n) * 6.0
+        + zt_breadth_points(zt_n)
         + float(board.get("pct") or 0)
         + float(board.get("focus") or 0) * 0.15
         + min(persist, 6) * 3.0
@@ -111,6 +158,7 @@ def mainline_score(board: dict[str, Any]) -> float:
         - zb_pen
         - explode_pen
         - late_pen
+        - thin_pen
     )
 
 

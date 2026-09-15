@@ -119,12 +119,38 @@ def extract_features(row: dict[str, Any]) -> dict[str, float]:
         feat["trend_up"] = 1.0
     if payload.get("trend_down") or (isinstance(payload.get("trend"), dict) and payload["trend"].get("down")):
         feat["trend_down"] = 1.0
-    if payload.get("board_match") or str(payload.get("vs_mainline") or "") in (
+    desk = str(payload.get("desk_source") or row.get("desk_source") or "").strip().lower()
+    st = str(row.get("signal_type") or "")
+    if not desk:
+        if st == "buy_side":
+            desk = "side"
+        elif st == "buy_link":
+            desk = "link"
+        elif st == "buy_trial":
+            desk = "watch_trial"
+    # Side/link: use source-board align only — sticky「偏离主线」is expected, not a miss.
+    if desk in ("side", "link"):
+        src_hit = payload.get("source_match")
+        vs_src = str(payload.get("vs_source") or "")
+        if src_hit or vs_src in (
+            "贴支线",
+            "接近支线",
+            "同题材·支线",
+            "贴联动",
+            "接近联动",
+            "同题材·联动",
+            "属于主线",
+            "接近主线",
+            "同题材",
+        ):
+            feat["board_match"] = 1.0
+    elif payload.get("board_match") or str(payload.get("vs_mainline") or "") in (
         "same",
         "theme",
         "match",
         "属于主线",
         "接近主线",
+        "同题材",
     ):
         feat["board_match"] = 1.0
     elif payload.get("vs_mainline") is True:

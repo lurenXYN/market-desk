@@ -1947,9 +1947,17 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 merged["vs_mainline"] = old_payload.get("vs_mainline")
             if "board_match" in old_payload and "board_match" not in incoming:
                 merged["board_match"] = old_payload.get("board_match")
+            if old_payload.get("source_board") and not incoming.get("source_board"):
+                merged["source_board"] = old_payload.get("source_board")
+            if old_payload.get("vs_source") is not None and not incoming.get("vs_source"):
+                merged["vs_source"] = old_payload.get("vs_source")
+            if "source_match" in old_payload and "source_match" not in incoming:
+                merged["source_match"] = old_payload.get("source_match")
         elif old_boards and new_boards and old_boards != new_boards:
             # Prefer richer first capture; only replace when newly resolved from empty.
             pass
+        if old_payload.get("source_board") and not incoming.get("source_board"):
+            merged["source_board"] = old_payload.get("source_board")
 
         # Gate evolution: keep first_ready / fail history across same-day upserts.
         ready_now = 1 if row.get("ready") else 0

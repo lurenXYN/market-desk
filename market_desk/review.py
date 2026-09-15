@@ -184,46 +184,142 @@ def resolve_day_mainline(trade_date: str) -> str | None:
 def compare_boards_to_mainline(
     board_names: list[str] | None,
     mainline: str | None,
+    *,
+    role: str = "main",
 ) -> dict[str, Any]:
-    """Classify whether listed boards align with the session mainline."""
+    """Classify whether listed boards align with a compare target.
+
+    ``role`` selects display labels for sticky main / side / link targets.
+    Soft match prefers substring, then ``same_theme`` (e.g. 煤炭↔动力煤).
+    """
     boards = [str(x).strip() for x in (board_names or []) if str(x).strip()]
     ml = str(mainline or "").strip()
+    role_key = str(role or "main").strip().lower()
+    if role_key not in ("main", "side", "link"):
+        role_key = "main"
+    labels = {
+        "main": {
+            "empty": "未归类",
+            "unknown": "主线未明",
+            "belong": "属于主线",
+            "near": "接近主线",
+            "theme": "同题材",
+            "off": "偏离主线",
+        },
+        "side": {
+            "empty": "未归类",
+            "unknown": "支线未明",
+            "belong": "贴支线",
+            "near": "接近支线",
+            "theme": "同题材·支线",
+            "off": "偏离支线",
+        },
+        "link": {
+            "empty": "未归类",
+            "unknown": "联动未明",
+            "belong": "贴联动",
+            "near": "接近联动",
+            "theme": "同题材·联动",
+            "off": "偏离联动",
+        },
+    }[role_key]
+
     if not boards:
         return {
             "boards": [],
-            "board_text": "未归类",
-            "vs_mainline": "未归类",
+            "board_text": labels["empty"],
+            "vs_mainline": labels["empty"],
             "match": None,
+            "align": "empty",
+            "role": role_key,
         }
     board_text = " / ".join(boards)
     if not ml or ml in ("未明", "—"):
         return {
             "boards": boards,
             "board_text": board_text,
-            "vs_mainline": "主线未明",
+            "vs_mainline": labels["unknown"],
             "match": None,
+            "align": "unknown",
+            "role": role_key,
         }
     if ml in boards:
         return {
             "boards": boards,
             "board_text": board_text,
-            "vs_mainline": "属于主线",
+            "vs_mainline": labels["belong"],
             "match": True,
+            "align": "belong",
+            "role": role_key,
         }
     soft = any(ml in b or b in ml for b in boards)
     if soft:
         return {
             "boards": boards,
             "board_text": board_text,
-            "vs_mainline": "接近主线",
+            "vs_mainline": labels["near"],
             "match": True,
+            "align": "near",
+            "role": role_key,
+        }
+    try:
+        from market_desk.mainline import same_theme
+
+        themed = any(same_theme(ml, b) for b in boards)
+    except Exception:
+        themed = False
+    if themed:
+        return {
+            "boards": boards,
+            "board_text": board_text,
+            "vs_mainline": labels["theme"],
+            "match": True,
+            "align": "theme",
+            "role": role_key,
         }
     return {
         "boards": boards,
         "board_text": board_text,
-        "vs_mainline": "偏离主线",
+        "vs_mainline": labels["off"],
         "match": False,
+        "align": "off",
+        "role": role_key,
     }
+
+
+def _infer_source_board(item: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
+    """Resolve the origin board for side/link signals (payload or action text)."""
+    blob = payload if isinstance(payload, dict) else {}
+    sb = str(blob.get("source_board") or item.get("source_board") or "").strip()
+    if sb and sb not in ("未明", "—"):
+        return sb
+    action = str(item.get("action") or "")
+    for prefix in ("观察支线·", "板块联动·"):
+        if action.startswith(prefix):
+            name = action[len(prefix) :].strip()
+            if name and name not in ("未明", "—"):
+                return name
+    return ""
+
+
+def _desk_source_of(item: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
+    """Normalize desk_source from row / payload / signal_type."""
+    blob = payload if isinstance(payload, dict) else {}
+    src = str(item.get("desk_source") or blob.get("desk_source") or "").strip().lower()
+    if src:
+        return src
+    st = str(item.get("signal_type") or "")
+    if st == "buy_side":
+        return "side"
+    if st == "buy_link":
+        return "link"
+    if st == "buy_trial":
+        return "watch_trial"
+    if st == "sell":
+        return "sell"
+    if is_buy_signal(st):
+        return "main"
+    return ""
 
 
 def enrich_signals_with_holders(
@@ -258,10 +354,11 @@ def enrich_signals_with_boards(
     *,
     live_mainline: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach board membership and compare them to the chosen mainline target.
+    """Attach board membership and multi-line compare tags.
 
-    ``所属板块`` prefers the first stored board names. ``对照主线`` uses
-    ``live_mainline`` when provided (caller selects live vs day-end target).
+    Sticky mainline (live/day) remains the global compare target for main and
+    watch-trial rows. Side / link rows compare against ``source_board`` so
+    expected branch tickets are not painted as「偏离主线」.
     """
     out: list[dict[str, Any]] = []
     live_ml = str(live_mainline or "").strip()
@@ -280,13 +377,35 @@ def enrich_signals_with_boards(
             ml = str(item.get("mainline") or "").strip()
             if ml and ml not in ("未明", "—"):
                 names = [ml]
-        compare_to = live_ml if live_ml and live_ml not in ("未明", "—") else item.get("mainline")
-        cmp = compare_boards_to_mainline(names, compare_to)
-        item["boards"] = cmp["boards"]
-        item["board_text"] = cmp["board_text"]
-        item["vs_mainline"] = cmp["vs_mainline"]
-        item["board_match"] = cmp["match"]
-        item["vs_mainline_of"] = str(compare_to or "").strip() or None
+        sticky = live_ml if live_ml and live_ml not in ("未明", "—") else item.get("mainline")
+        sticky_s = str(sticky or "").strip()
+        sticky_cmp = compare_boards_to_mainline(names, sticky_s, role="main")
+        item["boards"] = sticky_cmp["boards"] or names
+        item["board_text"] = sticky_cmp["board_text"] if sticky_cmp["boards"] else (
+            " / ".join(names) if names else "未归类"
+        )
+        item["vs_sticky"] = sticky_cmp["vs_mainline"]
+        item["vs_sticky_of"] = sticky_s or None
+        item["sticky_match"] = sticky_cmp["match"]
+
+        desk = _desk_source_of(item, payload)
+        source_board = _infer_source_board(item, payload)
+        item["desk_source"] = desk or item.get("desk_source")
+        item["source_board"] = source_board or None
+
+        if desk in ("side", "link") and source_board:
+            origin_cmp = compare_boards_to_mainline(names, source_board, role=desk)
+            item["vs_mainline"] = origin_cmp["vs_mainline"]
+            item["board_match"] = origin_cmp["match"]
+            item["vs_mainline_of"] = source_board
+            item["vs_compare_role"] = desk
+            item["vs_align"] = origin_cmp.get("align")
+        else:
+            item["vs_mainline"] = sticky_cmp["vs_mainline"]
+            item["board_match"] = sticky_cmp["match"]
+            item["vs_mainline_of"] = sticky_s or None
+            item["vs_compare_role"] = "main"
+            item["vs_align"] = sticky_cmp.get("align")
         out.append(item)
     return out
 
@@ -349,7 +468,17 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
             fb = board_fallback or mainline
             if not board_names and fb:
                 board_names = [fb]
-            board_cmp = compare_boards_to_mainline(board_names, mainline)
+            sticky_cmp = compare_boards_to_mainline(board_names, mainline, role="main")
+            source_board = ""
+            if desk_source in ("side", "link"):
+                source_board = str(board_fallback or "").strip()
+                if source_board in ("未明", "—"):
+                    source_board = ""
+            origin_cmp = None
+            if desk_source in ("side", "link") and source_board:
+                origin_cmp = compare_boards_to_mainline(
+                    board_names, source_board, role=desk_source
+                )
             upsert_signal(
                 {
                     "trade_date": trade_date,
@@ -366,10 +495,12 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "ready": 1 if item.get("ready") else 0,
                     "payload": {
                         "desk_source": desk_source,
+                        "source_board": source_board or None,
                         "role_label": item.get("role_label"),
                         "wait_price": item.get("wait_price"),
                         "stop_price": item.get("stop_price"),
                         "chase_price": item.get("chase_price"),
+                        "qty": int(item.get("qty") or 0) or None,
                         "pct": item.get("pct"),
                         "trend": item.get("trend"),
                         "trend_quality": item.get("trend_quality"),
@@ -383,9 +514,12 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "size_cap_block": bool(item.get("size_cap_block")),
                         "link_board": bool(item.get("link_board")),
                         "watch_trial": bool(item.get("watch_trial")),
-                        "board_names": board_cmp["boards"],
-                        "vs_mainline": board_cmp["vs_mainline"],
-                        "board_match": board_cmp["match"],
+                        "board_names": sticky_cmp["boards"],
+                        # Sticky compare kept for history / whitebox context.
+                        "vs_mainline": sticky_cmp["vs_mainline"],
+                        "board_match": sticky_cmp["match"],
+                        "vs_source": (origin_cmp or {}).get("vs_mainline"),
+                        "source_match": (origin_cmp or {}).get("match"),
                         "context": trade_ctx or None,
                     },
                 }
@@ -1634,7 +1768,14 @@ def enrich_signals_with_live_marks(
             labels.append("建议价附近")
         item["live_last"] = last
         item["live_pct"] = num(q.get("pct"))
+        # Keep a live last for booking defaults; do not overwrite plan suggest (price).
+        if last is not None:
+            item["last"] = last
         item.update(live_price_slope(code, last))
+        if item.get("plan_qty") is None:
+            pq = num(payload.get("qty"))
+            if pq is not None and float(pq) > 0:
+                item["plan_qty"] = int(pq)
         if last is not None and sig_px is not None and sig_px > 0:
             item["dev_pct"] = round((float(last) / float(sig_px) - 1.0) * 100.0, 2)
         else:
@@ -1784,12 +1925,21 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         item["wait_price"] = num(payload.get("wait_price"))
     if item.get("stop_price") is None:
         item["stop_price"] = num(payload.get("stop_price"))
+    if item.get("plan_qty") is None:
+        pq = num(payload.get("qty"))
+        if pq is not None and float(pq) > 0:
+            item["plan_qty"] = int(pq)
     if not item.get("desk_source"):
         item["desk_source"] = payload.get("desk_source") or (
             "main"
             if is_buy_signal(item.get("signal_type"))
             else ("sell" if is_sell_signal(item.get("signal_type")) else None)
         )
+    if not item.get("source_board"):
+        sb = str(payload.get("source_board") or "").strip()
+        if not sb:
+            sb = _infer_source_board(item, payload)
+        item["source_board"] = sb or None
     if item.get("near_entry") is None and "near_entry" in payload:
         item["near_entry"] = bool(payload.get("near_entry"))
     if not item.get("confirm_fail") and payload.get("confirm_fail"):

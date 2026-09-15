@@ -628,10 +628,21 @@ def trade_signal(
     note = (body.note if body.note is not None else "复盘已交易").strip()
     fill_px = float(body.price) if body.price is not None else None
     fill_qty = int(body.qty) if body.qty is not None else None
-    if fill_px is None and is_buy_signal(sig_type):
-        fill_px = float(row.get("price") or row.get("last") or 0) or None
+    if fill_px is None:
+        # Never silently book at plan/suggest price (signals.price).
+        fill_px = float(row.get("last") or 0) or None
+        if fill_px is None:
+            q = (getattr(engine, "_book_quotes", None) or {}).get(code) or {}
+            fill_px = float(q.get("price") or 0) or None
     if fill_qty is None and is_buy_signal(sig_type):
-        fill_qty = 100
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        plan_qty = payload.get("qty")
+        try:
+            fill_qty = int(plan_qty) if plan_qty not in (None, "") else 100
+        except (TypeError, ValueError):
+            fill_qty = 100
+        if fill_qty <= 0:
+            fill_qty = 100
 
     if is_sell_signal(sig_type) and code:
         trade_day = str(
