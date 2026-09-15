@@ -12,6 +12,7 @@ from market_desk.db import (
     load_review_digests,
     load_session_segments,
     load_signals,
+    load_signals_for_code,
     load_signals_for_date,
     mark_signal_outcome,
     apply_signal_user_meta,
@@ -1916,6 +1917,130 @@ def review_trends_fingerprint(
     )
     digest = hashlib.sha1(",".join(str(i) for i in ids).encode("utf-8")).hexdigest()[:12]
     return f"{cal}|{day}|n{len(ids)}|{digest}"
+
+
+def build_code_signal_history(
+    code: str,
+    *,
+    limit: int = 120,
+    holders: dict[str, Any] | None = None,
+    trend: dict[str, Any] | None = None,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    """Assemble per-ticker signal history for the review history drawer.
+
+    Holder / daily-trend fields are current snapshots (not frozen at signal
+    time). Plan prices and outcomes come from each stored signal row.
+    """
+    c = normalize_code(code)
+    raw = load_signals_for_code(c, limit=limit) if c else []
+    if user_id is not None and raw:
+        try:
+            raw = apply_signal_user_meta(raw, int(user_id))
+        except Exception:
+            pass
+    rows: list[dict[str, Any]] = []
+    for row in raw:
+        item = _flatten_signal_prices(row)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        boards = payload.get("board_names") or []
+        if isinstance(boards, list) and boards:
+            item["boards"] = [str(b) for b in boards if str(b).strip()]
+            item["board_text"] = "/".join(item["boards"])
+        else:
+            item["boards"] = []
+            item["board_text"] = ""
+        # Compact row for the drawer (drop bulky payload).
+        rows.append(
+            {
+                "id": item.get("id"),
+                "trade_date": item.get("trade_date"),
+                "signaled_at": item.get("signaled_at"),
+                "signal_type": item.get("signal_type"),
+                "action": item.get("action"),
+                "phase": item.get("phase"),
+                "mainline": item.get("mainline"),
+                "code": item.get("code"),
+                "name": item.get("name"),
+                "kind": item.get("kind"),
+                "price": item.get("price"),
+                "chase_price": item.get("chase_price"),
+                "wait_price": item.get("wait_price"),
+                "stop_price": item.get("stop_price"),
+                "ready": item.get("ready"),
+                "traded": int(item.get("traded") or 0),
+                "skipped": int(item.get("skipped") or 0),
+                "fill_price": item.get("fill_price"),
+                "fill_qty": item.get("fill_qty"),
+                "outcome_label": item.get("outcome_label"),
+                "outcome_day1_pct": item.get("outcome_day1_pct"),
+                "outcome_day3_pct": item.get("outcome_day3_pct"),
+                "board_text": item.get("board_text") or "",
+                "desk_source": item.get("desk_source"),
+            }
+        )
+
+    buys = [r for r in rows if is_buy_signal(r.get("signal_type"))]
+    sells = [r for r in rows if is_sell_signal(r.get("signal_type"))]
+    scored_buys = [r for r in buys if r.get("outcome_label")]
+    hit_n = sum(1 for r in scored_buys if (r.get("outcome_label") or "") in BUY_HIT_LABELS)
+    traded_buys = [r for r in buys if int(r.get("traded") or 0)]
+    dates = [str(r.get("trade_date") or "")[:10] for r in rows if r.get("trade_date")]
+    name = ""
+    kind = ""
+    for r in rows:
+        if r.get("name"):
+            name = str(r.get("name") or "")
+            kind = str(r.get("kind") or "")
+            break
+
+    holder_out: dict[str, Any] | None = None
+    if holders and isinstance(holders, dict):
+        hit = holders.get(c) or holders.get(str(code or ""))
+        if isinstance(hit, dict) and hit:
+            holder_out = {
+                "holder_num": hit.get("holder_num"),
+                "holder_prev": hit.get("holder_prev"),
+                "holder_chg": hit.get("holder_chg"),
+                "holder_chg_pct": hit.get("holder_chg_pct"),
+                "holder_avg_wan": hit.get("holder_avg_wan"),
+                "holder_end": hit.get("holder_end"),
+                "holder_notice": hit.get("holder_notice"),
+            }
+
+    trend_out: dict[str, Any] | None = None
+    if trend and isinstance(trend, dict) and trend:
+        trend_out = {
+            "label": trend.get("label") or trend.get("trend") or "",
+            "up": bool(trend.get("up") or trend.get("trend_ok")),
+            "down": bool(trend.get("down") or trend.get("trend_down")),
+            "quality": trend.get("quality"),
+            "ma5": trend.get("ma5"),
+            "ma20": trend.get("ma20"),
+        }
+
+    return {
+        "ok": True,
+        "code": c,
+        "name": name,
+        "kind": kind,
+        "summary": {
+            "n": len(rows),
+            "buy_n": len(buys),
+            "sell_n": len(sells),
+            "traded_buy_n": len(traded_buys),
+            "scored_buy_n": len(scored_buys),
+            "buy_hit_n": hit_n,
+            "buy_hit_rate": (
+                round(100.0 * hit_n / float(len(scored_buys)), 1) if scored_buys else None
+            ),
+            "first_date": min(dates) if dates else None,
+            "last_date": max(dates) if dates else None,
+        },
+        "holder": holder_out,
+        "trend": trend_out,
+        "signals": rows,
+    }
 
 
 def build_review_payload(

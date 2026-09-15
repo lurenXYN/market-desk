@@ -59,6 +59,7 @@ from market_desk.seasonality import build_seasonality
 from market_desk.lifecycle import build_mainline_lifecycle
 from market_desk.review import (
     apply_outcomes,
+    build_code_signal_history,
     build_price_touch_alerts,
     build_review_payload,
     note_quote_ticks,
@@ -113,7 +114,7 @@ from market_desk.sentiment import (
 )
 from market_desk.mainline import etf_spec_for_name, etf_spec_soft_fallback
 from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes, fetch_daily_bars_symbol
-from market_desk.trend import classify_many
+from market_desk.trend import classify_daily_trend, classify_many
 from market_desk.verdict import (
     align_action_with_ready,
     apply_size_cap_gate,
@@ -1055,6 +1056,44 @@ class DeskEngine:
         for k in stale:
             self._review_trend_cache.pop(k, None)
         return payload
+
+    async def build_review_code_history(
+        self,
+        code: str,
+        *,
+        user_id: int | None = None,
+        limit: int = 120,
+    ) -> dict[str, Any]:
+        """Return signal history plus current trend / holder snapshot for one code."""
+        c = normalize_code(code)
+        today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        holders: dict[str, dict[str, Any]] = {}
+        trend: dict[str, Any] | None = None
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as client:
+                closes_task = self._resolve_daily_closes(client, [c], today)
+                # ETF / funds skip shareholder stats.
+                want_holder = bool(c) and not c.startswith(("1", "5"))
+                if want_holder:
+                    holders_task = fetch_holder_stats_many(client, [c])
+                    (closes_by_code, ok_by_code), holders = await asyncio.gather(
+                        closes_task, holders_task
+                    )
+                else:
+                    closes_by_code, ok_by_code = await closes_task
+                series = list(closes_by_code.get(c) or [])
+                trend = classify_daily_trend(
+                    series, fetch_ok=bool(ok_by_code.get(c, bool(series)))
+                )
+        except Exception:
+            log.exception("review code history enrich failed for %s", c)
+        return build_code_signal_history(
+            c,
+            limit=limit,
+            holders=holders or None,
+            trend=trend,
+            user_id=user_id,
+        )
 
     async def refresh_fund_flow(self, *, force: bool = False) -> dict[str, Any]:
         """Fetch East Money day/week/month fund-flow boards (funds tab on demand)."""

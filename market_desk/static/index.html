@@ -874,6 +874,26 @@
     .ew-fit.mid { background: #3a2e1a; color: #e0b341; }
     .ew-card .ew-path { margin-top: 6px; font-size: 12.5px; line-height: 1.45; }
     .ew-card .ew-risk { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .ew-sub {
+      margin-top: 8px; padding-top: 8px; border-top: 1px dashed #2a3548;
+    }
+    .ew-sub > summary {
+      cursor: pointer; list-style: none; font-size: 12px; color: var(--muted);
+      user-select: none;
+    }
+    .ew-sub > summary::-webkit-details-marker { display: none; }
+    .ew-sub > summary::before {
+      content: "▸ "; color: var(--ferm);
+    }
+    .ew-sub[open] > summary::before { content: "▾ "; }
+    .ew-sub .ew-sub-pri {
+      margin-top: 6px; font-size: 12.5px; line-height: 1.45;
+    }
+    .ew-sub .ew-sub-pri b { color: var(--text); }
+    .ew-sub .ew-sub-alts {
+      margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px;
+    }
+    .ew-sub .ew-sub-alts li { margin: 2px 0; }
     .ew-bias-bull { color: var(--up); }
     .ew-bias-bear { color: var(--down); }
     .ew-bias-neutral { color: var(--warn); }
@@ -1346,6 +1366,34 @@
     }
     .chart-box svg { width: 100%; height: 160px; display: block; }
     .chart-empty { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
+    .sig-hist-drawer {
+      width: min(720px, 100%);
+    }
+    .sig-hist-sum {
+      display: flex; flex-wrap: wrap; gap: 8px 14px;
+      margin: 0 0 10px; font-size: 12px; color: var(--muted);
+    }
+    .sig-hist-sum b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .sig-hist-table-wrap {
+      overflow: auto; max-height: calc(100vh - 220px);
+      border: 1px solid var(--line); border-radius: 8px;
+    }
+    .sig-hist-table {
+      width: 100%; border-collapse: collapse; font-size: 12px;
+    }
+    .sig-hist-table th, .sig-hist-table td {
+      padding: 6px 8px; border-bottom: 1px solid var(--line);
+      text-align: left; white-space: nowrap;
+    }
+    .sig-hist-table th {
+      position: sticky; top: 0; background: #121a24; color: var(--muted);
+      font-weight: 600; z-index: 1;
+    }
+    .sig-hist-table tr:hover td { background: #121a24; }
+    .rev-hist-btn {
+      margin-left: 4px; padding: 0 6px !important; font-size: 11px !important;
+      vertical-align: middle;
+    }
     .data-banner {
       display: none; margin-bottom: 10px; padding: 10px 12px;
       border: 1px solid #8b3a3a; border-radius: 8px;
@@ -2387,7 +2435,7 @@
         <button type="button" class="q" data-term="波浪情景">?</button>
         <span class="mod-stamp" id="elliottStamp" title="随大盘快照更新"></span>
       </h2>
-      <p class="meta" id="elliottNote">Top5 情景 + 斐波那契变盘窗；参考 MACD/RSI；不改作战台买卖结论。</p>
+      <p class="meta" id="elliottNote">Top5 情景 + Top1/2 子浪草稿 + 斐波那契变盘窗；参考 MACD/RSI；不改作战台买卖结论。</p>
       <div class="pos-sum" id="elliottSum" style="margin-bottom:10px"></div>
       <div id="elliottBody"><div class="meta">等待日线…</div></div>
     </section>
@@ -2664,6 +2712,43 @@
       <div class="chart-box">
         <h4>日线 · MA5 / MA20</h4>
         <div id="chartDaily"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="chart-mask" id="sigHistMask" hidden>
+    <aside class="chart-drawer sig-hist-drawer" id="sigHistDrawer">
+      <div class="chart-hd">
+        <div>
+          <h3 id="sigHistTitle">信号历史</h3>
+          <div class="meta" id="sigHistMeta"></div>
+        </div>
+        <button type="button" class="pos-del" id="sigHistClose">关闭</button>
+      </div>
+      <div class="chart-actions">
+        <a id="sigHistXq" href="#" target="_blank" rel="noopener noreferrer">雪球看盘</a>
+        <button type="button" class="ghost" id="sigHistRefresh">刷新</button>
+        <button type="button" class="q" data-term="信号历史">?</button>
+      </div>
+      <div class="sig-hist-sum" id="sigHistSum"></div>
+      <div class="sig-hist-table-wrap">
+        <table class="sig-hist-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>类型</th>
+              <th>建议价</th>
+              <th>不追</th>
+              <th>回踩</th>
+              <th>结果</th>
+              <th>次日%</th>
+              <th>相位</th>
+              <th>主线</th>
+              <th>成交</th>
+            </tr>
+          </thead>
+          <tbody id="sigHistBody"></tbody>
+        </table>
       </div>
     </aside>
   </div>
@@ -4023,7 +4108,9 @@
           ? `<span class="meta">${ind.divergence.note}</span>`
           : "")
         + (primary.title
-          ? `<span>Top1 <b>${primary.title}</b>（${primary.fit ?? "—"}）</span>`
+          ? `<span>Top1 <b>${primary.title}</b>（${primary.fit ?? "—"}）`
+            + (primary.subwave ? ` · 子浪 <b>${primary.subwave}</b>` : "")
+            + `</span>`
           : "");
       const rows = box.scenarios || [];
       if (!rows.length) {
@@ -4036,7 +4123,7 @@
         "A浪": "A浪", "B浪": "B浪", "C浪": "C浪",
         "三角/平台": "三角整理", "复合调整": "复合调整",
       };
-      body.innerHTML = `<div class="ew-grid">` + rows.map((sc) => {
+      body.innerHTML = `<div class="ew-grid">` + rows.map((sc, idx) => {
         const fit = Number(sc.fit || 0);
         const fitCls = fit >= 60 ? "hi" : (fit >= 40 ? "mid" : "");
         const bias = sc.bias || "neutral";
@@ -4048,6 +4135,37 @@
         const turns = sc.turns || [];
         const levels = sc.levels || [];
         const timing = sc.timing || {};
+        const sub = sc.subwaves || null;
+        let subHtml = "";
+        if (idx < 2 && sub) {
+          if (sub.ok && sub.primary) {
+            const pri = sub.primary;
+            const alts = sub.alts || [];
+            const altHtml = alts.length
+              ? `<ul class="ew-sub-alts">`
+                + alts.map((a) =>
+                  `<li>${a.label || ""} · 契合 ${a.fit ?? "—"}`
+                  + (a.fit_note ? ` · ${a.fit_note}` : "")
+                  + `</li>`
+                ).join("")
+                + `</ul>`
+              : "";
+            subHtml = `<details class="ew-sub">
+              <summary>内部结构草稿 · ${pri.label || "—"}（契合 ${pri.fit ?? "—"}）
+                <button type="button" class="q" data-term="子浪草稿">?</button></summary>
+              <div class="ew-sub-pri">
+                <b>${pri.label || ""}</b>
+                <span class="meta"> · ${pri.fit_note || ""}</span>
+                <div class="ew-path"><b>路径：</b>${pri.path || "—"}</div>
+                <div class="ew-risk"><b>否决：</b>${pri.invalidation || pri.watch || "—"}</div>
+                <div class="meta">${sub.note || ""} · 细枢轴 ${sub.fine_pivot_n ?? "—"}</div>
+                ${altHtml}
+              </div>
+            </details>`;
+          } else if (sub.note) {
+            subHtml = `<div class="meta" style="margin-top:8px">子浪：${sub.note}</div>`;
+          }
+        }
         const turnHtml = turns.length
           ? `<div class="ew-turns"><div class="meta" style="margin-bottom:2px">变盘时间窗（仅日期，按本浪时钟）
               <button type="button" class="q" data-term="斐波那契变盘窗">?</button></div>`
@@ -4085,6 +4203,7 @@
           <div class="meta">${sc.family || ""} · ${sc.wave || ""} · ${sc.fit_note || ""}</div>
           <div class="ew-path"><b>后市路径：</b>${sc.path || sc.next || "—"}</div>
           <div class="ew-risk"><b>否决/风险：</b>${sc.invalidation || "—"}</div>
+          ${subHtml}
           ${timingHtml}
           ${turnHtml}
           ${lvlHtml}
@@ -4371,6 +4490,117 @@
 
     function closeChart() {
       document.getElementById("chartMask").hidden = true;
+    }
+
+    let sigHistCode = "";
+    let sigHistName = "";
+    let sigHistSeq = 0;
+
+    function closeSigHist() {
+      document.getElementById("sigHistMask").hidden = true;
+    }
+
+    function paintSigHist(d) {
+      const sum = d.summary || {};
+      const tr = d.trend || {};
+      const hol = d.holder || {};
+      const trendLab = tr.up ? "上升" : (tr.down ? "下降" : (tr.label || "—"));
+      const trendCls = tr.up ? "up" : (tr.down ? "down" : "");
+      const hitTxt = sum.buy_hit_rate == null
+        ? "—"
+        : `${sum.buy_hit_rate}%（${sum.buy_hit_n || 0}/${sum.scored_buy_n || 0}）`;
+      const holderBits = [];
+      if (hol.holder_num != null) {
+        holderBits.push(`股东 ${fmtHolderNum(hol.holder_num)}`);
+        if (hol.holder_chg_pct != null) {
+          const n = Number(hol.holder_chg_pct);
+          holderBits.push(`较上期 ${(n > 0 ? "+" : "") + n.toFixed(1)}%`);
+        }
+        if (hol.holder_avg_wan != null) {
+          holderBits.push(`户均 ${fmtHolderAvgWan(hol.holder_avg_wan)}`);
+        }
+        if (hol.holder_end) holderBits.push(`截止 ${hol.holder_end}`);
+      }
+      document.getElementById("sigHistTitle").textContent =
+        `${d.name || sigHistName || d.code} · ${d.code}`;
+      document.getElementById("sigHistMeta").innerHTML =
+        `日线 <span class="${trendCls}">${trendLab}</span>`
+        + (tr.ma5 != null ? ` · MA5 ${tr.ma5}` : "")
+        + (tr.ma20 != null ? ` · MA20 ${tr.ma20}` : "")
+        + (holderBits.length ? ` · ${holderBits.join(" · ")}` : (d.kind === "etf" ? " · ETF无股东户数" : " · 股东待取"));
+      document.getElementById("sigHistSum").innerHTML =
+        `<span>出现 <b>${sum.n ?? 0}</b> 次</span>`
+        + `<span>买 ${sum.buy_n ?? 0} / 卖 ${sum.sell_n ?? 0}</span>`
+        + `<span>已交易买 ${sum.traded_buy_n ?? 0}</span>`
+        + `<span>买命中 ${hitTxt}</span>`
+        + `<span>${sum.first_date || "—"} → ${sum.last_date || "—"}</span>`
+        + `<span class="meta">趋势/股东为现况快照，非信号当日冻结</span>`;
+      const typeLab = (st) => ({
+        buy: "买",
+        buy_side: "买·支",
+        buy_link: "买·联",
+        buy_trial: "买·自选",
+        sell: "卖",
+      })[st] || st || "—";
+      const body = document.getElementById("sigHistBody");
+      const rows = d.signals || [];
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="10" class="meta">暂无该代码的历史信号</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.map((r) => {
+        const d1 = r.outcome_day1_pct;
+        const d1Html = d1 == null
+          ? "—"
+          : `<span class="${Number(d1) >= 0 ? "up" : "down"}">${(Number(d1) > 0 ? "+" : "") + Number(d1).toFixed(2)}%</span>`;
+        const traded = Number(r.traded || 0) ? "已交易" : (Number(r.skipped || 0) ? "跳过" : "—");
+        const dayJump = r.trade_date
+          ? `<button type="button" class="rev-col-btn sig-hist-day" data-day="${escAttr(r.trade_date)}" style="padding:0 4px;font-size:11px">${escAttr(r.trade_date)}</button>`
+          : "—";
+        return `<tr>
+          <td>${dayJump}</td>
+          <td>${typeLab(r.signal_type)}</td>
+          <td>${r.price ?? "—"}</td>
+          <td>${r.chase_price ?? "—"}</td>
+          <td>${r.wait_price ?? "—"}</td>
+          <td>${r.outcome_label || "待隔日"}</td>
+          <td>${d1Html}</td>
+          <td>${r.phase || "—"}</td>
+          <td title="${escAttr(r.board_text || "")}">${escAttr(r.mainline || "—")}</td>
+          <td>${traded}${r.fill_price != null ? ` · ${r.fill_price}` : ""}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    async function openSigHist(code, name) {
+      const c = String(code || "").replace(/\D/g, "").padStart(6, "0");
+      if (c.length !== 6) return;
+      sigHistCode = c;
+      sigHistName = name || c;
+      const seq = ++sigHistSeq;
+      const mask = document.getElementById("sigHistMask");
+      mask.hidden = false;
+      document.getElementById("sigHistTitle").textContent = `${sigHistName} · ${c}`;
+      document.getElementById("sigHistMeta").textContent = "加载历史信号…";
+      document.getElementById("sigHistSum").innerHTML = "";
+      document.getElementById("sigHistBody").innerHTML =
+        `<tr><td colspan="10" class="meta">加载中…</td></tr>`;
+      const xq = xueqiuUrl(c);
+      const a = document.getElementById("sigHistXq");
+      a.href = xq || "#";
+      a.textContent = xq ? `雪球看盘 · ${xq.split("/").pop()}` : "雪球看盘";
+      try {
+        const r = await fetch("/api/review/history/" + c);
+        const d = await r.json();
+        if (seq !== sigHistSeq) return;
+        if (!d.ok && d.ok !== undefined) throw new Error("bad");
+        paintSigHist(d);
+      } catch (e) {
+        if (seq !== sigHistSeq) return;
+        document.getElementById("sigHistMeta").textContent = "历史信号拉取失败";
+        document.getElementById("sigHistBody").innerHTML =
+          `<tr><td colspan="10" class="meta">加载失败</td></tr>`;
+      }
     }
 
     const REV_COL_STORAGE = "md_rev_cols_v1";
@@ -4712,8 +4942,13 @@
           : ctx.typ;
       }
       if (col === "name") {
+        const code = r.code || "";
+        const histBtn = code
+          ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
+          : "";
         return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}`
           + revSideChips(r)
+          + histBtn
           + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
       }
       if (col === "code") return r.code || "";
@@ -6414,9 +6649,25 @@
     document.getElementById("chartMask").addEventListener("click", (ev) => {
       if (ev.target.id === "chartMask") closeChart();
     });
+    document.getElementById("sigHistClose").addEventListener("click", closeSigHist);
+    document.getElementById("sigHistMask").addEventListener("click", (ev) => {
+      if (ev.target.id === "sigHistMask") closeSigHist();
+    });
+    document.getElementById("sigHistRefresh").addEventListener("click", () => {
+      if (sigHistCode) openSigHist(sigHistCode, sigHistName);
+    });
+    document.getElementById("sigHistBody").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".sig-hist-day");
+      if (!btn) return;
+      const day = btn.getAttribute("data-day");
+      if (!day) return;
+      closeSigHist();
+      loadReview(true, day);
+    });
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") {
         closeChart();
+        closeSigHist();
         const gPanel = document.getElementById("glossaryPanel");
         if (gPanel && !gPanel.hidden) gPanel.hidden = true;
         return;
@@ -7017,6 +7268,12 @@
       }
     });
     document.getElementById("revBody").addEventListener("click", async (ev) => {
+      const histBtn = ev.target.closest(".rev-hist-btn");
+      if (histBtn) {
+        ev.preventDefault();
+        openSigHist(histBtn.getAttribute("data-code"), histBtn.getAttribute("data-name"));
+        return;
+      }
       const trade = ev.target.closest(".rev-trade");
       if (trade) {
         const id = trade.getAttribute("data-id");

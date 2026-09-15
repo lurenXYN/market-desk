@@ -2358,6 +2358,27 @@ def load_signals(limit: int = 60) -> list[dict[str, Any]]:
     return _decode_signal_rows(rows)
 
 
+def load_signals_for_code(code: str, limit: int = 120) -> list[dict[str, Any]]:
+    """Return signal history for one ticker, newest first."""
+    from market_desk.filters import normalize_code
+
+    c = normalize_code(code)
+    if not c:
+        return []
+    lim = max(1, min(int(limit or 120), 300))
+    with _connect() as conn:
+        rows = conn.execute(
+            _SIGNAL_SELECT
+            + """
+            WHERE code = ?
+            ORDER BY trade_date DESC, id DESC
+            LIMIT ?
+            """,
+            (c, lim),
+        ).fetchall()
+    return _decode_signal_rows(rows)
+
+
 def load_signals_for_date(trade_date: str) -> list[dict[str, Any]]:
     """Return all signals for one trade date, newest first."""
     day = str(trade_date or "").strip()[:10]

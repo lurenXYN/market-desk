@@ -198,11 +198,23 @@ def build_elliott_scenarios(
     scored.sort(key=lambda x: (-int(x.get("fit") or 0), str(x.get("id") or "")))
     indicators = _build_indicators(series)
     top = scored[:5]
-    for row in top:
+    fine_pivots = _zigzag_pivots(series, min_move_pct=1.05)
+    fine_st = _structure_snapshot(fine_pivots, last, series)
+    for i, row in enumerate(top):
         row["turns"] = _scenario_turns(row["id"], structure, pivots, series, last, indicators)
         row["levels"] = _scenario_levels(row["id"], structure, last)
         row["timing"] = _timing_summary(row["id"], indicators, structure)
         row["levels_note"] = "点位按距现价排序：↑阻力 / ↓支撑；均为结构观察位，非变盘日必达价。"
+        # One-layer internal draft only for Top1 / Top2.
+        if i < 2:
+            row["subwaves"] = _subwave_draft(
+                str(row.get("id") or ""),
+                fine_st,
+                fine_pivots,
+                last,
+            )
+        else:
+            row["subwaves"] = None
     primary = top[0] if top else None
     return {
         "ok": True,
@@ -214,6 +226,7 @@ def build_elliott_scenarios(
         "bar_from": series[0].get("date") or "",
         "bar_to": series[-1].get("date") or "",
         "pivot_n": len(pivots),
+        "fine_pivot_n": len(fine_pivots),
         "structure": structure,
         "pivots": pivots[-8:],
         "indicators": {
@@ -229,19 +242,22 @@ def build_elliott_scenarios(
             "fit": primary.get("fit"),
             "wave": primary.get("wave"),
             "family": primary.get("family"),
+            "subwave": ((primary.get("subwaves") or {}).get("primary") or {}).get("label"),
         }
         if primary
         else None,
         "note": (
             f"{index_name} 近 {len(series)} 日"
             f"（{series[0].get('date') or '?'} → {series[-1].get('date') or '?'}）"
-            f" · 枢轴 {len(pivots)} 个 · "
-            f"当前价 {round(last, 2)}；仅展示契合度最高的 5 个浪型情景"
+            f" · 枢轴 {len(pivots)} 个 · 细枢轴 {len(fine_pivots)} 个 · "
+            f"当前价 {round(last, 2)}；仅展示契合度最高的 5 个浪型情景；"
+            f"Top1/Top2 附一层子浪草稿"
         ),
         "disclaimer": (
-            "艾略特波浪天然多解。本页只列 Top5；变盘时间窗按浪型时钟分开计算，"
-            "结构点位单独列出（距现价%），二者不捆绑成「某日必达某价」；"
-            "参考 MACD/RSI；不改作战台可买入/ready。"
+            "艾略特波浪天然多解。本页只列 Top5；Top1/Top2 可展开「内部结构草稿」"
+            "（更细锯齿上一层子浪，多解且不保证）；"
+            "变盘时间窗按浪型时钟分开计算，结构点位单独列出（距现价%），"
+            "二者不捆绑成「某日必达某价」；参考 MACD/RSI；不改作战台可买入/ready。"
         ),
     }
 
@@ -1124,3 +1140,347 @@ def _scenario_levels(
     picked = downs[:3] + flats[:1] + ups[:3]
     picked.sort(key=lambda x: float(x.get("price") or 0), reverse=True)
     return picked[:6]
+
+
+# --- One-layer internal subwave draft (minor degree, observe-only) -------------
+
+_SUB_IMPULSE_UP: tuple[dict[str, Any], ...] = (
+    {
+        "id": "sub_i",
+        "label": "子浪 i",
+        "roman": "i",
+        "path": "细级启动上冲；若站稳，常接 ii 回撤后再 iii 加速。",
+        "risk": "跌破本段启动低点 → 子浪 i 草稿作废。",
+    },
+    {
+        "id": "sub_ii",
+        "label": "子浪 ii",
+        "roman": "ii",
+        "path": "细级回撤；理想不破 i 起点，结束后看 iii。",
+        "risk": "跌破 i 起点 → 内部上升推动草稿失效。",
+    },
+    {
+        "id": "sub_iii",
+        "label": "子浪 iii",
+        "roman": "iii",
+        "path": "细级主升段，斜率/幅度常强于 i；过后多见 iv 整理。",
+        "risk": "此段明显短于 i 且迅速回吐 → 降权或改标。",
+    },
+    {
+        "id": "sub_iv",
+        "label": "子浪 iv",
+        "roman": "iv",
+        "path": "细级整理/浅回撤；结束后看 v 末升。",
+        "risk": "深度跌回 i 区间 → 内部四浪失败嫌疑。",
+    },
+    {
+        "id": "sub_v",
+        "label": "子浪 v",
+        "roman": "v",
+        "path": "细级末升；完成后母浪更可能进入下一段（回撤或调整）。",
+        "risk": "无法过 iii 高点的失败 v → 转弱更快。",
+    },
+)
+
+_SUB_IMPULSE_DN: tuple[dict[str, Any], ...] = (
+    {
+        "id": "sub_i",
+        "label": "子浪 i",
+        "roman": "i",
+        "path": "细级首段下跌；之后常有 ii 反抽，再 iii 主跌。",
+        "risk": "快速收复本段高点 → 下跌子浪草稿作废。",
+    },
+    {
+        "id": "sub_ii",
+        "label": "子浪 ii",
+        "roman": "ii",
+        "path": "细级反抽；不过前高则仍偏空，结束后看 iii。",
+        "risk": "突破 i 起点高点 → 内部下跌推动草稿失效。",
+    },
+    {
+        "id": "sub_iii",
+        "label": "子浪 iii",
+        "roman": "iii",
+        "path": "细级主跌段，常加速创新低；过后多见 iv 反抽。",
+        "risk": "跌幅明显短于 i 且迅速反包 → 降权。",
+    },
+    {
+        "id": "sub_iv",
+        "label": "子浪 iv",
+        "roman": "iv",
+        "path": "细级反抽整理；结束后看 v 再下一台阶。",
+        "risk": "反抽过深进入 i 区间 → 可信度下降。",
+    },
+    {
+        "id": "sub_v",
+        "label": "子浪 v",
+        "roman": "v",
+        "path": "细级寻底段；完成后母浪更可能迎来反抽或更大级别转折。",
+        "risk": "破位后仍无止跌 → 下跌可能延伸。",
+    },
+)
+
+_SUB_ABC: tuple[dict[str, Any], ...] = (
+    {
+        "id": "sub_a",
+        "label": "子浪 a",
+        "roman": "a",
+        "path": "细级调整第一段；之后常见 b 反抽，再 c 完成。",
+        "risk": "很快被完全收复 → 可能不是调整 a，而是推动内部回撤。",
+    },
+    {
+        "id": "sub_b",
+        "label": "子浪 b",
+        "roman": "b",
+        "path": "细级反抽/诱多段；不过前高则仍看 c。",
+        "risk": "强势收复 a 全部并站稳 → 改标新推动嫌疑。",
+    },
+    {
+        "id": "sub_c",
+        "label": "子浪 c",
+        "roman": "c",
+        "path": "细级调整主段，常与 a 等长或延伸；完成后母浪阶段更清晰。",
+        "risk": "再创新极仍加速 → 可能演化为推动而非简单 abc。",
+    },
+)
+
+
+def _subwave_catalog(parent_id: str) -> tuple[dict[str, Any], ...] | None:
+    """Pick the one-layer internal catalog for a parent scenario id."""
+    sid = str(parent_id or "")
+    if sid.startswith("imp_up_"):
+        return _SUB_IMPULSE_UP
+    if sid.startswith("imp_dn_"):
+        return _SUB_IMPULSE_DN
+    if sid in ("corr_a", "corr_c"):
+        return _SUB_IMPULSE_DN
+    if sid == "corr_b":
+        return _SUB_ABC
+    return None
+
+
+def _score_sub_fit(
+    catalog_id: str,
+    mode: str,
+    st: dict[str, Any],
+) -> tuple[int, str]:
+    """Score a minor-degree subwave label against fine swing structure."""
+    trend = st.get("trend")
+    lp = st.get("last_pivot") or {}
+    kind = lp.get("kind")
+    swing = abs(float(st.get("swing_pct") or 0))
+    from_low = st.get("from_last_low_pct")
+    from_high = st.get("from_last_high_pct")
+    score = 18
+    why = "细级结构一般"
+
+    def add(n: int, note: str) -> None:
+        nonlocal score, why
+        score += n
+        why = note
+
+    if mode == "up":
+        if catalog_id == "sub_i":
+            if kind == "high" and (from_low or 0) >= 1.2 and swing >= 1.2:
+                add(40, "细级自低点上冲，像子浪 i")
+            elif kind == "high" and (from_low or 0) >= 0.8:
+                add(24, "弱上冲，可作子浪 i")
+            else:
+                add(0, "缺少细级启动上冲")
+        elif catalog_id == "sub_ii":
+            if kind == "low" and (from_high or 0) <= -1.0:
+                add(38, "细级高位回撤，像子浪 ii")
+            elif kind == "low" and (from_high or 0) <= -0.6:
+                add(24, "浅回撤，偏子浪 ii")
+            else:
+                add(0, "不是细级回撤低点")
+        elif catalog_id == "sub_iii":
+            if kind == "high" and st.get("higher_high") and swing >= 1.8:
+                add(46, "细级创新高加速，像子浪 iii")
+            elif kind == "high" and st.get("higher_high"):
+                add(32, "细级抬高高点，偏 iii")
+            else:
+                add(0, "未见细级主升")
+        elif catalog_id == "sub_iv":
+            if st.get("contracting"):
+                add(40, "细级波动收敛，像子浪 iv")
+            elif kind == "low" and (from_high or 0) <= -0.8 and st.get("higher_low"):
+                add(34, "上升中的浅回撤整理，偏 iv")
+            else:
+                add(4, "细级整理不足")
+        elif catalog_id == "sub_v":
+            if kind == "high" and st.get("higher_high") and swing < 2.2:
+                add(36, "创新高但摆动偏弱，像子浪 v")
+            elif kind == "high" and st.get("higher_high"):
+                add(26, "末段上冲嫌疑")
+            else:
+                add(6, "细级末升证据一般")
+    elif mode == "down":
+        if catalog_id == "sub_i":
+            if kind == "low" and (from_high or 0) <= -1.2 and swing >= 1.2:
+                add(40, "细级自高点下挫，像子浪 i")
+            elif kind == "low" and (from_high or 0) <= -0.8:
+                add(24, "弱下跌启动，可作子浪 i")
+            else:
+                add(0, "缺少细级下跌启动")
+        elif catalog_id == "sub_ii":
+            if kind == "high" and st.get("lower_high") and (from_low or 0) >= 1.0:
+                add(38, "细级反抽不过前高，像子浪 ii")
+            elif kind == "high" and (from_low or 0) >= 0.6:
+                add(24, "下跌中反抽，偏 ii")
+            else:
+                add(0, "不是细级反抽高点")
+        elif catalog_id == "sub_iii":
+            if kind == "low" and st.get("lower_low") and swing >= 1.8:
+                add(46, "细级创新低加速，像子浪 iii")
+            elif kind == "low" and st.get("lower_low"):
+                add(32, "细级低点下移，偏 iii")
+            else:
+                add(0, "未见细级主跌")
+        elif catalog_id == "sub_iv":
+            if st.get("contracting") and trend == "down":
+                add(40, "下跌中收敛反抽，像子浪 iv")
+            elif kind == "high" and (from_low or 0) >= 0.8:
+                add(30, "主跌后反抽整理，偏 iv")
+            else:
+                add(4, "细级反抽整理不足")
+        elif catalog_id == "sub_v":
+            if kind == "low" and st.get("lower_low") and swing < 2.2:
+                add(36, "再创新低但跌幅收敛，像子浪 v")
+            elif kind == "low" and st.get("lower_low"):
+                add(26, "寻底段嫌疑")
+            else:
+                add(6, "细级寻底证据一般")
+    else:  # abc
+        if catalog_id == "sub_a":
+            if kind == "low" and (from_high or 0) <= -1.2:
+                add(40, "细级自高回落，像子浪 a")
+            elif kind == "high" and (from_low or 0) >= 1.2 and not st.get("higher_high"):
+                add(28, "细级第一段上冲未创新高，可作 a（平台）")
+            else:
+                add(4, "细级 a 段特征弱")
+        elif catalog_id == "sub_b":
+            if kind == "high" and st.get("lower_high"):
+                add(42, "反抽高点更低，像子浪 b")
+            elif kind == "low" and st.get("higher_low") and not st.get("lower_low"):
+                add(30, "回撤低点抬高，偏 b（锯齿）")
+            else:
+                add(4, "细级 b 段特征弱")
+        elif catalog_id == "sub_c":
+            if kind == "low" and st.get("lower_low") and swing >= 1.5:
+                add(44, "再创新低的调整主段，像子浪 c")
+            elif kind == "high" and st.get("higher_high") and swing >= 1.5:
+                add(36, "再创新高的调整主段，像子浪 c（向上调整）")
+            else:
+                add(6, "细级 c 段特征一般")
+
+    # Soft prior: sideways tape compresses conviction.
+    if trend == "side":
+        score = max(10, score - 6)
+    score = max(0, min(100, int(score)))
+    return score, why
+
+
+def _subwave_invalidation(
+    catalog_id: str,
+    mode: str,
+    st: dict[str, Any],
+    last: float,
+) -> str:
+    """Build a short invalidation hint for the subwave draft."""
+    hl = st.get("last_low")
+    hh = st.get("last_high")
+    pl = st.get("prev_low")
+    ph = st.get("prev_high")
+    if mode == "up":
+        if catalog_id in ("sub_i", "sub_iii", "sub_v"):
+            floor = pl if pl is not None else hl
+            if floor is not None:
+                return f"收盘跌破 {round(float(floor), 2)}（近端细级低点）则本子浪草稿降权"
+        if catalog_id in ("sub_ii", "sub_iv") and hl is not None:
+            return f"继续跌破 {round(float(hl), 2)} 并失守抬高结构则改标"
+    if mode == "down":
+        if catalog_id in ("sub_i", "sub_iii", "sub_v"):
+            ceil = ph if ph is not None else hh
+            if ceil is not None:
+                return f"收盘站上 {round(float(ceil), 2)}（近端细级高点）则本子浪草稿降权"
+        if catalog_id in ("sub_ii", "sub_iv") and hh is not None:
+            return f"反抽站稳 {round(float(hh), 2)} 上方则下跌子浪计数降权"
+    if mode == "abc":
+        if catalog_id == "sub_a" and hh is not None:
+            return f"强势收复并站稳 {round(float(hh), 2)} 则 a 浪草稿可疑"
+        if catalog_id == "sub_b" and hh is not None:
+            return f"突破前高 {round(float(hh), 2)} 并站稳则改标推动嫌疑"
+        if catalog_id == "sub_c" and hl is not None:
+            return f"跌破 {round(float(hl), 2)} 后若加速，警惕演化为推动"
+    return f"相对现价 {round(float(last), 2)} 的细级结构被破坏则降权"
+
+
+def _subwave_draft(
+    parent_id: str,
+    fine_st: dict[str, Any],
+    fine_pivots: list[dict[str, Any]],
+    last: float,
+) -> dict[str, Any]:
+    """Build a one-layer internal subwave draft for a parent scenario.
+
+    Uses a finer zigzag than the parent board. Observe-only; never feeds desk
+    buy/sell gates. Skips triangle / complex parents.
+    """
+    catalog = _subwave_catalog(parent_id)
+    if not catalog:
+        return {
+            "ok": False,
+            "skipped": True,
+            "note": "盘整/复合浪内部不强制数子浪",
+            "primary": None,
+            "candidates": [],
+            "fine_pivot_n": len(fine_pivots or []),
+        }
+    if len(fine_pivots or []) < 4:
+        return {
+            "ok": False,
+            "skipped": False,
+            "note": "细级枢轴不足，暂不展开子浪",
+            "primary": None,
+            "candidates": [],
+            "fine_pivot_n": len(fine_pivots or []),
+        }
+
+    if str(parent_id).startswith("imp_up_"):
+        mode = "up"
+    elif str(parent_id).startswith("imp_dn_") or parent_id in ("corr_a", "corr_c"):
+        mode = "down"
+    else:
+        mode = "abc"
+
+    scored: list[dict[str, Any]] = []
+    for tpl in catalog:
+        fit, why = _score_sub_fit(str(tpl["id"]), mode, fine_st)
+        scored.append(
+            {
+                "id": tpl["id"],
+                "label": tpl["label"],
+                "roman": tpl.get("roman") or "",
+                "fit": fit,
+                "fit_note": why,
+                "path": tpl.get("path") or "",
+                "invalidation": _subwave_invalidation(str(tpl["id"]), mode, fine_st, last),
+                "watch": tpl.get("risk") or "",
+            }
+        )
+    scored.sort(key=lambda x: (-int(x.get("fit") or 0), str(x.get("id") or "")))
+    primary = scored[0] if scored else None
+    # Keep primary + next two alternatives for the collapsed list.
+    alts = scored[1:3]
+    return {
+        "ok": True,
+        "skipped": False,
+        "degree": "minor",
+        "mode": mode,
+        "note": "内部结构草稿 · 多解 · 仅观察，不改买卖结论",
+        "fine_pivot_n": len(fine_pivots or []),
+        "primary": primary,
+        "candidates": ([primary] + alts) if primary else [],
+        "alts": alts,
+    }

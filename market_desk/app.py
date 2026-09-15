@@ -419,6 +419,20 @@ async def review_trends(
     return await engine.build_review_trends(view_date=date)
 
 
+@app.get("/api/review/history/{code}")
+async def review_code_history(
+    code: str,
+    limit: int = Query(default=120, ge=1, le=300),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return signal history for one ticker (dates, plan prices, outcomes)."""
+    c = normalize_code(code)
+    if len(c) != 6 or not c.isdigit():
+        raise HTTPException(400, "code must be a 6-digit ticker")
+    uid = None if is_guest(user) else int(user["id"])
+    return await engine.build_review_code_history(c, user_id=uid, limit=limit)
+
+
 @app.get("/api/chart/{code}")
 async def chart(
     code: str,
