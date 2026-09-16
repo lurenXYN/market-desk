@@ -430,8 +430,20 @@ GAP_FADE_OPEN_PCT = 2.5          # open vs prev close
 GAP_FADE_DROP_PCT = 1.5          # last below open by at least this %
 # Bought yesterday (sellable window) + weak session: prefer half, raise clear bar.
 SELL_YDAY_BUY_MAX_AGE_DAYS = 3   # calendar days after buy still「昨买窗」(covers weekend)
-SELL_YDAY_BUY_WEAK_PCT = -1.0    # day change ≤ this →「今弱」
+SELL_YDAY_BUY_WEAK_PCT = -2.0    # day change ≤ this →「今弱」(−1% too noisy)
 SELL_YDAY_BUY_CLEAR_EXTRA = -1.5 # hard clear only if pnl ≤ pnl_stop + this
+# Independent popular pullback positions: skip「昨买今弱」half trim.
+SELL_INDEPENDENT_POP_EXEMPT_YDAY = True
+
+# Dual-dragon + independent popular pullback.
+INDEPENDENT_POP_MAX = 5
+INDEPENDENT_POP_LOW_DAYS = 5
+INDEPENDENT_POP_NEAR_LOW_PCT = 2.0
+# Absolute floor + turnover floors by market-cap bucket (亿元 / %).
+STOCK_MV_HARD_MIN_YI = 100.0          # below → always drop
+STOCK_TURN_MIN_MID = 3.0              # 100–500亿: turnover < this → drop
+STOCK_TURN_MIN_LARGE = 2.0            # >500亿: turnover < this → drop
+STOCK_MV_MID_MAX_YI = 500.0
 # Theme reputation / board affinity (soft mainline score feed).
 THEME_FADE_ZT_DROP = 0.45       # next-day zt ≤ prior * this → fade candidate
 THEME_FADE_PCT_MAX = 0.5        # and/or weak pct with thin zt

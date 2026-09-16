@@ -31,7 +31,9 @@ _LIVE_KEEP_SEC = 240.0
 _LIVE_FLAT_PCT = 0.08  # treat |Δ| below this as flat
 
 # Buy-family signal_type values (UNIQUE key includes type so sources coexist).
-BUY_SIGNAL_TYPES = frozenset({"buy", "buy_side", "buy_link", "buy_trial"})
+BUY_SIGNAL_TYPES = frozenset(
+    {"buy", "buy_side", "buy_link", "buy_trial", "buy_indep", "buy_dragon"}
+)
 
 
 def is_buy_signal(sig_type: Any) -> bool:
@@ -316,6 +318,10 @@ def _desk_source_of(item: dict[str, Any], payload: dict[str, Any] | None = None)
         return "link"
     if st == "buy_trial":
         return "watch_trial"
+    if st == "buy_indep":
+        return "independent_pop"
+    if st == "buy_dragon":
+        return "dragon"
     if st == "sell":
         return "sell"
     if is_buy_signal(st):
@@ -419,6 +425,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
       - side_recommend → ``buy_side``
       - link_recommend → ``buy_link``
       - watch_trial_recommend → ``buy_trial``
+      - independent_recommend → ``buy_indep``
+      - dragon_recommend → ``buy_dragon``
     Sell: ready items from sell_advice → ``sell``.
     """
     trade_date = snapshot.get("trade_date") or ""
@@ -563,6 +571,24 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         signal_type="buy_trial",
         desk_source="watch_trial",
         action_label="自选可试探",
+        board_fallback=mainline,
+    )
+
+    indep_rec = verdict.get("independent_recommend") or {}
+    n += _log_buy_items(
+        list(indep_rec.get("items") or []),
+        signal_type="buy_indep",
+        desk_source="independent_pop",
+        action_label="独立人气回踩",
+        board_fallback=mainline,
+    )
+
+    dragon_rec = verdict.get("dragon_recommend") or {}
+    n += _log_buy_items(
+        list(dragon_rec.get("items") or []),
+        signal_type="buy_dragon",
+        desk_source="dragon",
+        action_label="龙头排",
         board_fallback=mainline,
     )
 
@@ -985,12 +1011,16 @@ def build_desk_source_hit_rates(
         "side": "支线",
         "link": "联动",
         "watch_trial": "自选试探",
+        "independent_pop": "独立人气",
+        "dragon": "龙头排",
     }
     type_to_src = {
         "buy": "main",
         "buy_side": "side",
         "buy_link": "link",
         "buy_trial": "watch_trial",
+        "buy_indep": "independent_pop",
+        "buy_dragon": "dragon",
     }
     buckets: dict[str, list[dict[str, Any]]] = {k: [] for k in label_map}
     for row in rows:
@@ -1005,11 +1035,13 @@ def build_desk_source_hit_rates(
         src = str(row.get("desk_source") or "").strip()
         if not src:
             src = type_to_src.get(str(row.get("signal_type") or ""), "main")
+        if src in ("emotion_dragon", "mid_army_dragon"):
+            src = "dragon"
         if src not in buckets:
             src = "main"
         buckets[src].append(row)
     out: list[dict[str, Any]] = []
-    for key in ("main", "side", "link", "watch_trial"):
+    for key in ("main", "dragon", "side", "link", "watch_trial", "independent_pop"):
         items = buckets[key]
         if not items:
             continue

@@ -640,6 +640,18 @@
       box-shadow: inset 3px 0 0 #3ecf8e;
     }
     .trialbox .k { color: #3ecf8e; font-size: 12px; letter-spacing: 0.12em; }
+    .dragonbox {
+      margin-top: 10px; padding: 14px 16px;
+      border: 1px solid #5a3a2a; border-radius: 8px; background: #16100e;
+      box-shadow: inset 3px 0 0 #f97316;
+    }
+    .dragonbox .k { color: #fb923c; font-size: 12px; letter-spacing: 0.12em; }
+    .indepbox {
+      margin-top: 10px; padding: 14px 16px;
+      border: 1px solid #3a2a4a; border-radius: 8px; background: #120e16;
+      box-shadow: inset 3px 0 0 #a78bfa;
+    }
+    .indepbox .k { color: #c4b5fd; font-size: 12px; letter-spacing: 0.12em; }
     .favdesk {
       margin-top: 10px; padding: 14px 16px;
       border: 1px solid #1e3a5f; border-radius: 8px; background: #0e1520;
@@ -2053,7 +2065,7 @@
         border-radius: 12px;
         background: #0c1218;
       }
-      .buybox, .sellbox, .sidebox, .linkbox, .trialbox, .favdesk {
+      .buybox, .sellbox, .sidebox, .linkbox, .trialbox, .dragonbox, .indepbox, .favdesk {
         border-radius: 12px;
       }
     }
@@ -2307,6 +2319,14 @@
               <div class="rec-grid" id="sellItems"></div>
             </div>
           </div>
+          <div class="dragonbox" id="dragonbox" hidden>
+            <div class="k">龙头（情绪/中军）<button type="button" class="q" data-term="情绪龙">?</button>
+              <span class="meta" id="dragonNote"></span>
+            </div>
+            <div class="buyline" id="dragonline">暂无龙头排</div>
+            <div class="buymeta" id="dragonmeta"></div>
+            <div class="rec-grid" id="dragonItems"></div>
+          </div>
           <div class="sidebox" id="sidebox" hidden>
             <div class="k">观察支线<button type="button" class="q" data-term="观察支线">?</button>
               <span class="meta" id="sideGap"></span>
@@ -2330,6 +2350,14 @@
             <div class="buyline" id="trialline">暂无可试探自选</div>
             <div class="buymeta" id="trialmeta"></div>
             <div class="rec-grid" id="trialItems"></div>
+          </div>
+          <div class="indepbox" id="indepbox" hidden>
+            <div class="k">独立人气回踩<button type="button" class="q" data-term="独立人气回踩">?</button>
+              <span class="meta" id="indepNote"></span>
+            </div>
+            <div class="buyline" id="indepline">暂无独立人气回踩</div>
+            <div class="buymeta" id="indepmeta"></div>
+            <div class="rec-grid" id="indepItems"></div>
           </div>
           <div class="favdesk" id="favDesk" hidden>
             <div class="k">看好板块 · 推荐买卖<button type="button" class="q" data-term="看好板块买卖">?</button>
@@ -2868,6 +2896,7 @@
               data-suggest="${buy ?? ""}"
               data-last="${it.last ?? ""}"
               data-qty="${qtyForBook}"
+              data-desk-source="${it.desk_source || (it.independent_pop ? "independent_pop" : "")}"
               title="确认后写入本地仓位；若有当日买入信号会同步记已交易">记入仓位</button>
             <button type="button" class="pos-btn rec-pos"
               data-code="${it.code || ""}"
@@ -3349,6 +3378,24 @@
       }
       document.getElementById("buyavoid").textContent = rec.avoid || "";
       document.getElementById("recItems").innerHTML = (rec.items || []).map(recCard).join("");
+      const dragonRec = v.dragon_recommend || null;
+      const dragonBox = document.getElementById("dragonbox");
+      if (dragonBox) {
+        if (dragonRec && (dragonRec.items || []).length) {
+          dragonBox.hidden = false;
+          document.getElementById("dragonline").textContent =
+            dragonRec.text || dragonRec.title || "龙头排";
+          document.getElementById("dragonmeta").textContent =
+            dragonRec.size_note || "情绪龙·异动 / 中军龙·回踩；与上方回踩主推并行";
+          const dn = document.getElementById("dragonNote");
+          if (dn) dn.textContent = `· ${(dragonRec.items || []).length}只`;
+          document.getElementById("dragonItems").innerHTML =
+            (dragonRec.items || []).map(recCard).join("");
+        } else {
+          dragonBox.hidden = true;
+          document.getElementById("dragonItems").innerHTML = "";
+        }
+      }
       const side = v.side_mainline || null;
       const sideRec = v.side_recommend || {};
       const sideBox = document.getElementById("sidebox");
@@ -3419,6 +3466,24 @@
         } else {
           trialBox.hidden = true;
           document.getElementById("trialItems").innerHTML = "";
+        }
+      }
+      const indepRec = v.independent_recommend || null;
+      const indepBox = document.getElementById("indepbox");
+      if (indepBox) {
+        if (indepRec && (indepRec.items || []).length) {
+          indepBox.hidden = false;
+          document.getElementById("indepline").textContent =
+            indepRec.text || indepRec.title || "独立人气回踩";
+          document.getElementById("indepmeta").textContent =
+            indepRec.size_note || "主线板内独立行情·近低回踩，不改顶栏";
+          const inn = document.getElementById("indepNote");
+          if (inn) inn.textContent = `· ${(indepRec.items || []).length}只`;
+          document.getElementById("indepItems").innerHTML =
+            (indepRec.items || []).map(recCard).join("");
+        } else {
+          indepBox.hidden = true;
+          document.getElementById("indepItems").innerHTML = "";
         }
       }
       const favDesk = d.favorite_desk || {};
@@ -5182,9 +5247,13 @@
         const histBtn = code
           ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
           : "";
+        const minBtn = code
+          ? ` <button type="button" class="rev-col-btn rev-min-btn js-chart" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" data-signal-at="${escAttr(r.signaled_at || "")}" title="打开分时/日线">分时</button>`
+          : "";
         return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}`
           + revSideChips(r)
           + histBtn
+          + minBtn
           + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
       }
       if (col === "code") return r.code || "";
@@ -6132,6 +6201,8 @@
           if (lastData.verdict) {
             lastData.verdict = Object.assign({}, lastData.verdict, {
               watch_trial_recommend: (d.verdict && d.verdict.watch_trial_recommend) || null,
+              independent_recommend: (d.verdict && d.verdict.independent_recommend) || null,
+              dragon_recommend: (d.verdict && d.verdict.dragon_recommend) || null,
             });
           }
         }
@@ -6427,13 +6498,18 @@
           return;
         }
         const fromFav = (ev.currentTarget && ev.currentTarget.id === "favDesk");
+        const deskSrc = (bookBtn && bookBtn.dataset.deskSource) || "";
+        let note = fromFav ? "看好板块记入" : "作战台记入";
+        if (deskSrc === "independent_pop") note = "独立人气·作战台记入";
+        else if (deskSrc === "emotion_dragon" || deskSrc === "mid_army_dragon" || deskSrc === "dragon")
+          note = "龙头排·作战台记入";
         try {
           const ok = await bookBuyToPosition({
             code,
             name,
             price,
             qty,
-            note: fromFav ? "看好板块记入" : "作战台记入",
+            note,
           });
           if (ok) {
             await tick();
@@ -6490,7 +6566,7 @@
         alert("钉自选失败");
       }
     }
-    ["buybox", "sidebox", "linkbox", "trialbox", "favDesk"].forEach((id) => {
+    ["buybox", "dragonbox", "sidebox", "linkbox", "trialbox", "indepbox", "favDesk"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("click", onDeskRecClick);
     });
@@ -6935,7 +7011,7 @@
     document.addEventListener("click", (ev) => {
       const xqOnly = ev.target.closest("a.xq-link");
       if (xqOnly) return; // let browser open Xueqiu
-      const hit = ev.target.closest("a.js-chart");
+      const hit = ev.target.closest(".js-chart");
       if (!hit) return;
       ev.preventDefault();
       openChart(hit.dataset.code, hit.dataset.name, hit.dataset.signalAt || hit.getAttribute("data-signal-at") || "");
@@ -7149,6 +7225,7 @@
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
+        "独立人气回踩", "情绪龙", "中军龙", "年内涨停",
       ] },
       { id: "market", label: "大盘指标", keys: [
         "涨停", "跌停", "炸板", "换手", "高度", "广度", "晋级率", "晋级1→2", "晋级2→3", "梯队", "昨停溢价",

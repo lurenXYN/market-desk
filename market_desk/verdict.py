@@ -278,7 +278,18 @@ def build_verdict(
         adapt_bundle["similar_size_mult"] = round(max(0.5, min(1.0, sm)), 3)
     # Without ETF mapping, still allow主板回踩观察票, but never as ready buys.
     allow_stocks = not stock_block and not _blocks_chi_star_stocks(board_name)
+    surge_fresh = False
+    try:
+        from market_desk.leaders import board_surge_fresh
+
+        surge_fresh = board_surge_fresh(main, life_stage)
+        if surge_fresh:
+            algo_notes.append("板块暴起·龙头排先观察持续性")
+    except Exception:
+        pass
+    stocks = []
     if allow_stocks:
+        # Track A: original constituent pullbacks (may include mid/back-row).
         stocks = _stock_candidates(
             main,
             zt or [],
@@ -490,6 +501,8 @@ def build_verdict(
         "side_recommend": side_recommend,
         "link_mainline": link_info,
         "link_recommend": link_recommend,
+        "dragon_recommend": None,
+        "independent_recommend": None,
         "sell_themes": sell_themes,
         "playbook": playbook,
         "algo_notes": algo_notes,
@@ -550,6 +563,49 @@ def build_verdict(
     out["link_recommend"] = mark_pullback_entries(
         out.get("link_recommend"), observe_only=True, block_arm=block_arm
     )
+    # Track B: emotion + mid-army dragons on a separate desk row.
+    try:
+        dragon = build_dragon_recommend(
+            main,
+            zt or [],
+            surge_fresh=surge_fresh,
+            phase=phase,
+            playbook=playbook,
+            adapt=adapt_bundle,
+            action=action,
+        )
+        if dragon:
+            out["dragon_recommend"] = mark_pullback_entries(
+                dragon, observe_only=False, block_arm=block_arm or surge_fresh
+            )
+            algo_notes.append(f"龙头排={(len((dragon.get('items') or [])))}只")
+            out["algo_notes"] = algo_notes
+    except Exception:
+        out["dragon_recommend"] = None
+    # Independent popular pullback: observe-only module on sticky mainline pool.
+    try:
+        skip_extra = {
+            normalize_code(x.get("code"))
+            for x in ((out.get("dragon_recommend") or {}).get("items") or [])
+            if x.get("code")
+        }
+        indep = build_independent_pullback_recommend(
+            main,
+            recommend=out.get("recommend"),
+            skip_codes=skip_extra,
+            playbook=playbook,
+            adapt=adapt_bundle,
+        )
+        if indep:
+            out["independent_recommend"] = mark_pullback_entries(
+                indep, observe_only=True, block_arm=block_arm
+            )
+            algo_notes.append(
+                f"独立人气回踩={(len((indep.get('items') or [])))}只"
+            )
+            out["algo_notes"] = algo_notes
+    except Exception:
+        out["independent_recommend"] = None
     out = reconfirm_recommend_ready(out, metrics)
     return align_action_with_ready(out)
 
@@ -1683,6 +1739,148 @@ def build_watch_trial_recommend(
     return _attach_risk_sizing(rec, playbook=playbook, adapt=trial_adapt)
 
 
+def build_dragon_recommend(
+    main: dict[str, Any] | None,
+    zt: list[dict[str, Any]] | None,
+    *,
+    surge_fresh: bool = False,
+    phase: str = "",
+    playbook: dict[str, Any] | None = None,
+    adapt: dict[str, Any] | None = None,
+    action: str = "",
+) -> dict[str, Any] | None:
+    """Build a separate desk row for emotion + mid-army dragons (≤2).
+
+    Does not replace the main pullback recommend track. Card-level ready may arm
+    after gates, but hero action still follows ``recommend`` only.
+    """
+    from market_desk.leaders import build_dual_dragon_stocks
+
+    raw = build_dual_dragon_stocks(
+        main, zt, surge_fresh=surge_fresh, phase=phase
+    )
+    if not raw:
+        return None
+    items: list[dict[str, Any]] = []
+    for row in raw:
+        code = normalize_code(row.get("code"))
+        if not code:
+            continue
+        ready = bool(row.get("ready")) and not surge_fresh
+        item = _recommend_item(
+            row,
+            kind="stock",
+            role="alt",
+            ready=ready,
+            reason=str(row.get("reason") or "龙头观察"),
+        )
+        item["role_label"] = str(row.get("role_label") or "龙头")
+        item["dragon_kind"] = row.get("dragon_kind")
+        item["desk_source"] = str(row.get("desk_source") or "dragon")
+        item["dragon_row"] = True
+        if surge_fresh:
+            item["ready"] = False
+            if item.get("wait_price") is not None:
+                item["buy_price"] = item.get("wait_price")
+        items.append(item)
+    if not items:
+        return None
+    tip = "情绪龙·确认异动 + 中军龙·趋势回踩；与上方回踩主推并行，不替代。"
+    if surge_fresh:
+        tip += " 暴起当日龙头排只观察。"
+    rec: dict[str, Any] = {
+        "title": "龙头（情绪/中军）",
+        "text": f"龙头排 · {len(items)}只"
+        + (f" · 主线动作 {action}" if action else ""),
+        "buy": any(x.get("ready") for x in items),
+        "dragon_row": True,
+        "items": items,
+        "size_note": tip,
+    }
+    dragon_adapt = dict(adapt or {})
+    dragon_adapt["dragon_row"] = True
+    return _attach_risk_sizing(rec, playbook=playbook, adapt=dragon_adapt)
+
+
+def build_independent_pullback_recommend(
+    main: dict[str, Any] | None,
+    *,
+    recommend: dict[str, Any] | None = None,
+    skip_codes: set[str] | None = None,
+    playbook: dict[str, Any] | None = None,
+    adapt: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Build observe-only cards for mainline independent popular pullbacks.
+
+    Does not upgrade hero action / sticky. Sell path may exempt「昨买今弱」.
+    """
+    from market_desk.config import INDEPENDENT_POP_MAX
+    from market_desk.leaders import build_independent_pullback_candidates
+
+    skip = {
+        normalize_code(x.get("code"))
+        for x in ((recommend or {}).get("items") or [])
+        if x.get("kind") == "stock" and x.get("code")
+    }
+    for c in skip_codes or set():
+        cc = normalize_code(c)
+        if cc:
+            skip.add(cc)
+    raw = build_independent_pullback_candidates(
+        main, skip_codes=skip, max_items=int(INDEPENDENT_POP_MAX)
+    )
+    items: list[dict[str, Any]] = []
+    for row in raw:
+        code = normalize_code(row.get("code"))
+        if not code:
+            continue
+        last = row.get("price") or row.get("last")
+        items.append(
+            {
+                "kind": "stock",
+                "kind_label": "个股",
+                "role": "alt",
+                "role_label": "独立人气·回踩",
+                "code": code,
+                "name": row.get("name") or code,
+                "last": _px(last, 2),
+                "pct": None if row.get("pct") is None else round(float(row["pct"]), 2),
+                "buy_price": _px(last, 2),
+                "wait_price": _px(row.get("low") or last, 2),
+                "stop_price": _px(
+                    (float(last) * 0.97) if last not in (None, 0) else None, 2
+                ),
+                "chase_price": _px(
+                    (float(last) * 1.03) if last not in (None, 0) else None, 2
+                ),
+                "ready": False,
+                "independent_pop": True,
+                "desk_source": "independent_pop",
+                "reason": str(row.get("reason") or "主线板内独立人气·近低回踩观察"),
+                "qty": 100,
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "mv_yi": row.get("mv_yi"),
+            }
+        )
+    if not items:
+        return None
+    rec: dict[str, Any] = {
+        "title": "独立人气回踩",
+        "text": f"独立人气回踩 · {len(items)}只",
+        "buy": False,
+        "independent_pop": True,
+        "items": items,
+        "size_note": (
+            "主线板内走独立行情、近低回踩观察；不升顶栏可买入。"
+            "记仓后豁免「昨买今弱」轻减，破近5日低/止损仍提醒。"
+        ),
+    }
+    indep_adapt = dict(adapt or {})
+    indep_adapt["independent_pop"] = True
+    return _attach_risk_sizing(rec, playbook=playbook, adapt=indep_adapt)
+
+
 def build_favorite_desk_plans(
     *,
     favorite_boards: list[dict[str, Any]] | None,
@@ -2284,7 +2482,7 @@ def build_item_buy_progress(item: dict[str, Any] | None) -> dict[str, Any]:
                 "label": "分时",
                 "ok": None,
                 "soft": True,
-                "detail": str(minute.get("label") or "样本不足·软"),
+                "detail": str(minute.get("label") or "未验·软"),
             }
         )
         missing.append("分时")
@@ -3135,6 +3333,9 @@ def _score_stock(
     if pct is None:
         return None
     min_mv = float(setting("min_stock_mv_yi", 120.0) or 0.0)
+    from market_desk.config import STOCK_MV_HARD_MIN_YI
+
+    min_mv = max(min_mv, float(STOCK_MV_HARD_MIN_YI))
     if orphan_mode == "hard" and min_mv > 0:
         min_mv *= float(ORPHAN_STOCK_MV_MULT)
     elif orphan_mode == "soft" and min_mv > 0:
@@ -3149,6 +3350,12 @@ def _score_stock(
         turnover = float(member.get("turnover")) if member.get("turnover") is not None else None
     except (TypeError, ValueError):
         turnover = None
+    from market_desk.leaders import stock_liquidity_ok
+
+    if not stock_liquidity_ok(
+        None if mv_yi is None else float(mv_yi), turnover, sealed=False
+    ):
+        return None
     # Overheated turnover: skip hard; elevated turnover: no ready buys.
     if turnover is not None and turnover >= 25.0:
         return None
@@ -4114,6 +4321,20 @@ def _exit_band_params(
     return band
 
 
+def _position_exempt_yday_weak(row: dict[str, Any]) -> bool:
+    """Return True when a position should skip「昨买今弱」half-trim."""
+    from market_desk.config import SELL_INDEPENDENT_POP_EXEMPT_YDAY
+
+    if not SELL_INDEPENDENT_POP_EXEMPT_YDAY:
+        return False
+    note = str(row.get("note") or "")
+    if "独立人气" in note or "independent_pop" in note:
+        return True
+    if str(row.get("desk_source") or "").strip().lower() == "independent_pop":
+        return True
+    return False
+
+
 def _yday_buy_weak(
     *,
     buy_day: str | None,
@@ -4291,6 +4512,10 @@ def _sell_item(
         t1_locked=t1_locked,
         day_pct=day_pct_f,
     )
+    if yday_weak.get("active") and _position_exempt_yday_weak(row):
+        yday_weak = dict(yday_weak)
+        yday_weak["active"] = False
+        yday_weak["exempt"] = "independent_pop"
     hold_qty = int(row.get("qty") or 0)
     trend = trend or {}
     ma20 = trend.get("ma20")

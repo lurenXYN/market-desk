@@ -728,30 +728,8 @@ async def fetch_daily_klines(
     return dates, closes, {"open": opens, "high": highs, "low": lows}
 
 
-async def fetch_minute_trends(
-    client: httpx.AsyncClient,
-    code: str,
-) -> list[dict[str, Any]]:
-    """Fetch today's minute trend points for an intraday sparkline.
-
-    East Money ``trends2`` CSV (fields2=f51..f58) is currently:
-    ``time,open,close,high,low,volume,amount,avg`` — use close as price.
-    """
-    c = normalize_code(code)
-    if not c:
-        return []
-    url = (
-        "https://push2.eastmoney.com/api/qt/stock/trends2/get"
-        f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
-        "&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"
-        "&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
-        "&ndays=1&iscr=0&iscca=0"
-    )
-    try:
-        payload = await _get_json(client, url)
-    except Exception:
-        return []
-    rows = ((payload.get("data") or {}).get("trends")) or []
+def _parse_minute_trends(rows: list[Any]) -> list[dict[str, Any]]:
+    """Parse East Money trends2 CSV rows into minute points."""
     out: list[dict[str, Any]] = []
     for row in rows:
         parts = str(row).split(",")
@@ -775,6 +753,49 @@ async def fetch_minute_trends(
             point["amount"] = float(amt)
         out.append(point)
     return out
+
+
+async def fetch_minute_trends(
+    client: httpx.AsyncClient,
+    code: str,
+) -> list[dict[str, Any]]:
+    """Fetch today's minute trend points for an intraday sparkline.
+
+    East Money ``trends2`` CSV (fields2=f51..f58) is currently:
+    ``time,open,close,high,low,volume,amount,avg`` — use close as price.
+
+    ``push2.eastmoney.com`` often disconnects on ETFs; try delay/his hosts with a
+    short single-shot timeout so fallbacks are not delayed by ``_get_json`` retries.
+    """
+    c = normalize_code(code)
+    if not c:
+        return []
+    path = (
+        "/api/qt/stock/trends2/get"
+        f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
+        "&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"
+        "&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+        "&ndays=1&iscr=0&iscca=0"
+    )
+    # Prefer delay first: push2 frequently RSTs on ETF secids.
+    hosts = (
+        "push2delay.eastmoney.com",
+        "push2.eastmoney.com",
+        "push2his.eastmoney.com",
+    )
+    for host in hosts:
+        url = f"https://{host}{path}"
+        try:
+            resp = await client.get(url, headers=HTTP_HEADERS, timeout=6.0)
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            continue
+        rows = ((payload.get("data") or {}).get("trends")) or []
+        out = _parse_minute_trends(rows)
+        if out:
+            return out
+    return []
 
 
 async def fetch_daily_closes(

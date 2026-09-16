@@ -8,6 +8,14 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **双轨：回踩主推 + 龙头单独排** — 上方恢复成分回踩推荐；情绪/中军龙独立 dragonbox，不互相替代。*(2026-09-16)*
+- [x] **市值/换手流动性门槛** — 不足100亿剔除；100–500亿换手≥3%；500亿以上换手≥2%；封板情绪龙豁免换手。*(2026-09-16)*
+- [x] **年内涨停过滤 + 年缓存** — 个股推荐/试探/联动/独立人气要求 zt_ytd≥1；缓存「代码+年份」。*(2026-09-16)*
+- [x] **复盘分时按钮** — 名称旁「分时」，复用 `/api/chart` 抽屉。*(2026-09-16)*
+- [x] **独立人气回踩模块** — 主线板内独立行情、近5日低；观察卡；记仓豁免昨买今弱；buy_indep 落库。*(2026-09-16)*
+- [x] **双龙头 + 暴起观察** — 情绪龙·异动 / 中军龙·回踩，合计≤2；暴起当日个股不现买。*(2026-09-16)*
+- [x] **分时 ETF 源断连** — trends2 优先 push2delay；空序列不缓存；推荐卡未贴价也拉分时；进度「未验」≠样本不足。*(2026-09-16)*
+- [x] **昨买今弱放宽** — 当日弱阈值 −1%→−2%，减少常态波动误触发减半。*(2026-09-16)*
 - [x] **分时字段错位 + 早段样本** — trends2 按 open/close/high/low/vol/amt/avg 解析；MINUTE_SAMPLE_MIN 25→15。*(2026-09-16)*
 - [x] **竞价 9:30 前加快刷新** — `auction_refresh_seconds` 默认5；引擎/行情 TTL/前端竞价页跟 `refresh_seconds`。*(2026-09-16)*
 - [x] **竞价表加列** — 股东户数/户数增减/年内涨停/总市值/题材；股东与年内涨停 Phase B 补齐。*(2026-09-16)*
@@ -41,18 +49,3 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **仓位合流控制器** — 因子相乘 + ADAPT_META 夹紧 + 归因条。*(2026-09-11)*
 - [x] **闸门情景自适应** — 时段×波动假杀/真杀微调离日高/分时/薄确认。*(2026-09-11)*
 - [x] **Playbook size_cap 自适应** — 随仓位合流软调上限（恐慌不抬高）。*(2026-09-11)*
-- [x] **卖侧 MFE 学习** — 早卖留下涨幅中位 → 放宽/收紧止盈回撤。*(2026-09-11)*
-- [x] **主线粘性学习** — 换防频次 → sticky margin 软调。*(2026-09-11)*
-- [x] **白盒校准** — 样本外 + 贡献条。*(2026-09-11)*
-- [x] **exec_score → 轻缩仓** — *(2026-09-11)*
-- [x] **分段卖点学习化** — *(2026-09-11)*
-- [x] **相似日 cool 偏软** — *(2026-09-11)*
-- [x] **一致性修复 P0–P5** — *(2026-09-11)*
-
-## Won’t do (by design)
-
-- Emotion / seasonality → hard buy
-- True Kelly full-size
-- ATR replaces all pullback bands
-- Black-box ML predictors
-- Untagged / cross-bucket missed-buy generalization into auto_tune

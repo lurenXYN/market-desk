@@ -596,6 +596,9 @@ class DeskEngine:
                     except Exception:
                         log.exception("save daily mainline failed")
                 await self._apply_recommend_trends(client, verdict, trade_date_dash)
+                await self._refine_independent_pullbacks(
+                    client, verdict, trade_date_dash
+                )
                 # Soft ETF maps block_ready on the vehicle only; stocks may arm.
                 # Holders / watch-trial enrich run after first snapshot publish (Phase A).
                 seg_v = verdict.get("segment") or {}
@@ -615,6 +618,18 @@ class DeskEngine:
                     observe_only=True,
                     block_arm=block_arm,
                 )
+                if verdict.get("dragon_recommend"):
+                    verdict["dragon_recommend"] = mark_pullback_entries(
+                        verdict.get("dragon_recommend"),
+                        observe_only=False,
+                        block_arm=block_arm,
+                    )
+                if verdict.get("independent_recommend"):
+                    verdict["independent_recommend"] = mark_pullback_entries(
+                        verdict.get("independent_recommend"),
+                        observe_only=True,
+                        block_arm=block_arm,
+                    )
                 await self._apply_recommend_minutes(client, verdict)
                 # Rematch near-entry after minutes so only minute.ok=True arms.
                 verdict["recommend"] = mark_pullback_entries(
@@ -632,6 +647,18 @@ class DeskEngine:
                     observe_only=True,
                     block_arm=block_arm,
                 )
+                if verdict.get("dragon_recommend"):
+                    verdict["dragon_recommend"] = mark_pullback_entries(
+                        verdict.get("dragon_recommend"),
+                        observe_only=False,
+                        block_arm=block_arm,
+                    )
+                if verdict.get("independent_recommend"):
+                    verdict["independent_recommend"] = mark_pullback_entries(
+                        verdict.get("independent_recommend"),
+                        observe_only=True,
+                        block_arm=block_arm,
+                    )
                 verdict = reconfirm_recommend_ready(verdict, metrics)
                 verdict = apply_size_cap_gate(verdict, positions)
                 aligned = align_action_with_ready(verdict)
@@ -653,6 +680,18 @@ class DeskEngine:
                     block_arm=seg_lock,
                     allow_probe=False,
                 )
+                if verdict.get("dragon_recommend"):
+                    verdict["dragon_recommend"] = finalize_recommend_buy_ux(
+                        verdict.get("dragon_recommend"),
+                        block_arm=seg_lock,
+                        allow_probe=True,
+                    )
+                if verdict.get("independent_recommend"):
+                    verdict["independent_recommend"] = finalize_recommend_buy_ux(
+                        verdict.get("independent_recommend"),
+                        block_arm=seg_lock,
+                        allow_probe=False,
+                    )
                 desk_gate_summary = build_desk_gate_summary(verdict, phase=phase)
                 watchlist = _annotate_watchlist_observe(watchlist, verdict)
                 watch_trial = build_watch_trial_recommend(
@@ -667,6 +706,9 @@ class DeskEngine:
                             item["buy_price"] = item.get("wait_price")
                     watch_trial["buy"] = False
                 verdict["watch_trial_recommend"] = watch_trial
+                await self._filter_stock_recommends_by_zt_ytd(
+                    client, verdict, trade_date_dash
+                )
                 pos_trends = self._cached_trends_for(pos_codes)
                 positions = attach_position_daily_trends(positions, pos_trends)
                 updated_at = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -1290,7 +1332,7 @@ class DeskEngine:
         trade_date: str,
         concurrency: int = 5,
     ) -> dict[str, dict[str, Any]]:
-        """Resolve calendar-year limit-up counts (cached once per code per day)."""
+        """Resolve calendar-year limit-up counts (cached once per code+year)."""
         year = int(str(trade_date or "")[:4] or datetime.now(CN_TZ).year)
         day = str(trade_date or "")[:10]
         uniq = []
@@ -1304,9 +1346,14 @@ class DeskEngine:
         out: dict[str, dict[str, Any]] = {}
         need: list[str] = []
         for c in uniq:
-            hit = self._zt_ytd_cache.get(c)
-            if hit and hit.get("day") == day and hit.get("year") == year:
-                out[c] = hit
+            key = f"{year}:{c}"
+            hit = self._zt_ytd_cache.get(key) or self._zt_ytd_cache.get(c)
+            if hit and int(hit.get("year") or 0) == year:
+                # Year-scoped hit: reuse across trade days; refresh day stamp.
+                row = dict(hit)
+                row["day"] = day
+                self._zt_ytd_cache[key] = row
+                out[c] = row
             else:
                 need.append(c)
         if need:
@@ -1331,7 +1378,8 @@ class DeskEngine:
                     "count": cnt,
                     "note": f"{year}年日线涨停次数（未复权收盘涨幅阈值，非官方字段）",
                 }
-                self._zt_ytd_cache[c] = row
+                self._zt_ytd_cache[f"{year}:{c}"] = row
+                self._zt_ytd_cache[c] = row  # legacy key for older callers
                 out[c] = row
         return out
 
@@ -1447,11 +1495,15 @@ class DeskEngine:
         rec = verdict.get("recommend") or {}
         side_rec = verdict.get("side_recommend") or {}
         link_rec = verdict.get("link_recommend") or {}
+        dragon_rec = verdict.get("dragon_recommend") or {}
+        indep_rec = verdict.get("independent_recommend") or {}
         codes = [
             str(x.get("code") or "")
             for x in list(rec.get("items") or [])
             + list(side_rec.get("items") or [])
             + list(link_rec.get("items") or [])
+            + list(dragon_rec.get("items") or [])
+            + list(indep_rec.get("items") or [])
             if x.get("kind") in ("stock", "etf") and x.get("code")
         ]
         codes = list(dict.fromkeys(codes))
@@ -1484,6 +1536,140 @@ class DeskEngine:
                 if item.get("wait_price") is not None:
                     item["buy_price"] = item.get("wait_price")
             verdict["link_recommend"]["buy"] = False
+        if dragon_rec.get("items"):
+            verdict["dragon_recommend"] = apply_stock_daily_trends(
+                dragon_rec, closes_by_code, fetch_ok_by_code, overrides
+            )
+        if indep_rec.get("items"):
+            verdict["independent_recommend"] = apply_stock_daily_trends(
+                indep_rec, closes_by_code, fetch_ok_by_code, overrides
+            )
+            for item in (verdict["independent_recommend"].get("items") or []):
+                item["ready"] = False
+                item["independent_pop"] = True
+                if item.get("wait_price") is not None:
+                    item["buy_price"] = item.get("wait_price")
+            verdict["independent_recommend"]["buy"] = False
+
+    async def _filter_stock_recommends_by_zt_ytd(
+        self,
+        client: httpx.AsyncClient,
+        verdict: dict[str, Any],
+        trade_date: str,
+    ) -> None:
+        """Drop stock cards with zero calendar-year limit-ups (ETF kept)."""
+        keys = (
+            "recommend",
+            "side_recommend",
+            "link_recommend",
+            "dragon_recommend",
+            "independent_recommend",
+            "watch_trial_recommend",
+        )
+        codes: list[str] = []
+        names: dict[str, str] = {}
+        for key in keys:
+            box = verdict.get(key) or {}
+            for item in box.get("items") or []:
+                if item.get("kind") == "etf":
+                    continue
+                code = normalize_code(item.get("code"))
+                if not code:
+                    continue
+                codes.append(code)
+                names[code] = str(item.get("name") or "")
+        if not codes:
+            return
+        zt_map = await self._zt_ytd_for_codes(
+            client, codes, names, trade_date=trade_date, concurrency=4
+        )
+        for key in keys:
+            box = verdict.get(key)
+            if not isinstance(box, dict) or not box.get("items"):
+                continue
+            kept: list[dict[str, Any]] = []
+            dropped = 0
+            for item in box.get("items") or []:
+                if item.get("kind") == "etf":
+                    kept.append(item)
+                    continue
+                code = normalize_code(item.get("code"))
+                hit = zt_map.get(code) or {}
+                cnt = hit.get("count")
+                item["zt_ytd"] = cnt
+                item["zt_ytd_year"] = hit.get("year")
+                if cnt is None:
+                    # Fetch miss: keep but mark pending (do not hard-drop).
+                    item["zt_ytd_pending"] = True
+                    kept.append(item)
+                    continue
+                if int(cnt) < 1:
+                    dropped += 1
+                    continue
+                kept.append(item)
+            box["items"] = kept
+            if dropped and key == "recommend":
+                notes = list((verdict.get("algo_notes") or []))
+                tip = f"年内0涨停已剔除{dropped}只"
+                if tip not in notes:
+                    notes.append(tip)
+                verdict["algo_notes"] = notes
+            if not kept and key != "recommend":
+                verdict[key] = None if key != "recommend" else box
+
+    async def _refine_independent_pullbacks(
+        self,
+        client: httpx.AsyncClient,
+        verdict: dict[str, Any],
+        trade_date: str,
+    ) -> None:
+        """Keep independent-pop cards that hold the near-5-day low."""
+        from market_desk.config import (
+            INDEPENDENT_POP_LOW_DAYS,
+            INDEPENDENT_POP_NEAR_LOW_PCT,
+        )
+        from market_desk.leaders import within_n_day_low
+
+        box = verdict.get("independent_recommend")
+        if not isinstance(box, dict):
+            return
+        items = list(box.get("items") or [])
+        if not items:
+            verdict["independent_recommend"] = None
+            return
+        codes = [normalize_code(x.get("code")) for x in items if x.get("code")]
+        codes = [c for c in codes if c]
+        if not codes:
+            return
+        packed = await fetch_daily_klines_many(
+            client, codes, limit=max(20, int(INDEPENDENT_POP_LOW_DAYS) + 5), concurrency=4
+        )
+        kept: list[dict[str, Any]] = []
+        for item in items:
+            code = normalize_code(item.get("code"))
+            triple = packed.get(code) if packed else None
+            lows: list[float | None] = []
+            last = item.get("last") or item.get("price")
+            if triple and len(triple) >= 3:
+                ohlc = triple[2] or {}
+                lows = list(ohlc.get("low") or [])
+            if within_n_day_low(
+                lows,
+                float(last) if last is not None else None,
+                n=int(INDEPENDENT_POP_LOW_DAYS),
+                max_pct=float(INDEPENDENT_POP_NEAR_LOW_PCT),
+            ):
+                item["near_5d_low"] = True
+                kept.append(item)
+            elif not lows:
+                # No bars yet — keep soft day-low candidates.
+                kept.append(item)
+        box["items"] = kept
+        if not kept:
+            verdict["independent_recommend"] = None
+        else:
+            box["text"] = f"独立人气回踩 · {len(kept)}只"
+            verdict["independent_recommend"] = box
 
     async def _apply_watch_trial_trends(
         self,
@@ -1707,7 +1893,8 @@ class DeskEngine:
                     minutes_by_code[code] = []
                     continue
                 series = list(rows or [])
-                self._minute_cache[code] = (now_ts, series)
+                if series:
+                    self._minute_cache[code] = (now_ts, series)
                 minutes_by_code[code] = series
         for board in boards:
             if board.get("etf_soft"):
@@ -1721,16 +1908,34 @@ class DeskEngine:
         client: httpx.AsyncClient,
         verdict: dict[str, Any],
     ) -> None:
-        """Fetch minute series for ready / near-entry cards and gate structure."""
+        """Fetch minute series for recommend cards and gate structure.
+
+        Prefer ready / near-entry codes; also pull other item codes (cap 8) so
+        buy-progress shows a real minute verdict instead of a soft placeholder.
+        """
         rec = verdict.get("recommend") or {}
-        codes = sorted(
-            {
-                str(x.get("code") or "").zfill(6)
-                for x in (rec.get("items") or [])
-                if x.get("code")
-                and (x.get("ready") or x.get("near_entry"))
-            }
-        )
+        dragon = verdict.get("dragon_recommend") or {}
+        items = list(rec.get("items") or []) + list(dragon.get("items") or [])
+        priority: list[str] = []
+        rest: list[str] = []
+        for x in items:
+            code = str(x.get("code") or "").zfill(6)
+            if not code or len(code) != 6:
+                continue
+            if x.get("ready") or x.get("near_entry"):
+                priority.append(code)
+            else:
+                rest.append(code)
+        # De-dupe while keeping priority first; cap to limit East Money fan-out.
+        codes: list[str] = []
+        seen: set[str] = set()
+        for code in [*priority, *rest]:
+            if code in seen:
+                continue
+            seen.add(code)
+            codes.append(code)
+            if len(codes) >= 8:
+                break
         if not codes:
             return
         now_ts = datetime.now(CN_TZ).timestamp()
@@ -1753,9 +1958,14 @@ class DeskEngine:
                     minutes_by_code[code] = []
                     continue
                 series = list(rows or [])
-                self._minute_cache[code] = (now_ts, series)
+                if series:
+                    self._minute_cache[code] = (now_ts, series)
                 minutes_by_code[code] = series
         verdict["recommend"] = apply_minute_confirmations(rec, minutes_by_code)
+        if dragon.get("items"):
+            verdict["dragon_recommend"] = apply_minute_confirmations(
+                dragon, minutes_by_code
+            )
 
     def apply_trend_override(self, code: str, verdict_flag: str) -> dict[str, Any]:
         """Persist a manual trend judgment and refresh recommend cards in-memory."""
