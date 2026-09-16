@@ -526,6 +526,22 @@
       border-color: #334155; color: #cbd5e1; background: #111827; cursor: help;
       max-width: 14em;
     }
+    .rev-chip.src-indep {
+      border-color: #3a2a4a; color: #c4b5fd; background: #120e16;
+    }
+    .rev-chip.src-dragon {
+      border-color: #5a3a2a; color: #fb923c; background: #16100e;
+    }
+    .rev-chip.src-side {
+      border-color: #334155; color: #93c5fd; background: #10141c;
+    }
+    .rev-chip.src-link {
+      border-color: #5a4a2a; color: #eab308; background: #16140e;
+    }
+    .rev-type-indep { color: #c4b5fd; font-weight: 700; }
+    .rev-type-dragon { color: #fb923c; font-weight: 700; }
+    .rev-type-side { color: #93c5fd; font-weight: 700; }
+    .rev-type-link { color: #eab308; font-weight: 700; }
     th.rev-sort {
       cursor: pointer;
       user-select: none;
@@ -2731,12 +2747,14 @@
               </select>
             </label>
             <label>来源
-              <select id="revSource" title="主线/支线/联动/自选">
+              <select id="revSource" title="主线/龙头/支线回踩/联动回踩/自选/独立人气">
                 <option value="">全部来源</option>
                 <option value="main">主线</option>
-                <option value="side">支线</option>
-                <option value="link">联动</option>
+                <option value="dragon">龙头</option>
+                <option value="side">支线回踩</option>
+                <option value="link">联动回踩</option>
                 <option value="watch_trial">自选试探</option>
+                <option value="independent_pop">独立人气</option>
               </select>
             </label>
             <label>主线<input id="revMain" placeholder="关键词，可空" /></label>
@@ -5070,9 +5088,70 @@
     function revColLabel(id) {
       return (REV_COL_CATALOG.find((c) => c.id === id) || {}).label || id;
     }
+    function revNormSrc(r) {
+      const payload = (r.payload && typeof r.payload === "object") ? r.payload : {};
+      let src = String(r.desk_source || payload.desk_source || "").trim().toLowerCase();
+      if (src === "emotion_dragon" || src === "mid_army_dragon") src = "dragon";
+      if (!src) {
+        const st = String(r.signal_type || "");
+        if (st === "buy_side") src = "side";
+        else if (st === "buy_link") src = "link";
+        else if (st === "buy_trial") src = "watch_trial";
+        else if (st === "buy_indep") src = "independent_pop";
+        else if (st === "buy_dragon") src = "dragon";
+        else if (st === "sell") src = "sell";
+        else src = "main";
+      }
+      return src;
+    }
+    function revSrcTagMeta(src) {
+      const table = {
+        dragon: {
+          chip: "龙头",
+          title: "龙头排 · 情绪龙/中军龙",
+          cls: "src-dragon",
+          typ: "rev-type-dragon",
+        },
+        side: {
+          chip: "支线回踩",
+          title: "观察支线 · 板块回踩副卡",
+          cls: "src-side",
+          typ: "rev-type-side",
+        },
+        link: {
+          chip: "联动回踩",
+          title: "板块联动 · 相似板回踩副卡",
+          cls: "src-link",
+          typ: "rev-type-link",
+        },
+        independent_pop: {
+          chip: "独立人气",
+          title: "独立人气回踩 · 主线板内独立行情",
+          cls: "src-indep",
+          typ: "rev-type-indep",
+        },
+        watch_trial: {
+          chip: "自选试探",
+          title: "自选可试探副卡",
+          cls: "src-trial",
+          typ: "",
+        },
+      };
+      return table[src] || null;
+    }
     function revSideChips(r) {
       const chips = [];
       const payload = (r.payload && typeof r.payload === "object") ? r.payload : {};
+      const srcTag = revSrcTagMeta(revNormSrc(r));
+      if (srcTag) {
+        const role = String(r.role_label || payload.role_label || "").trim();
+        const tip = role && role !== srcTag.chip
+          ? `${srcTag.title} · ${role}`
+          : srcTag.title;
+        chips.push(
+          `<span class="rev-chip ${srcTag.cls}" title="${escAttr(tip)}">${escAttr(srcTag.chip)}</span>`
+        );
+      }
       if (r.trend_ok) {
         chips.push(`<span class="rev-chip up" title="日线上升">上升</span>`);
       } else if (r.trend_down) {
@@ -5089,41 +5168,40 @@
         const tip = r.vs_mainline_of ? `对照「${r.vs_mainline_of}」` : "对照主线";
         chips.push(`<span class="rev-chip ${cls}" title="${escAttr(tip)}">${escAttr(vs)}</span>`);
       }
-      // Desk-style gate chips: 分时 opens chart (same as name); 原因 shows tip.
+      // Desk-style gate chips: label stays「分时」; detail lives in title (hover).
       const minute = (r.minute && typeof r.minute === "object")
         ? r.minute
         : ((payload.minute && typeof payload.minute === "object") ? payload.minute : {});
       const fails = [].concat(r.confirm_fail || payload.confirm_fail || []).filter(Boolean);
       const softs = [].concat(r.confirm_soft || payload.confirm_soft || []).filter(Boolean);
-      let minLab = minute.label || "";
+      let minDetail = "";
       let minCls = "rev-chip gate soft";
       if (minute.ok === true) {
-        minLab = minLab || "分时已过";
+        minDetail = minute.label || "分时已过";
         minCls = "rev-chip gate ok";
       } else if (minute.ok === false) {
-        minLab = minLab || "分时未过";
+        minDetail = minute.label || "分时未过";
         minCls = "rev-chip gate";
       } else {
         const hitFail = fails.find((f) => String(f).startsWith("分时"));
         const hitSoft = softs.find((f) => String(f).startsWith("分时"));
         if (hitFail) {
-          minLab = String(hitFail);
+          minDetail = String(hitFail);
           minCls = "rev-chip gate";
         } else if (hitSoft) {
-          minLab = String(hitSoft).replace(/·软$/, "") + "·软";
+          minDetail = String(hitSoft);
           minCls = "rev-chip gate soft";
         } else if (r.code) {
-          minLab = "分时";
+          minDetail = "点击看分时/日线";
           minCls = "rev-chip gate soft";
         }
       }
-      if (minLab && r.code) {
-        const short = minLab.length > 8 ? (minLab.slice(0, 7) + "…") : minLab;
+      if (minDetail && r.code) {
         chips.push(
           `<a class="${minCls} js-chart" href="#" data-code="${escAttr(r.code || "")}" `
           + `data-name="${escAttr(r.name || r.code || "")}" `
           + `data-signal-at="${escAttr(r.signaled_at || "")}" `
-          + `title="${escAttr(minLab + " · 点击看分时/日线")}">${escAttr(short)}</a>`
+          + `title="${escAttr(minDetail)}">分时</a>`
         );
       }
       const why = String(r.reason || payload.reason || "").trim();
@@ -5348,9 +5426,14 @@
     function revCellHtml(col, r, ctx) {
       if (col === "date") return revSignalTime(r);
       if (col === "type") {
-        return ctx.typ === "卖"
-          ? `<span class="rev-type-sell">卖</span>`
-          : ctx.typ;
+        if (ctx.typ === "卖") {
+          return `<span class="rev-type-sell">卖</span>`;
+        }
+        const srcMeta = revSrcTagMeta(revNormSrc(r));
+        if (srcMeta && srcMeta.typ) {
+          return `<span class="${srcMeta.typ}">${ctx.typ}</span>`;
+        }
+        return ctx.typ;
       }
       if (col === "name") {
         const code = r.code || "";
@@ -5652,15 +5735,7 @@
       const srcFilter = (document.getElementById("revSource") || {}).value || "";
       const main = ((document.getElementById("revMain") || {}).value || "").trim();
       const hideWait = !!(document.getElementById("revHideWait") || {}).checked;
-      const srcOf = (r) => {
-        if (r.desk_source) return r.desk_source;
-        const st = String(r.signal_type || "");
-        if (st === "buy_side") return "side";
-        if (st === "buy_link") return "link";
-        if (st === "buy_trial") return "watch_trial";
-        if (st === "sell") return "sell";
-        return "main";
-      };
+      const srcOf = (r) => revNormSrc(r);
       const isPaperWait = (r) => {
         const st = String(r.signal_type || "");
         if (!(st === "buy" || st.startsWith("buy_"))) return false;
@@ -5721,9 +5796,11 @@
       const colspan = Math.max(cols.length, 1);
       const buyTypeLabel = (st) => ({
         buy: "买",
-        buy_side: "买·支线",
-        buy_link: "买·联动",
+        buy_side: "买·支线回踩",
+        buy_link: "买·联动回踩",
         buy_trial: "买·自选",
+        buy_indep: "买·独立人气",
+        buy_dragon: "买·龙头",
         sell: "卖",
       })[st] || (st === "sell" ? "卖" : "买");
       document.getElementById("revBody").innerHTML = rows.map((r) => {

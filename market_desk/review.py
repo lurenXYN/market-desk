@@ -1026,11 +1026,11 @@ def build_desk_source_hit_rates(
     mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
     label_map = {
         "main": "主线",
-        "side": "支线",
-        "link": "联动",
+        "side": "支线回踩",
+        "link": "联动回踩",
         "watch_trial": "自选试探",
         "independent_pop": "独立人气",
-        "dragon": "龙头排",
+        "dragon": "龙头",
     }
     type_to_src = {
         "buy": "main",
