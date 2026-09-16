@@ -33,6 +33,8 @@ USER_PRIVATE_KEYS = frozenset(
 DEFAULTS: dict[str, Any] = {
     "refresh_seconds": int(cfg.SESSION_REFRESH_SECONDS),
     "idle_seconds": int(cfg.IDLE_CHECK_SECONDS),
+    # Call-auction window (09:15–09:30) poll cadence; 0 = use refresh_seconds.
+    "auction_refresh_seconds": 5,
     "sticky_margin": float(cfg.MAINLINE_STICKY_MARGIN),
     "switch_min_seconds": int(cfg.MAINLINE_SWITCH_MIN_SECONDS),
     "toast_enabled": bool(cfg.TOAST_ENABLED),
@@ -180,6 +182,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out.update(raw or {})
     out["refresh_seconds"] = max(10, min(120, int(out["refresh_seconds"])))
     out["idle_seconds"] = max(30, min(600, int(out["idle_seconds"])))
+    out["auction_refresh_seconds"] = max(0, min(30, int(out.get("auction_refresh_seconds") or 0)))
     out["sticky_margin"] = max(0.0, min(40.0, float(out["sticky_margin"])))
     out["switch_min_seconds"] = max(30, min(900, int(out["switch_min_seconds"])))
     out["toast_enabled"] = bool(out["toast_enabled"])

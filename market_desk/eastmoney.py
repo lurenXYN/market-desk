@@ -223,12 +223,22 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch Shanghai and Shenzhen main-board quotes with pagination.
 
     Results are cached briefly to cut the heaviest clist fan-out on the 20s tick.
+    During the 09:15–09:30 call-auction window the TTL collapses so open% stays fresh.
     """
     import time
+    from datetime import datetime, timezone, timedelta
 
     global _MAIN_QUOTES_CACHE
     now = time.time()
-    if _MAIN_QUOTES_CACHE and now - _MAIN_QUOTES_CACHE[0] < _MAIN_QUOTES_TTL_SEC:
+    ttl = _MAIN_QUOTES_TTL_SEC
+    try:
+        local = datetime.now(timezone(timedelta(hours=8)))
+        mins = local.hour * 60 + local.minute
+        if 9 * 60 + 15 <= mins < 9 * 60 + 30:
+            ttl = _MAIN_QUOTES_AUCTION_TTL_SEC
+    except Exception:
+        pass
+    if _MAIN_QUOTES_CACHE and now - _MAIN_QUOTES_CACHE[0] < ttl:
         return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
     sh_rows, sz_rows = await asyncio.gather(
         _fetch_clist_pages(client, "m:1+t:2", max_pages=18),
@@ -249,6 +259,7 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 
 _MAIN_QUOTES_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 _MAIN_QUOTES_TTL_SEC = 120.0
+_MAIN_QUOTES_AUCTION_TTL_SEC = 4.0
 
 
 def _is_junk_board(name: str) -> bool:
@@ -721,7 +732,11 @@ async def fetch_minute_trends(
     client: httpx.AsyncClient,
     code: str,
 ) -> list[dict[str, Any]]:
-    """Fetch today's minute trend points for an intraday sparkline."""
+    """Fetch today's minute trend points for an intraday sparkline.
+
+    East Money ``trends2`` CSV (fields2=f51..f58) is currently:
+    ``time,open,close,high,low,volume,amount,avg`` — use close as price.
+    """
     c = normalize_code(code)
     if not c:
         return []
@@ -740,21 +755,23 @@ async def fetch_minute_trends(
     out: list[dict[str, Any]] = []
     for row in rows:
         parts = str(row).split(",")
-        if len(parts) < 2:
+        if len(parts) < 3:
             continue
-        px = num(parts[1])
+        # Prefer close; fall back to open when a short row appears.
+        px = num(parts[2]) if len(parts) > 2 else None
+        if px is None:
+            px = num(parts[1])
         if px is None:
             continue
-        # Eastmoney trends: time,price,avg,volume,amount,...
-        avg = num(parts[2]) if len(parts) > 2 else None
-        vol = num(parts[3]) if len(parts) > 3 else None
-        amt = num(parts[4]) if len(parts) > 4 else None
+        avg = num(parts[7]) if len(parts) > 7 else None
+        vol = num(parts[5]) if len(parts) > 5 else None
+        amt = num(parts[6]) if len(parts) > 6 else None
         point: dict[str, Any] = {"time": str(parts[0]), "price": float(px)}
-        if avg is not None:
+        if avg is not None and avg > 0:
             point["avg"] = float(avg)
-        if vol is not None:
+        if vol is not None and vol >= 0:
             point["volume"] = float(vol)
-        if amt is not None:
+        if amt is not None and amt >= 0:
             point["amount"] = float(amt)
         out.append(point)
     return out

@@ -2179,7 +2179,8 @@
     <div class="rev-col-panel settings-panel" id="settingsPanel" hidden style="position:fixed;right:16px;top:58px;z-index:40;">
       <div class="hd"><span>运行参数</span><button type="button" class="pos-del" id="settingsClose">关闭</button></div>
       <div class="pos-form" style="grid-template-columns:1fr 1fr;margin:0;">
-        <label>刷新秒<input id="setRefresh" type="number" min="10" max="120" /></label>
+        <label>刷新秒<input id="setRefresh" type="number" min="10" max="120" title="盘中常规刷新间隔" /></label>
+        <label>竞价刷新秒<input id="setAuctionRefresh" type="number" min="0" max="30" title="09:15–09:30 集合竞价刷新间隔；0=跟常规刷新秒" /></label>
         <label>空闲秒<input id="setIdle" type="number" min="30" max="600" /></label>
         <label>主线迟滞分<input id="setSticky" type="number" min="0" max="40" step="0.5" /></label>
         <label>切换去抖秒<input id="setSwitch" type="number" min="30" max="900" /></label>
@@ -6077,6 +6078,13 @@
       if (tab === "review") return live ? 60000 : 120000;
       if (tab === "funds") return live ? 45000 : 90000;
       if (tab === "market" || tab === "boards") return live ? 30000 : 90000;
+      // Prefer engine cadence (faster in 09:15–09:30 call auction).
+      const snapSec = lastData && Number(lastData.refresh_seconds);
+      if (live && snapSec > 0) {
+        if (tab === "auction") return Math.max(3000, Math.round(snapSec * 1000));
+        return Math.max(5000, Math.round(snapSec * 1000));
+      }
+      if (tab === "auction" && live) return 5000;
       return live ? 20000 : 60000;
     }
     async function tick(force) {
@@ -7044,6 +7052,7 @@
         const d = await r.json();
         const s = d.settings || {};
         document.getElementById("setRefresh").value = s.refresh_seconds ?? 20;
+        document.getElementById("setAuctionRefresh").value = s.auction_refresh_seconds ?? 5;
         document.getElementById("setIdle").value = s.idle_seconds ?? 60;
         document.getElementById("setSticky").value = s.sticky_margin ?? 12;
         document.getElementById("setSwitch").value = s.switch_min_seconds ?? 300;
@@ -7086,6 +7095,7 @@
     document.getElementById("settingsSave").addEventListener("click", async () => {
       const body = {
         refresh_seconds: Number(document.getElementById("setRefresh").value),
+        auction_refresh_seconds: Number(document.getElementById("setAuctionRefresh").value),
         idle_seconds: Number(document.getElementById("setIdle").value),
         sticky_margin: Number(document.getElementById("setSticky").value),
         switch_min_seconds: Number(document.getElementById("setSwitch").value),

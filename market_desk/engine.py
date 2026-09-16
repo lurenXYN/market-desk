@@ -362,9 +362,7 @@ class DeskEngine:
                 self.snapshot["live"] = False
                 self.snapshot["polling"] = False
                 self.snapshot["trading_day"] = is_trading_day(now)
-            await asyncio.sleep(
-                int(setting("refresh_seconds", 20)) if live else int(setting("idle_seconds", 60))
-            )
+            await asyncio.sleep(_effective_refresh_seconds(now) if live else int(setting("idle_seconds", 60)))
 
     async def refresh(self) -> None:
         """Pull public snapshots and rebuild the dashboard payload."""
@@ -699,7 +697,7 @@ class DeskEngine:
                     "live": _is_session(now),
                     "polling": _is_session(now),
                     "trading_day": is_trading_day(now),
-                    "refresh_seconds": int(setting("refresh_seconds", 20)),
+                    "refresh_seconds": _effective_refresh_seconds(now),
                     "phase": phase,
                     "temperature": temperature,
                     "metrics": metrics,
@@ -2315,8 +2313,19 @@ async def _safe(fn, *args, errors: list[str], label: str):
 
 
 def _minutes(now: datetime) -> int:
-    """Return minutes since midnight for session-window checks."""
     return now.hour * 60 + now.minute
+
+
+def _effective_refresh_seconds(now: datetime) -> int:
+    """Pick poll cadence: faster in 09:15–09:30 call-auction, else normal."""
+    base = int(setting("refresh_seconds", 20))
+    auction = int(setting("auction_refresh_seconds", 5) or 0)
+    if not auction:
+        return max(5, base)
+    minutes = _minutes(now)
+    if is_trading_day(now) and 9 * 60 + 15 <= minutes < 9 * 60 + 30:
+        return max(3, min(auction, base))
+    return max(5, base)
 
 
 def _decorate_watchlist(

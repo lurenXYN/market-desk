@@ -242,7 +242,8 @@ MINUTE_VOL_PULLBACK = 0.55
 ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可买入
 STOCK_WEAK_VS_ETF_PCT = 1.5        # stock pct must not lag mapped ETF by more than this
 ETF_THIN_AMOUNT = 8e7              # yuan; green ETF below this → volume fail
-MINUTE_SAMPLE_MIN = 25
+# ~15 one-minute bars after 09:30; was 25 and kept gating soft until ~09:55.
+MINUTE_SAMPLE_MIN = 15
 
 # Fund-flow soft feed into mainline score / sell urgency (亿元).
 MAINLINE_FLOW_IN_YI = 0.8

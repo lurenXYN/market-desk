@@ -8,6 +8,8 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **分时字段错位 + 早段样本** — trends2 按 open/close/high/low/vol/amt/avg 解析；MINUTE_SAMPLE_MIN 25→15。*(2026-09-16)*
+- [x] **竞价 9:30 前加快刷新** — `auction_refresh_seconds` 默认5；引擎/行情 TTL/前端竞价页跟 `refresh_seconds`。*(2026-09-16)*
 - [x] **竞价表加列** — 股东户数/户数增减/年内涨停/总市值/题材；股东与年内涨停 Phase B 补齐。*(2026-09-16)*
 - [x] **收盘「明日看点」+ 体验可信度** — `/api/report/tomorrow`；复盘页展示/复制；波浪图点卡片切换浪序；命中率看板（来源/题材）；尾盘静音默认30分。*(2026-09-15)*
 - [x] **艾略特子浪草稿 + 波浪示意 SVG** — Top1/Top2 子浪；看板画收盘/主枢轴/细枢轴/否决线；**按 Top1 标 1/2/3（或 A/B/C）浪序**。*(2026-09-15)*

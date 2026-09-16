@@ -123,6 +123,7 @@ class SettingsIn(BaseModel):
 
     refresh_seconds: int | None = None
     idle_seconds: int | None = None
+    auction_refresh_seconds: int | None = None
     sticky_margin: float | None = None
     switch_min_seconds: int | None = None
     toast_enabled: bool | None = None
