@@ -563,12 +563,36 @@ def build_verdict(
     out["link_recommend"] = mark_pullback_entries(
         out.get("link_recommend"), observe_only=True, block_arm=block_arm
     )
-    # Track B: emotion + mid-army dragons on a separate desk row.
+    # Track B: emotion + mid-army dragons for sticky + side + link boards.
     try:
+        from market_desk.leaders import board_surge_fresh as _board_surge_fresh
+
+        side_board = None
+        side_surge = False
+        if side_info:
+            side_board = _lookup_hot_board(
+                hot, name=side_info.get("name"), bk=side_info.get("bk")
+            )
+            side_surge = _board_surge_fresh(
+                side_board, side_info.get("lifecycle")
+            )
+        link_board = None
+        link_surge = False
+        if link_info:
+            link_board = _lookup_hot_board(
+                hot, name=link_info.get("name"), bk=link_info.get("bk")
+            )
+            link_surge = _board_surge_fresh(
+                link_board, (link_info or {}).get("lifecycle")
+            )
         dragon = build_dragon_recommend(
             main,
             zt or [],
+            side_board=side_board,
+            link_board=link_board,
             surge_fresh=surge_fresh,
+            side_surge=side_surge,
+            link_surge=link_surge,
             phase=phase,
             playbook=playbook,
             adapt=adapt_bundle,
@@ -578,6 +602,10 @@ def build_verdict(
             out["dragon_recommend"] = mark_pullback_entries(
                 dragon, observe_only=False, block_arm=block_arm or surge_fresh
             )
+            # Side/link dragons stay observe even if mainline gates arm.
+            for it in (out["dragon_recommend"].get("items") or []):
+                if str(it.get("dragon_scope") or "main") != "main":
+                    it["ready"] = False
             algo_notes.append(f"龙头排={(len((dragon.get('items') or [])))}只")
             out["algo_notes"] = algo_notes
     except Exception:
@@ -1739,34 +1767,54 @@ def build_watch_trial_recommend(
     return _attach_risk_sizing(rec, playbook=playbook, adapt=trial_adapt)
 
 
-def build_dragon_recommend(
-    main: dict[str, Any] | None,
+def _lookup_hot_board(
+    hot: list[dict[str, Any]] | None,
+    *,
+    name: str | None = None,
+    bk: Any = None,
+) -> dict[str, Any] | None:
+    """Resolve a full board card from the hot list by name or bk code."""
+    want_name = str(name or "").strip()
+    want_bk = str(bk or "").strip()
+    for card in hot or []:
+        if want_bk and str(card.get("bk") or "").strip() == want_bk:
+            return card
+        if want_name and str(card.get("name") or "").strip() == want_name:
+            return card
+    return None
+
+
+def _dragon_items_for_board(
+    board: dict[str, Any] | None,
     zt: list[dict[str, Any]] | None,
     *,
-    surge_fresh: bool = False,
+    scope: str,
     phase: str = "",
-    playbook: dict[str, Any] | None = None,
-    adapt: dict[str, Any] | None = None,
-    action: str = "",
-) -> dict[str, Any] | None:
-    """Build a separate desk row for emotion + mid-army dragons (≤2).
-
-    Does not replace the main pullback recommend track. Card-level ready may arm
-    after gates, but hero action still follows ``recommend`` only.
-    """
+    surge_fresh: bool = False,
+    observe_only: bool = False,
+    skip_codes: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Build emotion/mid-army dragon cards for one board with scope tags."""
     from market_desk.leaders import build_dual_dragon_stocks
 
+    if not board or not str(board.get("name") or "").strip():
+        return []
     raw = build_dual_dragon_stocks(
-        main, zt, surge_fresh=surge_fresh, phase=phase
+        board, zt, surge_fresh=surge_fresh, phase=phase
     )
-    if not raw:
-        return None
+    board_name = str(board.get("name") or "").strip()
+    scope_prefix = {
+        "main": "",
+        "side": "支线·",
+        "link": "联动·",
+    }.get(scope, "")
+    skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
     items: list[dict[str, Any]] = []
     for row in raw:
         code = normalize_code(row.get("code"))
-        if not code:
+        if not code or code in skip:
             continue
-        ready = bool(row.get("ready")) and not surge_fresh
+        ready = bool(row.get("ready")) and not surge_fresh and not observe_only
         item = _recommend_item(
             row,
             kind="stock",
@@ -1774,28 +1822,87 @@ def build_dragon_recommend(
             ready=ready,
             reason=str(row.get("reason") or "龙头观察"),
         )
-        item["role_label"] = str(row.get("role_label") or "龙头")
+        base_role = str(row.get("role_label") or "龙头")
+        item["role_label"] = f"{scope_prefix}{base_role}" if scope_prefix else base_role
         item["dragon_kind"] = row.get("dragon_kind")
         item["desk_source"] = str(row.get("desk_source") or "dragon")
         item["dragon_row"] = True
-        if surge_fresh:
+        item["dragon_scope"] = scope
+        item["source_board"] = board_name
+        if surge_fresh or observe_only:
             item["ready"] = False
             if item.get("wait_price") is not None:
                 item["buy_price"] = item.get("wait_price")
+        if observe_only and scope != "main":
+            item["reason"] = _join_hint(
+                str(item.get("reason") or ""),
+                f"{'支线' if scope == 'side' else '联动'}龙头仅观察，不升顶栏",
+            )
         items.append(item)
+        skip.add(code)
+    return items
+
+
+def build_dragon_recommend(
+    main: dict[str, Any] | None,
+    zt: list[dict[str, Any]] | None,
+    *,
+    side_board: dict[str, Any] | None = None,
+    link_board: dict[str, Any] | None = None,
+    surge_fresh: bool = False,
+    side_surge: bool = False,
+    link_surge: bool = False,
+    phase: str = "",
+    playbook: dict[str, Any] | None = None,
+    adapt: dict[str, Any] | None = None,
+    action: str = "",
+) -> dict[str, Any] | None:
+    """Build one desk dragon row covering sticky + side + link boards.
+
+    Mainline dragons may arm ready after gates; side/link dragons stay observe-only.
+    Codes already used on a higher-priority board are skipped (main > side > link).
+    """
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for scope, board, surge, observe in (
+        ("main", main, surge_fresh, False),
+        ("side", side_board, side_surge, True),
+        ("link", link_board, link_surge, True),
+    ):
+        chunk = _dragon_items_for_board(
+            board,
+            zt,
+            scope=scope,
+            phase=phase,
+            surge_fresh=surge,
+            observe_only=observe,
+            skip_codes=seen,
+        )
+        for it in chunk:
+            code = normalize_code(it.get("code"))
+            if code:
+                seen.add(code)
+            items.append(it)
     if not items:
         return None
-    tip = "情绪龙·确认异动 + 中军龙·趋势回踩；与上方回踩主推并行，不替代。"
-    if surge_fresh:
-        tip += " 暴起当日龙头排只观察。"
+    scopes = sorted({str(x.get("dragon_scope") or "main") for x in items})
+    tip = "情绪龙·确认异动 + 中军龙·趋势回踩；主线可到位，支线/联动只观察。"
+    if surge_fresh or side_surge or link_surge:
+        tip += " 暴起当日该板龙头只观察。"
+    bits = [f"{len(items)}只"]
+    if "side" in scopes:
+        bits.append("含支线")
+    if "link" in scopes:
+        bits.append("含联动")
     rec: dict[str, Any] = {
         "title": "龙头（情绪/中军）",
-        "text": f"龙头排 · {len(items)}只"
+        "text": f"龙头排 · {' · '.join(bits)}"
         + (f" · 主线动作 {action}" if action else ""),
         "buy": any(x.get("ready") for x in items),
         "dragon_row": True,
         "items": items,
         "size_note": tip,
+        "scopes": scopes,
     }
     dragon_adapt = dict(adapt or {})
     dragon_adapt["dragon_row"] = True

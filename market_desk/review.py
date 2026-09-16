@@ -483,10 +483,23 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                 source_board = str(board_fallback or "").strip()
                 if source_board in ("未明", "—"):
                     source_board = ""
+            # Dragon cards may carry their own board (main / side / link).
+            scope_role = str(item.get("dragon_scope") or "").strip()
+            if (
+                desk_source in ("dragon", "emotion_dragon", "mid_army_dragon")
+                or scope_role in ("side", "link", "main")
+            ):
+                sb = str(item.get("source_board") or "").strip()
+                if sb and sb not in ("未明", "—"):
+                    source_board = sb
             origin_cmp = None
             if desk_source in ("side", "link") and source_board:
                 origin_cmp = compare_boards_to_mainline(
                     board_names, source_board, role=desk_source
+                )
+            elif scope_role in ("side", "link") and source_board:
+                origin_cmp = compare_boards_to_mainline(
+                    board_names, source_board, role=scope_role
                 )
             upsert_signal(
                 {
@@ -526,6 +539,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "size_cap_block": bool(item.get("size_cap_block")),
                         "link_board": bool(item.get("link_board")),
                         "watch_trial": bool(item.get("watch_trial")),
+                        "dragon_scope": item.get("dragon_scope") or None,
+                        "dragon_kind": item.get("dragon_kind") or None,
                         "board_names": sticky_cmp["boards"],
                         # Sticky compare kept for history / whitebox context.
                         "vs_mainline": sticky_cmp["vs_mainline"],

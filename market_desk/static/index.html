@@ -662,6 +662,12 @@
       box-shadow: inset 3px 0 0 #f97316;
     }
     .dragonbox .k { color: #fb923c; font-size: 12px; letter-spacing: 0.12em; }
+    .dragon-group { margin-top: 10px; }
+    .dragon-group:first-child { margin-top: 4px; }
+    .dragon-group .dg-hd {
+      font-size: 12px; color: #fdba74; margin: 0 0 6px; letter-spacing: 0.06em;
+    }
+    .dragon-group .dg-hd .meta { color: var(--muted); font-weight: 400; letter-spacing: 0; }
     .indepbox {
       margin-top: 10px; padding: 14px 16px;
       border: 1px solid #3a2a4a; border-radius: 8px; background: #120e16;
@@ -2871,6 +2877,40 @@
         + `<span class="meta"> ${c}${extra || ""}</span>`
         + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
     };
+    const dragonItemsHtml = (items) => {
+      const order = ["main", "side", "link"];
+      const labelOf = (scope, board) => {
+        if (scope === "side") return `支线${board ? ` · ${board}` : ""}`;
+        if (scope === "link") return `联动${board ? ` · ${board}` : ""}`;
+        return `主线${board ? ` · ${board}` : ""}`;
+      };
+      const groups = new Map();
+      (items || []).forEach((it) => {
+        const scope = String(it.dragon_scope || "main");
+        const board = String(it.source_board || "").trim();
+        const key = `${scope}|${board}`;
+        if (!groups.has(key)) {
+          groups.set(key, { scope, board, items: [] });
+        }
+        groups.get(key).items.push(it);
+      });
+      const sorted = Array.from(groups.values()).sort((a, b) => {
+        const ia = order.indexOf(a.scope);
+        const ib = order.indexOf(b.scope);
+        return (ia < 0 ? 9 : ia) - (ib < 0 ? 9 : ib);
+      });
+      if (sorted.length <= 1) {
+        return (items || []).map(recCard).join("");
+      }
+      return sorted.map((g) => {
+        const tip = g.scope === "main" ? "可到位" : "只观察";
+        return `<div class="dragon-group">`
+          + `<div class="dg-hd">${escAttr(labelOf(g.scope, g.board))}`
+          + `<span class="meta"> · ${g.items.length}只 · ${tip}</span></div>`
+          + `<div class="rec-grid">${g.items.map(recCard).join("")}</div>`
+          + `</div>`;
+      }).join("");
+    };
     const recCard = (it) => {
       const kind = it.kind || "stock";
       const wait = !it.ready;
@@ -3402,11 +3442,11 @@
           document.getElementById("dragonline").textContent =
             dragonRec.text || dragonRec.title || "龙头排";
           document.getElementById("dragonmeta").textContent =
-            dragonRec.size_note || "情绪龙·异动 / 中军龙·回踩；与上方回踩主推并行";
+            dragonRec.size_note || "主线可到位；支线/联动龙头只观察，与回踩副卡并行";
           const dn = document.getElementById("dragonNote");
           if (dn) dn.textContent = `· ${(dragonRec.items || []).length}只`;
           document.getElementById("dragonItems").innerHTML =
-            (dragonRec.items || []).map(recCard).join("");
+            dragonItemsHtml(dragonRec.items || []);
         } else {
           dragonBox.hidden = true;
           document.getElementById("dragonItems").innerHTML = "";
