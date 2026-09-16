@@ -480,6 +480,7 @@
     @media (max-width: 960px) {
       .playbook { grid-template-columns: 1fr; }
       .desk-pair { grid-template-columns: 1fr; }
+      .desk-side-grid { grid-template-columns: 1fr; }
       .mainline-title { font-size: 22px; }
     }
     .rev-hist {
@@ -645,6 +646,25 @@
       gap: 10px;
       margin-top: 14px;
     }
+    .desk-side-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+      align-items: start;
+    }
+    .desk-side-grid > .dragonbox,
+    .desk-side-grid > .sidebox,
+    .desk-side-grid > .linkbox,
+    .desk-side-grid > .trialbox,
+    .desk-side-grid > .indepbox,
+    .desk-side-grid > .favdesk {
+      margin-top: 0;
+      min-width: 0;
+    }
+    .desk-side-grid > [hidden] {
+      display: none !important;
+    }
     .buybox, .sellbox, .sidebox {
       margin-top: 0; padding: 14px 16px;
       border: 1px solid var(--line); border-radius: 8px; background: #0e1210;
@@ -658,22 +678,22 @@
     .sellbox.on { border-color: #8b3a3a; background: #1a1010; }
     .sellbox.off { border-color: #3a4558; background: #10141c; }
     .sidebox {
-      margin-top: 10px; border-color: #3a4558; background: #10141c;
+      border-color: #3a4558; background: #10141c;
     }
     .linkbox {
-      margin-top: 10px; padding: 14px 16px;
+      padding: 14px 16px;
       border: 1px solid #5a4a2a; border-radius: 8px; background: #16140e;
       box-shadow: inset 3px 0 0 #c9a227;
     }
     .linkbox .k { color: #eab308; font-size: 12px; letter-spacing: 0.12em; }
     .trialbox {
-      margin-top: 10px; padding: 14px 16px;
+      padding: 14px 16px;
       border: 1px solid #2a4a3a; border-radius: 8px; background: #0e1612;
       box-shadow: inset 3px 0 0 #3ecf8e;
     }
     .trialbox .k { color: #3ecf8e; font-size: 12px; letter-spacing: 0.12em; }
     .dragonbox {
-      margin-top: 10px; padding: 14px 16px;
+      padding: 14px 16px;
       border: 1px solid #5a3a2a; border-radius: 8px; background: #16100e;
       box-shadow: inset 3px 0 0 #f97316;
     }
@@ -685,13 +705,13 @@
     }
     .dragon-group .dg-hd .meta { color: var(--muted); font-weight: 400; letter-spacing: 0; }
     .indepbox {
-      margin-top: 10px; padding: 14px 16px;
+      padding: 14px 16px;
       border: 1px solid #3a2a4a; border-radius: 8px; background: #120e16;
       box-shadow: inset 3px 0 0 #a78bfa;
     }
     .indepbox .k { color: #c4b5fd; font-size: 12px; letter-spacing: 0.12em; }
     .favdesk {
-      margin-top: 10px; padding: 14px 16px;
+      padding: 14px 16px;
       border: 1px solid #1e3a5f; border-radius: 8px; background: #0e1520;
     }
     .favdesk .k { color: #93c5fd; font-size: 12px; letter-spacing: 0.12em; }
@@ -714,6 +734,7 @@
     }
     @media (max-width: 900px) {
       .fav-board .fav-cols { grid-template-columns: 1fr; }
+      .desk-side-grid { grid-template-columns: 1fr; }
     }
     .sidebox .k, .buybox .k, .sellbox .k { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
     .buybox.watch .k { color: #fde68a; }
@@ -844,7 +865,7 @@
       background: #3a1a1a; color: var(--up); border-color: #8b3a3a;
     }
     @media (max-width: 900px) {
-      .desk-pair, .seg-strip { grid-template-columns: 1fr; }
+      .desk-pair, .desk-side-grid, .seg-strip { grid-template-columns: 1fr; }
     }
     .hdr {
       display: flex; justify-content: space-between; align-items: baseline;
@@ -1957,6 +1978,7 @@
       .today-trio { font-size: 14px; padding: 10px; }
       .playbook { grid-template-columns: 1fr; }
       .desk-pair { grid-template-columns: 1fr; gap: 10px; }
+      .desk-side-grid { grid-template-columns: 1fr; gap: 10px; }
       .rec-prices { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
       .rec-prices .val { font-size: 16px; }
       .rec-card .pos-btn,
@@ -2173,10 +2195,22 @@
       border: 1px solid #334155; border-radius: 4px;
       background: #0f172a; color: #cbd5e1; cursor: pointer;
     }
-    .admin-users { margin-top: 10px; max-height: 220px; overflow: auto; font-size: 12px; }
+    .admin-users { margin-top: 10px; max-height: 280px; overflow: auto; font-size: 12px; }
     .admin-users .row {
-      display: flex; gap: 8px; align-items: center; justify-content: space-between;
+      display: flex; justify-content: space-between; gap: 8px; align-items: center;
       padding: 6px 0; border-bottom: 1px solid #1e293b;
+    }
+    .admin-users .row button.danger {
+      color: #fecaca; border-color: #7f1d1d;
+    }
+    .pwd-panel {
+      margin-top: 12px; padding-top: 12px; border-top: 1px solid #243247;
+    }
+    .pwd-panel[hidden] { display: none !important; }
+    .pwd-panel label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
+    .pwd-panel input {
+      width: 100%; margin-top: 4px; padding: 8px 10px;
+      border: 1px solid var(--line); border-radius: 6px; background: #0b1220; color: #e2e8f0;
     }
   </style>
 </head>
@@ -2193,6 +2227,16 @@
         <button type="button" id="authRegisterBtn">注册</button>
       </div>
       <div class="auth-msg" id="authMsg"></div>
+      <div class="pwd-panel" id="pwdPanel" hidden>
+        <div class="meta">修改密码（正式账号）</div>
+        <label>原密码<input id="pwdOld" type="password" autocomplete="current-password" /></label>
+        <label>新密码<input id="pwdNew" type="password" autocomplete="new-password" /></label>
+        <label>确认新密码<input id="pwdNew2" type="password" autocomplete="new-password" /></label>
+        <div class="auth-actions">
+          <button type="button" id="pwdSubmitBtn">确认改密</button>
+          <button type="button" id="pwdCancelBtn">取消</button>
+        </div>
+      </div>
       <div class="admin-users" id="adminUsers" hidden></div>
     </div>
   </div>
@@ -2206,9 +2250,10 @@
           <span id="pageClock" style="margin-left:10px"></span>
           <span class="auth-user" id="authUserChip">
             <span id="authUserLabel">未登录</span>
+            <button type="button" id="authPwdBtn" hidden>改密</button>
             <button type="button" id="authSwitchBtn" hidden>切换账号</button>
             <button type="button" id="authLogoutBtn" hidden>退出</button>
-            <button type="button" id="authAdminBtn" hidden>审批</button>
+            <button type="button" id="authAdminBtn" hidden>账号管理</button>
           </span>
         </div>
       </div>
@@ -2378,6 +2423,7 @@
               <div class="rec-grid" id="sellItems"></div>
             </div>
           </div>
+          <div class="desk-side-grid" id="deskSideGrid">
           <div class="dragonbox" id="dragonbox" hidden>
             <div class="k">龙头（情绪/中军）<button type="button" class="q" data-term="情绪龙">?</button>
               <span class="meta" id="dragonNote"></span>
@@ -2423,6 +2469,7 @@
               <span class="meta" id="favDeskNote"></span>
             </div>
             <div id="favDeskBody"></div>
+          </div>
           </div>
           <div class="theme-mem" id="themeMem" hidden>
             <div class="k">题材信誉 · 一日游记忆
@@ -6406,7 +6453,10 @@
         const prevUid = authUser && authUser.id;
         const nextUid = d.auth_user && d.auth_user.id;
         // Account switch / first pack: replace cache so another user's books never linger.
-        if (force || !lastData || (prevUid != null && nextUid != null && prevUid !== nextUid)) {
+        // Tab switches use force=true only to refetch; still merge so market.elliott
+        // (and other tab slices) are not wiped when leaving/re-entering a tab.
+        const accountSwitch = prevUid != null && nextUid != null && prevUid !== nextUid;
+        if (!lastData || accountSwitch) {
           lastData = d;
         } else {
           lastData = Object.assign({}, lastData || {}, d);
@@ -6459,6 +6509,7 @@
       const switchBtn = document.getElementById("authSwitchBtn");
       const logoutBtn = document.getElementById("authLogoutBtn");
       const adminBtn = document.getElementById("authAdminBtn");
+      const pwdBtn = document.getElementById("authPwdBtn");
       if (!label) return;
       if (authUser) {
         const tag = isGuestUser(authUser)
@@ -6468,13 +6519,18 @@
         if (switchBtn) switchBtn.hidden = false;
         if (logoutBtn) logoutBtn.hidden = false;
         if (adminBtn) adminBtn.hidden = authUser.role !== "admin";
+        if (pwdBtn) pwdBtn.hidden = isGuestUser(authUser);
         document.getElementById("authMask").hidden = true;
         applyGuestUi();
+        if (authUser.must_change_password && !isGuestUser(authUser)) {
+          showPasswordPanel("请先修改默认密码后再继续使用");
+        }
       } else {
         label.textContent = "未登录";
         if (switchBtn) switchBtn.hidden = true;
         if (logoutBtn) logoutBtn.hidden = true;
         if (adminBtn) adminBtn.hidden = true;
+        if (pwdBtn) pwdBtn.hidden = true;
         showAuth("请登录或游客进入");
       }
     }
@@ -6494,6 +6550,22 @@
       const m = document.getElementById("authMsg");
       if (m) m.textContent = msg || "";
       document.getElementById("adminUsers").hidden = true;
+      const pwd = document.getElementById("pwdPanel");
+      if (pwd) pwd.hidden = true;
+    }
+    function showPasswordPanel(msg) {
+      const mask = document.getElementById("authMask");
+      if (!mask) return;
+      mask.hidden = false;
+      document.getElementById("adminUsers").hidden = true;
+      const pwd = document.getElementById("pwdPanel");
+      if (pwd) pwd.hidden = false;
+      const m = document.getElementById("authMsg");
+      if (m) m.textContent = msg || "修改密码";
+      ["pwdOld", "pwdNew", "pwdNew2"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+      });
     }
     async function refreshAdminUsers() {
       const box = document.getElementById("adminUsers");
@@ -6505,15 +6577,22 @@
         box.innerHTML = `<div class="meta">${d.detail || "加载失败"}</div>`;
         return;
       }
+      const selfId = authUser && authUser.id;
       box.innerHTML = (d.users || []).map((u) => {
         const pending = u.status === "pending";
         const guest = u.is_guest || u.role === "guest";
-        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}${guest ? " · 游客" : ""}</span>`
+        const isSelf = selfId != null && Number(u.id) === Number(selfId);
+        const canDelete = !guest && !isSelf;
+        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}${guest ? " · 游客" : ""}${isSelf ? " · 当前" : ""}</span>`
+          + `<span>`
           + (pending
-            ? `<span><button type="button" data-approve="${u.id}">同意</button> `
-              + `<button type="button" data-reject="${u.id}">拒绝</button></span>`
+            ? `<button type="button" data-approve="${u.id}">同意</button> `
+              + `<button type="button" data-reject="${u.id}">拒绝</button> `
             : "")
-          + `</div>`;
+          + (canDelete
+            ? `<button type="button" class="danger" data-delete="${u.id}" data-name="${String(u.username || "").replace(/"/g, "&quot;")}">删除</button>`
+            : "")
+          + `</span></div>`;
       }).join("") || `<div class="meta">暂无用户</div>`;
       box.querySelectorAll("[data-approve]").forEach((btn) => {
         btn.onclick = async () => {
@@ -6528,6 +6607,23 @@
           await fetch("/api/admin/users/" + btn.dataset.reject + "/reject", {
             method: "POST", credentials: "same-origin",
           });
+          refreshAdminUsers();
+        };
+      });
+      box.querySelectorAll("[data-delete]").forEach((btn) => {
+        btn.onclick = async () => {
+          const name = btn.dataset.name || btn.dataset.delete;
+          if (!confirm(`确认删除账号「${name}」？其仓位/自选/成交标记也会一并清除，且不可恢复。`)) {
+            return;
+          }
+          const resp = await fetch("/api/admin/users/" + btn.dataset.delete, {
+            method: "DELETE", credentials: "same-origin",
+          });
+          const body = await resp.json().catch(() => ({}));
+          if (!resp.ok || body.ok === false) {
+            alert(body.detail || body.message || "删除失败");
+            return;
+          }
           refreshAdminUsers();
         };
       });
@@ -6551,7 +6647,7 @@
       /** Clear cached desk state and reload snapshot / review for the new session. */
       const msg = document.getElementById("authMsg");
       paintAuthUser(user);
-      if (msg && okMsg) msg.textContent = okMsg;
+      if (msg && okMsg && !(user && user.must_change_password)) msg.textContent = okMsg;
       lastData = null;
       if (currentMain === "pos" && !canPersonal()) {
         applyMain("desk");
@@ -6583,6 +6679,54 @@
       }
     }
     document.getElementById("authSwitchBtn")?.addEventListener("click", () => showAuth("切换账号"));
+    document.getElementById("authPwdBtn")?.addEventListener("click", () => {
+      if (!authUser || isGuestUser(authUser)) return;
+      showPasswordPanel("修改密码");
+    });
+    document.getElementById("pwdCancelBtn")?.addEventListener("click", () => {
+      const pwd = document.getElementById("pwdPanel");
+      if (pwd) pwd.hidden = true;
+      if (authUser && !authUser.must_change_password) {
+        document.getElementById("authMask").hidden = true;
+      } else if (authUser && authUser.must_change_password) {
+        const m = document.getElementById("authMsg");
+        if (m) m.textContent = "请先修改默认密码后再继续使用";
+      } else {
+        showAuth("请登录或游客进入");
+      }
+    });
+    document.getElementById("pwdSubmitBtn")?.addEventListener("click", async () => {
+      const msg = document.getElementById("authMsg");
+      const oldP = (document.getElementById("pwdOld") || {}).value || "";
+      const newP = (document.getElementById("pwdNew") || {}).value || "";
+      const newP2 = (document.getElementById("pwdNew2") || {}).value || "";
+      if (newP.length < 6) {
+        if (msg) msg.textContent = "新密码至少 6 位";
+        return;
+      }
+      if (newP !== newP2) {
+        if (msg) msg.textContent = "两次输入的新密码不一致";
+        return;
+      }
+      try {
+        const r = await fetch("/api/auth/password", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ old_password: oldP, new_password: newP }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) throw new Error(d.detail || d.message || "改密失败");
+        if (authUser) authUser.must_change_password = false;
+        const pwd = document.getElementById("pwdPanel");
+        if (pwd) pwd.hidden = true;
+        document.getElementById("authMask").hidden = true;
+        if (msg) msg.textContent = "";
+        alert("密码已更新");
+      } catch (e) {
+        if (msg) msg.textContent = String(e.message || e);
+      }
+    });
     document.getElementById("authGuestBtn")?.addEventListener("click", () => enterAsGuest());
     document.getElementById("authLoginBtn")?.addEventListener("click", async () => {
       const msg = document.getElementById("authMsg");
@@ -6608,7 +6752,7 @@
       paintAuthUser(null);
     });
     document.getElementById("authAdminBtn")?.addEventListener("click", () => {
-      showAuth("待审批用户");
+      showAuth("账号管理 · 同意 / 拒绝 / 删除");
       refreshAdminUsers();
     });
     // Soft-gate: 仓位 / 个人写入对游客拦截。

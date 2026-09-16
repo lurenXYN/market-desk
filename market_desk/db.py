@@ -685,6 +685,57 @@ def update_user_password(
         conn.commit()
 
 
+def delete_user(user_id: int) -> bool:
+    """Delete a user row plus sessions and personal book data.
+
+    Returns True when a ``users`` row was removed. Does not cascade shared
+    market tables (signals / daily snapshots stay intact).
+    """
+    uid = int(user_id)
+    with _connect() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (uid,))
+        conn.execute("DELETE FROM positions WHERE user_id = ?", (uid,))
+        try:
+            conn.execute("DELETE FROM watchlist WHERE user_id = ?", (uid,))
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("DELETE FROM favorite_boards WHERE user_id = ?", (uid,))
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("DELETE FROM signal_user_meta WHERE user_id = ?", (uid,))
+        except sqlite3.OperationalError:
+            pass
+        conn.execute(
+            "DELETE FROM settings WHERE key LIKE ?",
+            (f"user:{uid}:%",),
+        )
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+
+
+def count_active_admins(*, exclude_user_id: int | None = None) -> int:
+    """Count active admin accounts, optionally excluding one id."""
+    with _connect() as conn:
+        if exclude_user_id is None:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM users
+                WHERE role = 'admin' AND status = 'active'
+                """
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM users
+                WHERE role = 'admin' AND status = 'active' AND id != ?
+                """,
+                (int(exclude_user_id),),
+            ).fetchone()
+    return int((row["n"] if row else 0) or 0)
+
 def create_session(user_id: int, token: str, expires_at: str) -> None:
     """Persist a login session token."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

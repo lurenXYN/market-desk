@@ -113,7 +113,12 @@ from market_desk.sentiment import (
     spark_values,
 )
 from market_desk.mainline import etf_spec_for_name, etf_spec_soft_fallback
-from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes, fetch_daily_bars_symbol
+from market_desk.tencent import (
+    fetch_etfs,
+    fetch_index_daily_bars,
+    fetch_indices,
+    fetch_quotes,
+)
 from market_desk.trend import classify_daily_trend, classify_many
 from market_desk.verdict import (
     align_action_with_ready,
@@ -2123,7 +2128,7 @@ class DeskEngine:
         ):
             return
         bars = await _safe(
-            fetch_daily_bars_symbol,
+            fetch_index_daily_bars,
             client,
             "sh000001",
             want,
@@ -2136,6 +2141,10 @@ class DeskEngine:
         elif not self._index_bars:
             self._index_bars = list(bars or [])
             self._index_bars_day = day
+        if len(self._index_bars) < 30 and errors is not None:
+            msg = "index-k: 上证日线不足，大盘波浪暂不可用"
+            if msg not in errors:
+                errors.append(msg)
 
     def _build_elliott(self, indices: list[dict[str, Any]] | None) -> dict[str, Any]:
         """Attach multi-scenario Elliott readout for 上证指数."""
@@ -2728,6 +2737,10 @@ def _build_health(
     if live and not (payload.get("indices") or []):
         score -= 10
         tips.append("指数为空")
+    ew = payload.get("elliott") if isinstance(payload.get("elliott"), dict) else {}
+    if ew.get("ok") is False and "日线" in str(ew.get("note") or ""):
+        score -= 8
+        tips.append("上证日线不足，大盘波浪暂不可用")
     stale_sec = None
     if updated_at:
         try:

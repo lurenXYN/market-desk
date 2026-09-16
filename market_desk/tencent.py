@@ -196,3 +196,79 @@ async def fetch_daily_bars_symbol(
         )
         prev_close = float(cl)
     return out[-n:] if len(out) > n else out
+
+
+async def _fetch_daily_bars_sina_symbol(
+    client: httpx.AsyncClient,
+    symbol: str,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """Fetch daily bars from Sina for an explicit symbol (e.g. ``sh000001``)."""
+    sym = str(symbol or "").strip().lower()
+    if not sym or sym[:2] not in ("sh", "sz") or len(sym) < 8:
+        return []
+    n = max(5, min(int(limit or 60), 320))
+    url = (
+        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        f"CN_MarketData.getKLineData?symbol={sym}&scale=240&ma=no&datalen={n}"
+    )
+    try:
+        resp = await client.get(
+            url,
+            headers={
+                **HTTP_HEADERS,
+                "Referer": "https://finance.sina.com.cn",
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception:
+        return []
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    prev_close: float | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cl = num(row.get("close"))
+        if cl is None:
+            continue
+        pct = None
+        if prev_close not in (None, 0):
+            pct = (float(cl) / float(prev_close) - 1.0) * 100.0
+        out.append(
+            {
+                "date": str(row.get("day") or row.get("date") or "")[:10],
+                "open": num(row.get("open")),
+                "close": float(cl),
+                "high": num(row.get("high")),
+                "low": num(row.get("low")),
+                "volume": num(row.get("volume")),
+                "pct": None if pct is None else round(float(pct), 2),
+                "source": "sina",
+            }
+        )
+        prev_close = float(cl)
+    return out[-n:] if len(out) > n else out
+
+
+async def fetch_index_daily_bars(
+    client: httpx.AsyncClient,
+    symbol: str = "sh000001",
+    limit: int = 320,
+) -> list[dict[str, Any]]:
+    """Load index daily OHLCV with Tencent → Sina fallback.
+
+    Six-digit ``000001`` alone is 平安银行 on SZ; always pass ``sh000001`` for 上证.
+    Empty Tencent responses do not raise, so Sina is tried whenever the sample is thin.
+    """
+    want = max(30, min(int(limit or 320), 320))
+    bars = await fetch_daily_bars_symbol(client, symbol, limit=want)
+    if len(bars) >= 30:
+        return bars
+    sina = await _fetch_daily_bars_sina_symbol(client, symbol, limit=want)
+    if len(sina) > len(bars):
+        return sina
+    return bars

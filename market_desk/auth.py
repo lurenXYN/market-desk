@@ -11,9 +11,11 @@ from typing import Any
 
 from market_desk.db import (
     approve_user,
+    count_active_admins,
     create_session,
     create_user,
     delete_session,
+    delete_user,
     get_session_user,
     get_user_by_id,
     get_user_by_username,
@@ -263,3 +265,25 @@ def change_password(user_id: int, old_password: str, new_password: str) -> None:
     from market_desk.db import update_user_password
 
     update_user_password(int(user_id), hash_password(new_password), must_change=False)
+
+
+def admin_delete_user(user_id: int, admin_id: int) -> dict[str, Any]:
+    """Delete another account (not self / guest / last admin)."""
+    uid = int(user_id)
+    aid = int(admin_id)
+    if uid == aid:
+        raise ValueError("不能删除当前登录的管理员账号")
+    target = get_user_by_id(uid)
+    if not target:
+        raise ValueError("用户不存在")
+    pub = public_user(target) or {}
+    if is_guest(pub):
+        raise ValueError("不能删除游客账号")
+    if str(target.get("role") or "") == "admin" and count_active_admins(
+        exclude_user_id=uid
+    ) < 1:
+        raise ValueError("不能删除最后一个管理员")
+    snapshot = dict(pub)
+    if not delete_user(uid):
+        raise ValueError("删除失败")
+    return snapshot

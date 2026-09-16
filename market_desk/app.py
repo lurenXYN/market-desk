@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from market_desk.auth import (
     SESSION_COOKIE,
     admin_approve,
+    admin_delete_user,
     admin_list_users,
     admin_reject,
     change_password,
@@ -347,6 +348,16 @@ def admin_user_reject(uid: int, admin: dict = Depends(current_admin_required)) -
     """Reject a pending registration."""
     try:
         row = admin_reject(uid, int(admin["id"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "user": row}
+
+
+@app.delete("/api/admin/users/{uid}")
+def admin_user_delete(uid: int, admin: dict = Depends(current_admin_required)) -> dict:
+    """Permanently delete another account (admin only)."""
+    try:
+        row = admin_delete_user(uid, int(admin["id"]))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "user": row}
