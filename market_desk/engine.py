@@ -710,6 +710,7 @@ class DeskEngine:
                         quotes=quotes,
                         zt_today=zt,
                         zb_today=zb,
+                        boards=list(hot_cards) + list(pin_cards) + list(fav_cards),
                         now=now,
                         trading_day=is_trading_day(now),
                     ),
@@ -805,6 +806,10 @@ class DeskEngine:
                     await self._apply_recommend_holders(client, verdict)
                 except Exception:
                     log.exception("recommend holders enrich failed")
+                try:
+                    await self._enrich_auction_strategy(client)
+                except Exception:
+                    log.exception("auction strategy enrich failed")
                 wt = verdict.get("watch_trial_recommend")
                 if wt and (wt.get("items") or []):
                     try:
@@ -1535,6 +1540,67 @@ class DeskEngine:
             if not isinstance(rec, dict) or not rec.get("items"):
                 continue
             verdict[key] = _attach_holders_to_items(rec, holders)
+
+    async def _enrich_auction_strategy(self, client: httpx.AsyncClient) -> None:
+        """Attach holders + YTD limit-up counts onto auction strategy rows."""
+        snap = self.snapshot
+        if not isinstance(snap, dict):
+            return
+        box = snap.get("auction_strategy")
+        if not isinstance(box, dict):
+            return
+        tiers = list(box.get("tiers") or [])
+        codes: list[str] = []
+        for tier in tiers:
+            for item in (tier.get("items") or []):
+                code = normalize_code(item.get("code"))
+                if code:
+                    codes.append(code)
+        codes = list(dict.fromkeys(codes))
+        if not codes:
+            box["enrich_pending"] = False
+            snap["auction_strategy"] = box
+            return
+        holders: dict[str, dict[str, Any]] = {}
+        zt_map: dict[str, Any] = {}
+        names = {
+            normalize_code(it.get("code")): str(it.get("name") or "")
+            for tier in tiers
+            for it in (tier.get("items") or [])
+            if normalize_code(it.get("code"))
+        }
+        day = str(snap.get("trade_date") or "")[:10]
+        try:
+            holders = await fetch_holder_stats_many(client, codes)
+        except Exception:
+            log.exception("auction holder stats failed")
+        try:
+            zt_map = await self._zt_ytd_for_codes(
+                client, codes, names, trade_date=day or datetime.now(CN_TZ).strftime("%Y-%m-%d")
+            )
+        except Exception:
+            log.exception("auction zt_ytd failed")
+        for tier in tiers:
+            for item in (tier.get("items") or []):
+                code = normalize_code(item.get("code"))
+                if not code:
+                    continue
+                h = holders.get(code) or {}
+                if h:
+                    item["holder_num"] = h.get("holder_num")
+                    item["holder_chg_pct"] = h.get("holder_chg_pct")
+                    item["holder_avg_wan"] = h.get("holder_avg_wan")
+                    item["holder_end"] = h.get("holder_end")
+                z = zt_map.get(code)
+                if isinstance(z, dict):
+                    item["zt_ytd"] = z.get("count")
+                    item["zt_ytd_year"] = z.get("year")
+                elif z is not None:
+                    item["zt_ytd"] = z
+        box["enrich_pending"] = False
+        box["tiers"] = tiers
+        snap["auction_strategy"] = box
+        self.snapshot = snap
 
     async def _apply_favorite_desk_holders(
         self,

@@ -7,6 +7,7 @@ from typing import Any
 
 from market_desk.filters import is_limit_up, limit_up_threshold, normalize_code
 from market_desk.numbers import num
+from market_desk.review import lookup_code_boards
 from market_desk.session import session_segment
 
 
@@ -16,6 +17,7 @@ def build_auction_strategy(
     quotes: list[dict[str, Any]] | None,
     zt_today: list[dict[str, Any]] | None,
     zb_today: list[dict[str, Any]] | None = None,
+    boards: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
     trading_day: bool = True,
 ) -> dict[str, Any]:
@@ -23,6 +25,9 @@ def build_auction_strategy(
 
     Completely isolated from verdict / recommend / ready. Labels like「抢筹」
     are strategy-board jargon only — they never unlock desk buys.
+
+    ``boards`` (hot/pin/…) supplies theme tags via constituent pools. Shareholder
+    counts and YTD limit-up counts are attached later by the engine enrich pass.
     """
     del zb_today  # Reserved for broken-seal context in a later pass.
     clock = now or datetime.now()
@@ -47,6 +52,7 @@ def build_auction_strategy(
         for r in (zt_today or [])
         if normalize_code(r.get("code"))
     }
+    board_list = list(boards or [])
     yzt = list(yesterday_zt or [])
     rows: list[dict[str, Any]] = []
     for raw in yzt:
@@ -76,6 +82,25 @@ def build_auction_strategy(
             continue
         seal_ratio = _seal_ratio(zt_row)
         tier = _tier_for(open_type=open_type, advice=advice, score=score, boards_y=boards_y)
+        industry = str(raw.get("industry") or zt_row.get("industry") or "").strip()
+        themes = lookup_code_boards(code, board_list, limit=3)
+        theme_bits: list[str] = []
+        if industry:
+            theme_bits.append(industry)
+        for t in themes:
+            if t and t not in theme_bits:
+                theme_bits.append(t)
+        mv_yi = num(q.get("mv_yi"))
+        if mv_yi is None:
+            for board in board_list:
+                for m in (board.get("pool") or board.get("members") or []):
+                    if normalize_code(m.get("code")) != code:
+                        continue
+                    mv_yi = num(m.get("mv_yi"))
+                    if mv_yi is not None:
+                        break
+                if mv_yi is not None:
+                    break
         rows.append(
             {
                 "code": code,
@@ -87,7 +112,14 @@ def build_auction_strategy(
                 "advice": advice,
                 "judge": "保" if advice in ("抢筹", "关注") else "剔",
                 "boards_yesterday": boards_y,
-                "industry": str(raw.get("industry") or zt_row.get("industry") or ""),
+                "industry": industry,
+                "themes": theme_bits,
+                "theme_text": " / ".join(theme_bits[:4]),
+                "mv_yi": None if mv_yi is None else round(float(mv_yi), 1),
+                "holder_num": None,
+                "holder_chg_pct": None,
+                "holder_avg_wan": None,
+                "zt_ytd": None,
                 "in_zt_today": in_zt,
                 "tier": tier,
                 "score": score,
@@ -113,6 +145,7 @@ def build_auction_strategy(
         "segment": seg.get("label") or seg_key,
         "yzt_n": len(yzt),
         "scan_n": sum(len(v) for v in tiers.values()),
+        "enrich_pending": True,
         "tiers": [
             {
                 "id": "double",

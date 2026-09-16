@@ -183,6 +183,12 @@ def _quote_from_diff(item: dict[str, Any]) -> dict[str, Any] | None:
         "low": num(item.get("f16")),
         "amount": num(item.get("f6"), 0.0) or 0.0,
         "turnover": num(item.get("f8"), 0.0) or 0.0,
+        # Stock clist f20 = 总市值 (yuan); boards use f20 as成交额 separately.
+        "mv_yi": (
+            None
+            if num(item.get("f20")) is None or float(num(item.get("f20")) or 0) <= 0
+            else round(float(num(item.get("f20"))) / 1e8, 2)
+        ),
     }
 
 

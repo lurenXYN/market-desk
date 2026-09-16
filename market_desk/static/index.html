@@ -848,6 +848,7 @@
       background: #1e3a5f; color: #9ec5ff; font-size: 12px; font-weight: 700;
     }
     .auc-tier table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .auc-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .auc-tier th, .auc-tier td {
       padding: 8px 10px; border-bottom: 1px solid #1c2430;
       text-align: left; white-space: nowrap;
@@ -4528,17 +4529,32 @@
       if (!note || !sum || !body) return;
       const running = box.run_state === "竞价中" || box.run_state === "已开盘";
       note.textContent = (box.disclaimer || "独立页：不改作战台买卖结论。")
-        + (box.run_note ? (" " + box.run_note) : "");
+        + (box.run_note ? (" " + box.run_note) : "")
+        + (box.enrich_pending ? " 股东/年内涨停补齐中…" : "");
       sum.innerHTML =
         `<span class="auc-run${running ? " on" : ""}">${box.run_state || "未运行"}</span>`
         + `<span>昨停 <b>${box.yzt_n ?? "—"}</b></span>`
         + `<span>入选 <b>${box.scan_n ?? 0}</b></span>`
-        + `<span class="meta">时段 ${box.segment || "—"}</span>`;
+        + `<span class="meta">时段 ${box.segment || "—"}</span>`
+        + (box.enrich_pending ? `<span class="meta">补齐中…</span>` : "");
       const tiers = box.tiers || [];
       if (!tiers.length) {
         body.innerHTML = `<div class="meta">暂无竞价策略数据（等昨停池与开盘价）</div>`;
         return;
       }
+      const fmtMv = (v) => {
+        if (v == null || v === "") return "—";
+        const n = Number(v);
+        if (Number.isNaN(n)) return "—";
+        return n >= 100 ? n.toFixed(0) + "亿" : n.toFixed(1) + "亿";
+      };
+      const fmtChg = (v) => {
+        if (v == null || v === "") return "—";
+        const n = Number(v);
+        if (Number.isNaN(n)) return "—";
+        const cls = n < 0 ? "up" : (n > 0 ? "down" : "");
+        return `<span class="${cls}">${n > 0 ? "+" : ""}${n.toFixed(2)}%</span>`;
+      };
       body.innerHTML = tiers.map((tier) => {
         const items = tier.items || [];
         const rows = items.map((it) => {
@@ -4547,6 +4563,12 @@
             : (adv === "关注" ? "auc-adv-watch" : "auc-adv-no");
           const seal = it.seal_ratio == null ? "—" : it.seal_ratio;
           const openPct = it.open_pct == null ? "—" : ((it.open_pct > 0 ? "+" : "") + it.open_pct + "%");
+          const holderTip = [
+            it.holder_end ? `截止 ${it.holder_end}` : "",
+            it.holder_avg_wan != null ? `户均 ${it.holder_avg_wan}万` : "",
+            "季度披露",
+          ].filter(Boolean).join(" · ");
+          const theme = it.theme_text || it.industry || "—";
           return `<tr>
             <td>${tickerHtml(it.name, it.code)}</td>
             <td class="${(it.open_pct || 0) >= 0 ? "up" : "down"}">${openPct}</td>
@@ -4555,21 +4577,29 @@
             <td class="${advCls}">${adv}</td>
             <td>${it.judge || "—"}</td>
             <td class="meta">${it.boards_yesterday ?? "—"}板${it.in_zt_today ? " ·今封" : ""}</td>
+            <td title="${holderTip}">${it.holder_num != null ? fmtHolderNum(it.holder_num) : "—"}</td>
+            <td>${fmtChg(it.holder_chg_pct)}</td>
+            <td>${it.zt_ytd != null ? it.zt_ytd : "—"}</td>
+            <td>${fmtMv(it.mv_yi)}</td>
+            <td class="meta" title="${theme}">${theme}</td>
             <td><button type="button" class="rev-col-btn auc-pin" data-code="${it.code || ""}" data-name="${it.name || ""}">钉自选</button></td>
           </tr>`;
-        }).join("") || `<tr><td colspan="8" class="meta">本档暂无</td></tr>`;
+        }).join("") || `<tr><td colspan="13" class="meta">本档暂无</td></tr>`;
         return `<div class="auc-tier" data-tier="${tier.id || ""}">
           <div class="auc-hd">
             <b>${tier.label || ""}</b>
             <span class="cnt">${items.length}</span>
             <span class="meta">${tier.hint || ""}</span>
           </div>
+          <div class="auc-table-wrap">
           <table>
             <thead><tr>
-              <th>名称</th><th>开幅%</th><th>开盘型</th><th>封成比</th><th>建议</th><th>判</th><th>昨连</th><th></th>
+              <th>名称</th><th>开幅%</th><th>开盘型</th><th>封成比</th><th>建议</th><th>判</th><th>昨连</th>
+              <th>股东户数</th><th>户数增减</th><th>年内涨停</th><th>总市值</th><th>题材</th><th></th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
+          </div>
         </div>`;
       }).join("");
     }
