@@ -81,8 +81,17 @@ chmod +x start.sh deploy/install-systemd.sh
 ## 技术栈
 
 - 后端：FastAPI + uvicorn + httpx + SQLite
-- 前端：单页 `market_desk/static/index.html`
+- 前端：单页 `market_desk/static/index.html` + 复盘助手 `/static/js/md-review.js`
 - 行情：东财涨停/板块/成分，腾讯 ETF 与持仓报价；**日线趋势**优先腾讯前复权日K（东财历史常断连时回退新浪）
+
+### 本地单测
+
+```bash
+cd apps/market-desk   # 或独立仓根目录
+python -m unittest discover -s tests -v
+```
+
+覆盖涨停板别阈值、流动性门槛、龙头/独立人气助手、复盘封板过滤与次日红绿打分。
 
 ---
 
@@ -267,6 +276,7 @@ market-desk/
 ├── deploy/                   # systemd / 远程更新 / Actions 部署说明
 ├── .github/workflows/        # push main 自动 SSH 部署
 ├── requirements.txt
+├── tests/                    # unittest（filters / leaders / review）
 ├── market_desk/
 │   ├── app.py                # FastAPI 入口
 │   ├── engine.py             # 刷新循环与板块 enrichment
@@ -276,7 +286,9 @@ market-desk/
 │   ├── eastmoney.py / tencent.py
 │   ├── db.py                 # SQLite
 │   ├── config.py
-│   └── static/index.html     # 作战台 UI
+│   └── static/
+│       ├── index.html        # 作战台 UI
+│       └── js/md-review.js   # 复盘来源/图窗描述助手
 └── data/                     # 本地库（gitignore）
 ```
 
