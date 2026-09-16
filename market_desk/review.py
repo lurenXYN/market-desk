@@ -35,6 +35,35 @@ BUY_SIGNAL_TYPES = frozenset(
     {"buy", "buy_side", "buy_link", "buy_trial", "buy_indep", "buy_dragon"}
 )
 
+# Main-board limit-up band: dragons here were never same-day actionable.
+_DRAGON_REVIEW_PCT_LIMIT = 9.5
+
+
+def _dragon_hide_from_review(row: dict[str, Any]) -> bool:
+    """Return True when a dragon signal was not actionable (limit-up / sealed observe).
+
+    Such rows are omitted from review logging and the review table—they do not
+    represent a missed buy, only same-day「买不进」观察。
+    """
+    st = str(row.get("signal_type") or "")
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    desk = str(row.get("desk_source") or payload.get("desk_source") or "").strip().lower()
+    if st != "buy_dragon" and desk not in (
+        "dragon",
+        "emotion_dragon",
+        "mid_army_dragon",
+    ):
+        return False
+    pct = num(row.get("pct"))
+    if pct is None:
+        pct = num(payload.get("pct"))
+    if pct is not None and float(pct) >= _DRAGON_REVIEW_PCT_LIMIT:
+        return True
+    reason = str(row.get("reason") or payload.get("reason") or "")
+    if "已封板" in reason:
+        return True
+    return False
+
 
 def is_buy_signal(sig_type: Any) -> bool:
     """Return True for main / side / link / trial buy signal types."""
@@ -466,6 +495,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         for item in items or []:
             code = normalize_code(item.get("code"))
             if not code:
+                continue
+            if signal_type == "buy_dragon" and _dragon_hide_from_review(item):
                 continue
             kind = item.get("kind") or "stock"
             price = num(item.get("buy_price"))
@@ -2167,8 +2198,16 @@ def build_review_payload(
     if mode == "live" and not compare_ml:
         compare_ml = day_ml
 
-    global_rows = [_flatten_signal_prices(r) for r in load_signals(limit=limit)]
-    day_rows = [_flatten_signal_prices(r) for r in load_signals_for_date(day)]
+    global_rows = [
+        r
+        for r in (_flatten_signal_prices(r) for r in load_signals(limit=limit))
+        if not _dragon_hide_from_review(r)
+    ]
+    day_rows = [
+        r
+        for r in (_flatten_signal_prices(r) for r in load_signals_for_date(day))
+        if not _dragon_hide_from_review(r)
+    ]
     if quotes:
         day_rows = enrich_signals_with_live_marks(day_rows, quotes)
     day_rows = enrich_signals_with_boards(

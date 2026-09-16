@@ -1440,6 +1440,24 @@
       margin: 0 0 6px; font-size: 12px; color: var(--muted);
       letter-spacing: 0.08em; font-weight: 600;
     }
+    .chart-desc {
+      margin: 0 0 12px; padding: 10px 12px;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: #0e141c; font-size: 13px; line-height: 1.45;
+    }
+    .chart-desc[hidden] { display: none !important; }
+    .chart-desc .hd {
+      font-size: 12px; color: var(--muted); letter-spacing: 0.08em;
+      font-weight: 600; margin-bottom: 8px;
+    }
+    .chart-desc dl {
+      margin: 0; display: grid; grid-template-columns: 4.5em 1fr;
+      gap: 6px 10px;
+    }
+    .chart-desc dt { color: var(--muted); margin: 0; }
+    .chart-desc dd { margin: 0; color: var(--text); word-break: break-word; }
+    .chart-desc dd.up { color: var(--up); }
+    .chart-desc dd.down { color: var(--down, #38bdf8); }
     .chart-box svg { width: 100%; height: 160px; display: block; }
     .chart-empty { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
     .sig-hist-drawer {
@@ -2812,6 +2830,7 @@
         <a id="chartXq" href="#" target="_blank" rel="noopener noreferrer">雪球看盘</a>
         <button type="button" class="ghost" id="chartRefresh">刷新图</button>
       </div>
+      <div class="chart-desc" id="chartDesc" hidden></div>
       <div class="chart-box">
         <h4>分时</h4>
         <div id="chartMinute"></div>
@@ -2891,7 +2910,10 @@
       const sig = opts && opts.signal_at
         ? ` data-signal-at="${String(opts.signal_at).replace(/"/g, "")}"`
         : "";
-      return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig} title="点开看图，可跳雪球">${label}</a>`
+      const revId = opts && opts.rev_id != null && opts.rev_id !== ""
+        ? ` data-rev-id="${String(opts.rev_id).replace(/"/g, "")}"`
+        : "";
+      return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig}${revId} title="点开看图与信号描述">${label}</a>`
         + `<span class="meta"> ${c}${extra || ""}</span>`
         + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
     };
@@ -4758,6 +4780,7 @@
     let reviewTrendRefreshedAt = "";
     let chartCode = "";
     let chartSignalAt = "";
+    let chartRevId = "";
 
     function sparkSvg(values, opts) {
       const pts = (values || []).map(Number).filter((v) => !Number.isNaN(v));
@@ -4835,15 +4858,103 @@
       });
     }
 
-    async function openChart(code, name, signalAt) {
+    function findRevSignal(id) {
+      if (id == null || id === "" || !lastReview) return null;
+      return (lastReview.signals || []).find((r) => String(r.id) === String(id)) || null;
+    }
+
+    function revSignalDescRows(r) {
+      if (!r) return [];
+      const payload = (r.payload && typeof r.payload === "object") ? r.payload : {};
+      const rows = [];
+      const srcMeta = revSrcTagMeta(revNormSrc(r));
+      const role = String(r.role_label || payload.role_label || "").trim();
+      if (srcMeta || role) {
+        let v = srcMeta ? srcMeta.chip : "";
+        if (role) v = v ? `${v} · ${role}` : role;
+        rows.push({ k: "来源", v });
+      }
+      const vs = r.vs_mainline;
+      if (vs && vs !== "—") {
+        let v = vs;
+        if (r.vs_mainline_of) v += `（对照「${r.vs_mainline_of}」）`;
+        rows.push({
+          k: "对照主线",
+          v,
+          cls: r.board_match === true ? "up" : (r.board_match === false ? "down" : ""),
+        });
+      }
+      if (r.trend_ok) {
+        rows.push({ k: "日线", v: "上升趋势" + (r.daily_trend ? ` · ${r.daily_trend}` : "") });
+      } else if (r.trend_down) {
+        rows.push({ k: "日线", v: "下降趋势" + (r.daily_trend ? ` · ${r.daily_trend}` : "") });
+      } else if (r.trend_pending) {
+        rows.push({ k: "日线", v: r.daily_trend || "样本不足或未取到" });
+      } else if (r.daily_trend) {
+        rows.push({ k: "日线", v: r.daily_trend });
+      }
+      const minute = (r.minute && typeof r.minute === "object")
+        ? r.minute
+        : ((payload.minute && typeof payload.minute === "object") ? payload.minute : {});
+      const fails = [].concat(r.confirm_fail || payload.confirm_fail || []).filter(Boolean);
+      const softs = [].concat(r.confirm_soft || payload.confirm_soft || []).filter(Boolean);
+      let minTxt = "";
+      if (minute.label) {
+        minTxt = minute.label;
+      } else if (minute.ok === true) {
+        minTxt = "分时已过";
+      } else if (minute.ok === false) {
+        minTxt = "分时未过";
+      } else {
+        const hitFail = fails.find((f) => String(f).startsWith("分时"));
+        const hitSoft = softs.find((f) => String(f).startsWith("分时"));
+        minTxt = hitFail ? String(hitFail) : (hitSoft ? String(hitSoft) : "");
+      }
+      if (minTxt) rows.push({ k: "分时", v: minTxt });
+      const why = String(r.reason || payload.reason || "").trim();
+      if (why) rows.push({ k: "原因", v: why });
+      const gates = fails.filter((f) => !String(f).startsWith("分时"))
+        .concat(softs.filter((f) => !String(f).startsWith("分时")));
+      if (gates.length) rows.push({ k: "闸门", v: gates.join(" · ") });
+      if (r.price_mark) rows.push({ k: "价带", v: String(r.price_mark) });
+      if (r.buy_caution) rows.push({ k: "当日", v: String(r.buy_caution) });
+      return rows;
+    }
+
+    function revSignalDescHtml(r) {
+      const rows = revSignalDescRows(r);
+      if (!rows.length) return "";
+      return "<dl>"
+        + rows.map(({ k, v, cls }) =>
+          `<dt>${escAttr(k)}</dt><dd class="${cls || ""}">${escAttr(v)}</dd>`
+        ).join("")
+        + "</dl>";
+    }
+
+    function paintChartDesc(r) {
+      const box = document.getElementById("chartDesc");
+      if (!box) return;
+      const html = revSignalDescHtml(r);
+      if (!html) {
+        box.hidden = true;
+        box.innerHTML = "";
+        return;
+      }
+      box.hidden = false;
+      box.innerHTML = `<div class="hd">信号描述</div>${html}`;
+    }
+
+    async function openChart(code, name, signalAt, revId) {
       const c = String(code || "").replace(/\D/g, "");
       if (!c) return;
       chartCode = c;
       chartSignalAt = signalAt || "";
+      chartRevId = revId || "";
       const mask = document.getElementById("chartMask");
       mask.hidden = false;
       document.getElementById("chartTitle").textContent = `${name || c} · ${c}`;
       document.getElementById("chartMeta").textContent = "加载中…";
+      paintChartDesc(findRevSignal(chartRevId));
       document.getElementById("chartMinute").innerHTML = `<div class="chart-empty">加载分时…</div>`;
       document.getElementById("chartDaily").innerHTML = `<div class="chart-empty">加载日线…</div>`;
       const xq = xueqiuUrl(c);
@@ -5139,19 +5250,8 @@
       };
       return table[src] || null;
     }
-    function revSideChips(r) {
+    function revTrendChips(r) {
       const chips = [];
-      const payload = (r.payload && typeof r.payload === "object") ? r.payload : {};
-      const srcTag = revSrcTagMeta(revNormSrc(r));
-      if (srcTag) {
-        const role = String(r.role_label || payload.role_label || "").trim();
-        const tip = role && role !== srcTag.chip
-          ? `${srcTag.title} · ${role}`
-          : srcTag.title;
-        chips.push(
-          `<span class="rev-chip ${srcTag.cls}" title="${escAttr(tip)}">${escAttr(srcTag.chip)}</span>`
-        );
-      }
       if (r.trend_ok) {
         chips.push(`<span class="rev-chip up" title="日线上升">上升</span>`);
       } else if (r.trend_down) {
@@ -5161,64 +5261,6 @@
         chips.push(`<span class="rev-chip" title="${escAttr(tip)}">待验</span>`);
       } else if (r.daily_trend) {
         chips.push(`<span class="rev-chip" title="${escAttr(r.daily_trend)}">震荡</span>`);
-      }
-      const vs = r.vs_mainline;
-      if (vs && vs !== "—") {
-        const cls = r.board_match === true ? "up" : (r.board_match === false ? "down" : "");
-        const tip = r.vs_mainline_of ? `对照「${r.vs_mainline_of}」` : "对照主线";
-        chips.push(`<span class="rev-chip ${cls}" title="${escAttr(tip)}">${escAttr(vs)}</span>`);
-      }
-      // Desk-style gate chips: label stays「分时」; detail lives in title (hover).
-      const minute = (r.minute && typeof r.minute === "object")
-        ? r.minute
-        : ((payload.minute && typeof payload.minute === "object") ? payload.minute : {});
-      const fails = [].concat(r.confirm_fail || payload.confirm_fail || []).filter(Boolean);
-      const softs = [].concat(r.confirm_soft || payload.confirm_soft || []).filter(Boolean);
-      let minDetail = "";
-      let minCls = "rev-chip gate soft";
-      if (minute.ok === true) {
-        minDetail = minute.label || "分时已过";
-        minCls = "rev-chip gate ok";
-      } else if (minute.ok === false) {
-        minDetail = minute.label || "分时未过";
-        minCls = "rev-chip gate";
-      } else {
-        const hitFail = fails.find((f) => String(f).startsWith("分时"));
-        const hitSoft = softs.find((f) => String(f).startsWith("分时"));
-        if (hitFail) {
-          minDetail = String(hitFail);
-          minCls = "rev-chip gate";
-        } else if (hitSoft) {
-          minDetail = String(hitSoft);
-          minCls = "rev-chip gate soft";
-        } else if (r.code) {
-          minDetail = "点击看分时/日线";
-          minCls = "rev-chip gate soft";
-        }
-      }
-      if (minDetail && r.code) {
-        chips.push(
-          `<a class="${minCls} js-chart" href="#" data-code="${escAttr(r.code || "")}" `
-          + `data-name="${escAttr(r.name || r.code || "")}" `
-          + `data-signal-at="${escAttr(r.signaled_at || "")}" `
-          + `title="${escAttr(minDetail)}">分时</a>`
-        );
-      }
-      const why = String(r.reason || payload.reason || "").trim();
-      if (why) {
-        const shortWhy = why.length > 12 ? (why.slice(0, 11) + "…") : why;
-        chips.push(
-          `<span class="rev-chip why" title="${escAttr(why)}">${escAttr(shortWhy)}</span>`
-        );
-      } else {
-        const otherFails = fails.filter((f) => !String(f).startsWith("分时"));
-        if (otherFails.length) {
-          const tip = otherFails.join(" · ");
-          const shortFail = tip.length > 12 ? (tip.slice(0, 11) + "…") : tip;
-          chips.push(
-            `<span class="rev-chip why" title="${escAttr(tip)}">${escAttr(shortFail)}</span>`
-          );
-        }
       }
       return chips.length ? ` <span class="rev-chips">${chips.join("")}</span>` : "";
     }
@@ -5440,8 +5482,8 @@
         const histBtn = code
           ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
           : "";
-        return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}`
-          + revSideChips(r)
+        return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
+          + revTrendChips(r)
           + histBtn
           + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
       }
@@ -7197,7 +7239,12 @@
       const hit = ev.target.closest(".js-chart");
       if (!hit) return;
       ev.preventDefault();
-      openChart(hit.dataset.code, hit.dataset.name, hit.dataset.signalAt || hit.getAttribute("data-signal-at") || "");
+      openChart(
+        hit.dataset.code,
+        hit.dataset.name,
+        hit.dataset.signalAt || hit.getAttribute("data-signal-at") || "",
+        hit.dataset.revId || hit.getAttribute("data-rev-id") || ""
+      );
     });
     document.getElementById("chartClose").addEventListener("click", closeChart);
     document.getElementById("chartMask").addEventListener("click", (ev) => {
@@ -7241,7 +7288,7 @@
       }
     });
     document.getElementById("chartRefresh").addEventListener("click", () => {
-      if (chartCode) openChart(chartCode, "", chartSignalAt);
+      if (chartCode) openChart(chartCode, "", chartSignalAt, chartRevId);
     });
     function deskFileDate() {
       const d = (lastData && lastData.trade_date)
