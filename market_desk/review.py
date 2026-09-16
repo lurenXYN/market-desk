@@ -518,6 +518,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "trend_ok": bool(item.get("trend_ok")),
                         "trend_down": bool(item.get("trend_down")),
                         "confirm_fail": list(item.get("confirm_fail") or []),
+                        "confirm_soft": list(item.get("confirm_soft") or []),
+                        "minute": item.get("minute") if isinstance(item.get("minute"), dict) else None,
+                        "reason": str(item.get("reason") or "")[:240] or None,
                         "block_ready": bool(item.get("block_ready")),
                         "near_entry": bool(item.get("near_entry")),
                         "size_cap_block": bool(item.get("size_cap_block")),
@@ -2256,6 +2259,14 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         item["near_entry"] = bool(payload.get("near_entry"))
     if not item.get("confirm_fail") and payload.get("confirm_fail"):
         item["confirm_fail"] = list(payload.get("confirm_fail") or [])
+    if not item.get("confirm_soft") and payload.get("confirm_soft"):
+        item["confirm_soft"] = list(payload.get("confirm_soft") or [])
+    if not item.get("reason") and payload.get("reason"):
+        item["reason"] = str(payload.get("reason") or "")[:240] or None
+    if not item.get("role_label") and payload.get("role_label"):
+        item["role_label"] = payload.get("role_label")
+    if not isinstance(item.get("minute"), dict) and isinstance(payload.get("minute"), dict):
+        item["minute"] = payload.get("minute")
     return item
 
 

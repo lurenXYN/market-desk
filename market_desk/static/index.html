@@ -501,15 +501,31 @@
       display: inline-block;
       font-size: 11px;
       line-height: 1.2;
-      padding: 1px 5px;
-      border-radius: 3px;
+      padding: 1px 6px;
+      border-radius: 4px;
       border: 1px solid var(--line);
       color: var(--muted);
       background: #151c28;
       font-weight: 600;
+      vertical-align: middle;
+      max-width: 9em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-decoration: none;
     }
+    a.rev-chip:hover { filter: brightness(1.12); }
     .rev-chip.up { color: var(--up); border-color: #5a2a2a; background: #1a1014; }
     .rev-chip.down { color: var(--down, #38bdf8); border-color: #1e3a5f; background: #0c1a28; }
+    .rev-chip.gate {
+      border-color: #5b4a2a; color: #fbbf24; background: #1a1508; cursor: pointer;
+    }
+    .rev-chip.gate.ok { border-color: #14532d; color: #86efac; background: #0c1a12; }
+    .rev-chip.gate.soft { border-color: #3f3f46; color: #a1a1aa; background: #18181b; }
+    .rev-chip.why {
+      border-color: #334155; color: #cbd5e1; background: #111827; cursor: help;
+      max-width: 14em;
+    }
     th.rev-sort {
       cursor: pointer;
       user-select: none;
@@ -5016,6 +5032,7 @@
     }
     function revSideChips(r) {
       const chips = [];
+      const payload = (r.payload && typeof r.payload === "object") ? r.payload : {};
       if (r.trend_ok) {
         chips.push(`<span class="rev-chip up" title="日线上升">上升</span>`);
       } else if (r.trend_down) {
@@ -5031,6 +5048,59 @@
         const cls = r.board_match === true ? "up" : (r.board_match === false ? "down" : "");
         const tip = r.vs_mainline_of ? `对照「${r.vs_mainline_of}」` : "对照主线";
         chips.push(`<span class="rev-chip ${cls}" title="${escAttr(tip)}">${escAttr(vs)}</span>`);
+      }
+      // Desk-style gate chips: 分时 opens chart (same as name); 原因 shows tip.
+      const minute = (r.minute && typeof r.minute === "object")
+        ? r.minute
+        : ((payload.minute && typeof payload.minute === "object") ? payload.minute : {});
+      const fails = [].concat(r.confirm_fail || payload.confirm_fail || []).filter(Boolean);
+      const softs = [].concat(r.confirm_soft || payload.confirm_soft || []).filter(Boolean);
+      let minLab = minute.label || "";
+      let minCls = "rev-chip gate soft";
+      if (minute.ok === true) {
+        minLab = minLab || "分时已过";
+        minCls = "rev-chip gate ok";
+      } else if (minute.ok === false) {
+        minLab = minLab || "分时未过";
+        minCls = "rev-chip gate";
+      } else {
+        const hitFail = fails.find((f) => String(f).startsWith("分时"));
+        const hitSoft = softs.find((f) => String(f).startsWith("分时"));
+        if (hitFail) {
+          minLab = String(hitFail);
+          minCls = "rev-chip gate";
+        } else if (hitSoft) {
+          minLab = String(hitSoft).replace(/·软$/, "") + "·软";
+          minCls = "rev-chip gate soft";
+        } else if (r.code) {
+          minLab = "分时";
+          minCls = "rev-chip gate soft";
+        }
+      }
+      if (minLab && r.code) {
+        const short = minLab.length > 8 ? (minLab.slice(0, 7) + "…") : minLab;
+        chips.push(
+          `<a class="${minCls} js-chart" href="#" data-code="${escAttr(r.code || "")}" `
+          + `data-name="${escAttr(r.name || r.code || "")}" `
+          + `data-signal-at="${escAttr(r.signaled_at || "")}" `
+          + `title="${escAttr(minLab + " · 点击看分时/日线")}">${escAttr(short)}</a>`
+        );
+      }
+      const why = String(r.reason || payload.reason || "").trim();
+      if (why) {
+        const shortWhy = why.length > 12 ? (why.slice(0, 11) + "…") : why;
+        chips.push(
+          `<span class="rev-chip why" title="${escAttr(why)}">${escAttr(shortWhy)}</span>`
+        );
+      } else {
+        const otherFails = fails.filter((f) => !String(f).startsWith("分时"));
+        if (otherFails.length) {
+          const tip = otherFails.join(" · ");
+          const shortFail = tip.length > 12 ? (tip.slice(0, 11) + "…") : tip;
+          chips.push(
+            `<span class="rev-chip why" title="${escAttr(tip)}">${escAttr(shortFail)}</span>`
+          );
+        }
       }
       return chips.length ? ` <span class="rev-chips">${chips.join("")}</span>` : "";
     }
@@ -5247,13 +5317,9 @@
         const histBtn = code
           ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
           : "";
-        const minBtn = code
-          ? ` <button type="button" class="rev-col-btn rev-min-btn js-chart" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" data-signal-at="${escAttr(r.signaled_at || "")}" title="打开分时/日线">分时</button>`
-          : "";
         return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "" })}`
           + revSideChips(r)
           + histBtn
-          + minBtn
           + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
       }
       if (col === "code") return r.code || "";
