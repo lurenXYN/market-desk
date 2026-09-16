@@ -54,21 +54,47 @@ def is_st(name: str | None) -> bool:
     return "ST" in n.upper()
 
 
-def limit_up_threshold(name: str | None) -> float:
+def is_chinext_or_star(code: str | int | None) -> bool:
+    """Return True for ChiNext (300/301) or STAR (688/689) boards."""
+    c = normalize_code(code)
+    return c.startswith(("300", "301", "688", "689"))
+
+
+def is_bj_exchange(code: str | int | None) -> bool:
+    """Return True for Beijing exchange tickers (rough 30% limit band)."""
+    c = normalize_code(code)
+    return c.startswith(("4", "8"))
+
+
+def limit_up_threshold(name: str | None, code: str | int | None = None) -> float:
     """Return the percentage threshold treated as a limit-up."""
-    return 4.85 if is_st(name) else 9.85
+    if is_st(name):
+        return 4.85
+    if is_chinext_or_star(code):
+        return 19.5
+    if is_bj_exchange(code):
+        return 29.5
+    return 9.85
 
 
-def is_limit_up(name: str | None, pct: float | None) -> bool:
+def is_limit_up(
+    name: str | None,
+    pct: float | None,
+    code: str | int | None = None,
+) -> bool:
     """Return True if the daily change qualifies as a limit-up."""
     if pct is None:
         return False
-    return pct >= limit_up_threshold(name)
+    return float(pct) >= limit_up_threshold(name, code)
 
 
-def is_limit_down(name: str | None, pct: float | None) -> bool:
+def is_limit_down(
+    name: str | None,
+    pct: float | None,
+    code: str | int | None = None,
+) -> bool:
     """Return True if the daily change qualifies as a limit-down."""
     if pct is None:
         return False
-    thr = -4.85 if is_st(name) else -9.85
-    return pct <= thr
+    thr = -limit_up_threshold(name, code)
+    return float(pct) <= thr

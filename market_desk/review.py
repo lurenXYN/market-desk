@@ -18,8 +18,10 @@ from market_desk.db import (
     apply_signal_user_meta,
     save_review_digest,
     upsert_signal,
+    delete_signal,
+    purge_sentinel_signal_dates,
 )
-from market_desk.filters import normalize_code
+from market_desk.filters import is_limit_up, normalize_code
 from market_desk.zt_stats import enrich_signals_with_zt_ytd
 from market_desk.numbers import num
 from market_desk.settings import setting
@@ -34,10 +36,6 @@ _LIVE_FLAT_PCT = 0.08  # treat |Δ| below this as flat
 BUY_SIGNAL_TYPES = frozenset(
     {"buy", "buy_side", "buy_link", "buy_trial", "buy_indep", "buy_dragon"}
 )
-
-# Main-board limit-up band: dragons here were never same-day actionable.
-_DRAGON_REVIEW_PCT_LIMIT = 9.5
-
 
 def _dragon_hide_from_review(row: dict[str, Any]) -> bool:
     """Return True when a dragon signal was not actionable (limit-up / sealed observe).
@@ -54,15 +52,42 @@ def _dragon_hide_from_review(row: dict[str, Any]) -> bool:
         "mid_army_dragon",
     ):
         return False
+    name = str(row.get("name") or payload.get("name") or "")
+    code = row.get("code") or payload.get("code")
     pct = num(row.get("pct"))
     if pct is None:
         pct = num(payload.get("pct"))
-    if pct is not None and float(pct) >= _DRAGON_REVIEW_PCT_LIMIT:
+    if is_limit_up(name, pct, code):
         return True
     reason = str(row.get("reason") or payload.get("reason") or "")
     if "已封板" in reason:
         return True
     return False
+
+
+def purge_unactionable_dragon_signals(trade_date: str | None = None) -> int:
+    """Hard-delete sealed / limit-up dragon rows that should not count as missed buys.
+
+    Prefer calling with a trade_date so only that day's junk is cleaned. When
+    omitted, scans a short recent window from ``load_signals``.
+    """
+    if trade_date:
+        raw = load_signals_for_date(str(trade_date).strip()[:10])
+    else:
+        raw = load_signals(limit=400)
+    n = 0
+    for row in raw:
+        if not _dragon_hide_from_review(row):
+            continue
+        sid = row.get("id")
+        if sid is None:
+            continue
+        try:
+            if delete_signal(int(sid)):
+                n += 1
+        except Exception:
+            continue
+    return n
 
 
 def is_buy_signal(sig_type: Any) -> bool:
@@ -2060,6 +2085,8 @@ def build_code_signal_history(
     rows: list[dict[str, Any]] = []
     for row in raw:
         item = _flatten_signal_prices(row)
+        if _dragon_hide_from_review(item):
+            continue
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         boards = payload.get("board_names") or []
         if isinstance(boards, list) and boards:
@@ -2068,7 +2095,7 @@ def build_code_signal_history(
         else:
             item["boards"] = []
             item["board_text"] = ""
-        # Compact row for the drawer (drop bulky payload).
+        # Compact row for the drawer (keep fields needed for signal description).
         rows.append(
             {
                 "id": item.get("id"),
@@ -2095,6 +2122,23 @@ def build_code_signal_history(
                 "outcome_day3_pct": item.get("outcome_day3_pct"),
                 "board_text": item.get("board_text") or "",
                 "desk_source": item.get("desk_source"),
+                "role_label": item.get("role_label") or payload.get("role_label"),
+                "reason": payload.get("reason"),
+                "pct": payload.get("pct"),
+                "confirm_fail": list(payload.get("confirm_fail") or []),
+                "confirm_soft": list(payload.get("confirm_soft") or []),
+                "minute": payload.get("minute") if isinstance(payload.get("minute"), dict) else None,
+                "vs_mainline": payload.get("vs_mainline"),
+                "vs_mainline_of": payload.get("vs_mainline_of") or item.get("mainline"),
+                "board_match": payload.get("board_match"),
+                "payload": {
+                    "reason": payload.get("reason"),
+                    "confirm_fail": list(payload.get("confirm_fail") or []),
+                    "confirm_soft": list(payload.get("confirm_soft") or []),
+                    "minute": payload.get("minute") if isinstance(payload.get("minute"), dict) else None,
+                    "role_label": payload.get("role_label"),
+                    "desk_source": payload.get("desk_source"),
+                },
             }
         )
 
@@ -2198,6 +2242,12 @@ def build_review_payload(
     if mode == "live" and not compare_ml:
         compare_ml = day_ml
 
+    # Drop sealed / limit-up dragons and sentinel test days from DB.
+    try:
+        purge_sentinel_signal_dates()
+        purge_unactionable_dragon_signals(day)
+    except Exception:
+        pass
     global_rows = [
         r
         for r in (_flatten_signal_prices(r) for r in load_signals(limit=limit))

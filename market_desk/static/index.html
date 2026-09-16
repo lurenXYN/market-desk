@@ -1484,6 +1484,9 @@
       font-weight: 600; z-index: 1;
     }
     .sig-hist-table tr:hover td { background: #121a24; }
+    .sig-hist-table tr.sig-hist-row { cursor: pointer; }
+    .sig-hist-table tr.sig-hist-row.sel td { background: #1a2430; }
+    .sig-hist-desc { margin: 8px 0 10px; }
     .rev-hist-btn {
       margin-left: 4px; padding: 0 6px !important; font-size: 11px !important;
       vertical-align: middle;
@@ -2857,6 +2860,7 @@
         <button type="button" class="q" data-term="信号历史">?</button>
       </div>
       <div class="sig-hist-sum" id="sigHistSum"></div>
+      <div class="chart-desc sig-hist-desc" id="sigHistDesc" hidden></div>
       <div class="sig-hist-table-wrap">
         <table class="sig-hist-table">
           <thead>
@@ -3477,16 +3481,27 @@
       const dragonRec = v.dragon_recommend || null;
       const dragonBox = document.getElementById("dragonbox");
       if (dragonBox) {
-        if (dragonRec && (dragonRec.items || []).length) {
+        const dragonItems = (dragonRec && dragonRec.items) || [];
+        const hasMain = !!(ml && ml !== "未明");
+        if (dragonItems.length) {
           dragonBox.hidden = false;
           document.getElementById("dragonline").textContent =
             dragonRec.text || dragonRec.title || "龙头排";
           document.getElementById("dragonmeta").textContent =
             dragonRec.size_note || "主线可到位；支线/联动龙头只观察，与回踩副卡并行";
           const dn = document.getElementById("dragonNote");
-          if (dn) dn.textContent = `· ${(dragonRec.items || []).length}只`;
+          if (dn) dn.textContent = `· ${dragonItems.length}只`;
           document.getElementById("dragonItems").innerHTML =
-            dragonItemsHtml(dragonRec.items || []);
+            dragonItemsHtml(dragonItems);
+        } else if (hasMain) {
+          dragonBox.hidden = false;
+          document.getElementById("dragonline").textContent = "暂无龙头排";
+          document.getElementById("dragonmeta").textContent =
+            "主线板情绪/中军龙未成形，或均在涨停观察区（涨停不进复盘）";
+          const dn = document.getElementById("dragonNote");
+          if (dn) dn.textContent = "";
+          document.getElementById("dragonItems").innerHTML =
+            `<div class="meta">等确认异动或趋势回踩后再看；封板只观察</div>`;
         } else {
           dragonBox.hidden = true;
           document.getElementById("dragonItems").innerHTML = "";
@@ -3524,7 +3539,8 @@
       const linkRec = v.link_recommend || {};
       const linkBox = document.getElementById("linkbox");
       if (linkBox) {
-        if (link && link.name && (linkRec.items || []).length) {
+        const linkItems = (linkRec.items || []);
+        if (link && link.name && linkItems.length) {
           linkBox.hidden = false;
           const simPct = link.sim == null ? null : Math.round(Number(link.sim) * 100);
           document.getElementById("linkline").textContent =
@@ -3540,7 +3556,28 @@
               : (`· 相对主线相似 ${simPct}%` + (link.mainline_name ? `（${link.mainline_name}）` : ""));
           }
           document.getElementById("linkItems").innerHTML =
-            (linkRec.items || []).map(recCard).join("");
+            linkItems.map(recCard).join("");
+        } else if (link && link.name) {
+          linkBox.hidden = false;
+          document.getElementById("linkline").textContent = `联动 · ${link.name}`;
+          document.getElementById("linkmeta").textContent =
+            "已点名相似板，但暂无合格回踩票";
+          const simEl = document.getElementById("linkSim");
+          if (simEl) {
+            const simPct = link.sim == null ? null : Math.round(Number(link.sim) * 100);
+            simEl.textContent = simPct == null ? "" : (`· 相似 ${simPct}%`);
+          }
+          document.getElementById("linkItems").innerHTML =
+            `<div class="meta">可先盯联动板状态，先不定价</div>`;
+        } else if (ml && ml !== "未明") {
+          linkBox.hidden = false;
+          document.getElementById("linkline").textContent = "暂无板块联动";
+          document.getElementById("linkmeta").textContent =
+            "主线仍有现买点，或无达标相似同伴 / 同伴尖峰退潮";
+          const simEl = document.getElementById("linkSim");
+          if (simEl) simEl.textContent = "";
+          document.getElementById("linkItems").innerHTML =
+            `<div class="meta">联动仅在主线无现买或过热时软挖相似板</div>`;
         } else {
           linkBox.hidden = true;
           document.getElementById("linkItems").innerHTML = "";
@@ -3567,21 +3604,32 @@
       const indepRec = v.independent_recommend || null;
       const indepBox = document.getElementById("indepbox");
       if (indepBox) {
-        if (indepRec && (indepRec.items || []).length) {
+        const indepItems = (indepRec && indepRec.items) || [];
+        if (indepItems.length) {
           indepBox.hidden = false;
           document.getElementById("indepline").textContent =
             indepRec.text || indepRec.title || "独立人气回踩";
           document.getElementById("indepmeta").textContent =
             indepRec.size_note || "主线板内独立行情·近低回踩，不改顶栏";
           const inn = document.getElementById("indepNote");
-          if (inn) inn.textContent = `· ${(indepRec.items || []).length}只`;
+          if (inn) inn.textContent = `· ${indepItems.length}只`;
           document.getElementById("indepItems").innerHTML =
-            (indepRec.items || []).map(recCard).join("");
+            indepItems.map(recCard).join("");
+        } else if (ml && ml !== "未明") {
+          indepBox.hidden = false;
+          document.getElementById("indepline").textContent = "暂无独立人气回踩";
+          document.getElementById("indepmeta").textContent =
+            "主线成分无「相对板发散 + 贴近日低 + 年内涨停」合格票";
+          const inn = document.getElementById("indepNote");
+          if (inn) inn.textContent = "";
+          document.getElementById("indepItems").innerHTML =
+            `<div class="meta">排除双龙/卡位后，近低独立路径才进此池</div>`;
         } else {
           indepBox.hidden = true;
           document.getElementById("indepItems").innerHTML = "";
         }
       }
+      registerDeskChartContext(v);
       const favDesk = d.favorite_desk || {};
       const favDeskEl = document.getElementById("favDesk");
       const favDeskBody = document.getElementById("favDeskBody");
@@ -4781,6 +4829,8 @@
     let chartCode = "";
     let chartSignalAt = "";
     let chartRevId = "";
+    let deskChartCtxByCode = {};
+    let sigHistRows = [];
 
     function sparkSvg(values, opts) {
       const pts = (values || []).map(Number).filter((v) => !Number.isNaN(v));
@@ -4863,10 +4913,74 @@
       return (lastReview.signals || []).find((r) => String(r.id) === String(id)) || null;
     }
 
+    function registerDeskChartContext(v) {
+      deskChartCtxByCode = {};
+      if (!v) return;
+      const pools = [
+        v.recommend?.items,
+        v.dragon_recommend?.items,
+        v.side_recommend?.items,
+        v.link_recommend?.items,
+        v.watch_trial_recommend?.items,
+        v.independent_recommend?.items,
+      ];
+      for (const items of pools) {
+        for (const it of items || []) {
+          const c = String(it.code || "").replace(/\D/g, "").padStart(6, "0");
+          if (c.length === 6) deskChartCtxByCode[c] = it;
+        }
+      }
+    }
+
+    function deskItemAsReviewShape(it) {
+      if (!it) return null;
+      return {
+        role_label: it.role_label,
+        reason: it.reason,
+        minute: it.minute,
+        confirm_fail: it.confirm_fail,
+        confirm_soft: it.confirm_soft,
+        trend_ok: it.trend_ok,
+        trend_down: it.trend_down,
+        trend_pending: it.trend_pending,
+        daily_trend: it.trend,
+        desk_source: it.desk_source,
+        dragon_row: it.dragon_row,
+        independent_pop: it.independent_pop,
+        signal_type: it.dragon_row ? "buy_dragon" : (it.independent_pop ? "buy_indep" : null),
+        price: it.buy_price,
+        wait_price: it.wait_price,
+        chase_price: it.chase_price,
+        stop_price: it.stop_price,
+        pct: it.pct,
+        payload: {
+          reason: it.reason,
+          confirm_fail: it.confirm_fail,
+          confirm_soft: it.confirm_soft,
+          minute: it.minute,
+          role_label: it.role_label,
+          desk_source: it.desk_source,
+        },
+      };
+    }
+
+    function resolveChartDescContext(revId) {
+      if (revId) return findRevSignal(revId);
+      const c = String(chartCode || "").replace(/\D/g, "").padStart(6, "0");
+      if (c.length === 6 && deskChartCtxByCode[c]) {
+        return deskItemAsReviewShape(deskChartCtxByCode[c]);
+      }
+      return null;
+    }
+
     function revSignalDescRows(r) {
       if (!r) return [];
       const payload = (r.payload && typeof r.payload === "object") ? r.payload : {};
       const rows = [];
+      if (r.price != null) rows.push({ k: "建议价", v: String(r.price) });
+      if (r.wait_price != null) rows.push({ k: "回踩", v: String(r.wait_price) });
+      if (r.chase_price != null) rows.push({ k: "不追", v: String(r.chase_price) });
+      if (r.stop_price != null) rows.push({ k: "止损", v: String(r.stop_price) });
       const srcMeta = revSrcTagMeta(revNormSrc(r));
       const role = String(r.role_label || payload.role_label || "").trim();
       if (srcMeta || role) {
@@ -4954,7 +5068,7 @@
       mask.hidden = false;
       document.getElementById("chartTitle").textContent = `${name || c} · ${c}`;
       document.getElementById("chartMeta").textContent = "加载中…";
-      paintChartDesc(findRevSignal(chartRevId));
+      paintChartDesc(resolveChartDescContext(chartRevId));
       document.getElementById("chartMinute").innerHTML = `<div class="chart-empty">加载分时…</div>`;
       document.getElementById("chartDaily").innerHTML = `<div class="chart-empty">加载日线…</div>`;
       const xq = xueqiuUrl(c);
@@ -5030,11 +5144,17 @@
       })[st] || st || "—";
       const body = document.getElementById("sigHistBody");
       const rows = d.signals || [];
+      sigHistRows = rows;
+      const descBox = document.getElementById("sigHistDesc");
+      if (descBox) {
+        descBox.hidden = true;
+        descBox.innerHTML = "";
+      }
       if (!rows.length) {
         body.innerHTML = `<tr><td colspan="10" class="meta">暂无该代码的历史信号</td></tr>`;
         return;
       }
-      body.innerHTML = rows.map((r) => {
+      body.innerHTML = rows.map((r, idx) => {
         const d1 = r.outcome_day1_pct;
         const d1Html = d1 == null
           ? "—"
@@ -5043,7 +5163,7 @@
         const dayJump = r.trade_date
           ? `<button type="button" class="rev-col-btn sig-hist-day" data-day="${escAttr(r.trade_date)}" style="padding:0 4px;font-size:11px">${escAttr(r.trade_date)}</button>`
           : "—";
-        return `<tr>
+        return `<tr class="sig-hist-row" data-row-idx="${idx}" title="点击查看该条信号描述">
           <td>${dayJump}</td>
           <td>${typeLab(r.signal_type)}</td>
           <td>${r.price ?? "—"}</td>
@@ -5056,6 +5176,24 @@
           <td>${traded}${r.fill_price != null ? ` · ${r.fill_price}` : ""}</td>
         </tr>`;
       }).join("");
+      if (rows.length) paintSigHistDesc(rows[0], 0);
+    }
+
+    function paintSigHistDesc(row, idx) {
+      const box = document.getElementById("sigHistDesc");
+      if (!box) return;
+      const html = revSignalDescHtml(row);
+      if (!html) {
+        box.hidden = true;
+        box.innerHTML = "";
+        return;
+      }
+      box.hidden = false;
+      const when = row.signaled_at || row.trade_date || "";
+      box.innerHTML = `<div class="hd">信号描述${when ? ` · ${escAttr(String(when).slice(0, 16))}` : ""}</div>${html}`;
+      document.querySelectorAll("#sigHistBody tr.sig-hist-row").forEach((tr) => {
+        tr.classList.toggle("sel", Number(tr.dataset.rowIdx) === idx);
+      });
     }
 
     async function openSigHist(code, name) {
@@ -5090,6 +5228,39 @@
     }
 
     const REV_COL_STORAGE = "md_rev_cols_v1";
+    const REV_FILTER_STORAGE = "md_rev_filters_v1";
+    function saveRevFilters() {
+      try {
+        const payload = {
+          type: (document.getElementById("revType") || {}).value || "",
+          kind: (document.getElementById("revKind") || {}).value || "",
+          source: (document.getElementById("revSource") || {}).value || "",
+          main: ((document.getElementById("revMain") || {}).value || "").trim(),
+          hideWait: !!(document.getElementById("revHideWait") || {}).checked,
+        };
+        localStorage.setItem(REV_FILTER_STORAGE, JSON.stringify(payload));
+      } catch (e) {}
+    }
+    function loadRevFilters() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(REV_FILTER_STORAGE) || "null");
+        if (!raw || typeof raw !== "object") return;
+        const setVal = (id, v) => {
+          const el = document.getElementById(id);
+          if (!el || v == null) return;
+          if (el.type === "checkbox") el.checked = !!v;
+          else el.value = String(v);
+        };
+        setVal("revType", raw.type);
+        setVal("revKind", raw.kind);
+        setVal("revSource", raw.source);
+        setVal("revMain", raw.main || "");
+        if (typeof raw.hideWait === "boolean") {
+          setVal("revHideWait", raw.hideWait);
+        }
+      } catch (e) {}
+    }
+    loadRevFilters();
     function liveArrowHtml(r) {
       const dir = r.live_arrow;
       if (!dir) return "";
@@ -7246,6 +7417,14 @@
         hit.dataset.revId || hit.getAttribute("data-rev-id") || ""
       );
     });
+    document.getElementById("sigHistBody").addEventListener("click", (ev) => {
+      if (ev.target.closest(".sig-hist-day")) return;
+      const tr = ev.target.closest("tr.sig-hist-row");
+      if (!tr) return;
+      const idx = Number(tr.dataset.rowIdx);
+      if (!Number.isFinite(idx) || !sigHistRows[idx]) return;
+      paintSigHistDesc(sigHistRows[idx], idx);
+    });
     document.getElementById("chartClose").addEventListener("click", closeChart);
     document.getElementById("chartMask").addEventListener("click", (ev) => {
       if (ev.target.id === "chartMask") closeChart();
@@ -7296,11 +7475,31 @@
         || new Date().toISOString().slice(0, 10);
       return String(d).replace(/[^\d-]/g, "") || new Date().toISOString().slice(0, 10);
     }
-    document.getElementById("revApply").addEventListener("click", () => paintReview(lastReview));
+    document.getElementById("revApply").addEventListener("click", () => {
+      saveRevFilters();
+      paintReview(lastReview);
+    });
     ["revSource", "revHideWait", "revType", "revKind"].forEach((id) => {
       const el = document.getElementById(id);
-      if (el) el.addEventListener("change", () => paintReview(lastReview));
+      if (el) el.addEventListener("change", () => {
+        saveRevFilters();
+        paintReview(lastReview);
+      });
     });
+    const revMainEl = document.getElementById("revMain");
+    if (revMainEl) {
+      revMainEl.addEventListener("change", () => {
+        saveRevFilters();
+        paintReview(lastReview);
+      });
+      revMainEl.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          saveRevFilters();
+          paintReview(lastReview);
+        }
+      });
+    }
     const revHeadEl = document.getElementById("revHead");
     if (revHeadEl) {
       revHeadEl.addEventListener("click", (ev) => {

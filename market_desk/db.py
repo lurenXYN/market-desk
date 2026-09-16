@@ -2488,7 +2488,12 @@ def sync_sell_fill_from_trim(
 
 
 def list_signal_trade_dates(limit: int = 40) -> list[str]:
-    """Return distinct trade dates that have signals, newest first."""
+    """Return distinct trade dates that have signals, newest first.
+
+    Skip sentinel / far-future placeholders (e.g. 2099-01-01 test rows) so the
+    review day chips stay usable.
+    """
+    calendar_today = datetime.now().strftime("%Y-%m-%d")
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -2498,9 +2503,37 @@ def list_signal_trade_dates(limit: int = 40) -> list[str]:
             ORDER BY trade_date DESC
             LIMIT ?
             """,
-            (max(1, int(limit)),),
+            (max(1, int(limit) * 3),),
         ).fetchall()
-    return [str(r["trade_date"]) for r in rows if r["trade_date"]]
+    out: list[str] = []
+    for r in rows:
+        d = str(r["trade_date"] or "").strip()[:10]
+        if len(d) != 10 or d[4] != "-" or d[7] != "-":
+            continue
+        # Drop far-future / sentinel test days (chip would show as 01-01).
+        if d > calendar_today and d[:4] >= "2090":
+            continue
+        if d.startswith("2099"):
+            continue
+        out.append(d)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def purge_sentinel_signal_dates() -> int:
+    """Delete far-future / placeholder signal days (e.g. 2099-01-01 test rows)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM signals
+            WHERE trade_date LIKE '2099%'
+               OR (length(trade_date) = 10 AND trade_date > date('now', '+30 days'))
+            """
+        )
+        n = int(cur.rowcount or 0)
+        conn.commit()
+    return n
 
 
 def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, Any]]:
