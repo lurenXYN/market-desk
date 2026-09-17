@@ -479,7 +479,6 @@
     }
     @media (max-width: 960px) {
       .playbook { grid-template-columns: 1fr; }
-      .desk-pair { grid-template-columns: 1fr; }
       .rec-grid { grid-template-columns: 1fr; }
       .mainline-title { font-size: 22px; }
     }
@@ -641,10 +640,15 @@
     .bans { margin-top: 10px; font-size: 14px; color: var(--warn); }
     .meaning { font-size: 16px; color: var(--warn); margin: 0 0 10px; }
     .desk-pair {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
+      display: flex;
+      flex-direction: column;
       gap: 10px;
       margin-top: 14px;
+    }
+    .desk-pair > .buybox,
+    .desk-pair > .sellbox {
+      width: 100%;
+      min-width: 0;
     }
     .desk-side-grid {
       display: flex;
@@ -726,14 +730,15 @@
     }
     .fav-board .fav-hd .nm { font-size: 16px; font-weight: 750; }
     .fav-board .fav-cols {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
       margin-top: 8px;
     }
     .fav-board .fav-col .lab {
       color: var(--muted); font-size: 11px; letter-spacing: 0.1em; margin-bottom: 6px;
     }
     @media (max-width: 900px) {
-      .fav-board .fav-cols { grid-template-columns: 1fr; }
       .rec-grid { grid-template-columns: 1fr; }
     }
     .sidebox .k, .buybox .k, .sellbox .k { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
@@ -753,9 +758,6 @@
     }
     .rec-grid > .rec-card { min-width: 0; }
     .dragon-group .rec-grid { margin-top: 6px; }
-    /* Buy/sell share a half-width column; keep one card per row there. */
-    .desk-pair .rec-grid { grid-template-columns: 1fr; }
-    .fav-board .fav-col .rec-grid { grid-template-columns: 1fr; }
     .rec-card {
       border: 1px solid var(--line);
       background: #0c1410;
@@ -871,7 +873,7 @@
       background: #3a1a1a; color: var(--up); border-color: #8b3a3a;
     }
     @media (max-width: 900px) {
-      .desk-pair, .seg-strip { grid-template-columns: 1fr; }
+      .seg-strip { grid-template-columns: 1fr; }
       .rec-grid { grid-template-columns: 1fr; }
     }
     .hdr {
@@ -1984,7 +1986,6 @@
       .mainline-title .meta { display: inline; margin-left: 6px; font-size: 12px; }
       .today-trio { font-size: 14px; padding: 10px; }
       .playbook { grid-template-columns: 1fr; }
-      .desk-pair { grid-template-columns: 1fr; gap: 10px; }
       .rec-grid { grid-template-columns: 1fr; }
       .rec-prices { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
       .rec-prices .val { font-size: 16px; }
