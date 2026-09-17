@@ -208,7 +208,7 @@ OUTCOME_FAKE_RED_LOW_PCT = -2.0   # day1 low vs entry ≤ this → 次日虚红
 OUTCOME_FAKE_RED_OPEN_PCT = 1.5   # day1 open ≥ this and close weak → 次日冲高回落
 OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
 # Bump when buy outcome label semantics change; review refresh migrates old rows.
-OUTCOME_FORMULA_VERSION = 2
+OUTCOME_FORMULA_VERSION = 3
 
 # Wait price as a fraction of last (shallower wait → nearer entry tags).
 ETF_WAIT_GAP = 0.9955   # ~0.45% below last
@@ -436,6 +436,19 @@ SELL_YDAY_BUY_WEAK_PCT = -2.0    # day change ≤ this →「今弱」(−1% too
 SELL_YDAY_BUY_CLEAR_EXTRA = -1.5 # hard clear only if pnl ≤ pnl_stop + this
 # Independent popular pullback positions: skip「昨买今弱」half trim.
 SELL_INDEPENDENT_POP_EXEMPT_YDAY = True
+# After half-trim: don't escalate soft/take clear while still strong (regret window).
+SELL_REGRET_ENABLED = True
+# 昨买今弱 repair: day pct recovered above this → cancel weak trim.
+SELL_YDAY_RECOVER_PCT = -0.5
+# Soft floor nudge when lagging carrier (not at tip).
+SELL_CARRIER_WEAK_SOFT_DELTA = -0.6
+# Elliott soft sell: mid wave-3 hold longer; wave-5 / C end slightly easier trim.
+SELL_WAVE_W3_SOFT_EXTRA = 1.2
+SELL_WAVE_END_SOFT_DELTA = -0.5
+# Review「卖飞」: left-on-table after sell.
+SELL_FLY_MAE_PCT = 3.0
+SELL_FLY_DAY1_PCT = -2.5
+SELL_MINUTE_GATE_ENABLED = True
 
 # Dual-dragon + independent popular pullback.
 INDEPENDENT_POP_MAX = 5

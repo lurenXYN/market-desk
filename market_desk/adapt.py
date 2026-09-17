@@ -701,12 +701,16 @@ def build_segment_sell_learned(
             "note": f"{key}卖点样本不足（n={n}，需≥{min_n}）",
         }
     hit = sum(1 for r in sells if str(r.get("outcome_label") or "") == "卖后回落")
-    early = sum(1 for r in sells if str(r.get("outcome_label") or "") == "卖后继续涨")
+    early = sum(
+        1
+        for r in sells
+        if str(r.get("outcome_label") or "") in ("卖后继续涨", "卖飞")
+    )
     rate = round(100.0 * hit / n, 1)
     widen = rate < float(SELL_REVIEW_WIDEN_BELOW)
     tighten = rate >= float(SELL_REVIEW_TIGHTEN_ABOVE)
     mult = 1.0
-    note = f"{key}卖后回落{rate}%（n={n}，续涨{early}）"
+    note = f"{key}卖后回落{rate}%（n={n}，续涨/卖飞{early}）"
     if widen:
         mult = float(SELL_REVIEW_WIDEN_MULT)
         note += "·偏早→放宽"
@@ -896,14 +900,18 @@ def build_sell_mfe_bias(
             continue
         if mode == "traded" and not int(r.get("traded") or 0):
             continue
-        if str(r.get("outcome_label") or "") != "卖后继续涨":
+        if str(r.get("outcome_label") or "") not in ("卖后继续涨", "卖飞"):
             continue
         mae = _num(r.get("outcome_mae_pct"))
         if mae is None:
             continue
         # MAE ≤0 when price rose after sell; absolute = left on table.
         left = abs(mae) if mae <= 0 else float(mae)
-        if 0.3 <= left <= 20.0:
+        if not (0.3 <= left <= 20.0):
+            continue
+        # 卖飞 samples weigh slightly heavier by duplicating into the pool.
+        lefts.append(left)
+        if str(r.get("outcome_label") or "") == "卖飞":
             lefts.append(left)
     n = len(lefts)
     if n < int(SELL_MFE_MIN_N):

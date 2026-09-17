@@ -4239,6 +4239,12 @@ def build_sell_advice(
         if item:
             items.append(item)
     sell_bias = sell_bundle.get("all") or {}
+    try:
+        from market_desk.adapt import build_sell_mfe_bias
+
+        mfe_bias = build_sell_mfe_bias()
+    except Exception:
+        mfe_bias = {"ok": False, "note": ""}
     sell_bias_out = {
         "hit_rate": sell_bias.get("hit_rate"),
         "n": sell_bias.get("n"),
@@ -4248,6 +4254,8 @@ def build_sell_advice(
         "etf": sell_bundle.get("etf"),
         "stock": sell_bundle.get("stock"),
         "all": sell_bias,
+        "mfe": mfe_bias,
+        "fly_n": sell_bias.get("fly_n"),
     }
     rank = {"stop": 0, "take": 1, "trim": 2, "hold": 3}
     items.sort(key=lambda x: (rank.get(str(x.get("urgency") or "hold"), 9), -(x.get("pnl_pct") or 0)))
@@ -4486,6 +4494,83 @@ def _yday_buy_weak(
     return out
 
 
+def _sell_wave_adj(verdict: dict[str, Any] | None) -> dict[str, Any]:
+    """Soft sell-band nudge from index Elliott primary scenario (observe-only)."""
+    from market_desk.config import SELL_WAVE_END_SOFT_DELTA, SELL_WAVE_W3_SOFT_EXTRA
+
+    ew = (verdict or {}).get("elliott") if isinstance(verdict, dict) else None
+    if not isinstance(ew, dict) or not ew.get("ok"):
+        return {}
+    primary = ew.get("primary") or {}
+    wid = str(primary.get("id") or "")
+    if wid == "imp_up_w3":
+        return {
+            "soft_extra": float(SELL_WAVE_W3_SOFT_EXTRA),
+            "take_mult": 1.08,
+            "tag": "浪3持有",
+        }
+    if wid in ("imp_up_w5", "corr_c"):
+        return {
+            "soft_extra": float(SELL_WAVE_END_SOFT_DELTA),
+            "take_mult": 0.95,
+            "tag": "浪末偏紧",
+        }
+    return {}
+
+
+def _sell_tune_tags(
+    *,
+    band: dict[str, Any],
+    daily_up: bool,
+    at_tip: bool,
+    rel_strong: bool,
+    carrier_rel_strong: bool,
+    carrier_rel_weak: bool,
+    flow_pressure: bool,
+    wave_tag: str | None,
+    yday_repaired: bool,
+    regret: bool,
+) -> list[str]:
+    """Build up to four short attribution chips for the sell card."""
+    tags: list[str] = []
+    sb = band.get("sell_bias") or {}
+    if sb.get("widen"):
+        tags.append("复盘卖早")
+    elif sb.get("tighten"):
+        tags.append("复盘卖准")
+    mfe = (band.get("segment_sell") or {}).get("mfe") or {}
+    if mfe.get("widen"):
+        tags.append("MFE放宽")
+    elif mfe.get("tighten"):
+        tags.append("MFE收紧")
+    if daily_up:
+        tags.append("日线↑")
+    if at_tip:
+        tags.append("贴尖")
+    if rel_strong or carrier_rel_strong:
+        tags.append("相对强")
+    elif carrier_rel_weak:
+        tags.append("弱于载体")
+    if flow_pressure:
+        tags.append("资金流出")
+    if wave_tag:
+        tags.append(str(wave_tag))
+    if yday_repaired:
+        tags.append("今弱已修复")
+    if regret:
+        tags.append("反悔窗")
+    # De-dupe preserve order, cap 4.
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tags:
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+        if len(out) >= 4:
+            break
+    return out
+
+
 def _sell_item(
     row: dict[str, Any],
     verdict: dict[str, Any],
@@ -4624,6 +4709,27 @@ def _sell_item(
         yday_weak = dict(yday_weak)
         yday_weak["active"] = False
         yday_weak["exempt"] = "independent_pop"
+    # 昨买今弱 repair: price reclaimed cost or day % recovered from the weak print.
+    yday_repaired = False
+    if yday_weak.get("active"):
+        from market_desk.config import SELL_YDAY_RECOVER_PCT
+
+        recovered = False
+        try:
+            if last is not None and buy > 0 and float(last) >= buy:
+                recovered = True
+        except (TypeError, ValueError):
+            pass
+        try:
+            if day_pct_f is not None and float(day_pct_f) > float(SELL_YDAY_RECOVER_PCT):
+                recovered = True
+        except (TypeError, ValueError):
+            pass
+        if recovered:
+            yday_weak = dict(yday_weak)
+            yday_weak["active"] = False
+            yday_weak["repaired"] = True
+            yday_repaired = True
     hold_qty = int(row.get("qty") or 0)
     trend = trend or {}
     ma20 = trend.get("ma20")
@@ -4652,14 +4758,18 @@ def _sell_item(
             theme_yi = t.get("main_yi")
             break
     flow_pressure = False
+    flow_fade = False
     try:
         from market_desk.config import SELL_FLOW_OUT_YI
 
         if theme_yi is not None and float(theme_yi) <= float(SELL_FLOW_OUT_YI):
             flow_pressure = True
+            flow_fade = bool(mainline_fade)
     except (TypeError, ValueError):
         flow_pressure = False
-    if sell_gate == "urgent" or flow_pressure:
+        flow_fade = False
+    wave_adj = _sell_wave_adj(verdict)
+    if sell_gate == "urgent" or flow_fade:
         from market_desk.config import SELL_SIM_URGENT_FLOOR
 
         pb_scale = 0.88 if sell_gate == "urgent" else 0.93
@@ -4671,12 +4781,24 @@ def _sell_item(
         band["take_pnl"] = float(band["take_pnl"]) * pb_scale
         if sell_gate == "urgent":
             band["mode_zh"] = f"{band['mode_zh']}·相似日急"
-        elif flow_pressure:
-            band["mode_zh"] = f"{band['mode_zh']}·资金流出"
+        elif flow_fade:
+            band["mode_zh"] = f"{band['mode_zh']}·资金+退潮"
     elif sell_gate == "hold" and band["mode"] != "tight":
         band["pb_light"] = float(band["pb_light"]) * 1.06
         band["take_pnl"] = float(band["take_pnl"]) * 1.06
         band["mode_zh"] = f"{band['mode_zh']}·相似日持"
+    # Wave soft take mult (observe-only; does not flip regime).
+    try:
+        w_mult = float(wave_adj.get("take_mult") or 1.0)
+        if abs(w_mult - 1.0) > 0.01:
+            for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+                band[key] = float(band[key]) * w_mult
+            if wave_adj.get("tag"):
+                band["mode_zh"] = f"{band['mode_zh']}·{wave_adj['tag']}"
+    except (TypeError, ValueError):
+        pass
+    if flow_pressure and not flow_fade:
+        band["mode_zh"] = f"{band['mode_zh']}·资金流出"
     stop = buy * float(band["stop_buy"])
     if low not in (None, 0) and float(low) < buy:
         stop = max(float(low), buy * float(band["stop_floor"]))
@@ -4760,34 +4882,72 @@ def _sell_item(
         urgency = "take"
         ready = True
         sell_price = float(last)
+        # Peak layering: light pullback → half only; deep / peak-fail → clear.
         deep = pullback >= pb_deep and pnl_pct >= take_deep_pnl
-        if deep or (
+        peak_fail = False
+        try:
+            last_sell_px = row.get("last_sell_price")
+            if (
+                partial_done
+                and last_sell_px not in (None, "", 0)
+                and float(last) < float(last_sell_px)
+                and pullback >= pb_light
+            ):
+                peak_fail = True
+            if (
+                high not in (None, 0)
+                and hold_peak > 0
+                and (hold_peak - float(high)) / hold_peak * 100.0
+                < float(SELL_TIP_HOLD_PB)
+                and pullback >= pb_deep
+                and pnl_pct >= take_deep_pnl
+            ):
+                peak_fail = True
+        except (TypeError, ValueError, ZeroDivisionError):
+            peak_fail = False
+        ending_clear = (
             ending
             and on_mainline
             and pullback >= pb_light
             and pnl_pct >= (3.0 if etf else 5.0)
-        ):
+            and not at_tip
+        )
+        if deep or peak_fail:
             exit_mode = "clear"
-            role_label = "结构回撤清仓" if deep else "退潮兑现清仓"
+            role_label = (
+                "破峰失败清仓"
+                if peak_fail and not deep
+                else "结构回撤清仓"
+            )
             sell_pct = 100
             reason_parts.append(
                 f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%"
-                + ("，生命周期偏衰退" if ending and on_mainline else "")
+                + ("，破减仓价/破峰失败" if peak_fail else "")
                 + f"（{band['mode_zh']}），建议清仓"
             )
+        elif ending_clear:
+            exit_mode = "clear"
+            role_label = "退潮兑现清仓"
+            sell_pct = 100
+            reason_parts.append(
+                f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%，生命周期偏衰退"
+                f"（{band['mode_zh']}），建议清仓"
+            )
         else:
+            # Light band: never clear on light pullback alone.
             exit_mode = "half"
             role_label = "冲高回落先减"
             sell_pct = 50
             reason_parts.append(
                 f"浮盈 {_fmt_pct(pnl_pct)}，高点回撤 {pullback:.1f}%"
-                f"（{band['mode_zh']}），先减一半"
+                f"（轻回撤·{band['mode_zh']}），先减一半"
             )
     elif pnl_pct is not None and pnl_pct >= pocket_pnl and not (at_tip and rel_strong):
         urgency = "take"
         ready = True
         sell_price = float(last)
-        if ending and on_mainline:
+        # Ending pocket clear requires leaving tip (no zero-pullback dump).
+        if ending and on_mainline and not at_tip:
             exit_mode = "clear"
             role_label = "衰退落袋清仓"
             sell_pct = 100
@@ -4801,6 +4961,7 @@ def _sell_item(
             )
     elif (soft_exit or phase_climax) and pnl_pct is not None and not (at_tip and rel_strong):
         from market_desk.config import (
+            SELL_CARRIER_WEAK_SOFT_DELTA,
             SELL_DAY_WEAK_SOFT_DELTA,
             SELL_SOFT_CLIMAX_MIN_PNL_ETF,
             SELL_SOFT_CLIMAX_MIN_PNL_STOCK,
@@ -4828,9 +4989,22 @@ def _sell_item(
             soft_min = float(soft_min) + float(SELL_SOFT_UPTREND_EXTRA)
         if day_weak:
             soft_min = float(soft_min) + float(SELL_DAY_WEAK_SOFT_DELTA)
+        # Flow alone (no theme fade): nudge soft floor only, no pb scale.
+        if flow_pressure and not flow_fade:
+            soft_min = float(soft_min) + float(SELL_DAY_WEAK_SOFT_DELTA) * 0.5
+        # Lagging carrier (not at tip): easier soft trim.
+        if carrier_rel_weak and not at_tip:
+            soft_min = float(soft_min) + float(SELL_CARRIER_WEAK_SOFT_DELTA)
+        # Elliott soft nudge.
+        try:
+            soft_min = float(soft_min) + float(wave_adj.get("soft_extra") or 0.0)
+        except (TypeError, ValueError):
+            pass
         # Relative strength: climax soft needs more profit; skip mild climax alone.
         if phase_climax and rel_strong and not soft_exit:
             soft_min = float(soft_min) + 1.0
+        # Carrier-strong bags: never soft-clear.
+        block_soft_clear = bool(carrier_rel_strong or (at_tip and rel_strong))
         if pnl_pct > soft_min:
             urgency = "trim"
             ready = True
@@ -4842,8 +5016,8 @@ def _sell_item(
                 (pullback is not None and pullback >= pb_light)
                 or pnl_pct >= deep_need
             )
-            # Uptrend: soft fade only halves; never clear on soft branch.
-            if deep_fade and not daily_up:
+            # Uptrend / carrier-strong: soft fade only halves; never clear on soft branch.
+            if deep_fade and not daily_up and not block_soft_clear:
                 exit_mode = "clear"
                 role_label = "衰退清仓"
                 sell_pct = 100
@@ -4877,6 +5051,8 @@ def _sell_item(
                     f"{why}，浮盈 {_fmt_pct(pnl_pct)}（门槛 {soft_min:.1f}%"
                     + ("·日线上升抬高" if daily_up else "")
                     + ("·当日偏弱放宽" if day_weak else "")
+                    + ("·弱于载体" if carrier_rel_weak and not at_tip else "")
+                    + ("·资金流出" if flow_pressure and not flow_fade else "")
                     + "），先减一半"
                 )
         # else: below soft floor — fall through to carrier / ending / hold
@@ -5042,6 +5218,41 @@ def _sell_item(
         sell_price = target
         reason_parts.insert(0, "今日已减，余仓盯止损")
 
+    # Regret window: after a half-trim, don't escalate soft/take clears while still strong.
+    regret_hold = False
+    if ready and partial_done and exit_mode == "clear" and urgency in ("take", "trim"):
+        from market_desk.config import SELL_REGRET_ENABLED
+
+        if SELL_REGRET_ENABLED:
+            still_strong = bool(at_tip or rel_strong or carrier_rel_strong)
+            allow_clear = False
+            if (
+                pullback is not None
+                and pullback >= pb_deep
+                and pnl_pct is not None
+                and float(pnl_pct) >= take_deep_pnl
+            ):
+                allow_clear = True
+            try:
+                last_sell_px = row.get("last_sell_price")
+                if last_sell_px not in (None, "", 0) and float(last) < float(last_sell_px):
+                    allow_clear = True
+            except (TypeError, ValueError):
+                pass
+            if day_weak and not rel_strong:
+                allow_clear = True
+            if still_strong and not allow_clear:
+                ready = False
+                exit_mode = "hold"
+                sell_pct = 0
+                regret_hold = True
+                role_label = "今日已减·继续观察"
+                sell_price = target
+                reason_parts.insert(
+                    0,
+                    "反悔窗：已减半后仍贴尖/相对强，暂不清仓；破减仓价或深结构再清",
+                )
+
     if t1_locked and ready:
         ready = False
         role_label = f"T+1锁定·{role_label}"
@@ -5057,6 +5268,35 @@ def _sell_item(
     clear_q = clear_sell_qty(hold_qty)
     sell_qty = clear_q if exit_mode == "clear" else (half_q if exit_mode == "half" else 0)
     stop_pct = round((1.0 - float(band["stop_buy"])) * 100.0, 2)
+    daily_up = bool(trend.get("up")) and not bool(trend.get("down"))
+    tune_tags = _sell_tune_tags(
+        band=band,
+        daily_up=daily_up,
+        at_tip=bool(at_tip),
+        rel_strong=bool(rel_strong),
+        carrier_rel_strong=bool(carrier_rel_strong),
+        carrier_rel_weak=bool(carrier_rel_weak),
+        flow_pressure=bool(flow_pressure),
+        wave_tag=str(wave_adj.get("tag") or "") or None,
+        yday_repaired=bool(yday_repaired),
+        regret=bool(regret_hold),
+    )
+    mfe_info = (band.get("segment_sell") or {}).get("mfe") or {}
+    sb = band.get("sell_bias") or {}
+    sell_tune = {
+        "review_note": sb.get("note"),
+        "mfe_note": mfe_info.get("note"),
+        "widen": bool(sb.get("widen") or mfe_info.get("widen")),
+        "tighten": bool(sb.get("tighten") or mfe_info.get("tighten")),
+        "mult": sb.get("mult"),
+        "mfe_mult": mfe_info.get("mult"),
+    }
+    # Soft half / light take need minute fade; stop & deep clear skip the gate.
+    minute_gate = bool(
+        ready
+        and exit_mode == "half"
+        and urgency in ("take", "trim")
+    )
 
     return {
         "id": row.get("id"),
@@ -5110,6 +5350,11 @@ def _sell_item(
             on_mainline and carrier_pct is None and not theme_ctx.get("carrier_falling")
         ),
         "partial_done": partial_done,
+        "tune_tags": tune_tags,
+        "sell_tune": sell_tune,
+        "minute_gate": minute_gate,
+        "regret_hold": regret_hold,
+        "yday_repaired": yday_repaired,
     }
 
 

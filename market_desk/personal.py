@@ -47,12 +47,14 @@ def attach_personal_layer(
     trends_for=None,
     decorate_watchlist=None,
     decorate_favorites=None,
+    minutes_for=None,
 ) -> dict[str, Any]:
     """Return a deep-copied snapshot with one user's positions / watch / risk.
 
     ``book_quotes`` is the shared engine mark map (all users' book codes).
     ``trends_for``, ``decorate_watchlist``, ``decorate_favorites`` are callables
     provided by DeskEngine to reuse its caches / helpers.
+    ``minutes_for(codes)`` optionally returns minute series for sell soft-take gates.
     """
     out = copy.deepcopy(snapshot or {})
     uid = int(user_id)
@@ -134,6 +136,25 @@ def attach_personal_layer(
             similar=out.get("similar_days"),
             metrics=out.get("metrics"),
         )
+        # Soft take / half: minute fade gate when series available (cache miss = soft pass).
+        try:
+            from market_desk.minute_confirm import apply_sell_minute_gates
+
+            advice = out["sell_advice"] or {}
+            need_codes = [
+                str(it.get("code") or "").zfill(6)
+                for it in (advice.get("items") or [])
+                if it.get("minute_gate") and it.get("code")
+            ]
+            minutes: dict[str, list] = {}
+            if need_codes and callable(minutes_for):
+                try:
+                    minutes = dict(minutes_for(need_codes) or {})
+                except Exception:
+                    minutes = {}
+            out["sell_advice"] = apply_sell_minute_gates(advice, minutes)
+        except Exception:
+            pass
 
         # Re-size recommend cards with this user's equity / open book.
         for key in ("recommend", "side_recommend", "link_recommend"):

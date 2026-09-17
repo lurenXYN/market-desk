@@ -780,7 +780,13 @@ def score_signal_with_closes(
         d3 = (price / day3 - 1.0) * 100.0
         mfe = (price / trough - 1.0) * 100.0
         mae = (price / peak - 1.0) * 100.0
-        if d1 >= 1.0:
+        from market_desk.config import SELL_FLY_DAY1_PCT, SELL_FLY_MAE_PCT
+
+        left = abs(mae) if mae <= 0 else 0.0
+        # 卖飞: left substantial upside on the table after the sell.
+        if d1 <= float(SELL_FLY_DAY1_PCT) or left >= float(SELL_FLY_MAE_PCT):
+            label = "卖飞"
+        elif d1 >= 1.0:
             label = "卖后回落"
         elif d1 <= -1.5:
             label = "卖后继续涨"
@@ -1498,12 +1504,22 @@ def build_sell_review_bias(
             "note": f"{label}卖点样本不足（n={n}，需≥{min_n}）",
         }
     hit = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后回落")
-    early = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后继续涨")
+    early = sum(
+        1
+        for r in sells
+        if (r.get("outcome_label") or "") in ("卖后继续涨", "卖飞")
+    )
+    fly_n = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖飞")
     rate = round(100.0 * hit / n, 1)
-    widen = rate < float(SELL_REVIEW_WIDEN_BELOW)
-    tighten = rate >= float(SELL_REVIEW_TIGHTEN_ABOVE)
+    # Extra early pressure when 卖飞 share is material.
+    fly_share = fly_n / n if n else 0.0
+    widen = rate < float(SELL_REVIEW_WIDEN_BELOW) or fly_share >= 0.25
+    tighten = (not widen) and rate >= float(SELL_REVIEW_TIGHTEN_ABOVE)
     mult = 1.0
-    note = f"{label}卖后回落命中 {rate}%（n={n}，继续涨 {early}）"
+    note = f"{label}卖后回落命中 {rate}%（n={n}，继续涨/卖飞 {early}"
+    if fly_n:
+        note += f"·卖飞{fly_n}"
+    note += "）"
     if widen:
         mult = float(SELL_REVIEW_WIDEN_MULT)
         note += "·偏早→放宽回撤/落袋"
@@ -1516,6 +1532,7 @@ def build_sell_review_bias(
         "n": n,
         "hit_rate": rate,
         "early_n": early,
+        "fly_n": fly_n,
         "hit_n": hit,
         "widen": widen,
         "tighten": tighten,

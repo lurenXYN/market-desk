@@ -259,3 +259,147 @@ def apply_minute_confirmations(
         extra = "分时未确认，先等回踩缩量"
         rec["size_note"] = note if extra in note else (f"{note}；{extra}" if note else extra)
     return rec
+
+
+def confirm_sell_take(minutes: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Judge whether minute structure supports soft take-profit / half trim.
+
+    Allow when price has faded from the tip or slipped below the minute average.
+    Sample-thin series return ``ok=None`` (soft pass — do not hard-block).
+    """
+    from market_desk.config import MINUTE_SAMPLE_MIN, MINUTE_SHALLOW
+
+    rows = list(minutes or [])
+    prices: list[float] = []
+    for row in rows:
+        try:
+            px = float(row.get("price"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if px > 0:
+            prices.append(px)
+    if len(prices) < int(MINUTE_SAMPLE_MIN):
+        return {
+            "ok": None,
+            "soft": True,
+            "label": "分时样本不足",
+            "at_tip": False,
+            "below_ma": False,
+            "pullback_pct": None,
+        }
+
+    base = evaluate_minute_structure(rows)
+    last = prices[-1]
+    ma = base.get("ma")
+    below_ma = False
+    try:
+        if ma is not None and float(ma) > 0:
+            below_ma = last < float(ma) * 0.999
+    except (TypeError, ValueError):
+        below_ma = False
+    pb = base.get("pullback_pct")
+    tip_fade = False
+    try:
+        if pb is not None and float(pb) >= float(MINUTE_SHALLOW):
+            tip_fade = True
+    except (TypeError, ValueError):
+        tip_fade = False
+    at_tip = bool(base.get("at_tip"))
+    if below_ma or tip_fade:
+        return {
+            "ok": True,
+            "soft": False,
+            "label": "分时转弱可兑现" if below_ma else "分时已离尖",
+            "at_tip": at_tip,
+            "below_ma": below_ma,
+            "pullback_pct": pb,
+        }
+    if at_tip or bool(base.get("fails")):
+        return {
+            "ok": False,
+            "soft": False,
+            "label": str(base.get("label") or "分时仍在冲高"),
+            "at_tip": at_tip,
+            "below_ma": below_ma,
+            "pullback_pct": pb,
+        }
+    return {
+        "ok": True,
+        "soft": False,
+        "label": "分时未贴尖",
+        "at_tip": at_tip,
+        "below_ma": below_ma,
+        "pullback_pct": pb,
+    }
+
+
+def apply_sell_minute_gates(
+    advice: dict[str, Any] | None,
+    minutes_by_code: dict[str, list[dict[str, Any]]] | None,
+) -> dict[str, Any]:
+    """Gate soft half / light take sells on minute fade; stop & deep clear skip.
+
+    Items must set ``minute_gate=True`` from ``_sell_item``. Thin samples pass
+    with ``minute_pending`` only.
+    """
+    from market_desk.config import SELL_MINUTE_GATE_ENABLED
+
+    out = dict(advice or {})
+    items = [dict(x) for x in (out.get("items") or [])]
+    if not items or not SELL_MINUTE_GATE_ENABLED:
+        out["items"] = items
+        return out
+    minutes_by_code = minutes_by_code or {}
+    changed = False
+    for item in items:
+        if not item.get("ready") or not item.get("minute_gate"):
+            continue
+        code = str(item.get("code") or "").zfill(6)
+        series = minutes_by_code.get(code)
+        if series is None and code not in minutes_by_code:
+            # Cache miss: soft pending, do not hard-block.
+            item["minute_sell"] = {
+                "ok": None,
+                "soft": True,
+                "label": "分时未拉·软放行",
+            }
+            item["minute_pending"] = True
+            continue
+        verdict = confirm_sell_take(series)
+        item["minute_sell"] = verdict
+        if verdict.get("ok") is None:
+            item["minute_pending"] = True
+            continue
+        item["minute_pending"] = False
+        if verdict.get("ok") is False:
+            changed = True
+            item["ready"] = False
+            item["exit_mode"] = "hold"
+            item["sell_pct"] = 0
+            item["sell_qty"] = 0
+            role = str(item.get("role_label") or "卖点")
+            if "待分时确认" not in role:
+                item["role_label"] = f"{role}·待分时确认"
+            why = str(verdict.get("label") or "分时仍强")
+            reason = str(item.get("reason") or "")
+            tip = f"待分时确认：{why}"
+            if tip not in reason:
+                item["reason"] = f"{tip}；{reason}" if reason else tip
+    if changed:
+        sell_now = [x for x in items if x.get("ready")]
+        out["sell"] = bool(sell_now)
+        if sell_now:
+            primary = sell_now[0]
+            out["primary"] = primary
+            mode = primary.get("exit_mode") or "half"
+            mode_zh = {"clear": "清仓", "half": "先减一半"}.get(str(mode), "减仓")
+            out["title"] = "建议卖出"
+            out["text"] = (
+                f"{primary.get('name') or primary.get('code')} · "
+                f"{primary.get('role_label') or mode_zh}"
+            )
+        else:
+            out["title"] = "仓位观察"
+            out["primary"] = items[0] if items else None
+    out["items"] = items
+    return out

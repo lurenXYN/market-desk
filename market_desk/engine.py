@@ -224,6 +224,7 @@ class DeskEngine:
                 rows, quotes, verdict=verdict
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
+            minutes_for=self._minutes_for_codes,
         )
         # Keep shared snapshot free of personal data; caller uses return / layered.
         return list(layered.get("positions") or [])
@@ -276,10 +277,25 @@ class DeskEngine:
                 rows, quotes, verdict=verdict
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
+            minutes_for=self._minutes_for_codes,
         )
         layered["personal_locked"] = False
         layered["auth_user"] = pub
         return layered
+
+    def _minutes_for_codes(self, codes: list[str] | None) -> dict[str, list]:
+        """Return cached minute series for sell soft-take gates (sync, no fetch)."""
+        out: dict[str, list] = {}
+        cache = getattr(self, "_minute_cache", None) or {}
+        for raw in codes or []:
+            code = str(raw or "").zfill(6)
+            if not code:
+                continue
+            hit = cache.get(code)
+            if hit and isinstance(hit, (tuple, list)) and len(hit) >= 2:
+                out[code] = list(hit[1] or [])
+            # Missing keys omitted → apply_sell_minute_gates soft-passes.
+        return out
 
     def _decorate_favorite_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Attach live board cards onto favorite rows (user-scoped)."""
