@@ -2725,7 +2725,7 @@
     <section class="tab-panel" id="panel-pos" hidden>
       <section class="card">
         <h2 style="text-transform:none">仓位记账<button type="button" class="q" data-term="仓位">?</button></h2>
-        <p class="meta">本地记账，不会下单。汇总优先看<strong>当日盈亏</strong>（相对昨收+今日已实现）；浮盈相对成本作次要参考。当日卖出仍留在列表，下一交易日自动移出。</p>
+        <p class="meta">本地记账，不会下单。汇总优先看<strong>当日盈亏</strong>（相对昨收/今买价 + 今日已实现；买入、卖出各扣 5 元手续费）；浮盈相对成本作次要参考。当日卖出仍留在列表，下一交易日自动移出。</p>
         <form class="pos-form" id="posForm">
           <label>代码<input name="code" placeholder="515050" maxlength="6" required /></label>
           <label>名称<input name="name" placeholder="可空，自动带行情名" /></label>

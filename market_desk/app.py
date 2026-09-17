@@ -36,6 +36,7 @@ from market_desk.deps import (
 from market_desk.settings import get_settings_for_user
 
 from market_desk.config import STATIC_DIR
+from market_desk.verdict import quote_prev_close
 from market_desk.db import (
     add_position,
     add_favorite_board,
@@ -571,6 +572,25 @@ def remove_position(pid: int, user: dict = Depends(current_member_required)) -> 
     }
 
 
+def _day_anchor_for_code(code: str) -> float | None:
+    """Resolve 昨收 for a ticker from the live book-quote cache."""
+    c = normalize_code(code)
+    if not c:
+        return None
+    qmap = getattr(engine, "_book_quotes", None) or {}
+    q = qmap.get(c) or {}
+    if not q:
+        # Fall back to any decorated open position still on the snapshot.
+        for row in (engine.snapshot or {}).get("positions") or []:
+            if normalize_code(row.get("code")) == c and row.get("prev") not in (None, ""):
+                try:
+                    return float(row["prev"])
+                except (TypeError, ValueError):
+                    break
+        return None
+    return quote_prev_close(q)
+
+
 @app.post("/api/positions/{pid}/trim")
 def trim_position_api(
     pid: int, body: TrimIn, user: dict = Depends(current_member_required)
@@ -585,12 +605,20 @@ def trim_position_api(
         trade_day = f"{trade_day[:4]}-{trade_day[4:6]}-{trade_day[6:8]}"
     else:
         trade_day = trade_day[:10] or None
+    # Peek code for 昨收 before trim (row may close).
+    pre = None
+    for row in load_positions(user_id=int(user["id"])):
+        if int(row.get("id") or 0) == int(pid):
+            pre = row
+            break
+    anchor = _day_anchor_for_code(str((pre or {}).get("code") or ""))
     row = trim_position(
         pid,
         int(body.qty),
         sell_price=body.sell_price,
         trade_date=trade_day,
         user_id=int(user["id"]),
+        day_anchor=anchor,
     )
     if row is None:
         raise HTTPException(404, "position not found")
@@ -719,6 +747,7 @@ def annotate_signal(
                     new_qty=new_qty,
                     user_id=uid,
                     trade_date=str(annotated.get("trade_date") or "")[:10] or None,
+                    day_anchor=_day_anchor_for_code(code),
                 )
                 book_summary = {
                     "side": "sell",
@@ -863,6 +892,7 @@ def trade_signal(
                 sell_price=sell_px,
                 trade_date=str(row.get("trade_date") or "")[:10] or None,
                 user_id=int(user["id"]),
+                day_anchor=_day_anchor_for_code(code),
             )
             update_signal_meta(
                 sid,

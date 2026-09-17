@@ -1792,12 +1792,25 @@ def trim_position(
     sell_price: float | None = None,
     trade_date: str | None = None,
     user_id: int | None = None,
+    day_anchor: float | None = None,
+    trade_fee: float | None = None,
 ) -> dict[str, Any] | None:
-    """Reduce shares; keep qty=0 rows as closed-today until the next trade day."""
+    """Reduce shares; keep qty=0 rows as closed-today until the next trade day.
+
+    ``day_anchor`` should be 昨收 for overnight lots (buy price is used automatically
+    when the lot was bought today). Session realized stores vs that anchor minus a
+    flat sell fee on the first sell of the day — display still recomputes in decorate
+    (buy fee is applied on the decorate path when bought today).
+    """
+    from market_desk.config import TRADE_FEE_CNY
+
     sell = int(qty)
     if sell <= 0:
         return None
     day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+    fee = float(TRADE_FEE_CNY if trade_fee is None else trade_fee)
+    if fee < 0:
+        fee = 0.0
     with _connect() as conn:
         if user_id is not None:
             row = conn.execute(
@@ -1818,14 +1831,21 @@ def trim_position(
         left = hold - sell
         buy = float(row["buy_price"] or 0)
         px = float(sell_price) if sell_price is not None and float(sell_price) > 0 else buy
-        chunk_pnl = round((px - buy) * sell, 2)
+        buy_day = str(row["last_buy_date"] or row["created_at"] or "")[:10]
+        if buy_day == day and buy > 0:
+            anchor = buy
+        elif day_anchor is not None and float(day_anchor) > 0:
+            anchor = float(day_anchor)
+        else:
+            anchor = buy
+        chunk_pnl = round((px - anchor) * sell, 2)
         prev_day = str(row["last_sell_date"] or "")[:10]
         if prev_day == day:
             day_sold = int(row["day_sold_qty"] or 0) + sell
             day_pnl = round(float(row["day_realized_pnl"] or 0) + chunk_pnl, 2)
         else:
             day_sold = sell
-            day_pnl = chunk_pnl
+            day_pnl = round(chunk_pnl - fee, 2)
         closed_date = day if left <= 0 else None
         conn.execute(
             """
@@ -1851,6 +1871,8 @@ def trim_position(
         item["trimmed"] = sell
         item["sell_price"] = round(px, 4)
         item["realized_chunk"] = chunk_pnl
+        item["day_anchor"] = round(anchor, 4)
+        item["trade_fee"] = fee if prev_day != day else 0.0
         return item
 
 
@@ -2008,11 +2030,16 @@ def sync_position_sell_fill(
     new_qty: int,
     user_id: int,
     trade_date: str | None = None,
+    day_anchor: float | None = None,
+    trade_fee: float | None = None,
 ) -> dict[str, Any]:
     """Correct a local book after a review sell fill is edited.
 
     Restores the previous sell qty, then re-trims at the new price/qty.
+    Session realized uses ``day_anchor`` (昨收) for overnight lots.
     """
+    from market_desk.config import TRADE_FEE_CNY
+
     uid = int(user_id)
     code = str(code or "").zfill(6)
     new_q = int(new_qty)
@@ -2022,6 +2049,9 @@ def sync_position_sell_fill(
     old_q = int(old_qty or 0)
     old_p = float(old_price or 0)
     day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+    fee = float(TRADE_FEE_CNY if trade_fee is None else trade_fee)
+    if fee < 0:
+        fee = 0.0
     with _connect() as conn:
         row = conn.execute(
             f"""
@@ -2036,6 +2066,13 @@ def sync_position_sell_fill(
             raise ValueError("no local position to sync this sell fill")
         hold = int(row["qty"] or 0)
         buy = float(row["buy_price"] or 0)
+        buy_day = str(row["last_buy_date"] or row["created_at"] or "")[:10]
+        if buy_day == day and buy > 0:
+            anchor = buy
+        elif day_anchor is not None and float(day_anchor) > 0:
+            anchor = float(day_anchor)
+        else:
+            anchor = buy
         day_sold = int(row["day_sold_qty"] or 0)
         day_pnl = float(row["day_realized_pnl"] or 0)
         last_sell = str(row["last_sell_date"] or "")[:10]
@@ -2046,7 +2083,7 @@ def sync_position_sell_fill(
             if last_sell == day:
                 day_sold = max(0, day_sold - old_q)
                 undo_px = old_p if old_p > 0 else float(last_px or buy or 0)
-                day_pnl = round(day_pnl - (undo_px - buy) * old_q, 2)
+                day_pnl = round(day_pnl - (undo_px - anchor) * old_q, 2)
                 if day_sold <= 0:
                     day_sold = 0
                     day_pnl = 0.0
@@ -2056,13 +2093,13 @@ def sync_position_sell_fill(
         if sell <= 0:
             raise ValueError("position qty is zero after reversing prior sell")
         left = hold - sell
-        chunk = round((new_p - buy) * sell, 2)
+        chunk = round((new_p - anchor) * sell, 2)
         if last_sell == day or (not last_sell and day_sold > 0):
             day_sold = day_sold + sell
             day_pnl = round(day_pnl + chunk, 2)
         else:
             day_sold = sell
-            day_pnl = chunk
+            day_pnl = round(chunk - fee, 2)
         closed_date = day if left <= 0 else None
         conn.execute(
             """
@@ -2089,6 +2126,7 @@ def sync_position_sell_fill(
         item["sell_price"] = round(new_p, 4)
         item["realized_chunk"] = chunk
         item["corrected"] = True
+        item["day_anchor"] = round(anchor, 4)
         return item
 
 

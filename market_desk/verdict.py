@@ -10,6 +10,7 @@ from market_desk.config import (
     ETF_BOUNCE_BUY_MIN,
     ETF_THIN_AMOUNT,
     STOCK_WEAK_VS_ETF_PCT,
+    TRADE_FEE_CNY,
 )
 from market_desk.filters import is_limit_up, is_main_board, is_st, normalize_code
 from market_desk.lifecycle import classify_lifecycle
@@ -5112,9 +5113,107 @@ def _sell_item(
     }
 
 
+def quote_prev_close(
+    quote: dict[str, Any] | None,
+    *,
+    last: float | None = None,
+) -> float | None:
+    """Return yesterday's close from a quote, recovering via pct when needed."""
+    q = quote or {}
+    prev = q.get("prev")
+    try:
+        if prev not in (None, "", 0):
+            return float(prev)
+    except (TypeError, ValueError):
+        pass
+    pct_q = q.get("pct")
+    mark = last if last is not None else q.get("price")
+    if mark is None or pct_q is None:
+        return None
+    try:
+        pct_f = float(pct_q)
+        if pct_f <= -99.999:
+            return None
+        return float(mark) / (1.0 + pct_f / 100.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def position_day_anchor(
+    buy_price: float,
+    *,
+    buy_day: str | None,
+    trade_day: str | None,
+    prev_close: float | None,
+) -> float | None:
+    """Pick the session P&L anchor: buy price if bought today, else 昨收."""
+    day = str(trade_day or "").strip()[:10]
+    bday = str(buy_day or "").strip()[:10]
+    buy = float(buy_price or 0)
+    if day and bday and bday == day and buy > 0:
+        return buy
+    try:
+        if prev_close not in (None, "") and float(prev_close) > 0:
+            return float(prev_close)
+    except (TypeError, ValueError):
+        pass
+    return buy if buy > 0 else None
+
+
+def session_sell_realized(
+    sell_price: float | None,
+    sold_qty: int,
+    *,
+    buy_price: float,
+    buy_day: str | None,
+    trade_day: str | None,
+    prev_close: float | None,
+    fee: float | None = None,
+) -> float:
+    """Compute today's realized P&L for shares sold today (vs day anchor − sell fee).
+
+    Overnight lots use 昨收 as the anchor so overnight gains are not counted as
+    today's P&L. Lots bought today use the buy price. A flat sell commission is
+    deducted once when ``sold_qty > 0`` (buy commission is applied separately).
+    """
+    qty = int(sold_qty or 0)
+    if qty <= 0 or sell_price in (None, ""):
+        return 0.0
+    try:
+        px = float(sell_price)
+    except (TypeError, ValueError):
+        return 0.0
+    anchor = position_day_anchor(
+        float(buy_price or 0),
+        buy_day=buy_day,
+        trade_day=trade_day,
+        prev_close=prev_close,
+    )
+    if anchor is None or anchor <= 0:
+        return 0.0
+    fee_v = float(TRADE_FEE_CNY if fee is None else fee)
+    if fee_v < 0:
+        fee_v = 0.0
+    return round((px - float(anchor)) * qty - fee_v, 2)
+
+
+def session_trade_fees(
+    *,
+    bought_today: bool,
+    sold_today: bool,
+    fee: float | None = None,
+) -> float:
+    """Return flat commissions: once for today's buy and once for today's sell."""
+    fee_v = float(TRADE_FEE_CNY if fee is None else fee)
+    if fee_v < 0:
+        fee_v = 0.0
+    n = (1 if bought_today else 0) + (1 if sold_today else 0)
+    return round(fee_v * n, 2)
+
+
 def decorate_positions(
     rows: list[dict[str, Any]],
-    quotes: dict[str, dict[str, Any]],
+    quotes: dict[str, Any],
     *,
     trade_date: str | None = None,
     boards: list[dict[str, Any]] | None = None,
@@ -5124,6 +5223,7 @@ def decorate_positions(
 
     day = str(trade_date or "").strip()[:10]
     board_pool = list(boards or [])
+    fee = float(TRADE_FEE_CNY)
     out: list[dict[str, Any]] = []
     for row in rows:
         code = str(row.get("code") or "").zfill(6)
@@ -5135,11 +5235,37 @@ def decorate_positions(
         closed = qty <= 0 and bool(closed_date)
         sell_px = row.get("last_sell_price")
         day_sold = int(row.get("day_sold_qty") or 0)
-        day_realized = round(float(row.get("day_realized_pnl") or 0), 2)
         sell_day = str(row.get("last_sell_date") or "")[:10]
         if day and sell_day and sell_day != day:
             day_sold = 0
-            day_realized = 0.0
+            sell_px = None
+        buy_day = str(row.get("last_buy_date") or row.get("created_at") or "")[:10]
+        bought_today = bool(day and buy_day and buy_day == day)
+        sold_today = day_sold > 0
+        buy_fee = fee if bought_today else 0.0
+        sell_fee = fee if sold_today else 0.0
+        trade_fee = session_trade_fees(
+            bought_today=bought_today, sold_today=sold_today, fee=fee
+        )
+        prev = quote_prev_close(q, last=float(last) if last is not None else None)
+        # Recompute today's sell-side realized (vs day-anchor − sell fee).
+        sell_realized = (
+            session_sell_realized(
+                sell_px,
+                day_sold,
+                buy_price=buy,
+                buy_day=buy_day,
+                trade_day=day,
+                prev_close=prev,
+                fee=fee,
+            )
+            if sold_today
+            else 0.0
+        )
+        # Closed same-day lots fold buy fee into 已实现 so day_pnl matches.
+        day_realized = (
+            round(sell_realized - buy_fee, 2) if (closed and sold_today) else sell_realized
+        )
         if closed:
             mark = float(sell_px) if sell_px not in (None, "") else (
                 float(last) if last is not None else buy
@@ -5147,28 +5273,29 @@ def decorate_positions(
             sold_qty = day_sold or int(row.get("day_sold_qty") or 0)
             cost = round(buy * sold_qty, 2) if sold_qty else None
             market = round(mark * sold_qty, 2) if sold_qty and mark is not None else None
-            pnl = day_realized
+            try:
+                gross_total = (float(mark) - buy) * sold_qty if sold_qty and mark is not None else None
+            except (TypeError, ValueError):
+                gross_total = None
+            closed_fee = sell_fee + buy_fee
+            pnl = (
+                round(float(gross_total) - closed_fee, 2)
+                if gross_total is not None
+                else day_realized
+            )
             pnl_pct = round((mark / buy - 1.0) * 100.0, 2) if mark and buy else None
             last = mark
-            day_pnl = day_realized if day_realized else None
+            day_pnl = day_realized if sold_today else None
         else:
             cost = round(buy * qty, 2)
             market = round(last * qty, 2) if last is not None else None
-            pnl = round(market - cost, 2) if market is not None else None
+            pnl = (
+                round(market - cost - buy_fee, 2)
+                if market is not None
+                else None
+            )
             pnl_pct = round((last / buy - 1.0) * 100.0, 2) if last and buy else None
-            # Session P&L: vs buy if bought today; else vs yesterday close (+ today realized).
-            prev = q.get("prev")
             pct_q = q.get("pct")
-            # Recover prev from last/pct when quote feed omits yesterday close.
-            if prev in (None, 0, "") and last is not None and pct_q is not None:
-                try:
-                    pct_f = float(pct_q)
-                    if pct_f > -99.999:
-                        prev = float(last) / (1.0 + pct_f / 100.0)
-                except (TypeError, ValueError):
-                    prev = q.get("prev")
-            buy_day = str(row.get("last_buy_date") or row.get("created_at") or "")[:10]
-            bought_today = bool(day and buy_day and buy_day == day)
             day_mtm = None
             try:
                 if last is not None and qty > 0 and bought_today and buy > 0:
@@ -5176,12 +5303,11 @@ def decorate_positions(
                 elif last is not None and prev not in (None, 0, "") and qty > 0:
                     day_mtm = (float(last) - float(prev)) * qty
                 elif pct_q is not None and prev not in (None, 0, "") and qty > 0 and not bought_today:
-                    # pct on yesterday MV — never on cost (would mix in overnight gap vs cost).
                     day_mtm = float(prev) * qty * float(pct_q) / 100.0
             except (TypeError, ValueError):
                 day_mtm = None
-            if day_mtm is not None or day_realized:
-                day_pnl = round((day_mtm or 0.0) + day_realized, 2)
+            if day_mtm is not None or sold_today or bought_today:
+                day_pnl = round((day_mtm or 0.0) + sell_realized - buy_fee, 2)
             else:
                 day_pnl = None
         item = dict(row)
@@ -5192,10 +5318,8 @@ def decorate_positions(
         item["high"] = q.get("high")
         item["low"] = q.get("low")
         item["open"] = None if closed else q.get("open")
-        item["prev"] = None if closed else q.get("prev")
-        item["bought_today"] = False if closed else bool(
-            day and str(row.get("last_buy_date") or row.get("created_at") or "")[:10] == day
-        )
+        item["prev"] = None if closed else prev
+        item["bought_today"] = False if closed else bought_today
         item["cost"] = cost
         item["market"] = market
         item["pnl"] = pnl
@@ -5205,6 +5329,9 @@ def decorate_positions(
         item["closed_date"] = closed_date
         item["day_sold_qty"] = day_sold
         item["day_realized_pnl"] = day_realized
+        item["trade_fee"] = trade_fee
+        item["buy_fee"] = buy_fee
+        item["sell_fee"] = sell_fee
         item["status"] = "今日已平" if closed else ("部分兑现" if day_sold > 0 else "持仓")
         # Sell-theme membership helpers for orphan bags.
         names = lookup_code_boards(code, board_pool) if board_pool else []
