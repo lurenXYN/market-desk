@@ -158,5 +158,79 @@ def test_apply_sell_minute_gates_attaches_verdict() -> None:
     assert "minute_sell" in out["items"][0]
 
 
+def test_next_action_on_hold_and_regret() -> None:
+    hold = _sell_item(_base_row(), _verdict_tied(), "发酵", trade_date="2026-09-17")
+    assert hold is not None
+    assert hold.get("next_action") in ("hold", "half", "clear", "watch")
+    assert hold.get("next_action_zh")
+    # Already trimmed + still strong → regret watch with half anchor.
+    row = _base_row(
+        qty=100,
+        day_sold_qty=100,
+        last_sell_price=10.8,
+        last=11.4,
+        high=11.45,
+        peak_price=11.5,
+        pnl_pct=14.0,
+        last_pct=3.0,
+    )
+    v = _verdict_tied()
+    v["sell_themes"][0]["lifecycle"] = "ending"
+    v["mainline"]["lifecycle"] = "ending"
+    item = _sell_item(row, v, "发酵", trade_date="2026-09-17")
+    assert item is not None
+    if item.get("regret_hold"):
+        assert item["next_action"] == "watch"
+        assert item.get("half_anchor_price") == 10.8
+        assert item.get("deep_clear_price") is not None
+
+
+def test_attach_position_sell_hints() -> None:
+    from market_desk.verdict import attach_position_sell_hints
+
+    positions = [
+        {"id": 1, "code": "600000", "qty": 200, "closed": False},
+        {"id": 2, "code": "510300", "qty": 0, "closed": True, "day_sold_qty": 100, "last_sell_price": 4.2},
+    ]
+    hints = [
+        {
+            "id": 1,
+            "code": "600000",
+            "next_action": "half",
+            "next_action_zh": "减半",
+            "next_action_note": "测试",
+            "trigger_price": 11.0,
+            "half_anchor_price": None,
+            "deep_clear_price": 10.5,
+            "exit_mode": "half",
+            "ready": True,
+            "regret_hold": False,
+            "role_label": "冲高回落先减",
+        }
+    ]
+    out = attach_position_sell_hints(positions, hints)
+    assert out[0]["next_action"] == "half"
+    assert out[0]["trigger_price"] == 11.0
+    assert out[1].get("half_anchor_price") == 4.2
+
+
+def test_sell_fly_board_counts() -> None:
+    from market_desk.review import build_sell_fly_board
+
+    rows = [
+        {"signal_type": "sell", "outcome_label": "卖后回落", "traded": 1, "kind": "stock", "desk_source": "main", "trade_date": "2026-09-10", "code": "600000", "name": "A"},
+        {"signal_type": "sell", "outcome_label": "卖飞", "traded": 1, "kind": "stock", "desk_source": "main", "trade_date": "2026-09-11", "code": "600001", "name": "B", "outcome_mae_pct": 4.0},
+        {"signal_type": "sell", "outcome_label": "卖后继续涨", "traded": 1, "kind": "etf", "desk_source": "link", "trade_date": "2026-09-12", "code": "510300", "name": "C"},
+        {"signal_type": "buy", "outcome_label": "次日红", "traded": 1},
+    ]
+    board = build_sell_fly_board(rows, hit_mode="traded")
+    assert board["n"] == 3
+    assert board["hit_n"] == 1
+    assert board["fly_n"] == 1
+    assert board["early_n"] == 2
+    assert board["recent_early"]
+    assert any(x.get("label") == "个股" for x in board["by_kind"])
+
+
 def test_trade_fee_constant_present() -> None:
     assert TRADE_FEE_CNY == 5.0

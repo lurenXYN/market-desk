@@ -476,7 +476,21 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "资金流出：仅流出→只降 soft 门槛；流出+主题退潮才缩放 pb。\n"
         "昨买今弱：窗内偏弱默认先减；现价收复成本或日涨回升过阈值→今弱已修复，取消轻减。\n"
         "独立人气回踩来源持仓豁免昨买今弱轻减。\n"
+        "下一动作：hold/half/clear/watch + 触发价；已减后展示减半价与深回撤线。\n"
         "T+1：last_buy_date=当日则 ready 关掉，复盘不可记卖出。",
+    },
+    "下一动作": {
+        "mean": "仓位表/卖卡上的一行执行提示：持有、减半、清仓或继续观察，并给出触发价。",
+        "algo": "来自 _sell_item.next_action。现卖 clear/half 用建议卖价；反悔窗/已减未现卖 → watch，\n"
+        "触发=破减仓价（last_sell_price）或深回撤线（peak×(1−pb_deep)）；未触发则 hold，触发=止损/目标。",
+    },
+    "减半价": {
+        "mean": "今日已减仓时记下的成交价；破此价是反悔窗允许再清的锚之一。",
+        "algo": "positions.last_sell_price → half_anchor_price；仓位表「已减价」列与卖卡明示。",
+    },
+    "卖飞看板": {
+        "mean": "复盘页汇总卖后回落 vs 续涨/卖飞，按来源拆开，并列出近期偏早样本。",
+        "algo": "build_sell_fly_board：已打分卖出（可按已交易过滤）；verdict 偏早/卖对；recent_early 列卖飞样本。",
     },
     "反悔窗": {
         "mean": "今日已减半后，若股价仍贴尖或相对强，暂不升级为清仓，避免刚减完又看着冲。",

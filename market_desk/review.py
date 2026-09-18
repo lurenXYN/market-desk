@@ -1606,6 +1606,146 @@ def build_sell_review_bias_bundle(
     }
 
 
+def build_sell_fly_board(
+    rows: list[dict[str, Any]] | None = None,
+    *,
+    hit_mode: str | None = None,
+    recent_limit: int = 10,
+) -> dict[str, Any]:
+    """Summarize early vs correct sells for the review 卖飞看板.
+
+    Buckets: 卖后回落 (hit), 卖后继续涨, 卖飞. Breaks down by desk source and
+    kind; lists recent 卖飞 / 卖后继续涨 samples so the UI can reinforce
+    rule-based selling feedback.
+    """
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    try:
+        src = rows if rows is not None else load_signals(limit=240)
+    except Exception:
+        src = []
+    sells = [
+        r
+        for r in src
+        if str(r.get("signal_type") or "") == "sell"
+        and not int(r.get("skipped") or 0)
+        and r.get("outcome_label")
+    ]
+    if mode == "traded":
+        sells = [r for r in sells if int(r.get("traded") or 0)]
+    n = len(sells)
+    hit_n = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后回落")
+    early_n = sum(
+        1
+        for r in sells
+        if (r.get("outcome_label") or "") in ("卖后继续涨", "卖飞")
+    )
+    fly_n = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖飞")
+    cont_n = sum(1 for r in sells if (r.get("outcome_label") or "") == "卖后继续涨")
+    hit_rate = round(100.0 * hit_n / n, 1) if n else None
+    early_rate = round(100.0 * early_n / n, 1) if n else None
+    fly_rate = round(100.0 * fly_n / n, 1) if n else None
+
+    def _bucket(rows_in: list[dict[str, Any]], key_fn) -> list[dict[str, Any]]:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for r in rows_in:
+            k = str(key_fn(r) or "未标").strip() or "未标"
+            groups.setdefault(k, []).append(r)
+        out: list[dict[str, Any]] = []
+        for lab, grp in groups.items():
+            gn = len(grp)
+            g_hit = sum(1 for x in grp if (x.get("outcome_label") or "") == "卖后回落")
+            g_fly = sum(1 for x in grp if (x.get("outcome_label") or "") == "卖飞")
+            g_early = sum(
+                1
+                for x in grp
+                if (x.get("outcome_label") or "") in ("卖后继续涨", "卖飞")
+            )
+            out.append(
+                {
+                    "label": lab,
+                    "n": gn,
+                    "hit_n": g_hit,
+                    "fly_n": g_fly,
+                    "early_n": g_early,
+                    "hit_rate": round(100.0 * g_hit / gn, 1) if gn else None,
+                    "early_rate": round(100.0 * g_early / gn, 1) if gn else None,
+                }
+            )
+        out.sort(key=lambda x: (-(x.get("n") or 0), x.get("label") or ""))
+        return out
+
+    by_source = _bucket(
+        sells,
+        lambda r: r.get("desk_source") or r.get("source") or "main",
+    )
+    by_kind = _bucket(
+        sells,
+        lambda r: "ETF" if str(r.get("kind") or "") == "etf" else "个股",
+    )
+    by_phase = _bucket(sells, lambda r: r.get("phase") or "未标")
+
+    early_rows = [
+        r
+        for r in sells
+        if (r.get("outcome_label") or "") in ("卖飞", "卖后继续涨")
+    ]
+    early_rows.sort(key=lambda r: str(r.get("trade_date") or ""), reverse=True)
+    recent = []
+    for r in early_rows[: max(1, int(recent_limit))]:
+        recent.append(
+            {
+                "trade_date": str(r.get("trade_date") or "")[:10],
+                "code": r.get("code"),
+                "name": r.get("name") or r.get("code"),
+                "kind": r.get("kind") or "stock",
+                "outcome_label": r.get("outcome_label"),
+                "outcome_day1_pct": r.get("outcome_day1_pct"),
+                "outcome_mae_pct": r.get("outcome_mae_pct"),
+                "price": r.get("price"),
+                "desk_source": r.get("desk_source") or r.get("source"),
+                "phase": r.get("phase"),
+                "mainline": r.get("mainline"),
+            }
+        )
+
+    verdict = "样本不足"
+    note = f"已打分卖出 n={n}"
+    if n >= 6:
+        if fly_rate is not None and fly_rate >= 20:
+            verdict = "偏早·卖飞偏多"
+            note = f"卖飞 {fly_n}/{n}（{fly_rate}%）· 卖后回落 {hit_n} · 宜略放宽止盈/回撤"
+        elif early_rate is not None and early_rate >= 55:
+            verdict = "偏早"
+            note = f"续涨/卖飞 {early_n}/{n}（{early_rate}%）· 卖后回落命中 {hit_rate}%"
+        elif hit_rate is not None and hit_rate >= 55:
+            verdict = "卖对居多"
+            note = f"卖后回落 {hit_n}/{n}（{hit_rate}%）· 规则卖点值得跟"
+        else:
+            verdict = "中性"
+            note = f"卖后回落 {hit_rate}% · 续涨/卖飞 {early_rate}%"
+    elif n:
+        note = f"样本偏少（n={n}，建议≥6）· 卖飞 {fly_n} · 回落 {hit_n}"
+
+    return {
+        "ok": n >= 6,
+        "n": n,
+        "hit_n": hit_n,
+        "early_n": early_n,
+        "fly_n": fly_n,
+        "cont_n": cont_n,
+        "hit_rate": hit_rate,
+        "early_rate": early_rate,
+        "fly_rate": fly_rate,
+        "verdict": verdict,
+        "note": note,
+        "by_source": by_source,
+        "by_kind": by_kind,
+        "by_phase": by_phase[:6],
+        "recent_early": recent,
+        "hit_mode": mode,
+    }
+
+
 _REVIEW_BIAS_CACHE: dict[str, Any] = {"day": "", "sell": None, "buy_gate": None}
 
 
@@ -2327,6 +2467,10 @@ def build_review_payload(
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
+    try:
+        summary["sell_fly_board"] = build_sell_fly_board(global_rows)
+    except Exception:
+        summary["sell_fly_board"] = {"ok": False, "n": 0, "note": "卖飞看板暂不可用"}
     summary["tune_hints"] = build_tune_hints(
         missed=summary["missed_buys"],
         phase_hits=summary["phase_hits"],

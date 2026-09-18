@@ -340,14 +340,21 @@ def apply_sell_minute_gates(
     """Gate soft half / light take sells on minute fade; stop & deep clear skip.
 
     Items must set ``minute_gate=True`` from ``_sell_item``. Thin samples pass
-    with ``minute_pending`` only.
+    with ``minute_pending`` only. When ``all_items`` is present, gate that pool
+    and keep ``items`` as the top slice.
     """
     from market_desk.config import SELL_MINUTE_GATE_ENABLED
+    from market_desk.verdict import _enrich_sell_next_action
 
     out = dict(advice or {})
-    items = [dict(x) for x in (out.get("items") or [])]
+    pool_key = "all_items" if out.get("all_items") is not None else "items"
+    items = [dict(x) for x in (out.get(pool_key) or [])]
     if not items or not SELL_MINUTE_GATE_ENABLED:
-        out["items"] = items
+        if pool_key == "all_items":
+            out["all_items"] = items
+            out["items"] = items[:4]
+        else:
+            out["items"] = items
         return out
     minutes_by_code = minutes_by_code or {}
     changed = False
@@ -385,6 +392,17 @@ def apply_sell_minute_gates(
             tip = f"待分时确认：{why}"
             if tip not in reason:
                 item["reason"] = f"{tip}；{reason}" if reason else tip
+            try:
+                _enrich_sell_next_action(
+                    item,
+                    hold_peak=float(item.get("hold_peak") or 0),
+                    last_sell_price=item.get("half_anchor_price"),
+                    digits=3 if item.get("kind") == "etf" else 2,
+                )
+            except Exception:
+                item["next_action"] = "watch"
+                item["next_action_zh"] = "继续观察"
+                item["next_action_note"] = tip
     if changed:
         sell_now = [x for x in items if x.get("ready")]
         out["sell"] = bool(sell_now)
@@ -401,5 +419,9 @@ def apply_sell_minute_gates(
         else:
             out["title"] = "仓位观察"
             out["primary"] = items[0] if items else None
-    out["items"] = items
+    if pool_key == "all_items":
+        out["all_items"] = items
+        out["items"] = items[:4]
+    else:
+        out["items"] = items
     return out

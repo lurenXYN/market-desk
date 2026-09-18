@@ -4259,7 +4259,8 @@ def build_sell_advice(
     }
     rank = {"stop": 0, "take": 1, "trim": 2, "hold": 3}
     items.sort(key=lambda x: (rank.get(str(x.get("urgency") or "hold"), 9), -(x.get("pnl_pct") or 0)))
-    items = items[:4]
+    all_items = list(items)
+    items = all_items[:4]
     sell_now = [x for x in items if x.get("ready")]
     open_n = sum(1 for r in (positions or []) if int(r.get("qty") or 0) > 0)
     if not open_n:
@@ -4270,6 +4271,7 @@ def build_sell_advice(
             "text": "暂无仓位 · 买入记账后这里给出卖出建议",
             "size_note": "仓位页记账后，按浮盈、回撤、主线强弱提示卖点。当日买入受 T+1 限制，隔日才可卖。今日已平不计入卖点。",
             "items": [],
+            "all_items": [],
             "sell_bias": sell_bias_out,
         }
     if sell_now:
@@ -4285,7 +4287,7 @@ def build_sell_advice(
         )
     else:
         primary = items[0] if items else None
-        t1_n = sum(1 for x in items if x.get("t1_locked"))
+        t1_n = sum(1 for x in all_items if x.get("t1_locked"))
         text = (
             f"继续持有 · 盯 {primary.get('name')} 目标 {primary.get('sell_price')}"
             if primary
@@ -4301,6 +4303,7 @@ def build_sell_advice(
         "text": text,
         "size_note": size_note,
         "items": items,
+        "all_items": all_items,
         "primary": primary if items else None,
         "sell_bias": sell_bias_out,
     }
@@ -4516,6 +4519,137 @@ def _sell_wave_adj(verdict: dict[str, Any] | None) -> dict[str, Any]:
             "tag": "浪末偏紧",
         }
     return {}
+
+
+def _enrich_sell_next_action(
+    item: dict[str, Any],
+    *,
+    hold_peak: float,
+    last_sell_price: Any = None,
+    digits: int = 2,
+) -> dict[str, Any]:
+    """Attach next-action label and trigger prices for position-row guidance.
+
+    Actions: hold / half / clear / watch. After a half-trim, prefer the regret
+    window anchors (break last sell price or deep pullback from hold peak).
+    """
+    ready = bool(item.get("ready"))
+    exit_mode = str(item.get("exit_mode") or "hold")
+    regret = bool(item.get("regret_hold"))
+    partial = bool(item.get("partial_done"))
+    t1 = bool(item.get("t1_locked"))
+    pb_deep = float(item.get("pb_deep") or 0)
+    stop = item.get("stop_price")
+    target = item.get("target_price")
+    sell_px = item.get("sell_price")
+
+    half_anchor = None
+    try:
+        if last_sell_price not in (None, "", 0) and partial:
+            half_anchor = _px(float(last_sell_price), digits)
+    except (TypeError, ValueError):
+        half_anchor = None
+    if half_anchor is None and item.get("half_anchor_price") not in (None, ""):
+        try:
+            half_anchor = _px(float(item["half_anchor_price"]), digits)
+        except (TypeError, ValueError):
+            half_anchor = None
+
+    deep_clear = None
+    try:
+        peak = float(hold_peak or item.get("hold_peak") or 0)
+    except (TypeError, ValueError):
+        peak = 0.0
+    if peak > 0 and pb_deep > 0:
+        deep_clear = _px(peak * (1.0 - pb_deep / 100.0), digits)
+
+    if t1:
+        action, zh = "watch", "继续观察"
+        trigger = None
+        note = "T+1 隔日可卖"
+    elif ready and exit_mode == "clear":
+        action, zh = "clear", "清仓"
+        trigger = sell_px
+        note = str(item.get("role_label") or "建议清仓")
+    elif ready and exit_mode == "half":
+        action, zh = "half", "减半"
+        trigger = sell_px
+        note = str(item.get("role_label") or "建议先减一半")
+    elif regret or (partial and not ready):
+        action, zh = "watch", "继续观察"
+        trigger = half_anchor if half_anchor is not None else deep_clear
+        bits: list[str] = []
+        if half_anchor is not None:
+            bits.append(f"破减仓价 {half_anchor}")
+        if deep_clear is not None:
+            bits.append(f"深回撤线 {deep_clear}")
+        note = ("再清：" + " / ".join(bits)) if bits else "余仓盯止损"
+    else:
+        action, zh = "hold", "持有"
+        trigger = stop
+        bits = []
+        if stop is not None:
+            bits.append(f"止损 {stop}")
+        if target is not None:
+            bits.append(f"目标 {target}")
+        note = " · ".join(bits) if bits else "继续持有"
+
+    item["next_action"] = action
+    item["next_action_zh"] = zh
+    item["next_action_note"] = note.strip()
+    item["trigger_price"] = trigger
+    item["half_anchor_price"] = half_anchor
+    item["deep_clear_price"] = deep_clear
+    if peak > 0:
+        item["hold_peak"] = round(peak, 4)
+    return item
+
+
+def attach_position_sell_hints(
+    positions: list[dict[str, Any]] | None,
+    sell_items: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Merge sell next-action / half-anchor fields onto position rows."""
+    by_id: dict[Any, dict[str, Any]] = {}
+    by_code: dict[str, dict[str, Any]] = {}
+    for it in sell_items or []:
+        if it.get("id") is not None:
+            by_id[it.get("id")] = it
+        code = normalize_code(it.get("code"))
+        if code:
+            by_code[code] = it
+    out: list[dict[str, Any]] = []
+    for row in positions or []:
+        item = dict(row)
+        if item.get("closed") or int(item.get("qty") or 0) <= 0:
+            # Still surface today's trim price on closed / flat rows.
+            try:
+                if item.get("last_sell_price") not in (None, "") and int(
+                    item.get("day_sold_qty") or 0
+                ) > 0:
+                    item["half_anchor_price"] = float(item["last_sell_price"])
+            except (TypeError, ValueError):
+                pass
+            out.append(item)
+            continue
+        hint = by_id.get(item.get("id"))
+        if hint is None:
+            hint = by_code.get(normalize_code(item.get("code")))
+        if not hint:
+            out.append(item)
+            continue
+        item["next_action"] = hint.get("next_action")
+        item["next_action_zh"] = hint.get("next_action_zh")
+        item["next_action_note"] = hint.get("next_action_note")
+        item["trigger_price"] = hint.get("trigger_price")
+        item["half_anchor_price"] = hint.get("half_anchor_price")
+        item["deep_clear_price"] = hint.get("deep_clear_price")
+        item["exit_mode"] = hint.get("exit_mode")
+        item["sell_ready"] = bool(hint.get("ready"))
+        item["regret_hold"] = bool(hint.get("regret_hold"))
+        item["role_label"] = hint.get("role_label")
+        out.append(item)
+    return out
 
 
 def _sell_tune_tags(
@@ -5298,7 +5432,7 @@ def _sell_item(
         and urgency in ("take", "trim")
     )
 
-    return {
+    out = {
         "id": row.get("id"),
         "kind": "etf" if etf else "stock",
         "kind_label": "ETF" if etf else "个股",
@@ -5355,7 +5489,14 @@ def _sell_item(
         "minute_gate": minute_gate,
         "regret_hold": regret_hold,
         "yday_repaired": yday_repaired,
+        "hold_peak": round(hold_peak, 4) if hold_peak else None,
     }
+    return _enrich_sell_next_action(
+        out,
+        hold_peak=float(hold_peak or 0),
+        last_sell_price=row.get("last_sell_price"),
+        digits=digits,
+    )
 
 
 def quote_prev_close(

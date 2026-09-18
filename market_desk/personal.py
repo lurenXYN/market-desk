@@ -11,6 +11,7 @@ from market_desk.settings import use_user_settings
 from market_desk.verdict import (
     apply_size_cap_gate,
     attach_position_daily_trends,
+    attach_position_sell_hints,
     build_risk_overview,
     build_sell_advice,
     build_watch_trial_recommend,
@@ -125,8 +126,6 @@ def attach_personal_layer(
         out["positions"] = positions
         out["position_summary"] = position_summary(positions)
         verdict = dict(out.get("verdict") or {})
-        cap = float((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
-        out["risk_overview"] = build_risk_overview(positions, size_cap_pct=cap)
         out["sell_advice"] = build_sell_advice(
             positions,
             verdict,
@@ -143,7 +142,7 @@ def attach_personal_layer(
             advice = out["sell_advice"] or {}
             need_codes = [
                 str(it.get("code") or "").zfill(6)
-                for it in (advice.get("items") or [])
+                for it in (advice.get("all_items") or advice.get("items") or [])
                 if it.get("minute_gate") and it.get("code")
             ]
             minutes: dict[str, list] = {}
@@ -155,6 +154,17 @@ def attach_personal_layer(
             out["sell_advice"] = apply_sell_minute_gates(advice, minutes)
         except Exception:
             pass
+
+        advice = out.get("sell_advice") or {}
+        all_items = list(advice.get("all_items") or advice.get("items") or [])
+        advice["items"] = all_items[:4]
+        advice.pop("all_items", None)
+        out["sell_advice"] = advice
+        positions = attach_position_sell_hints(positions, all_items)
+        out["positions"] = positions
+        out["position_summary"] = position_summary(positions)
+        cap = float((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
+        out["risk_overview"] = build_risk_overview(positions, size_cap_pct=cap)
 
         # Re-size recommend cards with this user's equity / open book.
         for key in ("recommend", "side_recommend", "link_recommend"):
