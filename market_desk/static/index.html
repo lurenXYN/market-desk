@@ -533,24 +533,74 @@
     .rev-vsml .vsml-btn.on {
       border-color: #3b5a8b; color: #93c5fd; background: #0c1520;
     }
-    .desk-more {
+    .desk-more, .desk-fold {
       margin: 0 0 8px; border: 1px dashed #2a3544; border-radius: 8px;
       background: #0a1016;
     }
-    .desk-more > summary {
+    .desk-more > summary, .desk-fold > summary {
       cursor: pointer; list-style: none; padding: 8px 12px;
       color: var(--muted); font-size: 12px; letter-spacing: 0.06em;
       user-select: none;
     }
-    .desk-more > summary::-webkit-details-marker { display: none; }
-    .desk-more[open] > summary { border-bottom: 1px solid var(--line); color: var(--text); }
-    .desk-more .body { padding: 10px 12px 12px; }
+    .desk-more > summary::-webkit-details-marker,
+    .desk-fold > summary::-webkit-details-marker { display: none; }
+    .desk-more[open] > summary, .desk-fold[open] > summary {
+      border-bottom: 1px solid var(--line); color: var(--text);
+    }
+    .desk-more .body, .desk-fold .body { padding: 10px 12px 12px; }
+    .desk-fold .body > .playbook { margin-bottom: 10px; }
+    .desk-fold .body > .pos-target-bar,
+    .desk-fold .body > .season-desk,
+    .desk-fold .body > .ml-meter,
+    .desk-fold .body > .ml-why { margin-top: 8px; }
+    .desk-fold .body > .desk-side-grid { margin-top: 0; }
+    .desk-fold .body > .desk-deltas { margin-bottom: 10px; }
     .desk-more .reason { font-size: 14px; margin: 0 0 6px; }
     .desk-more .narrative {
       color: var(--ice); font-size: 13px; margin: 0 0 6px;
       line-height: 1.45; border-left: 3px solid #164e63; padding-left: 10px;
     }
     .desk-more .detail { color: var(--muted); font-size: 13px; margin: 0 0 6px; }
+    .desk-pair { margin-top: 8px; margin-bottom: 10px; }
+    .verdict-one { margin-bottom: 8px; }
+    .nav-more-btn { display: none; }
+    .nav-more-sheet {
+      display: none;
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+      padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+      border-radius: 16px 16px 0 0;
+      border: 1px solid var(--line); border-bottom: none;
+      background: rgba(10, 14, 22, 0.98);
+      box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.45);
+    }
+    .nav-more-sheet.on { display: block; }
+    .nav-more-sheet .hd {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin-bottom: 10px;
+      font-size: 13px; font-weight: 700; color: var(--text);
+    }
+    .nav-more-sheet .hd button {
+      appearance: none; border: 1px solid var(--line); background: #151c28;
+      color: var(--muted); border-radius: 8px; padding: 6px 12px;
+      font: inherit; font-size: 12px; cursor: pointer;
+    }
+    .nav-more-grid {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+    }
+    .nav-more-grid button {
+      appearance: none; border: 1px solid var(--line); background: #121826;
+      color: var(--text); border-radius: 10px; padding: 14px 8px;
+      font: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+      min-height: 48px;
+    }
+    .nav-more-grid button.on {
+      border-color: #3b82f6; color: #93c5fd; background: #0c1520;
+    }
+    .nav-more-mask {
+      display: none; position: fixed; inset: 0; z-index: 55;
+      background: rgba(0, 0, 0, 0.45);
+    }
+    .nav-more-mask.on { display: block; }
     .headline {
       font-size: 42px;
       line-height: 1.1;
@@ -2187,7 +2237,7 @@
       html { -webkit-text-size-adjust: 100%; }
       body {
         font-size: 14px;
-        padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+        padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
       }
       .wrap {
         padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
@@ -2238,25 +2288,56 @@
         backdrop-filter: blur(12px);
         box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
       }
-      .nav-tabs button[data-main] {
+      .nav-tabs button[data-main].nav-core,
+      .nav-tabs .nav-more-btn {
         flex: none;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         gap: 2px;
-        min-height: 44px;
+        min-height: 48px;
         padding: 6px 2px;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 700;
         letter-spacing: 0;
         white-space: nowrap;
         border-radius: 8px;
       }
-      .nav-tabs button[data-main] .hint { display: none; }
+      .nav-tabs .nav-more-btn {
+        appearance: none; border: none; background: transparent;
+        color: var(--muted); cursor: pointer; font: inherit;
+      }
+      .nav-tabs .nav-more-btn.on { color: var(--text); background: #151c28; }
+      .nav-tabs button[data-main].nav-core.nav-locked {
+        opacity: 0.55;
+      }
+      .nav-tabs button[data-main].nav-core .hint { display: none; }
+      .nav-tabs button[data-main].nav-sec { display: none !important; }
       .nav-tabs button.q,
       .nav-tabs #glossaryBtn,
       .nav-tabs #settingsBtn { display: none !important; }
+      .banner .playbook { margin-bottom: 0; }
+      .desk-fold > summary, .desk-more > summary { padding: 10px 12px; min-height: 40px; }
+      .gate-hint {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        max-width: 100%;
+      }
+      .gate-hint:active, .gate-hint:focus {
+        -webkit-line-clamp: unset;
+        overflow: visible;
+      }
+      .toast-strip {
+        max-height: 72px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .action-row { margin-bottom: 6px; }
+      .today-trio { margin-bottom: 8px; }
+      .mainline-title { margin-bottom: 6px; }
       .banner { padding: 12px 12px 10px; border-radius: 12px; }
       .banner-top {
         flex-direction: column;
@@ -2567,6 +2648,10 @@
       border: 1px solid #334155; border-radius: 4px;
       background: #0f172a; color: #cbd5e1; cursor: pointer;
     }
+    @media (max-width: 768px) {
+      .hdr .auth-user button { display: none; }
+      .hdr .auth-user #authSwitchBtn { display: inline-block; }
+    }
     .admin-users { margin-top: 10px; max-height: 280px; overflow: auto; font-size: 12px; }
     .admin-users .row {
       display: flex; justify-content: space-between; gap: 8px; align-items: center;
@@ -2638,19 +2723,35 @@
     <div class="toast-strip" id="toastStrip"></div>
 
     <nav class="nav-tabs" id="navTabs" aria-label="主页签">
-      <button type="button" class="on" data-main="desk">作战<span class="hint">买卖</span></button>
-      <button type="button" data-main="market">大盘<span class="hint">相位</span></button>
-      <button type="button" data-main="boards">板块<span class="hint">热点</span></button>
-      <button type="button" data-main="funds">资金<span class="hint">大单</span></button>
-      <button type="button" data-main="watch">观察<span class="hint">异动</span></button>
-      <button type="button" data-main="auction">竞价<span class="hint">策略</span></button>
-      <button type="button" data-main="pos">仓位</button>
-      <button type="button" data-main="review">复盘<span class="hint">信号</span></button>
-      <button type="button" data-main="backtest">回测<span class="hint">撮合</span></button>
+      <button type="button" class="on nav-core" data-main="desk">作战<span class="hint">买卖</span></button>
+      <button type="button" class="nav-sec" data-main="market">大盘<span class="hint">相位</span></button>
+      <button type="button" class="nav-sec" data-main="boards">板块<span class="hint">热点</span></button>
+      <button type="button" class="nav-sec" data-main="funds">资金<span class="hint">大单</span></button>
+      <button type="button" class="nav-sec" data-main="watch">观察<span class="hint">异动</span></button>
+      <button type="button" class="nav-sec" data-main="auction">竞价<span class="hint">策略</span></button>
+      <button type="button" class="nav-core" data-main="pos">仓位</button>
+      <button type="button" class="nav-core" data-main="review">复盘<span class="hint">信号</span></button>
+      <button type="button" class="nav-sec" data-main="backtest">回测<span class="hint">撮合</span></button>
+      <button type="button" class="nav-more-btn" id="navMoreBtn" aria-expanded="false" aria-controls="navMoreSheet">更多</button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
       <button type="button" class="rev-col-btn" id="glossaryBtn" style="margin-left:auto" title="浏览全部术语">术语</button>
       <button type="button" class="rev-col-btn" id="settingsBtn">参数</button>
     </nav>
+    <div class="nav-more-mask" id="navMoreMask" hidden></div>
+    <div class="nav-more-sheet" id="navMoreSheet" hidden role="dialog" aria-label="更多页签">
+      <div class="hd">
+        <span>更多页签</span>
+        <button type="button" id="navMoreClose">关闭</button>
+      </div>
+      <div class="nav-more-grid" id="navMoreGrid">
+        <button type="button" data-main="auction">竞价</button>
+        <button type="button" data-main="market">大盘</button>
+        <button type="button" data-main="boards">板块</button>
+        <button type="button" data-main="funds">资金</button>
+        <button type="button" data-main="watch">观察</button>
+        <button type="button" data-main="backtest">回测</button>
+      </div>
+    </div>
     <div class="glossary-panel" id="glossaryPanel" hidden>
       <div class="hd">
         <span>术语表</span>
@@ -2790,33 +2891,56 @@
             <span class="dot">·</span>
             <span class="w stage" id="trioStage">—</span>
           </div>
-          <div class="ml-meter" id="mlMeter" hidden title="主线质量：分差 / 持有 / 为何不切"></div>
           <h1 class="mainline-title" id="headline">等待数据</h1>
-          <div class="ml-why" id="mlWhy" hidden></div>
           <div class="no-etf-banner" id="noEtfBanner" hidden>
             主线暂无映射 ETF：优先盯下方主板回踩票；创业板/科创个股仍不推荐。
           </div>
           <p class="verdict-one" id="meaning"></p>
-          <div class="playbook" id="playbook">
-            <div class="pb do"><div class="lab">能做 <button type="button" class="q" data-term="Playbook">?</button></div><div class="txt" id="pbDo">—</div></div>
-            <div class="pb dont"><div class="lab">不做</div><div class="txt" id="pbDont">—</div></div>
-            <div class="pb size"><div class="lab">仓位</div><div class="txt" id="pbSize">—</div></div>
-          </div>
-          <div class="pos-target-bar" id="posTargetBar" hidden title="目标总成本 vs 实际持仓成本">
-            <div class="hd">
-              <span>仓位目标 <button type="button" class="q" data-term="目标仓位">?</button></span>
-              <span class="meta" id="posTargetMeta">—</span>
+          <div class="desk-pair">
+            <div class="buybox off" id="buybox">
+              <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button>
+                <span class="meta" id="enrichHint" hidden>补齐中…</span>
+              </div>
+              <div class="buyline" id="buyline">暂不买入</div>
+              <div class="buymeta" id="buymeta"></div>
+              <div class="buymeta" id="buystop"></div>
+              <div class="rec-grid" id="recItems"></div>
+              <div class="buymeta bans" id="buyavoid"></div>
             </div>
-            <div class="track"><div class="fill" id="posTargetFill" style="width:0%"></div></div>
-          </div>
-          <div class="season-desk" id="seasonDesk" hidden>
-            <div class="k">日历提醒 <button type="button" class="q" data-term="季节性日历">?</button>
-              <span class="meta">仅观察</span>
-              <span class="mod-stamp" id="seasonDeskStamp" title="随作战台快照更新"></span>
+            <div class="sellbox off" id="sellbox">
+              <div class="k">仓位建议卖出<button type="button" class="q" data-term="建议卖出">?</button></div>
+              <div class="buyline" id="sellline">暂无仓位</div>
+              <div class="buymeta" id="sellmeta"></div>
+              <div class="rec-grid" id="sellItems"></div>
             </div>
-            <div class="txt" id="seasonDeskLine"></div>
-            <div class="detail" id="seasonDeskDetail"></div>
           </div>
+          <details class="desk-fold" id="deskContextFold">
+            <summary>作战手册 · 主线质量 · 仓位目标</summary>
+            <div class="body">
+              <div class="ml-meter" id="mlMeter" hidden title="主线质量：分差 / 持有 / 为何不切"></div>
+              <div class="ml-why" id="mlWhy" hidden></div>
+              <div class="playbook" id="playbook">
+                <div class="pb do"><div class="lab">能做 <button type="button" class="q" data-term="Playbook">?</button></div><div class="txt" id="pbDo">—</div></div>
+                <div class="pb dont"><div class="lab">不做</div><div class="txt" id="pbDont">—</div></div>
+                <div class="pb size"><div class="lab">仓位</div><div class="txt" id="pbSize">—</div></div>
+              </div>
+              <div class="pos-target-bar" id="posTargetBar" hidden title="目标总成本 vs 实际持仓成本">
+                <div class="hd">
+                  <span>仓位目标 <button type="button" class="q" data-term="目标仓位">?</button></span>
+                  <span class="meta" id="posTargetMeta">—</span>
+                </div>
+                <div class="track"><div class="fill" id="posTargetFill" style="width:0%"></div></div>
+              </div>
+              <div class="season-desk" id="seasonDesk" hidden>
+                <div class="k">日历提醒 <button type="button" class="q" data-term="季节性日历">?</button>
+                  <span class="meta">仅观察</span>
+                  <span class="mod-stamp" id="seasonDeskStamp" title="随作战台快照更新"></span>
+                </div>
+                <div class="txt" id="seasonDeskLine"></div>
+                <div class="detail" id="seasonDeskDetail"></div>
+              </div>
+            </div>
+          </details>
           <details class="morning-brief" id="morningBrief">
             <summary>
               早决策摘要 <button type="button" class="q" data-term="早决策摘要">?</button>
@@ -2836,24 +2960,9 @@
               <div class="bans" id="bans"></div>
             </div>
           </details>
-          <div class="desk-pair">
-            <div class="buybox off" id="buybox">
-              <div class="k">推荐买入<button type="button" class="q" data-term="推荐买入">?</button>
-                <span class="meta" id="enrichHint" hidden>补齐中…</span>
-              </div>
-              <div class="buyline" id="buyline">暂不买入</div>
-              <div class="buymeta" id="buymeta"></div>
-              <div class="buymeta" id="buystop"></div>
-              <div class="rec-grid" id="recItems"></div>
-              <div class="buymeta bans" id="buyavoid"></div>
-            </div>
-            <div class="sellbox off" id="sellbox">
-              <div class="k">仓位建议卖出<button type="button" class="q" data-term="建议卖出">?</button></div>
-              <div class="buyline" id="sellline">暂无仓位</div>
-              <div class="buymeta" id="sellmeta"></div>
-              <div class="rec-grid" id="sellItems"></div>
-            </div>
-          </div>
+          <details class="desk-fold" id="deskObserveFold">
+            <summary>扩展观察（龙头 / 支线 / 联动…）</summary>
+            <div class="body">
           <div class="desk-side-grid" id="deskSideGrid">
           <div class="dragonbox" id="dragonbox" hidden>
             <div class="k">龙头（情绪/中军）<button type="button" class="q" data-term="情绪龙">?</button>
@@ -2902,6 +3011,11 @@
             <div id="favDeskBody"></div>
           </div>
           </div>
+            </div>
+          </details>
+          <details class="desk-fold" id="deskMetaFold">
+            <summary>题材信誉 · 白盒 · 调参提示</summary>
+            <div class="body">
           <div class="theme-mem" id="themeMem" hidden>
             <div class="k">题材信誉 · 一日游记忆
               <button type="button" class="q" data-term="题材信誉">?</button>
@@ -2927,12 +3041,17 @@
             <div class="wb-list" id="whiteboxBody"></div>
             <div class="meta" id="whiteboxDelta"></div>
           </div>
+            </div>
+          </details>
         </div>
         <div class="clock">
           <div class="t" id="dataTime">--:--:--</div>
           <div class="sub" id="dataAge">数据尚未刷新</div>
         </div>
       </div>
+      <details class="desk-fold" id="deskTimelineFold">
+        <summary>盘中变化 · 分段 · 主线切换</summary>
+        <div class="body">
       <div class="desk-deltas" id="deskDeltas">
         <div class="sec-hd">指标较上轮变化</div>
         <div class="deltas" id="deltas"></div>
@@ -2949,6 +3068,8 @@
         </div>
         <ul class="switch-list" id="switchList"></ul>
       </div>
+        </div>
+      </details>
     </div>
     </section>
 
@@ -4483,6 +4604,7 @@
           }).join("");
         }
       }
+      syncDeskFoldHints();
       const themeMemEl = document.getElementById("themeMem");
       const themeMemBody = document.getElementById("themeMemBody");
       const themeMemNote = document.getElementById("themeMemNote");
@@ -7568,6 +7690,20 @@
     }
     document.getElementById("posLhbRefresh")?.addEventListener("click", () => ensurePosLhb(true));
 
+    function syncDeskFoldHints() {
+      const fold = document.getElementById("deskObserveFold");
+      if (!fold) return;
+      const sum = fold.querySelector("summary");
+      if (!sum) return;
+      const ids = ["dragonbox", "sidebox", "linkbox", "trialbox", "indepbox", "favDesk"];
+      const n = ids.filter((id) => {
+        const el = document.getElementById(id);
+        return el && !el.hidden;
+      }).length;
+      sum.textContent = n
+        ? `扩展观察（龙头 / 支线 / 联动…）· ${n} 块有内容`
+        : "扩展观察（龙头 / 支线 / 联动…）";
+    }
     function applyMain(tab) {
       let next = tab || "desk";
       if (next === "pos" && typeof canPersonal === "function" && !canPersonal()) {
@@ -7575,9 +7711,24 @@
         next = currentMain && currentMain !== "pos" ? currentMain : "desk";
       }
       currentMain = next;
+      const moreTabs = new Set(["market", "boards", "funds", "watch", "auction", "backtest"]);
+      const moreLabels = {
+        market: "大盘", boards: "板块", funds: "资金",
+        watch: "观察", auction: "竞价", backtest: "回测",
+      };
       document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
         el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
       );
+      document.querySelectorAll("#navMoreGrid button[data-main]").forEach((el) =>
+        el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
+      );
+      const moreBtn = document.getElementById("navMoreBtn");
+      if (moreBtn) {
+        const inMore = moreTabs.has(currentMain);
+        moreBtn.classList.toggle("on", inMore);
+        moreBtn.textContent = inMore ? (moreLabels[currentMain] || "更多") : "更多";
+      }
+      closeNavMore();
       ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "backtest"].forEach((name) => {
         const el = document.getElementById("panel-" + name);
         if (el) el.hidden = name !== currentMain;
@@ -7594,6 +7745,22 @@
       else scheduleTick(false);
       // Pull a sliced snapshot for the newly visible tab.
       tick(true);
+    }
+    function openNavMore() {
+      const sheet = document.getElementById("navMoreSheet");
+      const mask = document.getElementById("navMoreMask");
+      const btn = document.getElementById("navMoreBtn");
+      if (sheet) { sheet.hidden = false; sheet.classList.add("on"); }
+      if (mask) { mask.hidden = false; mask.classList.add("on"); }
+      if (btn) btn.setAttribute("aria-expanded", "true");
+    }
+    function closeNavMore() {
+      const sheet = document.getElementById("navMoreSheet");
+      const mask = document.getElementById("navMoreMask");
+      const btn = document.getElementById("navMoreBtn");
+      if (sheet) { sheet.hidden = true; sheet.classList.remove("on"); }
+      if (mask) { mask.hidden = true; mask.classList.remove("on"); }
+      if (btn) btn.setAttribute("aria-expanded", "false");
     }
     function paintClock() {
       const el = document.getElementById("pageClock");
@@ -7720,7 +7887,9 @@
     function applyGuestUi() {
       const locked = !canPersonal();
       document.querySelectorAll('#navTabs [data-main="pos"]').forEach((el) => {
-        el.hidden = locked;
+        // Keep visible so mobile bottom bar stays 4-up; click still gates via applyMain.
+        el.hidden = false;
+        el.classList.toggle("nav-locked", locked);
         el.title = locked ? "游客不可用仓位，请注册正式账号" : "";
       });
       // Hide personal write affordances on review when guest.
@@ -7997,10 +8166,23 @@
     scheduleTick(false);
     setInterval(paintClock, 1000);
     document.getElementById("navTabs").addEventListener("click", (ev) => {
+      if (ev.target.closest("#navMoreBtn")) {
+        const sheet = document.getElementById("navMoreSheet");
+        if (sheet && !sheet.hidden) closeNavMore();
+        else openNavMore();
+        return;
+      }
       const hit = ev.target.closest("button[data-main]");
       if (!hit) return;
       applyMain(hit.getAttribute("data-main"));
     });
+    document.getElementById("navMoreGrid")?.addEventListener("click", (ev) => {
+      const hit = ev.target.closest("button[data-main]");
+      if (!hit) return;
+      applyMain(hit.getAttribute("data-main"));
+    });
+    document.getElementById("navMoreClose")?.addEventListener("click", closeNavMore);
+    document.getElementById("navMoreMask")?.addEventListener("click", closeNavMore);
     document.getElementById("panel-auction").addEventListener("click", async (ev) => {
       const pin = ev.target.closest(".auc-pin");
       if (!pin) return;
