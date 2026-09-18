@@ -158,6 +158,16 @@ def attach_personal_layer(
         advice = out.get("sell_advice") or {}
         all_items = list(advice.get("all_items") or advice.get("items") or [])
         advice["items"] = all_items[:4]
+        # Keep all_items for sell-signal logging, then strip from API payload.
+        if all_items:
+            advice["all_items"] = all_items
+        out["sell_advice"] = advice
+        try:
+            from market_desk.review import record_sell_advice_signals
+
+            record_sell_advice_signals(out)
+        except Exception:
+            pass
         advice.pop("all_items", None)
         out["sell_advice"] = advice
         positions = attach_position_sell_hints(positions, all_items)

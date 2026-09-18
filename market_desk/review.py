@@ -482,6 +482,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
       - independent_recommend → ``buy_indep``
       - dragon_recommend → ``buy_dragon``
     Sell: ready items from sell_advice → ``sell``.
+    Note: shared engine snap keeps sell_advice empty; ready sells are
+    recorded via ``record_sell_advice_signals`` after the personal layer.
     """
     trade_date = snapshot.get("trade_date") or ""
     if not trade_date:
@@ -716,6 +718,46 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         n += 1
     return n
 
+
+def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
+    """Persist ready personal sell_advice items (shared snap has empty sells).
+
+    Sell cards are built per-user in ``attach_personal_layer``; the engine
+    snapshot always stores an empty ``sell_advice``. Call this after the
+    personal layer is attached so 复盘 can see 建议卖出 rows.
+    """
+    trade_date = snapshot.get("trade_date") or ""
+    if not trade_date:
+        return 0
+    sell = snapshot.get("sell_advice") or {}
+    items = list(sell.get("all_items") or sell.get("items") or [])
+    ready = [x for x in items if x.get("ready")]
+    if not ready:
+        return 0
+    # Reuse the session recorder with a slim payload that only carries sells.
+    slim = {
+        "trade_date": trade_date,
+        "updated_at": snapshot.get("updated_at"),
+        "phase": snapshot.get("phase") or "",
+        "verdict": snapshot.get("verdict") or {},
+        "hot_boards": snapshot.get("hot_boards") or [],
+        "pin_boards": snapshot.get("pin_boards") or [],
+        "metrics": snapshot.get("metrics"),
+        "sell_advice": {"items": ready},
+    }
+    # Avoid re-logging buys: temporarily strip recommend trees.
+    v = dict(slim["verdict"])
+    for key in (
+        "recommend",
+        "side_recommend",
+        "link_recommend",
+        "watch_trial_recommend",
+        "independent_recommend",
+        "dragon_recommend",
+    ):
+        v.pop(key, None)
+    slim["verdict"] = v
+    return record_session_signals(slim)
 
 def score_signal_with_closes(
     signal: dict[str, Any],

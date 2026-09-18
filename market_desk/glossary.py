@@ -476,7 +476,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "资金流出：仅流出→只降 soft 门槛；流出+主题退潮才缩放 pb。\n"
         "昨买今弱：窗内偏弱默认先减；现价收复成本或日涨回升过阈值→今弱已修复，取消轻减。\n"
         "独立人气回踩来源持仓豁免昨买今弱轻减。\n"
-        "下一动作：hold/half/clear/watch + 触发价；已减后展示减半价与深回撤线。\n"
+        "建议卖出落库：个人层算完 ready 卖点后 ``record_sell_advice_signals`` 写入；"
+        "共享引擎快照里 sell_advice 恒为空，故引擎轮询本身不会记卖出信号。\n"
         "T+1：last_buy_date=当日则 ready 关掉，复盘不可记卖出。",
     },
     "下一动作": {
