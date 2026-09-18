@@ -6339,6 +6339,21 @@ def decorate_positions(
             item["peak_price"] = row.get("peak_price")
             item["peak_dirty"] = False
         out.append(item)
+    # Attach open FIFO lots for multi-fill cost visibility.
+    try:
+        from market_desk.db import load_lots_for_positions
+
+        ids = [int(r["id"]) for r in out if r.get("id") is not None]
+        lots_map = load_lots_for_positions(ids)
+        for item in out:
+            pid = int(item.get("id") or 0)
+            lots = lots_map.get(pid) or []
+            item["lots"] = lots
+            item["lot_count"] = len(lots)
+    except Exception:
+        for item in out:
+            item.setdefault("lots", [])
+            item.setdefault("lot_count", 0)
     return out
 
 

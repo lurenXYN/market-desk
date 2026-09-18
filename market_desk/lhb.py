@@ -146,12 +146,28 @@ def _summarize_seats(buys: list[dict[str, Any]], sells: list[dict[str, Any]]) ->
         hints.append(
             f"量化倾向席 买{_yi(quant_buy)}/卖{_yi(quant_sell)} 亿"
         )
+    risk_flags: list[str] = []
+    if smash_sell >= 1e6:
+        risk_flags.append("smash_sell")
+    if inst_net <= -1e6:
+        risk_flags.append("inst_net_sell")
+    if nb_net <= -1e6:
+        risk_flags.append("nb_net_sell")
+    if quant_sell >= 1e6 and quant_sell > quant_buy * 1.2:
+        risk_flags.append("quant_net_sell")
+    seat_risk = "ok"
+    if "smash_sell" in risk_flags or "inst_net_sell" in risk_flags:
+        seat_risk = "bad"
+    elif risk_flags:
+        seat_risk = "warn"
     return {
         "style_line": style_brief(styles),
         "hints": hints[:4],
         "institution_net_yi": _yi(inst_net),
         "northbound_net_yi": _yi(nb_net),
         "smash_sell_yi": _yi(smash_sell),
+        "risk_flags": risk_flags,
+        "seat_risk": seat_risk,
     }
 
 

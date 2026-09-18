@@ -227,6 +227,49 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE positions ADD COLUMN {col} {decl}")
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS position_lots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                position_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                buy_price REAL NOT NULL,
+                qty INTEGER NOT NULL,
+                buy_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                note TEXT,
+                FOREIGN KEY(position_id) REFERENCES positions(id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_position_lots_pos "
+            "ON position_lots(position_id, id)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exec_diary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                trade_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                side TEXT NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT,
+                qty INTEGER,
+                price REAL,
+                advice_json TEXT,
+                note TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exec_diary_user_day "
+            "ON exec_diary(user_id, trade_date, id DESC)"
+        )
+        # Backfill one synthetic lot for open positions that have none yet.
+        _backfill_position_lots(conn)
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trade_date TEXT NOT NULL,
@@ -1800,6 +1843,270 @@ _POS_SELECT = """
 """
 
 
+def _backfill_position_lots(conn: sqlite3.Connection) -> None:
+    """Seed one lot row for open positions missing lot history (compat)."""
+    try:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.user_id, p.code, p.buy_price, p.qty, p.created_at,
+                   p.last_buy_date, p.note
+            FROM positions p
+            WHERE COALESCE(p.qty, 0) > 0
+              AND NOT EXISTS (
+                SELECT 1 FROM position_lots l WHERE l.position_id = p.id AND l.qty > 0
+              )
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for row in rows:
+        buy_day = str(row["last_buy_date"] or row["created_at"] or now)[:10]
+        conn.execute(
+            """
+            INSERT INTO position_lots(
+                user_id, position_id, code, buy_price, qty, buy_date, created_at, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(row["user_id"] or 0),
+                int(row["id"]),
+                str(row["code"] or "").zfill(6),
+                float(row["buy_price"] or 0),
+                int(row["qty"] or 0),
+                buy_day,
+                str(row["created_at"] or now),
+                str(row["note"] or "") or "历史回填",
+            ),
+        )
+
+
+def _insert_position_lot(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    position_id: int,
+    code: str,
+    buy_price: float,
+    qty: int,
+    buy_date: str,
+    created_at: str,
+    note: str = "",
+) -> int:
+    """Insert one buy lot under a parent position. Returns lot id."""
+    cur = conn.execute(
+        """
+        INSERT INTO position_lots(
+            user_id, position_id, code, buy_price, qty, buy_date, created_at, note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(user_id),
+            int(position_id),
+            str(code or "").zfill(6),
+            float(buy_price),
+            int(qty),
+            str(buy_date)[:10],
+            str(created_at),
+            str(note or ""),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _fifo_trim_lots(
+    conn: sqlite3.Connection,
+    *,
+    position_id: int,
+    qty: int,
+) -> list[dict[str, Any]]:
+    """Reduce oldest lots first; delete empty lots. Returns consumed lot chunks."""
+    sell = int(qty)
+    if sell <= 0:
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, buy_price, qty, buy_date
+        FROM position_lots
+        WHERE position_id = ? AND qty > 0
+        ORDER BY id ASC
+        """,
+        (int(position_id),),
+    ).fetchall()
+    consumed: list[dict[str, Any]] = []
+    left = sell
+    for row in rows:
+        if left <= 0:
+            break
+        lot_qty = int(row["qty"] or 0)
+        take = min(lot_qty, left)
+        if take <= 0:
+            continue
+        remain = lot_qty - take
+        if remain <= 0:
+            conn.execute("DELETE FROM position_lots WHERE id = ?", (int(row["id"]),))
+        else:
+            conn.execute(
+                "UPDATE position_lots SET qty = ? WHERE id = ?",
+                (remain, int(row["id"])),
+            )
+        consumed.append(
+            {
+                "lot_id": int(row["id"]),
+                "buy_price": float(row["buy_price"] or 0),
+                "qty": take,
+                "buy_date": str(row["buy_date"] or "")[:10],
+            }
+        )
+        left -= take
+    return consumed
+
+
+def load_lots_for_positions(
+    position_ids: list[int] | None,
+    *,
+    user_id: int | None = None,
+) -> dict[int, list[dict[str, Any]]]:
+    """Return position_id → open lots (oldest first) for decorate / UI."""
+    ids = [int(x) for x in (position_ids or []) if x]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    params: list[Any] = list(ids)
+    sql = f"""
+        SELECT id, user_id, position_id, code, buy_price, qty, buy_date, created_at, note
+        FROM position_lots
+        WHERE position_id IN ({placeholders}) AND qty > 0
+    """
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(int(user_id))
+    sql += " ORDER BY position_id ASC, id ASC"
+    out: dict[int, list[dict[str, Any]]] = {i: [] for i in ids}
+    with _connect() as conn:
+        for row in conn.execute(sql, params).fetchall():
+            pid = int(row["position_id"])
+            out.setdefault(pid, []).append(
+                {
+                    "id": int(row["id"]),
+                    "buy_price": round(float(row["buy_price"] or 0), 4),
+                    "qty": int(row["qty"] or 0),
+                    "buy_date": str(row["buy_date"] or "")[:10],
+                    "note": str(row["note"] or "") or None,
+                    "cost": round(
+                        float(row["buy_price"] or 0) * int(row["qty"] or 0), 2
+                    ),
+                }
+            )
+    return out
+
+
+def add_exec_diary(
+    *,
+    user_id: int,
+    side: str,
+    code: str,
+    name: str = "",
+    qty: int | None = None,
+    price: float | None = None,
+    advice: dict[str, Any] | None = None,
+    note: str = "",
+    trade_date: str | None = None,
+) -> dict[str, Any]:
+    """Append one execution diary row capturing the live advice snapshot."""
+    import json
+
+    uid = int(user_id)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    day = str(trade_date or now)[:10]
+    side_s = str(side or "").strip().lower() or "buy"
+    code_s = str(code or "").zfill(6)
+    payload = json.dumps(advice or {}, ensure_ascii=False, default=str)
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO exec_diary(
+                user_id, trade_date, created_at, side, code, name, qty, price,
+                advice_json, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uid,
+                day,
+                now,
+                side_s,
+                code_s,
+                str(name or ""),
+                int(qty) if qty is not None else None,
+                float(price) if price is not None else None,
+                payload,
+                str(note or ""),
+            ),
+        )
+        conn.commit()
+        did = int(cur.lastrowid)
+    return {
+        "id": did,
+        "user_id": uid,
+        "trade_date": day,
+        "created_at": now,
+        "side": side_s,
+        "code": code_s,
+        "name": name,
+        "qty": qty,
+        "price": price,
+        "note": note,
+    }
+
+
+def load_exec_diary(
+    *,
+    user_id: int,
+    trade_date: str | None = None,
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    """Return recent exec diary rows for one user (newest first)."""
+    import json
+
+    uid = int(user_id)
+    lim = max(1, min(int(limit or 40), 120))
+    with _connect() as conn:
+        if trade_date:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, trade_date, created_at, side, code, name,
+                       qty, price, advice_json, note
+                FROM exec_diary
+                WHERE user_id = ? AND trade_date = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (uid, str(trade_date)[:10], lim),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, trade_date, created_at, side, code, name,
+                       qty, price, advice_json, note
+                FROM exec_diary
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (uid, lim),
+            ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        raw = item.pop("advice_json", None)
+        try:
+            item["advice"] = json.loads(raw) if raw else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["advice"] = {}
+        out.append(item)
+    return out
+
+
 def _position_item(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     """Normalize a positions table row for API / decorate use."""
     item = dict(row)
@@ -1857,12 +2164,18 @@ def add_position(
     entry_board: str = "",
     user_id: int,
 ) -> dict[str, Any]:
-    """Insert a position, or average into an existing open same-code row."""
+    """Insert a position, or average into an existing open same-code row.
+
+    Always records a ``position_lots`` leg so multi-fill cost stays auditable while
+    the parent row keeps a weighted-average ``buy_price`` for display.
+    """
     uid = int(user_id)
     code = str(code or "").zfill(6)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     buy_day = now[:10]
     board = str(entry_board or "").strip() or None
+    add_qty = int(qty)
+    add_px = float(buy_price)
     with _connect() as conn:
         existing = conn.execute(
             f"""
@@ -1876,6 +2189,7 @@ def add_position(
         if existing:
             old_qty = int(existing["qty"] or 0)
             old_px = float(existing["buy_price"] or 0)
+            pid = int(existing["id"])
             if old_qty <= 0:
                 conn.execute(
                     """
@@ -1886,40 +2200,56 @@ def add_position(
                     """,
                     (
                         name or existing["name"] or code,
-                        float(buy_price),
-                        int(qty),
+                        add_px,
+                        add_qty,
                         note or existing["note"] or "",
                         buy_day,
                         now,
-                        float(buy_price),
+                        add_px,
                         board or (str(existing["entry_board"] or "").strip() or None),
-                        int(existing["id"]),
+                        pid,
                         uid,
                     ),
                 )
+                _insert_position_lot(
+                    conn,
+                    user_id=uid,
+                    position_id=pid,
+                    code=code,
+                    buy_price=add_px,
+                    qty=add_qty,
+                    buy_date=buy_day,
+                    created_at=now,
+                    note=note or "重开仓",
+                )
                 conn.commit()
                 return {
-                    "id": int(existing["id"]),
+                    "id": pid,
                     "user_id": uid,
                     "code": code,
                     "name": name or existing["name"] or code,
-                    "buy_price": float(buy_price),
-                    "qty": int(qty),
+                    "buy_price": add_px,
+                    "qty": add_qty,
                     "note": note or existing["note"] or "",
                     "created_at": now,
                     "last_buy_date": buy_day,
                     "entry_board": board or (str(existing["entry_board"] or "").strip() or None),
                     "reopened": True,
+                    "lot_added": True,
                 }
-            new_qty = old_qty + int(qty)
+            new_qty = old_qty + add_qty
             if new_qty <= 0:
                 conn.execute(
                     "DELETE FROM positions WHERE id = ? AND user_id = ?",
-                    (int(existing["id"]), uid),
+                    (pid, uid),
+                )
+                conn.execute(
+                    "DELETE FROM position_lots WHERE position_id = ?",
+                    (pid,),
                 )
                 conn.commit()
-                return {"id": int(existing["id"]), "deleted": True, "code": code}
-            avg = (old_px * old_qty + float(buy_price) * int(qty)) / float(new_qty)
+                return {"id": pid, "deleted": True, "code": code}
+            avg = (old_px * old_qty + add_px * add_qty) / float(new_qty)
             merged_note = (existing["note"] or "") or note
             if note and existing["note"] and note not in str(existing["note"]):
                 merged_note = f"{existing['note']}；{note}"
@@ -1937,13 +2267,24 @@ def add_position(
                     merged_note,
                     buy_day,
                     board,
-                    int(existing["id"]),
+                    pid,
                     uid,
                 ),
             )
+            _insert_position_lot(
+                conn,
+                user_id=uid,
+                position_id=pid,
+                code=code,
+                buy_price=add_px,
+                qty=add_qty,
+                buy_date=buy_day,
+                created_at=now,
+                note=note or "加仓",
+            )
             conn.commit()
             return {
-                "id": int(existing["id"]),
+                "id": pid,
                 "user_id": uid,
                 "code": code,
                 "name": name or existing["name"] or code,
@@ -1954,6 +2295,9 @@ def add_position(
                 "last_buy_date": buy_day,
                 "entry_board": board or (str(existing["entry_board"] or "").strip() or None),
                 "averaged": True,
+                "lot_added": True,
+                "lot_price": add_px,
+                "lot_qty": add_qty,
             }
         cur = conn.execute(
             """
@@ -1964,21 +2308,33 @@ def add_position(
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?, ?)
             """,
-            (uid, code, name, buy_price, qty, note, now, buy_day, float(buy_price), board),
+            (uid, code, name, add_px, add_qty, note, now, buy_day, add_px, board),
         )
         pid = int(cur.lastrowid)
+        _insert_position_lot(
+            conn,
+            user_id=uid,
+            position_id=pid,
+            code=code,
+            buy_price=add_px,
+            qty=add_qty,
+            buy_date=buy_day,
+            created_at=now,
+            note=note or "开仓",
+        )
         conn.commit()
     return {
         "id": pid,
         "user_id": uid,
         "code": code,
         "name": name,
-        "buy_price": buy_price,
-        "qty": qty,
+        "buy_price": add_px,
+        "qty": add_qty,
         "note": note,
         "created_at": now,
         "last_buy_date": buy_day,
         "entry_board": board,
+        "lot_added": True,
     }
 
 
@@ -1997,7 +2353,8 @@ def trim_position(
     ``day_anchor`` should be 昨收 for overnight lots (buy price is used automatically
     when the lot was bought today). Session realized stores vs that anchor minus a
     flat sell fee on the first sell of the day — display still recomputes in decorate
-    (buy fee is applied on the decorate path when bought today).
+    (buy fee is applied on the decorate path when bought today). Lot legs are trimmed
+    FIFO so multi-fill cost history stays consistent.
     """
     from market_desk.config import TRADE_FEE_CNY
 
@@ -2044,20 +2401,36 @@ def trim_position(
             day_sold = sell
             day_pnl = round(chunk_pnl - fee, 2)
         closed_date = day if left <= 0 else None
+        lot_chunks = _fifo_trim_lots(conn, position_id=pid, qty=sell)
+        new_buy = buy
+        if left > 0:
+            rem = conn.execute(
+                """
+                SELECT buy_price, qty FROM position_lots
+                WHERE position_id = ? AND qty > 0
+                """,
+                (pid,),
+            ).fetchall()
+            if rem:
+                cost = sum(float(r["buy_price"] or 0) * int(r["qty"] or 0) for r in rem)
+                qsum = sum(int(r["qty"] or 0) for r in rem)
+                if qsum > 0:
+                    new_buy = round(cost / qsum, 4)
         conn.execute(
             """
             UPDATE positions
-            SET qty = ?, closed_date = ?, last_sell_date = ?, last_sell_price = ?,
-                day_sold_qty = ?, day_realized_pnl = ?
+            SET qty = ?, buy_price = ?, closed_date = ?, last_sell_date = ?,
+                last_sell_price = ?, day_sold_qty = ?, day_realized_pnl = ?
             WHERE id = ?
             """,
-            (left, closed_date, day, round(px, 4), day_sold, day_pnl, pid),
+            (left, new_buy, closed_date, day, round(px, 4), day_sold, day_pnl, pid),
         )
         conn.commit()
         item = _position_item(
             {
                 **dict(row),
                 "qty": left,
+                "buy_price": new_buy,
                 "closed_date": closed_date,
                 "last_sell_date": day,
                 "last_sell_price": round(px, 4),
@@ -2070,6 +2443,7 @@ def trim_position(
         item["realized_chunk"] = chunk_pnl
         item["day_anchor"] = round(anchor, 4)
         item["trade_fee"] = fee if prev_day != day else 0.0
+        item["lot_chunks"] = lot_chunks
         return item
 
 

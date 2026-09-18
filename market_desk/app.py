@@ -41,6 +41,7 @@ from market_desk.settings import get_settings_for_user
 from market_desk.config import STATIC_DIR
 from market_desk.verdict import quote_prev_close
 from market_desk.db import (
+    add_exec_diary,
     add_position,
     add_favorite_board,
     add_stock_blacklist,
@@ -55,6 +56,7 @@ from market_desk.db import (
     export_user_backup_payload,
     import_user_backup_payload,
     is_t1_locked,
+    load_exec_diary,
     load_favorite_boards,
     load_positions,
     load_signal,
@@ -570,6 +572,93 @@ async def chart(
     }
 
 
+def _advice_snapshot_for_code(code: str) -> dict[str, Any]:
+    """Capture live desk advice for one ticker into an exec-diary payload."""
+    snap = engine.snapshot or {}
+    code_n = normalize_code(code)
+    verdict = snap.get("verdict") or {}
+    ml = (verdict.get("mainline") or {}) if isinstance(verdict, dict) else {}
+    out: dict[str, Any] = {
+        "action": verdict.get("action"),
+        "phase": snap.get("phase"),
+        "mainline": ml.get("name"),
+        "lifecycle": ml.get("lifecycle"),
+        "trade_date": snap.get("trade_date"),
+    }
+    rec = verdict.get("recommend") or {}
+    primary = rec.get("primary") if isinstance(rec, dict) else None
+    buy_hit: dict[str, Any] | None = None
+    if isinstance(primary, dict) and normalize_code(primary.get("code")) == code_n:
+        buy_hit = primary
+    if buy_hit is None:
+        for bucket in (
+            rec.get("items") or [],
+            (snap.get("side_recommend") or {}).get("items") or [],
+            (snap.get("link_recommend") or {}).get("items") or [],
+            (snap.get("trial_recommend") or {}).get("items") or [],
+            (snap.get("indep_recommend") or {}).get("items") or [],
+        ):
+            for it in bucket:
+                if isinstance(it, dict) and normalize_code(it.get("code")) == code_n:
+                    buy_hit = it
+                    break
+            if buy_hit is not None:
+                break
+    if buy_hit is not None:
+        out["buy"] = {
+            "buy_price": buy_hit.get("buy_price") or buy_hit.get("last"),
+            "stop_price": buy_hit.get("stop_price"),
+            "ready": buy_hit.get("ready"),
+            "role_label": buy_hit.get("role_label"),
+            "reason": (str(buy_hit.get("reason") or ""))[:160],
+        }
+    for it in ((snap.get("sell_advice") or {}).get("items") or []):
+        if not isinstance(it, dict):
+            continue
+        if normalize_code(it.get("code")) != code_n:
+            continue
+        out["sell"] = {
+            "ready": it.get("ready"),
+            "urgency": it.get("urgency"),
+            "exit_mode": it.get("exit_mode"),
+            "sell_price": it.get("sell_price") or it.get("last"),
+            "stop_price": it.get("stop_price"),
+            "next_action": it.get("next_action"),
+            "next_action_zh": it.get("next_action_zh"),
+            "reason": (str(it.get("reason") or ""))[:160],
+        }
+        break
+    return out
+
+
+def _log_exec_diary(
+    *,
+    user_id: int,
+    side: str,
+    code: str,
+    name: str = "",
+    qty: int | None = None,
+    price: float | None = None,
+    note: str = "",
+    trade_date: str | None = None,
+) -> dict[str, Any] | None:
+    """Persist one exec diary row; swallow errors so book ops stay primary."""
+    try:
+        return add_exec_diary(
+            user_id=int(user_id),
+            side=side,
+            code=normalize_code(code),
+            name=name or "",
+            qty=qty,
+            price=price,
+            advice=_advice_snapshot_for_code(code),
+            note=note or "",
+            trade_date=trade_date,
+        )
+    except Exception:
+        return None
+
+
 @app.get("/api/positions")
 def list_positions(user: dict = Depends(current_member_required)) -> dict:
     """Return recorded positions with the last known marks."""
@@ -579,6 +668,18 @@ def list_positions(user: dict = Depends(current_member_required)) -> dict:
         "positions": snap.get("positions") or [],
         "summary": snap.get("position_summary"),
     }
+
+
+@app.get("/api/exec-diary")
+def list_exec_diary(
+    trade_date: str | None = Query(default=None),
+    limit: int = Query(default=40, ge=1, le=120),
+    user: dict = Depends(current_member_required),
+) -> dict:
+    """Return recent buy/sell execution diary rows for the caller."""
+    day = str(trade_date or "").strip()[:10] or None
+    rows = load_exec_diary(user_id=int(user["id"]), trade_date=day, limit=limit)
+    return {"ok": True, "items": rows, "trade_date": day}
 
 
 @app.get("/api/positions/lhb")
@@ -601,7 +702,7 @@ def create_position(body: PositionIn, user: dict = Depends(current_member_requir
     entry_board = str(
         (((engine.snapshot.get("verdict") or {}).get("mainline") or {}).get("name")) or ""
     )
-    add_position(
+    booked = add_position(
         code,
         name,
         float(body.buy_price),
@@ -610,11 +711,21 @@ def create_position(body: PositionIn, user: dict = Depends(current_member_requir
         entry_board=entry_board,
         user_id=int(user["id"]),
     )
+    diary = _log_exec_diary(
+        user_id=int(user["id"]),
+        side="buy",
+        code=code,
+        name=name or str((booked or {}).get("name") or ""),
+        qty=int(body.qty),
+        price=float(body.buy_price),
+        note=body.note.strip() or "仓位记账",
+    )
     snap = engine.snapshot_for_user(int(user["id"]))
     return {
         "ok": True,
         "positions": snap.get("positions") or [],
         "summary": snap.get("position_summary"),
+        "diary": diary,
     }
 
 
@@ -692,6 +803,20 @@ def trim_position_api(
         note=note,
         user_id=int(user["id"]),
     )
+    diary = _log_exec_diary(
+        user_id=int(user["id"]),
+        side="clear" if left <= 0 else "half",
+        code=str(row.get("code") or ""),
+        name=str(row.get("name") or ""),
+        qty=trimmed,
+        price=(
+            float(row["sell_price"])
+            if row.get("sell_price") is not None
+            else (float(body.sell_price) if body.sell_price is not None else None)
+        ),
+        note=note,
+        trade_date=trade_day,
+    )
     engine.clear_review_cache()
     # Soft reputation write-back from realized chunk PnL%.
     feedback = None
@@ -720,6 +845,7 @@ def trim_position_api(
         "trimmed": row,
         "signal_fill": signal_fill,
         "feedback": feedback,
+        "diary": diary,
         "positions": snap.get("positions") or [],
         "summary": snap.get("position_summary"),
     }
@@ -924,6 +1050,16 @@ def trade_signal(
                 ),
                 user_id=int(user["id"]),
             )
+            _log_exec_diary(
+                user_id=int(user["id"]),
+                side="buy",
+                code=code,
+                name=name,
+                qty=qty,
+                price=px,
+                note=note or "复盘已交易",
+                trade_date=str(row.get("trade_date") or "")[:10] or None,
+            )
         else:
             positions = [
                 p
@@ -952,6 +1088,17 @@ def trade_signal(
                 trade_date=str(row.get("trade_date") or "")[:10] or None,
                 user_id=int(user["id"]),
                 day_anchor=_day_anchor_for_code(code),
+            )
+            left = int((booked or {}).get("qty") or 0)
+            _log_exec_diary(
+                user_id=int(user["id"]),
+                side="clear" if left <= 0 else "half",
+                code=code,
+                name=name,
+                qty=qty,
+                price=sell_px,
+                note=note or "复盘已交易",
+                trade_date=str(row.get("trade_date") or "")[:10] or None,
             )
             update_signal_meta(
                 sid,

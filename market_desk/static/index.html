@@ -1947,6 +1947,24 @@
     .next-act.na-half { color: #b86a00; }
     .next-act.na-watch { color: #6a6f7a; }
     .next-act.na-hold { color: var(--up, #1a7f37); }
+    .pos-lots {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+      max-width: 160px;
+    }
+    .pos-lots .lot-line { white-space: nowrap; }
+    .pos-diary .diary-row {
+      padding: 8px 0;
+      border-bottom: 1px dashed var(--line);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .pos-diary .diary-row:last-child { border-bottom: none; }
+    .pos-diary .side-buy { color: var(--up, #1a7f37); font-weight: 700; }
+    .pos-diary .side-half { color: #b86a00; font-weight: 700; }
+    .pos-diary .side-clear { color: var(--down, #c23); font-weight: 700; }
+    .lhb-tag.smash { border-color: #f87171; color: #fecaca; }
     .na-sub { font-size: 11px; margin-top: 2px; }
     .sell-fly-board {
       margin: 8px 0 12px;
@@ -2293,6 +2311,75 @@
       }
       .buybox, .sellbox, .sidebox, .linkbox, .trialbox, .dragonbox, .indepbox, .favdesk {
         border-radius: 12px;
+      }
+      /* Narrow commute: sell cards + position next-action first */
+      .sellbox .rec-card {
+        padding: 12px 12px 14px;
+      }
+      .sellbox .rec-card.sell-now {
+        box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.45);
+      }
+      .sellbox .rec-prices {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .sellbox .rec-prices .sell,
+      .sellbox .rec-prices .stop {
+        background: rgba(248, 113, 113, 0.08);
+        border-radius: 8px;
+        padding: 6px 8px;
+      }
+      .sellbox .rev-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 10px !important;
+      }
+      .sellbox .rev-actions .pos-btn {
+        width: 100%;
+        min-height: 44px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .sellbox .next-act {
+        font-size: 14px;
+        font-weight: 700;
+      }
+      table.m-cards#posTable tbody tr {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 8px;
+        padding: 12px;
+      }
+      table.m-cards#posTable tbody td[data-label="名称"],
+      table.m-cards#posTable tbody td[data-label="下一动作"],
+      table.m-cards#posTable tbody td[data-label="当日"],
+      table.m-cards#posTable tbody td.m-actions {
+        grid-column: 1 / -1;
+      }
+      table.m-cards#posTable tbody td[data-label="代码"],
+      table.m-cards#posTable tbody td[data-label="状态"],
+      table.m-cards#posTable tbody td[data-label="日线"],
+      table.m-cards#posTable tbody td[data-label="已实现"] {
+        display: none;
+      }
+      table.m-cards#posTable tbody td[data-label="下一动作"] {
+        order: -1;
+        font-size: 15px;
+        font-weight: 700;
+        padding-bottom: 8px;
+        margin-bottom: 4px;
+        border-bottom: 1px dashed var(--line) !important;
+      }
+      table.m-cards#posTable tbody td.m-actions .pos-del {
+        flex: 1 1 calc(50% - 6px);
+        min-height: 40px;
+        font-size: 13px;
+      }
+      .pos-lots { font-size: 12px; text-align: left; }
+      .pos-diary .diary-row {
+        padding: 10px 0;
+        border-bottom: 1px dashed var(--line);
+        font-size: 13px;
       }
     }
     .rev-table-wrap { width: 100%; }
@@ -2890,7 +2977,7 @@
         <table class="m-cards" id="posTable">
           <thead>
             <tr>
-              <th>状态</th><th>名称</th><th>代码</th><th>买价</th><th>股数</th>
+              <th>状态</th><th>名称</th><th>代码</th><th>买价</th><th>分批</th><th>股数</th>
               <th>成本</th><th>现价</th><th>已减价</th><th>下一动作</th>
               <th>市值</th><th>日线</th>
               <th>当日盈亏</th><th>浮盈</th><th>已实现</th><th></th>
@@ -2898,6 +2985,16 @@
           </thead>
           <tbody id="posBody"></tbody>
         </table>
+        <div class="pos-diary" id="posDiary" style="margin-top:14px">
+          <div class="hd" style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <b>执行日记</b>
+            <button type="button" class="q" data-term="执行日记">?</button>
+            <button type="button" class="copy-btn" id="posDiaryRefresh" title="刷新">刷新</button>
+            <span class="meta" id="posDiaryMeta"></span>
+          </div>
+          <p class="meta">买/减/清记账时自动记下当时建议，便于复盘对照。</p>
+          <div id="posDiaryBody"><div class="meta">打开仓位页后加载…</div></div>
+        </div>
         <div class="pos-lhb" id="posLhb">
           <div class="hd">
             <b>持仓龙虎榜</b>
@@ -3440,6 +3537,17 @@
           + `<span class="title">${t.title || ""}</span>`
           + `<span>${t.body || ""}</span></div>`
         ).join("");
+    }
+    function pushPageToast(title, body) {
+      const now = new Date();
+      const ts = now.toTimeString().slice(0, 8);
+      const row = { ts, title: title || "提醒", body: body || "" };
+      const cur = (lastData && Array.isArray(lastData.recent_toasts))
+        ? lastData.recent_toasts.slice()
+        : [];
+      const next = [row, ...cur].slice(0, 12);
+      if (lastData) lastData.recent_toasts = next;
+      paintToastStrip(next);
     }
     const tagClass = (s) => {
       if (s === "尖峰禁追" || s === "禁追") return "ban";
@@ -4469,12 +4577,24 @@
             nextCell += `<div class="meta na-sub">深回撤 ${p.deep_clear_price}</div>`;
           }
         }
+        const lots = Array.isArray(p.lots) ? p.lots : [];
+        let lotsCell = "—";
+        if (lots.length > 1) {
+          lotsCell = `<div class="pos-lots" title="FIFO 分批">${lots.map((l) =>
+            `<div class="lot-line">${l.buy_date || "—"} · ${l.buy_price}×${l.qty}</div>`
+          ).join("")}</div>`;
+        } else if (lots.length === 1) {
+          lotsCell = `<span class="meta">1批</span>`;
+        } else if (!closed && Number(p.lot_count || 0) > 1) {
+          lotsCell = `<span class="meta">${p.lot_count}批</span>`;
+        }
         return `
         <tr class="${closed ? "pos-closed" : ""}">
           <td data-label="状态">${p.status || (closed ? "今日已平" : "持仓")}</td>
           <td data-label="名称">${tickerHtml(p.name, p.code)}</td>
           <td data-label="代码">${p.code || ""}</td>
           <td data-label="买价">${p.buy_price ?? ""}</td>
+          <td data-label="分批">${lotsCell}</td>
           <td data-label="股数">${qtyLabel}</td>
           <td data-label="成本">${fmtMoney(p.cost)}</td>
           <td data-label="现价">${p.last ?? "—"}${closed ? "" : (p.last_pct == null ? "" : " " + fmtPct(p.last_pct))}</td>
@@ -4487,8 +4607,9 @@
           <td data-label="已实现" class="${realizedRow >= 0 ? "up" : "down"}">${realizedRow ? fmtMoney(realizedRow) : "—"}</td>
           <td class="m-actions">${actions}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="15" class="meta">暂无仓位，先记账</td></tr>`;
+      }).join("") || `<tr><td colspan="16" class="meta">暂无仓位，先记账</td></tr>`;
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
+      if (currentMain === "pos" && typeof ensurePosDiary === "function") ensurePosDiary(false);
       paintAuctionStrategy(d);
       paintEmotionWave(d);
       paintSeasonality(d);
@@ -6585,6 +6706,7 @@
       if (meta) meta.textContent = payload.note || "";
       if (note) note.textContent = payload.disclaimer || "席位风格为网络常见口碑标签，非官方分类。";
       const items = payload.items || [];
+      maybeToastLhbSeatEdge(items);
       if (!items.length) {
         body.innerHTML = `<div class="meta">${payload.note || "暂无持仓龙虎数据"}</div>`;
         return;
@@ -6599,18 +6721,108 @@
         const chg = it.change_pct == null ? "" : ` · ${fmtPct(it.change_pct)}`;
         const hints = (it.summary && it.summary.hints || []).join(" · ");
         const styleLine = (it.summary && it.summary.style_line) || "—";
+        const risk = (it.summary && it.summary.seat_risk) || "ok";
+        const riskBadge = risk === "bad"
+          ? `<span class="lhb-tag smash">席位偏坏</span>`
+          : (risk === "warn" ? `<span class="lhb-tag quant">席位偏弱</span>` : "");
         const buys = (it.buys || []).map(_seatLi).join("") || `<li class="meta">无买入席位</li>`;
         const sells = (it.sells || []).map(_seatLi).join("") || `<li class="meta">无卖出席位</li>`;
         return `<div class="pos-lhb-card">`
           + `<div class="title"><b>${it.name || ""}</b><span class="meta">${it.code || ""}</span>`
           + `<span class="meta">${it.trade_date || ""}</span>`
-          + `<span class="${netCls}">净买 ${it.net_yi == null ? "—" : it.net_yi + "亿"}</span>${chg}</div>`
+          + `<span class="${netCls}">净买 ${it.net_yi == null ? "—" : it.net_yi + "亿"}</span>${chg}${riskBadge}</div>`
           + `<div class="meta">${it.reason || "—"} · 风格 ${styleLine}</div>`
           + (hints ? `<div class="hints">${hints}</div>` : "")
           + `<div class="pos-lhb-seats"><div><h4>买入席位</h4><ul>${buys}</ul></div>`
           + `<div><h4>卖出席位</h4><ul>${sells}</ul></div></div></div>`;
       }).join("");
     }
+    function maybeToastLhbSeatEdge(items) {
+      const STORAGE = "desk-lhb-seat-edge";
+      let prev = {};
+      try { prev = JSON.parse(localStorage.getItem(STORAGE) || "{}") || {}; } catch (e) { prev = {}; }
+      const next = {};
+      const alerts = [];
+      const seeded = Object.keys(prev).length === 0;
+      (items || []).forEach((it) => {
+        if (!it || !it.on_list) return;
+        const code = String(it.code || "").padStart(6, "0");
+        const flags = ((it.summary && it.summary.risk_flags) || []).slice().sort();
+        const risk = (it.summary && it.summary.seat_risk) || "ok";
+        const sig = `${it.trade_date || ""}|${risk}|${flags.join(",")}`;
+        next[code] = sig;
+        if (seeded) return; // first paint only seeds fingerprints
+        if (prev[code] === sig) return;
+        if (risk !== "bad" && risk !== "warn") return;
+        const prevRisk = String(prev[code] || "").split("|")[1] || "ok";
+        const rank = { ok: 0, warn: 1, bad: 2 };
+        if ((rank[risk] || 0) <= (rank[prevRisk] || 0) && prev[code]) return;
+        const hint = ((it.summary && it.summary.hints) || []).slice(0, 2).join(" · ");
+        alerts.push({
+          title: "龙虎席位变坏",
+          body: `${it.name || ""} ${code}${hint ? " · " + hint : ""}`,
+        });
+      });
+      try { localStorage.setItem(STORAGE, JSON.stringify(next)); } catch (e) {}
+      alerts.slice(0, 3).forEach((a) => pushPageToast(a.title, a.body));
+    }
+    let _posDiaryAt = 0;
+    function paintPosDiary(payload) {
+      const body = document.getElementById("posDiaryBody");
+      const meta = document.getElementById("posDiaryMeta");
+      if (!body) return;
+      const items = (payload && payload.items) || [];
+      if (meta) meta.textContent = items.length ? `近 ${items.length} 笔` : "";
+      if (!items.length) {
+        body.innerHTML = `<div class="meta">暂无执行日记；记账买/减/清后自动出现</div>`;
+        return;
+      }
+      const sideZh = { buy: "买", half: "减", clear: "清", sell: "卖" };
+      body.innerHTML = items.map((it) => {
+        const side = String(it.side || "");
+        const cls = side === "buy" ? "side-buy"
+          : (side === "clear" ? "side-clear" : "side-half");
+        const adv = it.advice || {};
+        const bits = [];
+        if (adv.action) bits.push(adv.action);
+        if (adv.phase) bits.push("相位 " + adv.phase);
+        if (adv.mainline) bits.push("主线 " + adv.mainline);
+        if (adv.sell && adv.sell.next_action_zh) bits.push(adv.sell.next_action_zh);
+        else if (adv.buy && adv.buy.buy_price != null) bits.push("建议买 " + adv.buy.buy_price);
+        return `<div class="diary-row">`
+          + `<span class="${cls}">${sideZh[side] || side}</span> `
+          + `<b>${it.name || ""}</b> <span class="meta">${it.code || ""}</span> `
+          + `${it.qty != null ? it.qty + "股" : ""}`
+          + `${it.price != null ? " @ " + it.price : ""}`
+          + `<div class="meta">${(it.created_at || "").slice(11, 19) || (it.trade_date || "")}`
+          + `${bits.length ? " · " + bits.join(" · ") : ""}`
+          + `${it.note ? " · " + it.note : ""}</div></div>`;
+      }).join("");
+    }
+    async function ensurePosDiary(force) {
+      const box = document.getElementById("posDiary");
+      if (!box) return;
+      if (typeof canPersonal === "function" && !canPersonal()) {
+        box.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      if (!force && _posDiaryAt && Date.now() - _posDiaryAt < 45000) return;
+      try {
+        const r = await fetch("/api/exec-diary?limit=30", { credentials: "same-origin" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error("diary");
+        _posDiaryAt = Date.now();
+        paintPosDiary(d);
+      } catch (e) {
+        const body = document.getElementById("posDiaryBody");
+        if (body) body.innerHTML = `<div class="meta">执行日记加载失败</div>`;
+      }
+    }
+    document.getElementById("posDiaryRefresh")?.addEventListener("click", () => {
+      _posDiaryAt = 0;
+      ensurePosDiary(true);
+    });
     async function ensurePosLhb(force) {
       const box = document.getElementById("posLhb");
       if (!box) return;
@@ -6672,6 +6884,7 @@
       if (currentMain === "review") loadReview(false);
       if (currentMain === "funds") ensureFundFlowFull();
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
+      if (currentMain === "pos" && typeof ensurePosDiary === "function") ensurePosDiary(false);
       try { localStorage.setItem("desk-main-tab", currentMain); } catch (e) {}
       // Reschedule poll cadence for the active tab.
       if (lastData) scheduleTick(!!lastData.live);
@@ -6941,6 +7154,7 @@
       }
       if (currentMain === "pos") {
         try { await ensurePosLhb(true); } catch (e) {}
+        try { await ensurePosDiary(true); } catch (e) {}
       }
       const settingsPanel = document.getElementById("settingsPanel");
       if (settingsPanel && !settingsPanel.hidden) {
@@ -7422,6 +7636,7 @@
         }
         f.reset();
         await tick();
+        if (typeof _posDiaryAt !== "undefined") _posDiaryAt = 0;
         applyMain("pos");
       } catch (e) {
         alert("记账失败");
