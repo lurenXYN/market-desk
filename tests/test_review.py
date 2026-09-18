@@ -93,20 +93,22 @@ class ReviewTests(unittest.TestCase):
             "signal_type": "buy",
             "trade_date": "2026-09-10",
             "price": 10.0,
-            "fill_price": 10.5,
+            "fill_price": 10.5,  # ignored under same_day_plan
         }
-        closes = [10.2, 10.0]
-        dates = ["2026-09-10", "2026-09-11"]
-        lows = [9.9, 9.8]
-        highs = [10.3, 10.1]
-        opens = [10.0, 10.0]
+        # Touched plan on signal day; next close +2% vs plan → 次日红
+        closes = [10.2, 10.2, 10.3]
+        dates = ["2026-09-10", "2026-09-11", "2026-09-12"]
+        lows = [9.9, 10.0, 10.1]
+        highs = [10.3, 10.4, 10.5]
+        opens = [10.0, 10.1, 10.2]
         out = score_signal_with_closes(
             sig, closes, dates, opens=opens, lows=lows, highs=highs, standard="same_day_plan"
         )
         self.assertIsNotNone(out)
         assert out is not None
-        self.assertEqual(out.get("outcome_label"), "当日红")
+        self.assertEqual(out.get("outcome_label"), "次日红")
         self.assertEqual(out.get("outcome_standard"), "same_day_plan")
+        self.assertAlmostEqual(float(out["outcome_day1_pct"]), 2.0, places=2)
 
     def test_same_day_plan_miss(self) -> None:
         sig = {

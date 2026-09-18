@@ -400,16 +400,13 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "次日红": {
         "mean": "买入后下一交易日收盘相对入场价涨幅≥1%。算命中。不是「红开」——开盘红收盘绿不算。",
         "algo": "score_signal_with_closes：day1_close/entry−1 ≥1%。若同日最低相对入场≤−2% 改标次日虚红。\n"
-        "命中集合 BUY_HIT_LABELS={次日红,三日红,当日红}；虚红/冲高回落不进命中率。",
-    },
-    "当日红": {
-        "mean": "「当日建议价」标准下：信号当日最低已触达建议价，且当日收盘相对建议价≥+1%。更贴近人手当日买到的体感。",
-        "algo": "standard=same_day_plan：entry=plan；须 trade_date.low≤plan；d0=close/plan−1≥1% → 当日红（盘中低点≤−2%→当日虚红不计命中）。",
+        "命中集合 BUY_HIT_LABELS={次日红,三日红}；虚红/冲高回落不进命中率。",
     },
     "复盘评测标准": {
-        "mean": "复盘可切换两套结果口径：现行（次日收盘 vs 成交/建议价）与当日建议价（须当日触达 plan，先看当日收盘）。库内默认仍存现行；切换时按日线重算展示。",
+        "mean": "复盘两套口径：现行=成交价/建议价看隔日收盘；当日建议价=须当天碰到 plan 才算买到，入场用当天建议价，结果仍看隔日收盘（贴合 T+1）。",
         "algo": "settings.outcome_standard / GET /api/review?oc=。classic 写入 signals；same_day_plan 仅 overlay。\n"
-        "卖出两侧均带开盘反应：次日 high 不计入卖飞 MAE（只用次日收盘 + 更后日 high）。",
+        "same_day_plan：trade_date.low≤plan 否则「当日未触达」；有隔日后按次日红/绿等同现行标签。\n"
+        "卖出：次日 high 不计入卖飞 MAE（开盘反应）。",
     },
     "Ready风格": {
         "mean": "价带放松：现价已近建议价且未到不追时，半仓 ready（分时贴尖不挡）；严格=旧闸门，只给可试探不升 ready。",

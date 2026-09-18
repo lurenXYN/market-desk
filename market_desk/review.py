@@ -786,8 +786,8 @@ def score_signal_with_closes(
 
     Standards:
       - ``classic``: entry = fill else plan; buy labels use next-session close.
-      - ``same_day_plan``: entry = plan; require signal-day low ≤ plan; prefer
-        same-day close labels (当日红/绿), then fall through to next sessions.
+      - ``same_day_plan``: entry = plan; require signal-day low ≤ plan; then score
+        the **next** session(s) like classic (T+1-friendly, not same-day close).
 
     Sell MAE ignores the signal+1 session's **high** (open-reaction grace): day1
     contributes only via close so a noisy open spike is less likely to mark 卖飞.
@@ -883,6 +883,7 @@ def score_signal_with_closes(
 
     # --- buys ---
     if std == "same_day_plan":
+        # Human ops under T+1: must touch plan that day, then score next session(s).
         if day0_low is None or day0_low > price:
             return {
                 "outcome_day1_pct": None,
@@ -893,48 +894,13 @@ def score_signal_with_closes(
                 "outcome_standard": std,
                 "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-        # Same-day close vs plan first (human: bought at plan today).
-        if day0_close is not None and day0_close > 0:
-            d0 = (float(day0_close) / price - 1.0) * 100.0
-            if d0 >= 1.0:
-                low_pct = None
-                if day0_low is not None and day0_low > 0:
-                    low_pct = (float(day0_low) / price - 1.0) * 100.0
-                label = "当日红"
-                if low_pct is not None and low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
-                    label = "当日虚红"
-                return {
-                    "outcome_day1_pct": round(d0, 2),
-                    "outcome_day3_pct": round(d0, 2),
-                    "outcome_mfe_pct": round(d0, 2),
-                    "outcome_mae_pct": round(low_pct, 2) if low_pct is not None else None,
-                    "outcome_label": label,
-                    "outcome_standard": std,
-                    "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-            if d0 <= -1.5:
-                return {
-                    "outcome_day1_pct": round(d0, 2),
-                    "outcome_day3_pct": round(d0, 2),
-                    "outcome_mfe_pct": round(d0, 2),
-                    "outcome_mae_pct": round(d0, 2),
-                    "outcome_label": "当日绿",
-                    "outcome_standard": std,
-                    "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-        # Flat same-day → fall through to next sessions (still entry=plan).
         if not after_dates:
-            d0 = (
-                (float(day0_close) / price - 1.0) * 100.0
-                if day0_close is not None and day0_close > 0
-                else 0.0
-            )
             return {
-                "outcome_day1_pct": round(d0, 2),
-                "outcome_day3_pct": round(d0, 2),
-                "outcome_mfe_pct": round(d0, 2),
-                "outcome_mae_pct": round(d0, 2),
-                "outcome_label": "平淡",
+                "outcome_day1_pct": None,
+                "outcome_day3_pct": None,
+                "outcome_mfe_pct": None,
+                "outcome_mae_pct": None,
+                "outcome_label": "待隔日",
                 "outcome_standard": std,
                 "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -1017,7 +983,7 @@ def score_signal_with_closes(
 
 
 # Labels that count as a buy "hit" for rate / soft feedback.
-BUY_HIT_LABELS = frozenset({"次日红", "三日红", "当日红"})
+BUY_HIT_LABELS = frozenset({"次日红", "三日红"})
 
 
 def overlay_outcomes_for_standard(
