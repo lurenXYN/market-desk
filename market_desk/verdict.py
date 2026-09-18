@@ -1826,10 +1826,15 @@ def _dragon_items_for_board(
         base_role = str(row.get("role_label") or "龙头")
         item["role_label"] = f"{scope_prefix}{base_role}" if scope_prefix else base_role
         item["dragon_kind"] = row.get("dragon_kind")
+        item["dragon_why"] = row.get("dragon_why")
         item["desk_source"] = str(row.get("desk_source") or "dragon")
         item["dragon_row"] = True
         item["dragon_scope"] = scope
         item["source_board"] = board_name
+        # Keep selection rationale first if _recommend_item only got timing text.
+        why = str(row.get("dragon_why") or "").strip()
+        if why and why not in str(item.get("reason") or ""):
+            item["reason"] = f"{why}。{item.get('reason') or ''}".strip("。")
         if surge_fresh or observe_only:
             item["ready"] = False
             if item.get("wait_price") is not None:
@@ -1887,7 +1892,10 @@ def build_dragon_recommend(
     if not items:
         return None
     scopes = sorted({str(x.get("dragon_scope") or "main") for x in items})
-    tip = "情绪龙·确认异动 + 中军龙·趋势回踩；主线可到位，支线/联动只观察。"
+    tip = (
+        "情绪龙=涨停高度梯队（连板→封单→成交）；中军龙=成分成交额+市值核心（可不涨停）。"
+        "情绪看确认异动，中军看趋势回踩；主线可到位，支线/联动只观察。"
+    )
     if surge_fresh or side_surge or link_surge:
         tip += " 暴起当日该板龙头只观察。"
     bits = [f"{len(items)}只"]

@@ -853,6 +853,12 @@
     .rec-prices .stop .val { color: var(--warn); }
     .rec-prices .chase .val { color: var(--up); }
     .rec-why { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
+    .rec-why .dragon-why {
+      color: #fdba74;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .rec-why .dragon-timing { color: var(--muted); }
     .rec-holder {
       margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.35;
     }
@@ -3287,7 +3293,20 @@
           <div class="stop"><div class="lab">止损</div><div class="val">${fmtPx(it.stop_price, kind)}</div></div>
           <div class="chase"><div class="lab">不追</div><div class="val">${fmtPx(it.chase_price, kind)}</div></div>
         </div>
-        <div class="rec-why">${it.reason || ""}</div>
+        <div class="rec-why">${(() => {
+          const why = String(it.dragon_why || "").trim();
+          const rest = String(it.reason || "").trim();
+          if (why && rest.startsWith(why)) {
+            const tail = rest.slice(why.length).replace(/^[。；;\s]+/, "");
+            return `<div class="dragon-why">${why}</div>`
+              + (tail ? `<div class="dragon-timing">${tail}</div>` : "");
+          }
+          if (why) {
+            return `<div class="dragon-why">${why}</div>`
+              + (rest && rest !== why ? `<div class="dragon-timing">${rest}</div>` : "");
+          }
+          return rest;
+        })()}</div>
         ${(() => {
           const wb = it.whitebox || {};
           const contribs = wb.contribs || [];

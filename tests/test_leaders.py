@@ -60,6 +60,38 @@ class LeadersTests(unittest.TestCase):
         self.assertIsNotNone(hit)
         assert hit is not None
         self.assertEqual(hit["code"], "600002")
+        why = str(hit.get("dragon_why") or "")
+        self.assertIn("为何是情绪龙", why)
+        self.assertIn("2板", why)
+
+    def test_pick_mid_army_has_why(self) -> None:
+        from market_desk.leaders import pick_mid_army_dragon
+
+        board = {
+            "pool": [
+                {
+                    "code": "600001",
+                    "name": "甲",
+                    "amount": 5e8,
+                    "mv_yi": 200,
+                    "pct": 2.0,
+                    "turnover": 4,
+                },
+                {
+                    "code": "600002",
+                    "name": "乙",
+                    "amount": 20e8,
+                    "mv_yi": 500,
+                    "pct": 1.0,
+                    "turnover": 3,
+                },
+            ]
+        }
+        hit = pick_mid_army_dragon(board, skip_codes={"600099"})
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        self.assertEqual(hit["code"], "600002")
+        self.assertIn("为何是中军龙", str(hit.get("dragon_why") or ""))
 
 
 if __name__ == "__main__":

@@ -115,7 +115,7 @@ def pick_emotion_dragon(
         lb = int(card.get("leader_boards") or 0)
         if lc and 1 <= lb <= 2 and lc in zt_by:
             row = zt_by[lc]
-            return {
+            picked = {
                 "code": lc,
                 "name": str(row.get("name") or card.get("leader_name") or lc),
                 "boards": lb,
@@ -126,12 +126,59 @@ def pick_emotion_dragon(
                 "dragon_kind": "emotion",
                 "sealed": True,
             }
+            picked["dragon_why"] = _emotion_dragon_why(picked, runner=None, fallback=True)
+            return picked
         return None
     rows.sort(
         key=lambda r: (int(r["boards"]), float(r["seal"]), float(r["amount"])),
         reverse=True,
     )
-    return rows[0]
+    picked = rows[0]
+    runner = rows[1] if len(rows) > 1 else None
+    picked["dragon_why"] = _emotion_dragon_why(picked, runner=runner, fallback=False)
+    return picked
+
+
+def _fmt_yi(v: float | None, *, digits: int = 1) -> str:
+    """Format yuan amount as 亿 for short UI copy."""
+    try:
+        n = float(v or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if n <= 0:
+        return "—"
+    return f"{n / 1e8:.{digits}f}亿"
+
+
+def _emotion_dragon_why(
+    picked: dict[str, Any],
+    *,
+    runner: dict[str, Any] | None,
+    fallback: bool,
+) -> str:
+    """Explain why this name is the emotion dragon."""
+    boards = int(picked.get("boards") or 0)
+    bits = [
+        f"板块涨停池里主板连板最高（{boards}板）",
+        "同高度比封单，再比成交额",
+    ]
+    seal = picked.get("seal")
+    amount = picked.get("amount")
+    if seal not in (None, 0):
+        bits.append(f"封单约{_fmt_yi(seal)}")
+    if amount not in (None, 0):
+        bits.append(f"成交约{_fmt_yi(amount)}")
+    if runner:
+        rb = int(runner.get("boards") or 0)
+        rname = str(runner.get("name") or runner.get("code") or "")
+        if rb < boards:
+            bits.append(f"高于次席{rname}（{rb}板）")
+        elif rname:
+            bits.append(f"同{rb}板封单/成交优于{rname}")
+    if fallback:
+        bits.append("候选空时回退板块总龙头")
+    bits.append("≥3板不当情绪买点；买点看确认异动")
+    return "为何是情绪龙：" + "；".join(bits)
 
 
 def pick_mid_army_dragon(
@@ -144,6 +191,8 @@ def pick_mid_army_dragon(
     skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
     best: dict[str, Any] | None = None
     best_score = -1.0
+    second: dict[str, Any] | None = None
+    second_score = -1.0
     for member in card.get("pool") or card.get("members") or []:
         code = normalize_code(member.get("code"))
         name = str(member.get("name") or "")
@@ -169,21 +218,56 @@ def pick_mid_army_dragon(
             continue
         # Prefer heavy turnover; soft-boost larger caps and leaders vs board.
         score = amount / 1e8 + min(mv, 800.0) / 200.0 + max(0.0, pct) * 0.15
+        cand = {
+            "code": code,
+            "name": name or code,
+            "amount": amount,
+            "mv_yi": mv,
+            "pct": member.get("pct"),
+            "price": member.get("price"),
+            "high": member.get("high"),
+            "low": member.get("low"),
+            "dragon_kind": "mid_army",
+            "sealed": False,
+            "_score": score,
+        }
         if score > best_score:
-            best_score = score
-            best = {
-                "code": code,
-                "name": name or code,
-                "amount": amount,
-                "mv_yi": mv,
-                "pct": member.get("pct"),
-                "price": member.get("price"),
-                "high": member.get("high"),
-                "low": member.get("low"),
-                "dragon_kind": "mid_army",
-                "sealed": False,
-            }
+            second, second_score = best, best_score
+            best, best_score = cand, score
+        elif score > second_score:
+            second, second_score = cand, score
+    if not best:
+        return None
+    best["dragon_why"] = _mid_army_dragon_why(best, runner=second, skipped=skip)
+    best.pop("_score", None)
     return best
+
+
+def _mid_army_dragon_why(
+    picked: dict[str, Any],
+    *,
+    runner: dict[str, Any] | None,
+    skipped: set[str],
+) -> str:
+    """Explain why this name is the mid-army dragon."""
+    bits = ["成分按「成交额+市值」打分最高（可不涨停）"]
+    amount = picked.get("amount")
+    mv = picked.get("mv_yi")
+    if amount not in (None, 0):
+        bits.append(f"成交约{_fmt_yi(amount)}")
+    if mv not in (None, 0):
+        try:
+            bits.append(f"市值约{float(mv):.0f}亿")
+        except (TypeError, ValueError):
+            pass
+    if skipped:
+        bits.append("已排除情绪龙")
+    if runner:
+        rname = str(runner.get("name") or runner.get("code") or "")
+        if rname:
+            bits.append(f"分高于次席{rname}")
+    bits.append("买点看趋势回踩，不追尖峰")
+    return "为何是中军龙：" + "；".join(bits)
 
 
 def build_dual_dragon_stocks(
@@ -235,6 +319,7 @@ def build_dual_dragon_stocks(
             "low": emotion.get("price"),
             "amount": emotion.get("amount"),
         }
+        dragon_why = str(emotion.get("dragon_why") or "")
         # Sealed emotion dragon: still list as observe / 确认异动, never ready.
         if code in sealed or surge_fresh:
             item = dict(member)
@@ -243,12 +328,14 @@ def build_dual_dragon_stocks(
             item["dragon_kind"] = "emotion"
             item["role_label"] = "情绪龙·异动"
             item["desk_source"] = "emotion_dragon"
+            item["dragon_why"] = dragon_why
             boards_n = int(emotion.get("boards") or boards_by.get(code) or 0)
-            item["reason"] = (
+            timing = (
                 f"情绪龙 {boards_n}板·确认异动"
                 + ("；已封板先观察" if code in sealed else "")
                 + ("；板块暴起当日不推现买" if surge_fresh else "")
             )
+            item["reason"] = _join_dragon_reason(dragon_why, timing)
             out.append(item)
         else:
             scored = _score_stock(
@@ -272,8 +359,10 @@ def build_dual_dragon_stocks(
                 item["dragon_kind"] = "emotion"
                 item["role_label"] = "情绪龙·异动"
                 item["desk_source"] = "emotion_dragon"
-                item["reason"] = (
-                    f"情绪龙·确认异动；{item.get('reason') or '回踩确认后再动'}"
+                item["dragon_why"] = dragon_why
+                item["reason"] = _join_dragon_reason(
+                    dragon_why,
+                    f"情绪龙·确认异动；{item.get('reason') or '回踩确认后再动'}",
                 )
                 # Emotion buys only after mild confirmation, never on fresh surge.
                 if surge_fresh:
@@ -286,12 +375,16 @@ def build_dual_dragon_stocks(
                 item["dragon_kind"] = "emotion"
                 item["role_label"] = "情绪龙·异动"
                 item["desk_source"] = "emotion_dragon"
-                item["reason"] = "情绪龙·等待确认异动（未进回踩带）"
+                item["dragon_why"] = dragon_why
+                item["reason"] = _join_dragon_reason(
+                    dragon_why, "情绪龙·等待确认异动（未进回踩带）"
+                )
                 out.append(item)
 
     if mid and len(out) < 2:
         code = mid["code"]
         member = _member_for(code) or mid
+        dragon_why = str(mid.get("dragon_why") or "")
         if code in sealed:
             item = dict(member)
             item["code"] = code
@@ -299,7 +392,10 @@ def build_dual_dragon_stocks(
             item["dragon_kind"] = "mid_army"
             item["role_label"] = "中军龙·回踩"
             item["desk_source"] = "mid_army_dragon"
-            item["reason"] = "中军龙已封板，趋势回踩口径先观察"
+            item["dragon_why"] = dragon_why
+            item["reason"] = _join_dragon_reason(
+                dragon_why, "中军龙已封板，趋势回踩口径先观察"
+            )
             out.append(item)
         else:
             scored = _score_stock(
@@ -323,7 +419,11 @@ def build_dual_dragon_stocks(
                 item["dragon_kind"] = "mid_army"
                 item["role_label"] = "中军龙·回踩"
                 item["desk_source"] = "mid_army_dragon"
-                item["reason"] = f"中军龙·趋势回踩；{item.get('reason') or ''}".strip("；")
+                item["dragon_why"] = dragon_why
+                item["reason"] = _join_dragon_reason(
+                    dragon_why,
+                    f"中军龙·趋势回踩；{item.get('reason') or ''}".strip("；"),
+                )
                 if surge_fresh:
                     item["ready"] = False
                 out.append(item)
@@ -335,9 +435,21 @@ def build_dual_dragon_stocks(
                 item["dragon_kind"] = "mid_army"
                 item["role_label"] = "中军龙·回踩"
                 item["desk_source"] = "mid_army_dragon"
-                item["reason"] = "中军龙·等趋势回踩到位"
+                item["dragon_why"] = dragon_why
+                item["reason"] = _join_dragon_reason(
+                    dragon_why, "中军龙·等趋势回踩到位"
+                )
                 out.append(item)
     return out[:2]
+
+
+def _join_dragon_reason(why: str, timing: str) -> str:
+    """Combine selection rationale with timing/action note."""
+    w = str(why or "").strip()
+    t = str(timing or "").strip()
+    if w and t:
+        return f"{w}。{t}"
+    return w or t
 
 
 def _near_day_low(member: dict[str, Any], *, max_pct: float = 2.0) -> bool:
