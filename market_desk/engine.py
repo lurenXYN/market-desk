@@ -1145,15 +1145,22 @@ class DeskEngine:
         view_date: str | None = None,
         vs_mainline_mode: str | None = None,
         user_id: int | None = None,
+        outcome_standard: str | None = None,
     ) -> dict[str, Any]:
         """Score pending historical signals then return one trade-date review payload."""
         import time
+
+        from market_desk.config import OUTCOME_STANDARDS
+        from market_desk.settings import setting
 
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         day = str(view_date or today).strip()[:10] or today
         mode_key = str(vs_mainline_mode or "").strip().lower() or "auto"
         uid_key = "none" if user_id is None else str(int(user_id))
-        cache_key = f"{day}|{mode_key}|{limit}|u:{uid_key}"
+        std = str(outcome_standard or setting("outcome_standard", "classic") or "classic").strip().lower()
+        if std not in OUTCOME_STANDARDS:
+            std = "classic"
+        cache_key = f"{day}|{mode_key}|{limit}|u:{uid_key}|oc:{std}"
         now_m = time.monotonic()
         hit = self._review_cache.get(cache_key)
         ttl = 45.0 if day == today else 3600.0
@@ -1174,6 +1181,7 @@ class DeskEngine:
         holders: dict[str, dict[str, Any]] = {}
         day_rows: list[dict[str, Any]] = []
         live_codes: list[str] = []
+        packed_overlay: dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 day_rows = load_signals_for_date(day)
@@ -1227,12 +1235,18 @@ class DeskEngine:
                 async def _holders() -> dict[str, dict[str, Any]]:
                     return await fetch_holder_stats_many(client, stock_codes)
 
+                async def _overlay_klines() -> dict[str, Any]:
+                    if std == "classic" or not live_codes:
+                        return {}
+                    return await fetch_daily_klines_many(client, live_codes, limit=40)
+
                 # zt_ytd / daily-trend chips load async (see /api/review/zt-ytd, /trends).
-                _, _, quotes, holders = await asyncio.gather(
+                _, _, quotes, holders, packed_overlay = await asyncio.gather(
                     _score_pending(),
                     _migrate_outcome_labels(),
                     _quotes(),
                     _holders(),
+                    _overlay_klines(),
                 )
                 note_quote_ticks(quotes)
         except Exception:
@@ -1240,7 +1254,11 @@ class DeskEngine:
         phase = None
         if day == today and self.snapshot:
             phase = self.snapshot.get("phase")
-        from market_desk.review import review_trends_fingerprint
+        from market_desk.review import (
+            overlay_outcomes_for_standard,
+            review_trends_fingerprint,
+            summarize_signals,
+        )
 
         payload = build_review_payload(
             limit=limit,
@@ -1257,6 +1275,23 @@ class DeskEngine:
             user_id=user_id,
             trends=None,
         )
+        payload["outcome_standard"] = std
+        if std != "classic" and packed_overlay:
+            sigs = overlay_outcomes_for_standard(
+                list(payload.get("signals") or []),
+                packed_overlay,
+                standard=std,
+            )
+            payload["signals"] = sigs
+            day_sum = summarize_signals(sigs)
+            summary = dict(payload.get("summary") or {})
+            summary["outcome_standard"] = std
+            summary["buy_hit_rate"] = day_sum.get("buy_hit_rate")
+            summary["buy_hit_rate_all"] = day_sum.get("buy_hit_rate_all")
+            summary["buy_avg_day1"] = day_sum.get("buy_avg_day1")
+            summary["buy_scored"] = day_sum.get("buy_scored")
+            summary["buy_scored_all"] = day_sum.get("buy_scored_all")
+            payload["summary"] = summary
         payload["trends_fp"] = review_trends_fingerprint(
             day, day_rows or load_signals_for_date(day), calendar_day=today
         )

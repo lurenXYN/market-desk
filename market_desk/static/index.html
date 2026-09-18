@@ -2691,6 +2691,18 @@
             <option value="all">全部已打分（含纸面）</option>
           </select>
         </label>
+        <label>复盘评测标准 <button type="button" class="q" data-term="复盘评测标准">?</button>
+          <select id="setOutcomeStd" title="库内仍存现行口径；当日建议价为展示重算">
+            <option value="classic">现行（次日收盘）</option>
+            <option value="same_day_plan">当日建议价（更贴操作）</option>
+          </select>
+        </label>
+        <label>Ready 风格 <button type="button" class="q" data-term="Ready风格">?</button>
+          <select id="setReadyStyle" title="价带放松：靠近建议价且未到不追 → 半仓 ready">
+            <option value="band">价带放松（推荐）</option>
+            <option value="strict">严格（旧闸门）</option>
+          </select>
+        </label>
         <label>恐慌温度&lt;<input id="setPanicT" type="number" min="5" max="50" step="1" title="温度低于此判恐慌" /></label>
         <label>发酵温度≥<input id="setFermentT" type="number" min="10" max="80" step="1" title="温度达此判发酵（须高于恐慌）" /></label>
         <label>高潮温度≥<input id="setClimaxT" type="number" min="20" max="95" step="1" title="温度达此且高度够可判高潮" /></label>
@@ -3280,6 +3292,12 @@
               <select id="revHitMode" title="与运行参数同步；改后立即生效">
                 <option value="traded">仅已交易</option>
                 <option value="all">全部已打分</option>
+              </select>
+            </label>
+            <label>评测标准 <button type="button" class="q" data-term="复盘评测标准">?</button>
+              <select id="revOcMode" title="现行=次日收盘；当日建议价=须当日触达 plan，更贴人手">
+                <option value="classic">现行</option>
+                <option value="same_day_plan">当日建议价</option>
               </select>
             </label>
             <label class="wide" style="display:flex;align-items:center;gap:6px;grid-column:auto">
@@ -6584,6 +6602,10 @@
       const hitMode = sum.hit_rate_mode === "all" ? "全部已打分" : "仅已交易";
       const revHitSel = document.getElementById("revHitMode");
       if (revHitSel && sum.hit_rate_mode) revHitSel.value = sum.hit_rate_mode;
+      const revOcSel = document.getElementById("revOcMode");
+      const ocNow = payload.outcome_standard || sum.outcome_standard || reviewOcMode || "classic";
+      reviewOcMode = ocNow;
+      if (revOcSel) revOcSel.value = ocNow;
       document.getElementById("revSum").innerHTML = [
         cell("买入信号（近窗）", sum.buy_total ?? 0),
         cell(`买入命中率·${hitMode}`, sum.buy_hit_rate == null ? "—" : (sum.buy_hit_rate + "%"), "up"),
@@ -6772,6 +6794,7 @@
     let lastReview = { signals: [], summary: {} };
     let reviewViewDate = "";
     let reviewVsMlMode = "live";
+    let reviewOcMode = "classic";
     window.__eodMarkdown = "";
     window.__tomorrowMarkdown = "";
 
@@ -7114,6 +7137,10 @@
         const params = new URLSearchParams();
         if (want) params.set("date", want);
         if (reviewVsMlMode) params.set("vs_ml", reviewVsMlMode);
+        const ocEl = document.getElementById("revOcMode");
+        const oc = (ocEl && ocEl.value) || reviewOcMode || "classic";
+        reviewOcMode = oc;
+        if (oc) params.set("oc", oc);
         const q = params.toString() ? ("?" + params.toString()) : "";
         setModStamp("revStamp", null, { loading: true, label: "复盘" });
         const r = await fetch("/api/review" + q);
@@ -8700,6 +8727,18 @@
       } catch (e) {}
       loadReview(true, reviewViewDate || "");
     });
+    document.getElementById("revOcMode")?.addEventListener("change", async () => {
+      const oc = document.getElementById("revOcMode").value || "classic";
+      reviewOcMode = oc;
+      try {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ outcome_standard: oc }),
+        });
+      } catch (e) {}
+      loadReview(true, reviewViewDate || "");
+    });
     document.getElementById("revDayPrev").addEventListener("click", () => shiftReviewDay(1));
     document.getElementById("revDayNext").addEventListener("click", () => shiftReviewDay(-1));
     document.getElementById("revDayToday").addEventListener("click", () => {
@@ -8740,6 +8779,10 @@
         document.getElementById("setDecisionOn").checked = s.decision_alerts !== false;
         document.getElementById("setAlertMode").value = s.alert_mode || "traded_watch";
         document.getElementById("setHitMode").value = s.hit_rate_mode || "traded";
+        const ocEl = document.getElementById("setOutcomeStd");
+        if (ocEl) ocEl.value = s.outcome_standard || "classic";
+        const rsEl = document.getElementById("setReadyStyle");
+        if (rsEl) rsEl.value = s.ready_style || "band";
         document.getElementById("setPanicT").value = s.phase_panic_temp ?? 28;
         document.getElementById("setFermentT").value = s.phase_ferment_temp ?? 45;
         document.getElementById("setClimaxT").value = s.phase_climax_temp ?? 72;
@@ -8851,6 +8894,8 @@
         decision_alerts: !!document.getElementById("setDecisionOn").checked,
         alert_mode: document.getElementById("setAlertMode").value,
         hit_rate_mode: document.getElementById("setHitMode").value,
+        outcome_standard: document.getElementById("setOutcomeStd")?.value || "classic",
+        ready_style: document.getElementById("setReadyStyle")?.value || "band",
         phase_panic_temp: Number(document.getElementById("setPanicT").value),
         phase_ferment_temp: Number(document.getElementById("setFermentT").value),
         phase_climax_temp: Number(document.getElementById("setClimaxT").value),
@@ -8986,6 +9031,7 @@
       ] },
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "信号回测", "模拟成交", "触达", "计划价带", "理想回踩", "建议价", "不追上限", "买撮合", "预览匹配数", "仅ready",
+        "复盘评测标准", "当日红", "Ready风格",
         "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
         "独立人气回踩", "情绪龙", "中军龙", "年内涨停",

@@ -27,6 +27,8 @@ USER_PRIVATE_KEYS = frozenset(
         "toast_cooldown",
         "decision_alerts",
         "hit_rate_mode",
+        "outcome_standard",
+        "ready_style",
         "open_mute_minutes",
         "tail_mute_minutes",
         "morning_push",
@@ -50,6 +52,8 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "open_mute_minutes",
         "tail_mute_minutes",
         "hit_rate_mode",
+        "outcome_standard",
+        "ready_style",
         "morning_push",
         "sticky_margin",
         "switch_min_seconds",
@@ -74,6 +78,7 @@ SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
         "tail_mute_minutes": 45,
         "alert_mode": "traded_watch",
         "decision_alerts": False,
+        "ready_style": "strict",
     },
     "balanced": {
         "risk_pct_per_trade": 1.0,
@@ -87,6 +92,7 @@ SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
         "tail_mute_minutes": 30,
         "alert_mode": "traded_watch",
         "decision_alerts": True,
+        "ready_style": "band",
     },
     "aggressive": {
         "risk_pct_per_trade": 1.8,
@@ -100,6 +106,7 @@ SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
         "tail_mute_minutes": 15,
         "alert_mode": "all",
         "decision_alerts": True,
+        "ready_style": "band",
     },
 }
 
@@ -136,6 +143,10 @@ DEFAULTS: dict[str, Any] = {
     "tail_mute_minutes": 30,
     # Review hit-rate: traded (executed only) | all (paper signals too).
     "hit_rate_mode": "traded",
+    # Review outcome standard: classic | same_day_plan (display overlay).
+    "outcome_standard": "classic",
+    # Ready style: strict | band (near_entry below chase → soft ready).
+    "ready_style": str(cfg.READY_STYLE_DEFAULT),
     # Per-user: push morning brief via Server酱 once near open (needs Key).
     "morning_push": False,
     # Phase temperature cutoffs (see classify_phase).
@@ -286,6 +297,14 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     if hit_mode not in ("traded", "all"):
         hit_mode = "traded"
     out["hit_rate_mode"] = hit_mode
+    oc = str(out.get("outcome_standard") or "classic").strip().lower()
+    if oc not in ("classic", "same_day_plan"):
+        oc = "classic"
+    out["outcome_standard"] = oc
+    rs = str(out.get("ready_style") or cfg.READY_STYLE_DEFAULT).strip().lower()
+    if rs not in ("strict", "band"):
+        rs = str(cfg.READY_STYLE_DEFAULT)
+    out["ready_style"] = rs
     out["morning_push"] = bool(out.get("morning_push"))
     panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))
     ferment_t = max(panic_t + 1, min(80, int(out.get("phase_ferment_temp") or cfg.PHASE_FERMENT_TEMP)))

@@ -154,6 +154,10 @@ class SettingsIn(BaseModel):
     min_stock_mv_yi: float | None = None
     # Review hit-rate: traded (executed only) | all (paper signals too).
     hit_rate_mode: str | None = None
+    # Review outcome standard: classic | same_day_plan.
+    outcome_standard: str | None = None
+    # Ready style: strict | band.
+    ready_style: str | None = None
     morning_push: bool | None = None
     phase_panic_temp: int | None = None
     phase_ferment_temp: int | None = None
@@ -488,13 +492,17 @@ def health() -> dict:
 async def review(
     date: str | None = Query(default=None),
     vs_ml: str | None = Query(default=None, description="live or day"),
+    oc: str | None = Query(default=None, description="classic or same_day_plan"),
     user: dict = Depends(current_user_required),
 ) -> dict:
     """Return one trade-date's signals with scored outcomes for the review tab."""
     # Guest sees paper signals only (no fill overlays); members get per-user meta.
     uid = None if is_guest(user) else int(user["id"])
     return await engine.build_review(
-        view_date=date, vs_mainline_mode=vs_ml, user_id=uid
+        view_date=date,
+        vs_mainline_mode=vs_ml,
+        user_id=uid,
+        outcome_standard=oc,
     )
 
 

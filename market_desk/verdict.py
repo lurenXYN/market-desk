@@ -3213,16 +3213,80 @@ def apply_mainline_probe(
     return rec
 
 
+def apply_band_ready_relax(
+    recommend: dict[str, Any] | None,
+    *,
+    block_arm: bool = False,
+) -> dict[str, Any]:
+    """Promote near-entry cards to soft ready when style is ``band``.
+
+    Matches the habit of buying inside the band before chase: tip/shallow minute
+    fails no longer block ready; size stays at probe half-lot. Hard demote locks
+    (``block_ready`` / ``block_arm`` / trend_down / non-tip hard fails) still win.
+    """
+    from market_desk.config import PROBE_SIZE_MULT
+    from market_desk.numbers import num
+    from market_desk.settings import setting
+
+    style = str(setting("ready_style", "band") or "band").strip().lower()
+    rec = dict(recommend or {})
+    if style != "band":
+        return rec
+    items: list[dict[str, Any]] = []
+    any_relaxed = False
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        if (
+            block_arm
+            or item.get("block_ready")
+            or item.get("ready")
+            or item.get("trend_down")
+            or not item.get("near_entry")
+        ):
+            items.append(item)
+            continue
+        last = num(item.get("last") or item.get("price_now"))
+        chase = num(item.get("chase_price") or (item.get("prices") or {}).get("chase"))
+        if last is not None and chase is not None and chase > 0 and last >= chase:
+            items.append(item)
+            continue
+        blocking = probe_blocking_fails(item.get("confirm_fail") or [])
+        if blocking:
+            items.append(item)
+            continue
+        item["ready"] = True
+        item["ready_relaxed"] = True
+        item["probe_ok"] = False
+        any_relaxed = True
+        kind = item.get("kind") or "stock"
+        item["role_label"] = "ETF·价带可买" if kind == "etf" else "主线·价带可买"
+        tip = "价带放松：已近建议价且未到不追，半仓 ready（分时贴尖不挡）"
+        if abs(float(item.get("probe_size_mult") or 0) - float(PROBE_SIZE_MULT)) > 0.01:
+            _scale_item_qty(item, float(PROBE_SIZE_MULT), "价带放松·半仓")
+            item["probe_size_mult"] = round(float(PROBE_SIZE_MULT), 3)
+        item["reason"] = _join_hint(str(item.get("reason") or ""), tip)
+        items.append(item)
+    rec["items"] = items
+    if any_relaxed:
+        rec["ready_relaxed"] = True
+        rec["size_note"] = _join_hint(
+            str(rec.get("size_note") or ""),
+            "价带放松·未到不追可半仓买入",
+        )
+    return rec
+
+
 def finalize_recommend_buy_ux(
     recommend: dict[str, Any] | None,
     *,
     block_arm: bool = False,
     allow_probe: bool = True,
 ) -> dict[str, Any]:
-    """Apply mainline probe (optional) then attach buy-progress checklists."""
+    """Apply mainline probe, optional band-ready relax, then buy-progress checklists."""
     rec = dict(recommend or {})
     if allow_probe:
         rec = apply_mainline_probe(rec, block_arm=block_arm)
+        rec = apply_band_ready_relax(rec, block_arm=block_arm)
     else:
         for raw in rec.get("items") or []:
             raw["probe_ok"] = False

@@ -26,6 +26,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **价带放松 ready + 复盘双标准 + 卖出开盘反应** — ready_style=band；评测 classic/same_day_plan；卖飞 MAE 忽略次日 high。*(2026-09-18)*
 - [x] **回测术语说明** — 用法折叠、表头/控件「?」、glossary 增补模拟成交/触达/计划价带等。*(2026-09-18)*
 - [x] **回测护栏** — 日线高估免责声明置顶；跨度≤90天；`dry_run` 预览匹配数。*(2026-09-18)*
 - [x] **模拟撮合 / 回测引擎（轻量）** — 日线价带假成交 + 复盘 outcome；页签「回测」；不改真实 traded。*(2026-09-18)*

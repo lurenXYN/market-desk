@@ -207,8 +207,11 @@ STOCK_NEAR_HIGH_PCT = 0.50
 OUTCOME_FAKE_RED_LOW_PCT = -2.0   # day1 low vs entry ≤ this → 次日虚红
 OUTCOME_FAKE_RED_OPEN_PCT = 1.5   # day1 open ≥ this and close weak → 次日冲高回落
 OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
-# Bump when buy outcome label semantics change; review refresh migrates old rows.
-OUTCOME_FORMULA_VERSION = 3
+# Bump when buy/sell outcome label semantics change; review refresh migrates old rows.
+# v4: sell MAE ignores day1 high (open-reaction grace); same_day_plan is display-only.
+OUTCOME_FORMULA_VERSION = 4
+# Review display standards (DB always stores classic).
+OUTCOME_STANDARDS = ("classic", "same_day_plan")
 
 # Wait price as a fraction of last (shallower wait → nearer entry tags).
 ETF_WAIT_GAP = 0.9955   # ~0.45% below last
@@ -463,6 +466,8 @@ SELL_WAVE_END_SOFT_DELTA = -0.5
 # Review「卖飞」: left-on-table after sell.
 SELL_FLY_MAE_PCT = 3.0
 SELL_FLY_DAY1_PCT = -2.5
+# Ready style: strict = full gates; band = near_entry & below chase → soft ready (half size).
+READY_STYLE_DEFAULT = "band"
 SELL_MINUTE_GATE_ENABLED = True
 
 # Dual-dragon + independent popular pullback.

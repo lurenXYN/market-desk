@@ -780,57 +780,82 @@ def score_signal_with_closes(
     opens: list[float | None] | None = None,
     lows: list[float | None] | None = None,
     highs: list[float | None] | None = None,
+    standard: str = "classic",
 ) -> dict[str, Any] | None:
-    """Score a buy/sell signal against subsequent daily bars. Return outcome fields or None.
+    """Score a buy/sell signal against daily bars. Return outcome fields or None.
 
-    Buy labels use next-session **close** vs entry (fill else plan price) — not the
-    open. A close that is ≥+1% but stabbed deeply on the day-low (or opened strong
-    then faded) is marked ``次日虚红`` / ``次日冲高回落`` and does not count as a hit.
+    Standards:
+      - ``classic``: entry = fill else plan; buy labels use next-session close.
+      - ``same_day_plan``: entry = plan; require signal-day low ≤ plan; prefer
+        same-day close labels (当日红/绿), then fall through to next sessions.
+
+    Sell MAE ignores the signal+1 session's **high** (open-reaction grace): day1
+    contributes only via close so a noisy open spike is less likely to mark 卖飞.
     """
     from market_desk.config import (
         OUTCOME_FAKE_RED_CLOSE_MAX,
         OUTCOME_FAKE_RED_LOW_PCT,
         OUTCOME_FAKE_RED_OPEN_PCT,
+        OUTCOME_STANDARDS,
     )
 
-    price = num(signal.get("fill_price"))
-    if price is None or price <= 0:
-        price = num(signal.get("price"))
-    if price is None or price <= 0 or not closes:
-        return None
+    std = str(standard or "classic").strip().lower()
+    if std not in OUTCOME_STANDARDS:
+        std = "classic"
+
     trade_date = str(signal.get("trade_date") or "")
     sig_type = signal.get("signal_type") or "buy"
+    plan = num(signal.get("price"))
+    fill = num(signal.get("fill_price"))
 
-    # Prefer closes strictly after the signal date when dates are available.
-    after: list[float] = []
-    after_opens: list[float | None] = []
-    after_lows: list[float | None] = []
-    after_highs: list[float | None] = []
+    if std == "same_day_plan" and is_buy_signal(sig_type):
+        price = plan
+    else:
+        price = fill if fill is not None and fill > 0 else plan
+    if price is None or price <= 0 or not closes:
+        return None
+
+    # Index bars by date (signal day + forward).
+    bar_by_day: dict[str, dict[str, float | None]] = {}
     if dates and len(dates) == len(closes) and trade_date:
         for i, (d, px) in enumerate(zip(dates, closes)):
-            if str(d) > trade_date:
-                after.append(float(px))
-                if opens and i < len(opens):
-                    after_opens.append(opens[i])
-                if lows and i < len(lows):
-                    after_lows.append(lows[i])
-                if highs and i < len(highs):
-                    after_highs.append(highs[i])
-        if not after:
-            return None
+            ds = str(d)
+            bar_by_day[ds] = {
+                "close": float(px),
+                "open": (opens[i] if opens and i < len(opens) else None),
+                "low": (lows[i] if lows and i < len(lows) else None),
+                "high": (highs[i] if highs and i < len(highs) else None),
+            }
     else:
         return None
-    if not after:
+
+    after_dates = sorted(d for d in bar_by_day if d > trade_date)
+    if not after_dates and std != "same_day_plan":
         return None
 
-    day1 = after[0]
-    day3 = after[min(2, len(after) - 1)]
-    peak = max(after)
-    trough = min(after)
-    day1_open = after_opens[0] if after_opens else None
-    day1_low = after_lows[0] if after_lows else None
+    day0 = bar_by_day.get(trade_date) or {}
+    day0_close = num(day0.get("close"))
+    day0_low = num(day0.get("low"))
+
     if is_sell_signal(sig_type):
-        # Sell: positive means avoiding further drop (price fell after sell).
+        if not after_dates:
+            return None
+        after_closes = [float(bar_by_day[d]["close"]) for d in after_dates]  # type: ignore[index]
+        day1 = after_closes[0]
+        day3 = after_closes[min(2, len(after_closes) - 1)]
+        trough = min(after_closes)
+        # Open-reaction grace: day1 high does not inflate "left upside" / 卖飞.
+        peak = float(day1)
+        for i, d in enumerate(after_dates):
+            bar = bar_by_day[d]
+            c = num(bar.get("close"))
+            h = num(bar.get("high"))
+            if c is not None:
+                peak = max(peak, float(c))
+            if i == 0:
+                continue
+            if h is not None:
+                peak = max(peak, float(h))
         d1 = (price / day1 - 1.0) * 100.0
         d3 = (price / day3 - 1.0) * 100.0
         mfe = (price / trough - 1.0) * 100.0
@@ -838,7 +863,6 @@ def score_signal_with_closes(
         from market_desk.config import SELL_FLY_DAY1_PCT, SELL_FLY_MAE_PCT
 
         left = abs(mae) if mae <= 0 else 0.0
-        # 卖飞: left substantial upside on the table after the sell.
         if d1 <= float(SELL_FLY_DAY1_PCT) or left >= float(SELL_FLY_MAE_PCT):
             label = "卖飞"
         elif d1 >= 1.0:
@@ -847,61 +871,139 @@ def score_signal_with_closes(
             label = "卖后继续涨"
         else:
             label = "平淡"
-    else:
-        d1 = (day1 / price - 1.0) * 100.0
-        d3 = (day3 / price - 1.0) * 100.0
-        mfe = (peak / price - 1.0) * 100.0
-        mae = (trough / price - 1.0) * 100.0
-        # Prefer intraday low for MAE when available (T+1 path you could feel).
+        return {
+            "outcome_day1_pct": round(d1, 2),
+            "outcome_day3_pct": round(d3, 2),
+            "outcome_mfe_pct": round(mfe, 2),
+            "outcome_mae_pct": round(mae, 2),
+            "outcome_label": label,
+            "outcome_standard": "classic",
+            "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    # --- buys ---
+    if std == "same_day_plan":
+        if day0_low is None or day0_low > price:
+            return {
+                "outcome_day1_pct": None,
+                "outcome_day3_pct": None,
+                "outcome_mfe_pct": None,
+                "outcome_mae_pct": None,
+                "outcome_label": "当日未触达",
+                "outcome_standard": std,
+                "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        # Same-day close vs plan first (human: bought at plan today).
+        if day0_close is not None and day0_close > 0:
+            d0 = (float(day0_close) / price - 1.0) * 100.0
+            if d0 >= 1.0:
+                low_pct = None
+                if day0_low is not None and day0_low > 0:
+                    low_pct = (float(day0_low) / price - 1.0) * 100.0
+                label = "当日红"
+                if low_pct is not None and low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
+                    label = "当日虚红"
+                return {
+                    "outcome_day1_pct": round(d0, 2),
+                    "outcome_day3_pct": round(d0, 2),
+                    "outcome_mfe_pct": round(d0, 2),
+                    "outcome_mae_pct": round(low_pct, 2) if low_pct is not None else None,
+                    "outcome_label": label,
+                    "outcome_standard": std,
+                    "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            if d0 <= -1.5:
+                return {
+                    "outcome_day1_pct": round(d0, 2),
+                    "outcome_day3_pct": round(d0, 2),
+                    "outcome_mfe_pct": round(d0, 2),
+                    "outcome_mae_pct": round(d0, 2),
+                    "outcome_label": "当日绿",
+                    "outcome_standard": std,
+                    "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+        # Flat same-day → fall through to next sessions (still entry=plan).
+        if not after_dates:
+            d0 = (
+                (float(day0_close) / price - 1.0) * 100.0
+                if day0_close is not None and day0_close > 0
+                else 0.0
+            )
+            return {
+                "outcome_day1_pct": round(d0, 2),
+                "outcome_day3_pct": round(d0, 2),
+                "outcome_mfe_pct": round(d0, 2),
+                "outcome_mae_pct": round(d0, 2),
+                "outcome_label": "平淡",
+                "outcome_standard": std,
+                "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+    if not after_dates:
+        return None
+
+    after_closes = [float(bar_by_day[d]["close"]) for d in after_dates]  # type: ignore[index]
+    day1 = after_closes[0]
+    day3 = after_closes[min(2, len(after_closes) - 1)]
+    peak = max(after_closes)
+    trough = min(after_closes)
+    day1_bar = bar_by_day[after_dates[0]]
+    day1_open = num(day1_bar.get("open"))
+    day1_low = num(day1_bar.get("low"))
+
+    d1 = (day1 / price - 1.0) * 100.0
+    d3 = (day3 / price - 1.0) * 100.0
+    mfe = (peak / price - 1.0) * 100.0
+    mae = (trough / price - 1.0) * 100.0
+    if day1_low is not None and float(day1_low) > 0:
+        try:
+            day_mae = (float(day1_low) / price - 1.0) * 100.0
+            mae = min(mae, day_mae)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    if d1 >= 1.0:
+        label = "次日红"
         if day1_low is not None and float(day1_low) > 0:
             try:
-                day_mae = (float(day1_low) / price - 1.0) * 100.0
-                mae = min(mae, day_mae)
+                low_pct = (float(day1_low) / price - 1.0) * 100.0
+                if low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
+                    label = "次日虚红"
             except (TypeError, ValueError, ZeroDivisionError):
                 pass
-        if d1 >= 1.0:
-            label = "次日红"
-            if day1_low is not None and float(day1_low) > 0:
-                try:
-                    low_pct = (float(day1_low) / price - 1.0) * 100.0
-                    if low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
-                        label = "次日虚红"
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pass
-        elif (
-            day1_open is not None
-            and float(day1_open) > 0
-            and d1 < float(OUTCOME_FAKE_RED_CLOSE_MAX)
-        ):
-            try:
-                open_pct = (float(day1_open) / price - 1.0) * 100.0
-                if open_pct >= float(OUTCOME_FAKE_RED_OPEN_PCT):
-                    label = "次日冲高回落"
-                elif d1 <= -1.5:
-                    label = "次日绿"
-                elif d3 >= 2.0:
-                    label = "三日红"
-                elif d3 <= -2.0:
-                    label = "三日绿"
-                else:
-                    label = "平淡"
-            except (TypeError, ValueError, ZeroDivisionError):
-                if d1 <= -1.5:
-                    label = "次日绿"
-                elif d3 >= 2.0:
-                    label = "三日红"
-                elif d3 <= -2.0:
-                    label = "三日绿"
-                else:
-                    label = "平淡"
-        elif d1 <= -1.5:
-            label = "次日绿"
-        elif d3 >= 2.0:
-            label = "三日红"
-        elif d3 <= -2.0:
-            label = "三日绿"
-        else:
-            label = "平淡"
+    elif (
+        day1_open is not None
+        and float(day1_open) > 0
+        and d1 < float(OUTCOME_FAKE_RED_CLOSE_MAX)
+    ):
+        try:
+            open_pct = (float(day1_open) / price - 1.0) * 100.0
+            if open_pct >= float(OUTCOME_FAKE_RED_OPEN_PCT):
+                label = "次日冲高回落"
+            elif d1 <= -1.5:
+                label = "次日绿"
+            elif d3 >= 2.0:
+                label = "三日红"
+            elif d3 <= -2.0:
+                label = "三日绿"
+            else:
+                label = "平淡"
+        except (TypeError, ValueError, ZeroDivisionError):
+            if d1 <= -1.5:
+                label = "次日绿"
+            elif d3 >= 2.0:
+                label = "三日红"
+            elif d3 <= -2.0:
+                label = "三日绿"
+            else:
+                label = "平淡"
+    elif d1 <= -1.5:
+        label = "次日绿"
+    elif d3 >= 2.0:
+        label = "三日红"
+    elif d3 <= -2.0:
+        label = "三日绿"
+    else:
+        label = "平淡"
 
     return {
         "outcome_day1_pct": round(d1, 2),
@@ -909,12 +1011,56 @@ def score_signal_with_closes(
         "outcome_mfe_pct": round(mfe, 2),
         "outcome_mae_pct": round(mae, 2),
         "outcome_label": label,
+        "outcome_standard": std,
         "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
 # Labels that count as a buy "hit" for rate / soft feedback.
-BUY_HIT_LABELS = frozenset({"次日红", "三日红"})
+BUY_HIT_LABELS = frozenset({"次日红", "三日红", "当日红"})
+
+
+def overlay_outcomes_for_standard(
+    rows: list[dict[str, Any]],
+    closes_map: dict[str, Any],
+    *,
+    standard: str,
+) -> list[dict[str, Any]]:
+    """Return row copies with outcome fields rescored for a display standard."""
+    std = str(standard or "classic").strip().lower()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        if std == "classic":
+            item["outcome_standard"] = "classic"
+            out.append(item)
+            continue
+        code = normalize_code(row.get("code"))
+        packed = closes_map.get(code)
+        if not packed:
+            item["outcome_standard"] = std
+            out.append(item)
+            continue
+        if len(packed) >= 3:
+            dates, closes, ohlc = packed[0], packed[1], packed[2] or {}
+        else:
+            dates, closes = packed[0], packed[1]
+            ohlc = {}
+        scored = score_signal_with_closes(
+            row,
+            closes,
+            dates,
+            opens=list(ohlc.get("open") or []) or None,
+            lows=list(ohlc.get("low") or []) or None,
+            highs=list(ohlc.get("high") or []) or None,
+            standard=std,
+        )
+        if scored:
+            item.update(scored)
+        else:
+            item["outcome_standard"] = std
+        out.append(item)
+    return out
 
 
 def summarize_signals(
