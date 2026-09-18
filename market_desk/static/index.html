@@ -1943,26 +1943,69 @@
     .next-act.na-hold { color: var(--up, #1a7f37); }
     .na-sub { font-size: 11px; margin-top: 2px; }
     .sell-fly-board {
-      margin: 10px 0 14px;
+      margin: 8px 0 12px;
       padding: 10px 12px;
-      border: 1px solid var(--line, #e2e5ea);
+      border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--card-bg, #fafbfc);
+      background: #0e141c;
+      color: var(--text);
+      font-size: 13px;
     }
-    .sell-fly-board .hd { font-weight: 600; margin-bottom: 6px; }
-    .sell-fly-board .fly-verdict { margin: 4px 0 8px; }
+    .sell-fly-board .hd {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 6px;
+      letter-spacing: 0.02em;
+    }
+    .sell-fly-board .fly-verdict {
+      margin: 4px 0 8px;
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .sell-fly-board .fly-verdict b { color: var(--ice, #7dd3fc); font-weight: 650; }
     .sell-fly-board .fly-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
     .sell-fly-board .fly-chip {
       min-width: 88px;
       padding: 6px 8px;
       border-radius: 6px;
-      background: #fff;
-      border: 1px solid var(--line, #e6e8ee);
+      background: #121826;
+      border: 1px solid var(--line);
     }
     .sell-fly-board .fly-chip .lab { font-size: 11px; color: var(--muted); }
-    .sell-fly-board .fly-chip .n { font-size: 16px; font-weight: 650; }
-    .sell-fly-board .fly-recent { margin-top: 6px; font-size: 12px; line-height: 1.55; }
-    .sell-fly-board .fly-recent li { margin: 2px 0; }
+    .sell-fly-board .fly-chip .n {
+      font-size: 16px;
+      font-weight: 650;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .sell-fly-board .fly-src {
+      color: var(--muted);
+      font-size: 12px;
+      margin: 4px 0 6px;
+      line-height: 1.4;
+    }
+    .sell-fly-board .fly-recent {
+      list-style: none;
+      margin: 6px 0 0;
+      padding: 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+    }
+    .sell-fly-board .fly-recent li {
+      margin: 0;
+      padding: 4px 0;
+      border-top: 1px solid rgba(44, 58, 78, 0.55);
+    }
+    .sell-fly-board .fly-recent li:first-child { border-top: none; padding-top: 0; }
+    .sell-fly-board .fly-recent .fly-tag {
+      color: var(--warn, #e8a54b);
+      font-weight: 650;
+      margin-right: 4px;
+    }
+    .sell-fly-board .fly-recent .fly-tag.hit { color: var(--up, #3dd68c); }
+    .sell-fly-board .fly-recent .dim { color: var(--muted); }
     .pos-del {
       background: transparent; color: var(--warn); border: 1px solid #5a3d2a;
       border-radius: 4px; padding: 2px 8px; cursor: pointer;
@@ -6003,16 +6046,20 @@
           : "";
         const recentHtml = recent.length
           ? (`<ul class="fly-recent">` + recent.map((r) => {
-              const d1 = r.outcome_day1_pct == null ? "" : ` · 次日${Number(r.outcome_day1_pct) > 0 ? "+" : ""}${Number(r.outcome_day1_pct).toFixed(1)}%`;
-              const mae = r.outcome_mae_pct == null ? "" : ` · 留桌上${Number(r.outcome_mae_pct).toFixed(1)}%`;
-              return `<li><b>${r.outcome_label || ""}</b> ${(r.trade_date || "").slice(5)} ${r.name || r.code} ${r.code || ""}${d1}${mae}</li>`;
+              const lab = r.outcome_label || "";
+              const tagCls = lab === "卖后回落" ? "fly-tag hit" : "fly-tag";
+              const d1 = r.outcome_day1_pct == null ? ""
+                : ` <span class="dim">· 次日${Number(r.outcome_day1_pct) > 0 ? "+" : ""}${Number(r.outcome_day1_pct).toFixed(1)}%</span>`;
+              const mae = r.outcome_mae_pct == null ? ""
+                : ` <span class="dim">· 留桌上${Number(r.outcome_mae_pct).toFixed(1)}%</span>`;
+              return `<li><span class="${tagCls}">${lab}</span>${(r.trade_date || "").slice(5)} ${r.name || r.code} <span class="dim">${r.code || ""}</span>${d1}${mae}</li>`;
             }).join("") + `</ul>`)
           : `<div class="meta">暂无卖飞/续涨样本</div>`;
         flyBox.innerHTML =
           `<div class="hd">卖飞 / 卖后回落看板<button type="button" class="q" data-term="卖飞看板">?</button></div>`
           + `<div class="fly-verdict"><b>${fly.verdict || "—"}</b> · <span class="meta">${fly.note || ""}</span></div>`
           + `<div class="fly-chips">${chips}</div>`
-          + (srcLine ? `<div class="meta">${srcLine}</div>` : "")
+          + (srcLine ? `<div class="fly-src">${srcLine}</div>` : "")
           + recentHtml;
       }
       const type = (document.getElementById("revType") || {}).value || "";
