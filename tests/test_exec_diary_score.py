@@ -64,3 +64,39 @@ def test_merge_prefers_signal_over_diary() -> None:
     score = build_exec_score(merged)
     assert score["diary_n"] == 0
     assert score["in_band_n"] == 1
+
+
+def test_unplanned_manual_diary_skipped_from_score() -> None:
+    diary = [
+        {
+            "id": 3,
+            "side": "buy",
+            "code": "600099",
+            "price": 8.0,
+            "trade_date": "2026-09-18",
+            "created_at": "2026-09-18 11:00:00",
+            "advice": {"source": "manual"},  # no buy band
+        }
+    ]
+    assert diary_rows_as_exec_fills(diary) == []
+    score = build_exec_score(
+        [
+            {
+                "id": "diary:3",
+                "signal_type": "buy",
+                "traded": 1,
+                "code": "600099",
+                "kind": "stock",
+                "fill_price": 8.0,
+                "price": None,
+                "wait_price": None,
+                "chase_price": None,
+                "trade_date": "2026-09-18",
+                "exec_source": "diary",
+            }
+        ]
+    )
+    assert score["traded_buy_n"] == 1
+    assert score["scored_n"] == 0
+    assert score["unplanned_n"] == 1
+    assert score["score"] is None

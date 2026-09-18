@@ -806,7 +806,8 @@ def build_exec_size_bias(
     """Soft size multiplier from recent plan-execution quality (chase / score).
 
     Never bans buys — only shrinks suggested risk when fills chase the band.
-    Merges exec-diary buys when they do not duplicate a traded signal.
+    Uses shared paper signals only (not cross-user exec diary) so one account's
+    manual fills cannot skew desk-wide size bias.
     """
     if use_cache and rows is None and _ADAPT_CACHE.get("day") == _cache_day() and _ADAPT_CACHE.get("exec_bias"):
         return dict(_ADAPT_CACHE["exec_bias"])
@@ -817,19 +818,11 @@ def build_exec_size_bias(
             rows = load_signals(limit=240)
     except Exception:
         rows = []
-    from market_desk.review import build_exec_score, is_buy_signal, merge_exec_score_rows
+    from market_desk.review import build_exec_score, is_buy_signal
 
-    diary: list[dict[str, Any]] = []
-    try:
-        from market_desk.db import load_recent_buy_diary
-
-        diary = load_recent_buy_diary(limit=40)
-    except Exception:
-        diary = []
-    merged = merge_exec_score_rows(rows, diary)
     traded = [
         r
-        for r in merged
+        for r in (rows or [])
         if is_buy_signal(r.get("signal_type")) and int(r.get("traded") or 0)
     ]
     # Prefer chronological tail so recent discipline matters most.

@@ -401,9 +401,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "须年内≥1涨停。落库 desk_source=independent_pop / buy_indep。容量约5。",
     },
     "收盘一页纸": {
-        "mean": "复盘页一张纸：相位、主线切换、执行分、漏买、今日盈亏（相对昨收/今日买价），可复制；收盘后自动落库并可微信推送。",
-        "algo": "数据来自当日 digest + position_summary + mainline_switches；规则生成 Markdown，无 LLM。\n"
-        "盘后引擎 _write_eod_onepager → settings eod:{date}；Server酱 key=eod: 每天至多推一次。",
+        "mean": "复盘页一张纸：优先今日盈亏/持仓、焦点动作、成交日记、尖峰vs回踩、压缩主线切换、宜复盘漏买、明日看点与调参一行；收盘后落库并可微信推送。",
+        "algo": "build_eod_onepager：digest + position_summary + switches/日记/missed/tune_hints；可选 diary；缺省时内联 tomorrow_brief。\n"
+        "bullets 全量；push_bullets≈8 行且盈亏置顶。盘后 _write_eod_onepager → eod:{date}；Server酱 eod: 短脚注、每天至多一次。",
     },
     "明日看点": {
         "mean": "收盘后生成的次日观察清单：先风险/禁追，再主线回踩姿势与自选备注；不改可买入闸门，不推「可现买」通知。",

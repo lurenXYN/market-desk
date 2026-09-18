@@ -289,8 +289,25 @@ def format_serverchan_desp(
     body: str,
     current: dict[str, Any] | None = None,
 ) -> str:
-    """Build markdown body for ServerChan (buy includes desk context)."""
+    """Build markdown body for ServerChan (buy includes desk context).
+
+    EOD pushes already embed phase / mainline / action in the body, so the
+    footer stays a short trade-date line to avoid repeating the same facts.
+    """
     cur = current or {}
+    key_s = str(key or "")
+    body_md = str(body or "").replace("\n", "\n\n")
+    if key_s.startswith("eod:"):
+        return "\n".join(
+            [
+                f"**{title}**",
+                "",
+                body_md,
+                "",
+                "---",
+                f"_交易日 {cur.get('trade_date') or '—'} · market-desk_",
+            ]
+        )
     v = cur.get("verdict") or {}
     ml = (v.get("mainline") or {}).get("name") or cur.get("mainline") or "—"
     phase = cur.get("phase") or "—"
@@ -302,7 +319,7 @@ def format_serverchan_desp(
     lines = [
         f"**{title}**",
         "",
-        str(body or "").replace("\n", "\n\n"),
+        body_md,
         "",
         "---",
         f"- 作战结论：{action}",
@@ -311,7 +328,7 @@ def format_serverchan_desp(
         f"- 阶段：{life_zh}",
         f"- 交易日：{cur.get('trade_date') or '—'}",
     ]
-    if str(key or "").startswith("buy:"):
+    if key_s.startswith("buy:"):
         rec = v.get("recommend") or {}
         primary = rec.get("primary") or {}
         why = primary.get("reason") or rec.get("text") or ""

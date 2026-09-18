@@ -383,6 +383,14 @@ def apply_sell_minute_gates(
     minutes_by_code = minutes_by_code or {}
     changed = False
     for item in items:
+        # Soft-take candidates always expose a minute status chip.
+        if item.get("minute_gate") and not item.get("minute_sell"):
+            item["minute_sell"] = {
+                "ok": None,
+                "soft": True,
+                "label": "分时未验",
+            }
+            item["minute_pending"] = True
         if not item.get("ready") or not item.get("minute_gate"):
             continue
         code = str(item.get("code") or "").zfill(6)
@@ -392,7 +400,7 @@ def apply_sell_minute_gates(
             item["minute_sell"] = {
                 "ok": None,
                 "soft": True,
-                "label": "分时未拉·软放行",
+                "label": "分时未验",
             }
             item["minute_pending"] = True
             continue
@@ -400,6 +408,12 @@ def apply_sell_minute_gates(
         item["minute_sell"] = verdict
         if verdict.get("ok") is None:
             item["minute_pending"] = True
+            if not verdict.get("label"):
+                item["minute_sell"] = {
+                    **verdict,
+                    "label": "分时未验",
+                    "soft": True,
+                }
             continue
         item["minute_pending"] = False
         if verdict.get("ok") is False:

@@ -2065,6 +2065,27 @@
     .pos-diary .side-buy { color: var(--up, #1a7f37); font-weight: 700; }
     .pos-diary .side-half { color: #b86a00; font-weight: 700; }
     .pos-diary .side-clear { color: var(--down, #c23); font-weight: 700; }
+    .pos-cal {
+      border: 1px solid var(--line, #333);
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: rgba(0,0,0,0.12);
+    }
+    .pos-cal summary { list-style: none; display: flex; align-items: center; gap: 8px; }
+    .pos-cal summary::-webkit-details-marker { display: none; }
+    .pos-cal-grid {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+    }
+    .pos-cal-cell {
+      min-width: 72px; padding: 6px 8px; border-radius: 6px;
+      font-size: 12px; cursor: default; border: 1px solid transparent;
+    }
+    .pos-cal-cell.up { background: rgba(26,127,55,0.18); border-color: rgba(26,127,55,0.35); }
+    .pos-cal-cell.down { background: rgba(204,34,51,0.16); border-color: rgba(204,34,51,0.35); }
+    .pos-cal-cell.flat { background: rgba(128,128,128,0.12); }
+    .pos-cal-cell .d { font-variant-numeric: tabular-nums; opacity: 0.8; }
+    .pos-cal-cell .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .pos-cal-cell .n { color: var(--muted); font-size: 11px; margin-top: 2px; }
     .lhb-tag.smash { border-color: #f87171; color: #fecaca; }
     .na-sub { font-size: 11px; margin-top: 2px; }
     .sell-fly-board {
@@ -3098,9 +3119,21 @@
           <label>买入价<input name="buy_price" type="number" step="0.001" min="0.001" required /></label>
           <label>股数<input name="qty" type="number" step="1" min="1" required /></label>
           <label class="wide">备注<input name="note" placeholder="可选" /></label>
+          <label class="wide" title="有当日同码未交易买信号时，同步标已交易">
+            <input type="checkbox" name="match_signal" checked /> 试匹配当日买信号
+          </label>
           <button type="submit">记账</button>
         </form>
         <div class="pos-sum" id="posSum"></div>
+        <details class="pos-cal" id="posCal" style="margin:10px 0 6px">
+          <summary style="cursor:pointer">
+            <b>盈亏日历</b>
+            <span class="meta" id="posCalMeta">日/周胜率 · 默认收起</span>
+            <button type="button" class="q" data-term="仓位">?</button>
+          </summary>
+          <p class="meta">展示向：按日盈亏&gt;0计胜；不进仓位热度。点色块看日记摘要。</p>
+          <div id="posCalBody"><div class="meta">展开后加载…</div></div>
+        </details>
         <div class="pos-target-bar" id="posTargetBarPos" hidden title="目标总成本 vs 实际持仓成本">
           <div class="hd">
             <span>仓位目标 <button type="button" class="q" data-term="目标仓位">?</button></span>
@@ -3639,6 +3672,8 @@
       }
       if (it.minute_sell && it.minute_sell.label) {
         tuneHtml += `<div class="meta">分时卖 · ${it.minute_sell.label}${it.minute_pending ? "（软）" : ""}</div>`;
+      } else if (it.minute_gate) {
+        tuneHtml += `<div class="meta">分时卖 · 分时未验（软）</div>`;
       }
       return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
@@ -4347,7 +4382,17 @@
         if (ad.size_compose && ad.size_compose.note) bits.push(ad.size_compose.note);
         else if (ad.size_mult != null && Number(ad.size_mult) !== 1) bits.push(`仓位×${ad.size_mult}`);
         if (ad.auto_tune && ad.auto_tune.note) bits.push(ad.auto_tune.note);
-        else if (ad.size_heat && ad.size_heat.note) bits.push(ad.size_heat.note);
+        if (ad.auto_tune && ad.auto_tune.clamp != null) {
+          const cp = Math.round(Number(ad.auto_tune.clamp) * 100);
+          const mult = ad.auto_tune.pb_min_mult;
+          if (Number.isFinite(cp) && cp > 0) {
+            bits.push(
+              mult != null && Number(mult) !== 1
+                ? `本桶已夹紧 ±${cp}%（回踩×${Number(mult).toFixed(2)}）`
+                : `本桶夹紧 ±${cp}%`
+            );
+          }
+        } else if (ad.size_heat && ad.size_heat.note) bits.push(ad.size_heat.note);
         if (ad.exec_size && ad.exec_size.note && Number(ad.exec_size.size_mult) !== 1) bits.push(ad.exec_size.note);
         if (ad.context_gate && ad.context_gate.ok && ad.context_gate.note) bits.push(ad.context_gate.note);
         if (ad.sticky_margin && ad.sticky_margin.ok && ad.sticky_margin.note) bits.push(ad.sticky_margin.note);
@@ -4866,6 +4911,7 @@
       }).join("") || `<tr><td colspan="16" class="meta">暂无仓位，先记账</td></tr>`;
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
       if (currentMain === "pos" && typeof ensurePosDiary === "function") ensurePosDiary(false);
+      if (currentMain === "pos" && typeof ensurePosCal === "function") ensurePosCal(false);
       paintAuctionStrategy(d);
       paintEmotionWave(d);
       paintSeasonality(d);
@@ -6628,81 +6674,26 @@
       }
     }
 
-    function paintEodBrief(sum, today, dayLabel) {
+    async function paintEodBrief(_sum, _today, _dayLabel) {
       const focusEl = document.getElementById("eodFocus");
       const listEl = document.getElementById("eodBullets");
       if (!focusEl || !listEl) return;
-      const pos = (lastData && lastData.position_summary) || {};
-      const ex = sum.exec || today.exec || {};
-      const missed = sum.missed_buys || [];
-      const switches = (lastData && lastData.mainline_switches) || [];
-      const switchN = today.switch_n != null ? today.switch_n : switches.length;
-      const phase = today.phase || (lastData && lastData.phase) || "—";
-      const ml = ((((lastData || {}).verdict || {}).mainline || {}).name)
-        || sum.vs_mainline_of
-        || "—";
-      const action = (((lastData || {}).verdict || {}).action) || "—";
-      const floatPnl = pos.floating_pnl != null ? pos.floating_pnl : pos.pnl;
-      const realized = pos.realized_pnl != null ? pos.realized_pnl : 0;
-      let dayPnl = pos.day_pnl;
-      if (dayPnl == null && Array.isArray(lastData && lastData.positions)) {
-        let acc = 0;
-        let any = false;
-        for (const p of lastData.positions) {
-          if (p.day_pnl == null) continue;
-          acc += Number(p.day_pnl) || 0;
-          any = true;
-        }
-        if (any) dayPnl = acc;
+      const day = reviewViewDate || ((lastReview.summary || {}).view_date) || "";
+      const q = day ? (`?date=${encodeURIComponent(day)}`) : "";
+      try {
+        const r = await fetch("/api/report/eod" + q);
+        const d = await r.json();
+        const brief = (d && d.brief) || {};
+        focusEl.textContent = brief.focus || "收盘对照：盈亏/持仓与明日看点一张纸看完即可。";
+        const bullets = brief.bullets || [];
+        listEl.innerHTML = bullets.length
+          ? bullets.map((b) => `<li>${escAttr(String(b))}</li>`).join("")
+          : `<li class="meta">暂无要点</li>`;
+        window.__eodMarkdown = brief.markdown || (d && d.markdown) || "";
+      } catch (e) {
+        focusEl.textContent = "收盘一页纸加载失败";
+        listEl.innerHTML = `<li class="meta">${escAttr(String(e && e.message || e))}</li>`;
       }
-      const money = (v) => {
-        if (v == null || v === "") return "—";
-        const n = Number(v);
-        if (Number.isNaN(n)) return "—";
-        return (n > 0 ? "+" : "") + n.toFixed(2);
-      };
-      let focus = "收盘对照：相位/主线/执行分与盈亏一张纸看完即可。";
-      if (dayPnl != null && Number(dayPnl) < 0) {
-        focus = "收盘优先复盘失误与漏买，明日先降风险再谈进攻。";
-      } else if (action === "可买入" || action === "可小仓") {
-        focus = "收盘对照：今日有进攻窗口，核对价带内成交与仓位纪律。";
-      } else if (missed.length) {
-        focus = "收盘对照：有漏买项，记下是否规则过严或执行犹豫。";
-      }
-      const bullets = [
-        `相位 ${phase} · 结论 ${action} · 主线 ${ml} · 切换 ${switchN} 次`,
-        `执行分 ${ex.score == null ? "—" : ex.score} · 已成交买 ${ex.traded_buy_n ?? 0}`
-          + ` · 价带内 ${ex.in_band_n ?? 0} / 追高 ${ex.chase_n ?? 0}`,
-        `信号 买${today.buy_n ?? 0}/卖${today.sell_n ?? 0}`
-          + ` · 已交易 ${today.traded_n ?? 0} / 未交易 ${today.skipped_n ?? 0}`
-          + ` · 未回踩上行 ${today.miss_pullback_n ?? 0}`,
-        missed.length
-          ? (`漏买 ${missed.length}：` + missed.slice(0, 6).map((m) =>
-            `${m.name || m.code}@${m.price ?? "—"}`).join(" / "))
-          : "漏买：无",
-        `今日盈亏 ${money(dayPnl)}（相对昨收/今日买价；浮盈 ${money(floatPnl)} · 已实现 ${money(realized)}）`
-          + (pos.day_pnl_pct != null ? ` · ${pos.day_pnl_pct}%` : ""),
-      ];
-      if (isTodayView() && switches.length) {
-        bullets.splice(1, 0, "主线切换：" + switches.slice(0, 4).map((s) => {
-          const at = String(s.switched_at || "").slice(11, 16);
-          return `${at ? at + " " : ""}${s.from_name || "—"}→${s.to_name || "—"}`;
-        }).join("；"));
-      }
-      focusEl.textContent = focus;
-      listEl.innerHTML = bullets.map((b) => `<li>${b}</li>`).join("");
-      const day = today.date || reviewViewDate || "—";
-      window.__eodMarkdown = [
-        `# 收盘一页纸 · ${day}`,
-        "",
-        `**焦点：** ${focus}`,
-        "",
-        "## 要点",
-        ...bullets.map((b) => `- ${b}`),
-        "",
-        "---",
-        "_由 market-desk 规则生成，仅供复盘，不构成投资建议。_",
-      ].join("\n");
     }
 
     function isTodayView() {
@@ -7024,6 +7015,7 @@
       alerts.slice(0, 3).forEach((a) => pushPageToast(a.title, a.body));
     }
     let _posDiaryAt = 0;
+    let _posCalAt = 0;
     function paintPosDiary(payload) {
       const body = document.getElementById("posDiaryBody");
       const meta = document.getElementById("posDiaryMeta");
@@ -7041,6 +7033,7 @@
           : (side === "clear" ? "side-clear" : "side-half");
         const adv = it.advice || {};
         const bits = [];
+        if (adv.source === "manual") bits.push("手动");
         if (adv.action) bits.push(adv.action);
         if (adv.phase) bits.push("相位 " + adv.phase);
         if (adv.mainline) bits.push("主线 " + adv.mainline);
@@ -7056,6 +7049,60 @@
           + `${it.note ? " · " + it.note : ""}</div></div>`;
       }).join("");
     }
+    function paintPosCal(payload) {
+      const body = document.getElementById("posCalBody");
+      const meta = document.getElementById("posCalMeta");
+      if (!body) return;
+      const items = (payload && payload.items) || [];
+      const dayRate = payload && payload.day_win_rate;
+      const weekRate = payload && payload.week_win_rate;
+      const bits = [];
+      if (dayRate != null) bits.push(`日胜率 ${dayRate}%（${payload.day_wins || 0}/${payload.day_n || 0}）`);
+      if (weekRate != null) bits.push(`近周 ${weekRate}%（${payload.week_wins || 0}/${payload.week_n || 0}）`);
+      if (meta) meta.textContent = bits.join(" · ") || "暂无盈亏样本";
+      if (!items.length) {
+        body.innerHTML = `<div class="meta">暂无日记/日终盈亏记录</div>`;
+        return;
+      }
+      body.innerHTML = `<div class="pos-cal-grid">` + items.map((it) => {
+        const pnl = it.day_pnl;
+        const cls = pnl == null ? "flat" : (Number(pnl) > 0 ? "up" : (Number(pnl) < 0 ? "down" : "flat"));
+        const tip = (it.notes || []).join("；").replace(/"/g, "&quot;");
+        const v = pnl == null ? "—" : ((Number(pnl) > 0 ? "+" : "") + Number(pnl).toFixed(0));
+        const sub = [];
+        if (it.buy_n) sub.push(`买${it.buy_n}`);
+        if (it.sell_n) sub.push(`卖${it.sell_n}`);
+        return `<div class="pos-cal-cell ${cls}" title="${tip || (it.date || "")}">`
+          + `<div class="d">${String(it.date || "").slice(5)}</div>`
+          + `<div class="v">${v}</div>`
+          + (sub.length ? `<div class="n">${sub.join(" ")}</div>` : "")
+          + `</div>`;
+      }).join("") + `</div>`;
+    }
+    async function ensurePosCal(force) {
+      const box = document.getElementById("posCal");
+      if (!box) return;
+      if (typeof canPersonal === "function" && !canPersonal()) {
+        box.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      if (!box.open && !force) return;
+      if (!force && _posCalAt && Date.now() - _posCalAt < 60000) return;
+      try {
+        const r = await fetch("/api/positions/stats?days=20", { credentials: "same-origin" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error("cal");
+        _posCalAt = Date.now();
+        paintPosCal(d);
+      } catch (e) {
+        const body = document.getElementById("posCalBody");
+        if (body) body.innerHTML = `<div class="meta">盈亏日历加载失败</div>`;
+      }
+    }
+    document.getElementById("posCal")?.addEventListener("toggle", () => {
+      if (document.getElementById("posCal")?.open) ensurePosCal(true);
+    });
     async function ensurePosDiary(force) {
       const box = document.getElementById("posDiary");
       if (!box) return;
@@ -7142,6 +7189,7 @@
       if (currentMain === "funds") ensureFundFlowFull();
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
       if (currentMain === "pos" && typeof ensurePosDiary === "function") ensurePosDiary(false);
+      if (currentMain === "pos" && typeof ensurePosCal === "function") ensurePosCal(false);
       try { localStorage.setItem("desk-main-tab", currentMain); } catch (e) {}
       // Reschedule poll cadence for the active tab.
       if (lastData) scheduleTick(!!lastData.live);
@@ -7412,6 +7460,7 @@
       if (currentMain === "pos") {
         try { await ensurePosLhb(true); } catch (e) {}
         try { await ensurePosDiary(true); } catch (e) {}
+        try { await ensurePosCal(false); } catch (e) {}
       }
       const settingsPanel = document.getElementById("settingsPanel");
       if (settingsPanel && !settingsPanel.hidden) {
@@ -7980,6 +8029,7 @@
         buy_price: Number(f.buy_price.value),
         qty: Number(f.qty.value),
         note: f.note.value.trim(),
+        match_signal: !!(f.match_signal && f.match_signal.checked),
       };
       try {
         const r = await fetch("/api/positions", {
@@ -7992,10 +8042,16 @@
           alert("记账失败: " + t);
           return;
         }
+        const d = await r.json().catch(() => ({}));
         f.reset();
+        if (f.match_signal) f.match_signal.checked = true;
         await tick();
         if (typeof _posDiaryAt !== "undefined") _posDiaryAt = 0;
+        if (typeof _posCalAt !== "undefined") _posCalAt = 0;
         applyMain("pos");
+        if (d.matched_signal && d.matched_signal.matched) {
+          pushPageToast("已匹配买信号", `${payload.code} 已标复盘已交易`);
+        }
       } catch (e) {
         alert("记账失败");
       }

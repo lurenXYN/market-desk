@@ -4,6 +4,18 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Open
 
+### 优先
+
+（暂无）
+
+### 有空再加
+
+- [ ] **健康条下钻** — tip 点开看各源 ok/fail/timeout 明细表。
+- [ ] **卖侧日记反哺** — 卖点执行质量进复盘（对称买侧 diary）。
+- [ ] **买卡未 ready 短因** — 顶栏/卡面一行「还差：分时/离日高…」。
+- [ ] **VPS 库备份** — 定时 dump / 保留策略。
+- [ ] **早决策可选推送** — Server酱 早盘摘要开关。
+
 ### 以后可做（刻意缓做）
 
 - [ ] **再叠硬清仓 / 波浪硬关买卖** — 短期别堆阈值。
@@ -14,6 +26,12 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **收盘一页纸完善** — 盈亏优先、成交/日记、漏买复盘、尖峰一句、明日看点、tune 一行；主线切换压缩；Server酱底部去重。*(2026-09-18)*
+- [x] **当日盈亏 lot 分锚 + 加权卖价** — decorate 按 FIFO lot 今买/隔夜分锚；`day_sell_notional` VWAP。*(2026-09-18)*
+- [x] **手动仓试匹配信号 + diary source=manual** — 记账默认可匹配当日买信号；无价带不计硬执行分。*(2026-09-18)*
+- [x] **仓位页盈亏日历 + 日/周胜率** — `<details>` 默认收起；展示向不进 adapt。*(2026-09-18)*
+- [x] **多用户 soft-scoring 隔离** — desk 仓位偏置不再吞跨账号日记。*(2026-09-18)*
+- [x] **卖侧分时未验明示 / 调参夹紧可见 / health 探针加深** — *(2026-09-18)*
 - [x] **换防解释对齐 pick + 联动兜底/支线并入 + 尖峰主升提示 + 竞价桥叠乘归因** — *(2026-09-18)*
 - [x] **参数导出/导入 + 防守/平衡/进攻预设** — *(2026-09-18)*
 - [x] **仓位目标 vs 实际常驻条** — 作战台/仓位页进度条。*(2026-09-18)*
@@ -32,6 +50,6 @@ Agents: **at the start of each session involving this app, read this file before
 ## Notes for agents
 
 - Publish via independent repo only: sync `apps/market-desk/` → `D:\Source\Repos\market-desk` → commit/push there. **Never push go-learning.**
-- Prefer picking an **Open → 有空再加** item unless the user names something else. (Open 有空再加 currently empty.)
+- Prefer picking an **Open → 优先 / 有空再加** item unless the user names something else.
 - 「以后可做」默认可做，但先征得用户同意再开工。
 - Keep changes small and testable; update this file when closing items.

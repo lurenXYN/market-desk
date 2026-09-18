@@ -1030,7 +1030,11 @@ def build_today_digest(
 
 
 def classify_fill_execution(row: dict[str, Any]) -> str | None:
-    """Classify a traded buy fill versus the original suggest / chase band."""
+    """Classify a traded buy fill versus the original suggest / chase band.
+
+    Returns ``None`` when there is no plan band (unplanned / manual-only fill)
+    so callers can exclude it from hard exec scoring.
+    """
     if not is_buy_signal(row.get("signal_type")):
         return None
     if not int(row.get("traded") or 0):
@@ -1043,6 +1047,8 @@ def classify_fill_execution(row: dict[str, Any]) -> str | None:
     chase = num(row.get("chase_price") if row.get("chase_price") is not None else payload.get("chase_price"))
     suggest = num(row.get("price"))
     low = wait if wait is not None else suggest
+    if low is None and chase is None:
+        return None
     if chase is not None and fill >= chase:
         return "chase"
     if low is not None and fill < low:
@@ -1057,7 +1063,11 @@ def classify_fill_execution(row: dict[str, Any]) -> str | None:
 def diary_rows_as_exec_fills(
     diary: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Map buy-side exec diary rows into pseudo traded-signal shapes for scoring."""
+    """Map buy-side exec diary rows into pseudo traded-signal shapes for scoring.
+
+    Rows without a plan price band (wait / suggest / chase) are skipped — they
+    count as unplanned manual fills and must not drag the exec score to ``other``.
+    """
     out: list[dict[str, Any]] = []
     for row in diary or []:
         side = str(row.get("side") or "").strip().lower()
@@ -1071,6 +1081,9 @@ def diary_rows_as_exec_fills(
         wait = num(buy.get("wait_price") or buy.get("buy_price") or buy.get("price"))
         chase = num(buy.get("chase_price"))
         suggest = num(buy.get("price") or buy.get("buy_price") or wait)
+        # No band at all → unplanned; exclude from hard exec score.
+        if wait is None and chase is None and suggest is None:
+            continue
         kind = str(buy.get("kind") or row.get("kind") or "stock")
         out.append(
             {
@@ -1086,7 +1099,12 @@ def diary_rows_as_exec_fills(
                 "chase_price": chase,
                 "trade_date": str(row.get("trade_date") or "")[:10],
                 "signaled_at": str(row.get("created_at") or ""),
-                "payload": {"wait_price": wait, "chase_price": chase, "exec_source": "diary"},
+                "payload": {
+                    "wait_price": wait,
+                    "chase_price": chase,
+                    "exec_source": "diary",
+                    "advice_source": advice.get("source") or "manual",
+                },
                 "exec_source": "diary",
             }
         )
@@ -1127,10 +1145,14 @@ def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     def _score_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         counts = {"in_band": 0, "chase": 0, "below": 0, "other": 0}
         diary_n = 0
+        unplanned_n = 0
         for row in items:
             if str(row.get("exec_source") or "") == "diary" or str(row.get("id") or "").startswith("diary:"):
                 diary_n += 1
             kind = classify_fill_execution(row)
+            if kind is None:
+                unplanned_n += 1
+                continue
             if kind in counts:
                 counts[kind] += 1
             elif kind:
@@ -1146,6 +1168,8 @@ def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "score": score,
             "traded_buy_n": len(items),
+            "scored_n": n,
+            "unplanned_n": unplanned_n,
             "diary_n": diary_n,
             "in_band_n": counts["in_band"],
             "chase_n": counts["chase"],

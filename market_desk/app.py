@@ -54,6 +54,7 @@ from market_desk.db import (
     delete_stock_blacklist,
     delete_watchlist,
     export_user_backup_payload,
+    find_signal,
     import_user_backup_payload,
     is_t1_locked,
     load_exec_diary,
@@ -93,6 +94,8 @@ class PositionIn(BaseModel):
     buy_price: float = Field(gt=0)
     qty: int = Field(gt=0)
     note: str = ""
+    # Try to mark a same-day untraded buy signal as traded (soft desk sync).
+    match_signal: bool = True
 
 
 class TrimIn(BaseModel):
@@ -461,8 +464,22 @@ async def fund_flow(
 
 @app.get("/api/health")
 def health() -> dict:
-    """Liveness probe used by the startup script."""
-    return {"ok": True, "updated_at": engine.snapshot.get("updated_at")}
+    """Liveness + data-health probe (degraded / source fail rates)."""
+    snap = engine.snapshot or {}
+    h = snap.get("health") if isinstance(snap.get("health"), dict) else {}
+    return {
+        "ok": True,
+        "updated_at": snap.get("updated_at"),
+        "degraded": bool(h.get("degraded")),
+        "level": h.get("level") or "ok",
+        "score": h.get("score"),
+        "fail_rates": h.get("fail_rates") or {},
+        "failed_sources": h.get("failed_sources") or [],
+        "stale_seconds": h.get("stale_seconds"),
+        "tips": list(h.get("tips") or [])[:6],
+        "trading_day": h.get("trading_day"),
+    }
+
 
 
 @app.get("/api/review")
@@ -572,7 +589,9 @@ async def chart(
     }
 
 
-def _advice_snapshot_for_code(code: str) -> dict[str, Any]:
+def _advice_snapshot_for_code(
+    code: str, *, source: str | None = None
+) -> dict[str, Any]:
     """Capture live desk advice for one ticker into an exec-diary payload."""
     snap = engine.snapshot or {}
     code_n = normalize_code(code)
@@ -585,6 +604,8 @@ def _advice_snapshot_for_code(code: str) -> dict[str, Any]:
         "lifecycle": ml.get("lifecycle"),
         "trade_date": snap.get("trade_date"),
     }
+    if source:
+        out["source"] = str(source)
     rec = verdict.get("recommend") or {}
     primary = rec.get("primary") if isinstance(rec, dict) else None
     buy_hit: dict[str, Any] | None = None
@@ -645,6 +666,7 @@ def _log_exec_diary(
     price: float | None = None,
     note: str = "",
     trade_date: str | None = None,
+    source: str = "manual",
 ) -> dict[str, Any] | None:
     """Persist one exec diary row; swallow errors so book ops stay primary."""
     try:
@@ -655,12 +677,69 @@ def _log_exec_diary(
             name=name or "",
             qty=qty,
             price=price,
-            advice=_advice_snapshot_for_code(code),
+            advice=_advice_snapshot_for_code(code, source=source),
             note=note or "",
             trade_date=trade_date,
         )
     except Exception:
         return None
+
+
+def _try_match_buy_signal(
+    *,
+    user_id: int,
+    code: str,
+    fill_price: float,
+    fill_qty: int,
+    note: str = "",
+) -> dict[str, Any] | None:
+    """Mark a same-day untraded buy signal as traded when the book matches."""
+    day = str((engine.snapshot or {}).get("trade_date") or "")[:10]
+    if not day:
+        from datetime import datetime
+
+        day = datetime.now().strftime("%Y-%m-%d")
+    row = find_signal(day, normalize_code(code), "buy")
+    if not row:
+        return None
+    sid = int(row.get("id") or 0)
+    if sid <= 0:
+        return None
+    # Skip if this user already marked traded.
+    try:
+        from market_desk.db import load_signal_user_meta_map
+
+        um = (load_signal_user_meta_map(int(user_id)) or {}).get(sid) or {}
+        if int(um.get("traded") or 0):
+            return {"id": sid, "matched": False, "reason": "already_traded"}
+    except Exception:
+        pass
+    if int(row.get("traded") or 0) and int(row.get("owner_user_id") or 0) == int(user_id):
+        return {"id": sid, "matched": False, "reason": "already_traded"}
+    ok = update_signal_meta(
+        sid,
+        traded=1,
+        skipped=0,
+        fill_price=float(fill_price),
+        fill_qty=int(fill_qty),
+        note=(note or "仓位记账匹配")[:80] or None,
+        user_id=int(user_id),
+    )
+    if not ok:
+        return None
+    try:
+        engine.clear_review_cache()
+    except Exception:
+        pass
+    return {
+        "id": sid,
+        "matched": True,
+        "code": normalize_code(code),
+        "trade_date": day,
+        "fill_price": float(fill_price),
+        "fill_qty": int(fill_qty),
+    }
+
 
 
 @app.get("/api/positions")
@@ -672,6 +751,22 @@ def list_positions(user: dict = Depends(current_member_required)) -> dict:
         "positions": snap.get("positions") or [],
         "summary": snap.get("position_summary"),
     }
+
+
+@app.get("/api/positions/stats")
+def positions_stats(
+    days: int = Query(default=20, ge=5, le=60),
+    user: dict = Depends(current_member_required),
+) -> dict:
+    """Return personal day/week win-rate calendar (display-only)."""
+    from market_desk.personal_stats import build_personal_pnl_calendar
+
+    snap = engine.snapshot_for_user(int(user["id"]))
+    return build_personal_pnl_calendar(
+        user_id=int(user["id"]),
+        days=days,
+        trade_date=str(snap.get("trade_date") or "")[:10] or None,
+    )
 
 
 @app.get("/api/exec-diary")
@@ -756,13 +851,24 @@ def create_position(body: PositionIn, user: dict = Depends(current_member_requir
         qty=int(body.qty),
         price=float(body.buy_price),
         note=body.note.strip() or "仓位记账",
+        source="manual",
     )
+    matched = None
+    if body.match_signal:
+        matched = _try_match_buy_signal(
+            user_id=int(user["id"]),
+            code=code,
+            fill_price=float(body.buy_price),
+            fill_qty=int(body.qty),
+            note=body.note.strip() or "仓位记账匹配",
+        )
     snap = engine.snapshot_for_user(int(user["id"]))
     return {
         "ok": True,
         "positions": snap.get("positions") or [],
         "summary": snap.get("position_summary"),
         "diary": diary,
+        "matched_signal": matched,
     }
 
 
@@ -1483,7 +1589,16 @@ async def report_eod(
     uid = None if is_guest(user) else int(user["id"])
     snap = engine.snapshot_for_user(int(user["id"]))
     review = await engine.build_review(view_date=date, user_id=uid)
-    brief = build_eod_onepager(snapshot=snap, review=review)
+    diary = None
+    day_hint = str(date or (review.get("summary") or {}).get("view_date") or "").strip()[:10]
+    if uid is not None and day_hint:
+        try:
+            from market_desk.db import load_exec_diary
+
+            diary = load_exec_diary(user_id=int(uid), trade_date=day_hint, limit=40)
+        except Exception:
+            diary = None
+    brief = build_eod_onepager(snapshot=snap, review=review, diary=diary)
     cached = None
     day = str(date or brief.get("date") or "").strip()[:10]
     if day:

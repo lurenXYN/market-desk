@@ -220,6 +220,7 @@ def init_db() -> None:
             ("last_sell_price", "REAL"),
             ("day_sold_qty", "INTEGER DEFAULT 0"),
             ("day_realized_pnl", "REAL DEFAULT 0"),
+            ("day_sell_notional", "REAL DEFAULT 0"),
             ("peak_price", "REAL"),
             ("entry_board", "TEXT"),
         ):
@@ -1839,7 +1840,7 @@ def list_theme_outcome_keys() -> list[str]:
 _POS_SELECT = """
     id, user_id, code, name, buy_price, qty, note, created_at, last_buy_date,
     closed_date, last_sell_date, last_sell_price, day_sold_qty, day_realized_pnl,
-    peak_price, entry_board
+    day_sell_notional, peak_price, entry_board
 """
 
 
@@ -2069,7 +2070,7 @@ def load_exec_diary(
     import json
 
     uid = int(user_id)
-    lim = max(1, min(int(limit or 40), 120))
+    lim = max(1, min(int(limit or 40), 500))
     with _connect() as conn:
         if trade_date:
             rows = conn.execute(
@@ -2143,6 +2144,10 @@ def _position_item(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         item["last_buy_date"] = str(item.get("created_at") or "")[:10] or None
     item["day_sold_qty"] = int(item.get("day_sold_qty") or 0)
     item["day_realized_pnl"] = float(item.get("day_realized_pnl") or 0)
+    try:
+        item["day_sell_notional"] = float(item.get("day_sell_notional") or 0)
+    except (TypeError, ValueError):
+        item["day_sell_notional"] = 0.0
     qty = int(item.get("qty") or 0)
     item["closed"] = qty <= 0 and bool(str(item.get("closed_date") or "").strip())
     peak = item.get("peak_price")
@@ -2422,13 +2427,16 @@ def trim_position(
         else:
             anchor = buy
         chunk_pnl = round((px - anchor) * sell, 2)
+        chunk_notional = round(px * sell, 4)
         prev_day = str(row["last_sell_date"] or "")[:10]
         if prev_day == day:
             day_sold = int(row["day_sold_qty"] or 0) + sell
             day_pnl = round(float(row["day_realized_pnl"] or 0) + chunk_pnl, 2)
+            day_notional = round(float(row["day_sell_notional"] or 0) + chunk_notional, 4)
         else:
             day_sold = sell
             day_pnl = round(chunk_pnl - fee, 2)
+            day_notional = chunk_notional
         closed_date = day if left <= 0 else None
         lot_chunks = _fifo_trim_lots(conn, position_id=pid, qty=sell)
         new_buy = buy
@@ -2449,10 +2457,21 @@ def trim_position(
             """
             UPDATE positions
             SET qty = ?, buy_price = ?, closed_date = ?, last_sell_date = ?,
-                last_sell_price = ?, day_sold_qty = ?, day_realized_pnl = ?
+                last_sell_price = ?, day_sold_qty = ?, day_realized_pnl = ?,
+                day_sell_notional = ?
             WHERE id = ?
             """,
-            (left, new_buy, closed_date, day, round(px, 4), day_sold, day_pnl, pid),
+            (
+                left,
+                new_buy,
+                closed_date,
+                day,
+                round(px, 4),
+                day_sold,
+                day_pnl,
+                day_notional,
+                pid,
+            ),
         )
         conn.commit()
         item = _position_item(
@@ -2465,6 +2484,7 @@ def trim_position(
                 "last_sell_price": round(px, 4),
                 "day_sold_qty": day_sold,
                 "day_realized_pnl": day_pnl,
+                "day_sell_notional": day_notional,
             }
         )
         item["trimmed"] = sell
@@ -2761,7 +2781,7 @@ def purge_stale_closed_positions(trade_date: str | None = None) -> dict[str, int
         cur_reset = conn.execute(
             """
             UPDATE positions
-            SET day_sold_qty = 0, day_realized_pnl = 0
+            SET day_sold_qty = 0, day_realized_pnl = 0, day_sell_notional = 0
             WHERE qty > 0
               AND last_sell_date IS NOT NULL
               AND last_sell_date <> ''

@@ -6391,12 +6391,28 @@ def decorate_positions(
     trade_date: str | None = None,
     boards: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach mark-to-market and day-realized fields used by the position tab."""
+    """Attach mark-to-market and day-realized fields used by the position tab.
+
+    Day MTM prefers open FIFO lots: today-bought legs vs buy price, overnight
+    legs vs 昨收 — so averaging into a bag does not re-anchor the whole row.
+    Multi-trim sells use ``day_sell_notional`` for a volume-weighted sell price
+    when present.
+    """
     from market_desk.review import lookup_code_boards
 
     day = str(trade_date or "").strip()[:10]
     board_pool = list(boards or [])
     fee = float(TRADE_FEE_CNY)
+    # Prefetch lots so day_mtm can split today vs overnight legs.
+    lots_map: dict[int, list[dict[str, Any]]] = {}
+    try:
+        from market_desk.db import load_lots_for_positions
+
+        ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+        lots_map = load_lots_for_positions(ids)
+    except Exception:
+        lots_map = {}
+
     out: list[dict[str, Any]] = []
     for row in rows:
         code = str(row.get("code") or "").zfill(6)
@@ -6409,11 +6425,26 @@ def decorate_positions(
         sell_px = row.get("last_sell_price")
         day_sold = int(row.get("day_sold_qty") or 0)
         sell_day = str(row.get("last_sell_date") or "")[:10]
+        day_notional = float(row.get("day_sell_notional") or 0)
         if day and sell_day and sell_day != day:
             day_sold = 0
             sell_px = None
+            day_notional = 0.0
         buy_day = str(row.get("last_buy_date") or row.get("created_at") or "")[:10]
-        bought_today = bool(day and buy_day and buy_day == day)
+        pid = int(row.get("id") or 0)
+        lots = lots_map.get(pid) or []
+        today_lot_qty = 0
+        if lots and day:
+            today_lot_qty = sum(
+                int(l.get("qty") or 0)
+                for l in lots
+                if str(l.get("buy_date") or "")[:10] == day
+            )
+        # Any today lot → charge one buy fee; do not require whole-row last_buy_date.
+        bought_today = bool(
+            (lots and today_lot_qty > 0)
+            or (not lots and day and buy_day and buy_day == day)
+        )
         sold_today = day_sold > 0
         buy_fee = fee if bought_today else 0.0
         sell_fee = fee if sold_today else 0.0
@@ -6421,13 +6452,21 @@ def decorate_positions(
             bought_today=bought_today, sold_today=sold_today, fee=fee
         )
         prev = quote_prev_close(q, last=float(last) if last is not None else None)
-        # Recompute today's sell-side realized (vs day-anchor − sell fee).
+        # Prefer VWAP from day_sell_notional when multi-trim; else last_sell_price.
+        eff_sell_px = sell_px
+        if sold_today and day_sold > 0 and day_notional > 0:
+            try:
+                eff_sell_px = float(day_notional) / float(day_sold)
+            except (TypeError, ValueError, ZeroDivisionError):
+                eff_sell_px = sell_px
         sell_realized = (
             session_sell_realized(
-                sell_px,
+                eff_sell_px,
                 day_sold,
                 buy_price=buy,
-                buy_day=buy_day,
+                buy_day=buy_day if not lots else (
+                    day if today_lot_qty >= day_sold else "1970-01-01"
+                ),
                 trade_day=day,
                 prev_close=prev,
                 fee=fee,
@@ -6435,12 +6474,23 @@ def decorate_positions(
             if sold_today
             else 0.0
         )
-        # Closed same-day lots fold buy fee into 已实现 so day_pnl matches.
+        # When lots mix today+overnight and we sold, VWAP path above still uses a
+        # single buy_day; prefer cumulative trim store if it looks multi-leg.
+        stored_realized = float(row.get("day_realized_pnl") or 0)
+        if (
+            sold_today
+            and not closed
+            and day_sold > 0
+            and day_notional > 0
+            and stored_realized != 0
+        ):
+            # Trim path already accumulated chunk P&L (− first sell fee).
+            sell_realized = stored_realized
         day_realized = (
             round(sell_realized - buy_fee, 2) if (closed and sold_today) else sell_realized
         )
         if closed:
-            mark = float(sell_px) if sell_px not in (None, "") else (
+            mark = float(eff_sell_px) if eff_sell_px not in (None, "") else (
                 float(last) if last is not None else buy
             )
             sold_qty = day_sold or int(row.get("day_sold_qty") or 0)
@@ -6459,7 +6509,17 @@ def decorate_positions(
             pnl_pct = round((mark / buy - 1.0) * 100.0, 2) if mark and buy else None
             last = mark
             day_pnl = day_realized if sold_today else None
+            # Closed day_pnl_pct vs session anchor (昨收 if overnight, else buy).
+            if day_pnl is not None and sold_qty > 0:
+                anchor = buy if bought_today else (float(prev) if prev not in (None, 0, "") else buy)
+                basis = abs(float(anchor) * sold_qty)
+                day_pnl_pct_row = (
+                    round(100.0 * float(day_pnl) / basis, 2) if basis > 0 else None
+                )
+            else:
+                day_pnl_pct_row = None
         else:
+            day_pnl_pct_row = None
             cost = round(buy * qty, 2)
             market = round(last * qty, 2) if last is not None else None
             pnl = (
@@ -6471,7 +6531,21 @@ def decorate_positions(
             pct_q = q.get("pct")
             day_mtm = None
             try:
-                if last is not None and qty > 0 and bought_today and buy > 0:
+                if last is not None and qty > 0 and lots and day:
+                    day_mtm = 0.0
+                    for lot in lots:
+                        lq = int(lot.get("qty") or 0)
+                        if lq <= 0:
+                            continue
+                        lpx = float(lot.get("buy_price") or 0)
+                        ld = str(lot.get("buy_date") or "")[:10]
+                        if ld == day and lpx > 0:
+                            day_mtm += (float(last) - lpx) * lq
+                        elif prev not in (None, 0, ""):
+                            day_mtm += (float(last) - float(prev)) * lq
+                        elif pct_q is not None and prev not in (None, 0, ""):
+                            day_mtm += float(prev) * lq * float(pct_q) / 100.0
+                elif last is not None and qty > 0 and bought_today and buy > 0:
                     day_mtm = (float(last) - buy) * qty
                 elif last is not None and prev not in (None, 0, "") and qty > 0:
                     day_mtm = (float(last) - float(prev)) * qty
@@ -6480,7 +6554,12 @@ def decorate_positions(
             except (TypeError, ValueError):
                 day_mtm = None
             if day_mtm is not None or sold_today or bought_today:
-                day_pnl = round((day_mtm or 0.0) + sell_realized - buy_fee, 2)
+                # When sell_realized already came from trim store, it embeds sell fee;
+                # still subtract buy_fee once for today buys.
+                if sold_today and not closed and day_notional > 0 and stored_realized != 0:
+                    day_pnl = round(float(day_mtm or 0.0) + sell_realized - buy_fee, 2)
+                else:
+                    day_pnl = round((day_mtm or 0.0) + sell_realized - buy_fee, 2)
             else:
                 day_pnl = None
         item = dict(row)
@@ -6493,20 +6572,28 @@ def decorate_positions(
         item["open"] = None if closed else q.get("open")
         item["prev"] = None if closed else prev
         item["bought_today"] = False if closed else bought_today
+        item["today_lot_qty"] = today_lot_qty if not closed else 0
         item["cost"] = cost
         item["market"] = market
         item["pnl"] = pnl
         item["pnl_pct"] = pnl_pct
         item["day_pnl"] = day_pnl
+        if closed and day_pnl_pct_row is not None:
+            item["day_pnl_pct"] = day_pnl_pct_row
         item["closed"] = closed
         item["closed_date"] = closed_date
         item["day_sold_qty"] = day_sold
         item["day_realized_pnl"] = day_realized
+        item["day_sell_notional"] = day_notional if sold_today else 0.0
+        item["avg_sell_price"] = (
+            round(float(eff_sell_px), 4)
+            if sold_today and eff_sell_px not in (None, "")
+            else None
+        )
         item["trade_fee"] = trade_fee
         item["buy_fee"] = buy_fee
         item["sell_fee"] = sell_fee
         item["status"] = "今日已平" if closed else ("部分兑现" if day_sold > 0 else "持仓")
-        # Sell-theme membership helpers for orphan bags.
         names = lookup_code_boards(code, board_pool) if board_pool else []
         entry = str(row.get("entry_board") or "").strip()
         if entry and entry not in names:
@@ -6514,7 +6601,6 @@ def decorate_positions(
         item["board_names"] = names[:4]
         item["board"] = names[0] if names else (entry or None)
         item["entry_board"] = entry or None
-        # Maintain hold-peak for cross-day take-profit pullback.
         if not closed and qty > 0:
             peak_vals = [buy]
             stored = row.get("peak_price")
@@ -6537,22 +6623,9 @@ def decorate_positions(
         else:
             item["peak_price"] = row.get("peak_price")
             item["peak_dirty"] = False
+        item["lots"] = lots
+        item["lot_count"] = len(lots)
         out.append(item)
-    # Attach open FIFO lots for multi-fill cost visibility.
-    try:
-        from market_desk.db import load_lots_for_positions
-
-        ids = [int(r["id"]) for r in out if r.get("id") is not None]
-        lots_map = load_lots_for_positions(ids)
-        for item in out:
-            pid = int(item.get("id") or 0)
-            lots = lots_map.get(pid) or []
-            item["lots"] = lots
-            item["lot_count"] = len(lots)
-    except Exception:
-        for item in out:
-            item.setdefault("lots", [])
-            item.setdefault("lot_count", 0)
     return out
 
 

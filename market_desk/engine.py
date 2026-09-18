@@ -985,8 +985,14 @@ class DeskEngine:
 
         Market-level brief is stored under ``eod:{date}``. Eligible users with
         Server酱 enabled get a personalized body (own books) at most once.
+        Push body uses curated ``push_bullets`` (P&L first, ~8 lines).
         """
-        from market_desk.db import list_serverchan_recipients, load_setting, save_setting
+        from market_desk.db import (
+            list_serverchan_recipients,
+            load_exec_diary,
+            load_setting,
+            save_setting,
+        )
         from market_desk.notify import format_serverchan_desp, notify_serverchan
         from market_desk.report import build_eod_onepager
 
@@ -1004,6 +1010,7 @@ class DeskEngine:
                     "title": brief.get("title"),
                     "focus": brief.get("focus"),
                     "bullets": brief.get("bullets"),
+                    "push_bullets": brief.get("push_bullets"),
                     "markdown": brief.get("markdown"),
                     "date": day_s,
                     "as_of": brief.get("as_of"),
@@ -1033,11 +1040,20 @@ class DeskEngine:
                 if uid is not None:
                     snap = self.snapshot_for_user(int(uid))
                     urev = await self.build_review(view_date=day_s, user_id=int(uid))
-                    ubrief = build_eod_onepager(snapshot=snap, review=urev)
+                    diary = load_exec_diary(user_id=int(uid), trade_date=day_s, limit=40)
+                    ubrief = build_eod_onepager(
+                        snapshot=snap, review=urev, diary=diary
+                    )
             except Exception:
                 log.exception("eod personal brief failed user=%s", uid)
+            push_list = ubrief.get("push_bullets")
+            if not isinstance(push_list, list) or not push_list:
+                raw = [str(b) for b in (ubrief.get("bullets") or []) if b]
+                pnl = [b for b in raw if b.startswith("今日盈亏")]
+                rest = [b for b in raw if not b.startswith("今日盈亏")]
+                push_list = (pnl + rest)[:8]
             body_lines = [str(ubrief.get("focus") or "").strip()]
-            for b in (ubrief.get("bullets") or [])[:6]:
+            for b in push_list[:8]:
                 body_lines.append(f"· {b}")
             body = "\n".join(x for x in body_lines if x)
             alert_key = f"eod:{day_s}"

@@ -134,3 +134,64 @@ def test_decorate_open_bought_today_subtracts_buy_fee() -> None:
     assert row["trade_fee"] == TRADE_FEE_CNY
     assert row["day_pnl"] == round(50.0 - TRADE_FEE_CNY, 2)  # mtm 50 − buy fee
     assert row["pnl"] == round(50.0 - TRADE_FEE_CNY, 2)
+
+
+def test_decorate_lot_split_ignores_avg_last_buy_date(monkeypatch) -> None:
+    """Averaging into overnight bag must not re-anchor whole row as today-bought."""
+    rows = [
+        {
+            "id": 10,
+            "code": "600010",
+            "name": "分批",
+            "buy_price": 11.0,  # avg after add
+            "qty": 200,
+            "last_buy_date": "2026-09-17",  # would wrongly treat all as today
+            "closed_date": None,
+            "day_sold_qty": 0,
+            "day_realized_pnl": 0,
+        }
+    ]
+    lots = {
+        10: [
+            {"buy_date": "2026-09-16", "buy_price": 10.0, "qty": 100},
+            {"buy_date": "2026-09-17", "buy_price": 12.0, "qty": 100},
+        ]
+    }
+    monkeypatch.setattr(
+        "market_desk.db.load_lots_for_positions",
+        lambda ids: lots,
+    )
+    quotes = {"600010": {"price": 11.5, "prev": 10.5, "pct": 9.52}}
+    out = decorate_positions(rows, quotes, trade_date="2026-09-17")
+    row = out[0]
+    # overnight: (11.5-10.5)*100 + today: (11.5-12)*100 = 100 - 50 = 50 − buy fee
+    assert row["today_lot_qty"] == 100
+    assert row["bought_today"] is True
+    assert row["day_pnl"] == round(50.0 - TRADE_FEE_CNY, 2)
+
+
+def test_decorate_multi_trim_uses_vwap(monkeypatch) -> None:
+    rows = [
+        {
+            "id": 11,
+            "code": "600011",
+            "name": "多减",
+            "buy_price": 10.0,
+            "qty": 100,
+            "last_buy_date": "2026-09-01",
+            "closed_date": None,
+            "last_sell_date": "2026-09-17",
+            "last_sell_price": 11.0,  # last trim only — VWAP should win
+            "day_sold_qty": 100,
+            "day_sell_notional": 1050.0,  # avg 10.5
+            "day_realized_pnl": 45.0,  # (10.5-10)*100 - fee approx stored
+        }
+    ]
+    monkeypatch.setattr("market_desk.db.load_lots_for_positions", lambda ids: {})
+    quotes = {"600011": {"price": 10.8, "prev": 10.2, "pct": 5.88}}
+    out = decorate_positions(rows, quotes, trade_date="2026-09-17")
+    row = out[0]
+    assert row["avg_sell_price"] == 10.5
+    # Open + stored realized path: mtm remaining + stored - buy_fee(0)
+    assert row["day_realized_pnl"] == 45.0
+    assert abs(row["day_pnl"] - (round((10.8 - 10.2) * 100, 2) + 45.0)) < 0.02
