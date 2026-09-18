@@ -14,6 +14,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **换防解释对齐 pick + 联动兜底/支线并入 + 尖峰主升提示 + 竞价桥叠乘归因** — *(2026-09-18)*
 - [x] **参数导出/导入 + 防守/平衡/进攻预设** — *(2026-09-18)*
 - [x] **仓位目标 vs 实际常驻条** — 作战台/仓位页进度条。*(2026-09-18)*
 - [x] **主题链时间线** — 点题材信誉卡看 persist/fade。*(2026-09-18)*

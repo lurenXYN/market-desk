@@ -1766,6 +1766,7 @@
     #lifePill.life-start { color: var(--ferm); }
     #lifePill.life-run { color: var(--ice); }
     #lifePill.life-end { color: var(--warn); }
+    #lifePill.life-tip, .today-trio .w.stage.life-tip { color: #fdba74; }
     .rev-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .rev-actions .rev-up {
       background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;
@@ -3828,12 +3829,20 @@
         ? (`相位 ${termHtml(phase)}`) : "";
       const lifePill = document.getElementById("lifePill");
       const lifeStage = (v.mainline && v.mainline.lifecycle) || "";
+      const mlStatus = String((v.mainline && v.mainline.status) || "");
+      const tipPeak = lifeStage === "ongoing" && mlStatus === "尖峰禁追";
       const lifeLabel = ({ starting: "萌芽", ongoing: "主升", ending: "衰退" })[lifeStage] || "";
       if (lifePill) {
-        lifePill.textContent = lifeLabel ? (`阶段 ${lifeLabel}`) : "";
+        if (tipPeak) {
+          lifePill.textContent = "阶段 主升·尖峰仅观察";
+          lifePill.title = "生命周期落在主升，但板块状态为尖峰禁追：只描述扩散强度，不等于可追可买";
+        } else {
+          lifePill.textContent = lifeLabel ? (`阶段 ${lifeLabel}`) : "";
+          lifePill.title = "";
+        }
         lifePill.className = "meta " + ({
           starting: "life-start",
-          ongoing: "life-run",
+          ongoing: tipPeak ? "life-run life-tip" : "life-run",
           ending: "life-end",
         }[lifeStage] || "");
       }
@@ -3870,10 +3879,15 @@
       if (trioPhase) trioPhase.textContent = (phase && phase !== "—") ? phase : "相位未明";
       if (trioMain) trioMain.textContent = ml || "主线未明";
       if (trioStage) {
-        trioStage.textContent = lifeLabel || "阶段未明";
+        trioStage.textContent = tipPeak
+          ? "主升·尖峰仅观察"
+          : (lifeLabel || "阶段未明");
+        trioStage.title = tipPeak
+          ? "尖峰禁追仍可落在主升桶：只看扩散，不当现买"
+          : "";
         trioStage.className = "w stage " + ({
           starting: "life-start",
-          ongoing: "life-run",
+          ongoing: tipPeak ? "life-run life-tip" : "life-run",
           ending: "life-end",
         }[lifeStage] || "");
       }

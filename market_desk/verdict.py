@@ -228,6 +228,15 @@ def build_verdict(
         carrier_pct=pct,
     )
     algo_notes.extend(bridge_notes)
+    # Stack open_mute + auction-open bridge so demote attribution is explicit.
+    if bool(seg.get("open_mute")) and bool((auction_open_bridge or {}).get("active")):
+        stack = f"开盘静音+竞价开盘桥叠乘·禁试探（静音{mute_m}分）"
+        if stack not in algo_notes:
+            algo_notes.append(stack)
+        size_hint = _join_hint(size_hint or "", "开盘静音×竞价桥叠乘")
+        auction_open_bridge = dict(auction_open_bridge or {})
+        auction_open_bridge["stacked_with_open_mute"] = True
+        auction_open_bridge["open_mute_minutes"] = mute_m
     action, reason, size_hint, stock_block, review_notes = apply_review_bias(
         action, reason, size_hint, phase=phase
     )
@@ -431,10 +440,26 @@ def build_verdict(
         orphan=("hard" if not exact_etf and not soft_etf else ("soft" if soft_etf else False)),
         phase=phase,
     )
-    if link_info:
-        algo_notes.append(
-            f"板块联动={link_info.get('name')}({int(round(float(link_info.get('sim') or 0) * 100))}%)"
+    # High-sim / fallback side absorbed into link → drop duplicate side cards.
+    if (
+        link_info
+        and side_info
+        and (
+            link_info.get("from_side")
+            or str(link_info.get("name") or "") == str(side_info.get("name") or "")
         )
+    ):
+        algo_notes = [n for n in algo_notes if not str(n).startswith("观察支线=")]
+        algo_notes.append(f"支线并入联动={link_info.get('name')}")
+        side_info = None
+        side_recommend = None
+    if link_info:
+        fb = str(link_info.get("fallback") or "peer")
+        sim_pct = int(round(float(link_info.get("sim") or 0) * 100))
+        if fb in ("theme", "score"):
+            algo_notes.append(f"板块联动={link_info.get('name')}({sim_pct}%·{fb}兜底)")
+        elif not any(str(n).startswith("支线并入联动=") for n in algo_notes):
+            algo_notes.append(f"板块联动={link_info.get('name')}({sim_pct}%)")
         from market_desk.config import BOARD_LINK_SIZE_MULT
 
         link_adapt = dict(adapt_bundle)
@@ -1331,6 +1356,133 @@ def _mainline_needs_link(recommend: dict[str, Any] | None) -> tuple[bool, str]:
     return False, ""
 
 
+def _peer_sim_for_name(
+    peers: list[dict[str, Any]] | None,
+    name: str,
+) -> float | None:
+    """Return similarity for one peer name from similar_peers, if present."""
+    target = str(name or "").strip()
+    if not target:
+        return None
+    for peer in peers or []:
+        if str(peer.get("name") or "").strip() != target:
+            continue
+        try:
+            return float(peer.get("sim") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    return None
+
+
+def _link_board_ok(
+    board: dict[str, Any] | None,
+    *,
+    main_name: str,
+    side_name: str = "",
+    allow_side_name: bool = False,
+) -> bool:
+    """Return True when a hot board is eligible as a soft link target."""
+    if not board:
+        return False
+    name = str(board.get("name") or "").strip()
+    if not name or name == main_name:
+        return False
+    if name == side_name and not allow_side_name:
+        return False
+    status = str(board.get("status") or "")
+    if status in ("尖峰禁追", "退潮"):
+        return False
+    if _blocks_chi_star_stocks(name):
+        return False
+    return True
+
+
+def _pick_link_fallback_board(
+    *,
+    hot: list[dict[str, Any]] | None,
+    main: dict[str, Any],
+    side_info: dict[str, Any] | None,
+    peers: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any] | None, float, str]:
+    """Pick a soft link board when similar_peers yields nothing.
+
+    Order: promote side when sim/theme qualifies → same theme_key → score-near.
+    Returns (board, synthetic_sim, fallback_tag).
+    """
+    from market_desk.config import (
+        BOARD_LINK_SCORE_FALLBACK_SIM,
+        BOARD_LINK_SIM_MIN,
+        BOARD_LINK_THEME_FALLBACK_SIM,
+    )
+    from market_desk.mainline import mainline_score, theme_key
+
+    main_name = str(main.get("name") or "").strip()
+    by_name = {
+        str(b.get("name") or "").strip(): b
+        for b in (hot or [])
+        if str(b.get("name") or "").strip()
+    }
+    side_name = str((side_info or {}).get("name") or "").strip()
+    # 1) Side runner-up with real or theme similarity → absorb into link.
+    if side_name:
+        side_board = by_name.get(side_name) or None
+        if side_board is None and side_info:
+            side_board = dict(side_info)
+        side_sim = _peer_sim_for_name(peers, side_name)
+        if side_sim is None and same_theme(main_name, side_name):
+            side_sim = float(BOARD_LINK_THEME_FALLBACK_SIM)
+        if (
+            side_board
+            and side_sim is not None
+            and float(side_sim) >= float(BOARD_LINK_SIM_MIN)
+            and _link_board_ok(
+                side_board, main_name=main_name, side_name=side_name, allow_side_name=True
+            )
+        ):
+            return side_board, float(side_sim), "from_side"
+
+    # 2) Same theme_key sibling in the hot pool.
+    main_theme = theme_key(main_name)
+    if main_theme:
+        best_theme: dict[str, Any] | None = None
+        best_sc = -1e9
+        for board in hot or []:
+            if not _link_board_ok(board, main_name=main_name, side_name=side_name):
+                continue
+            if theme_key(str(board.get("name") or "")) != main_theme:
+                continue
+            sc = mainline_score(board)
+            if sc > best_sc:
+                best_sc = sc
+                best_theme = board
+        if best_theme:
+            return best_theme, float(BOARD_LINK_THEME_FALLBACK_SIM), "theme"
+
+    # 3) Score-near runner within side_mainline_gap.
+    gap_limit = float(setting("side_mainline_gap", 12.0) or 0.0)
+    if gap_limit > 0:
+        main_sc = mainline_score(main)
+        ranked = sorted(list(hot or []), key=mainline_score, reverse=True)
+        for board in ranked:
+            if not _link_board_ok(board, main_name=main_name, side_name=""):
+                continue
+            sc = mainline_score(board)
+            if main_sc - sc > gap_limit:
+                continue
+            return board, float(BOARD_LINK_SCORE_FALLBACK_SIM), "score"
+    # Last resort: raw side board even when sim is thin (still observe_only).
+    if side_name:
+        side_board = by_name.get(side_name)
+        if _link_board_ok(
+            side_board, main_name=main_name, side_name=side_name, allow_side_name=True
+        ):
+            sim = _peer_sim_for_name(peers, side_name)
+            if sim is None:
+                sim = float(BOARD_LINK_SCORE_FALLBACK_SIM)
+            return side_board, float(sim), "from_side_soft"
+    return None, 0.0, ""
+
+
 def _build_link_branch(
     *,
     hot: list[dict[str, Any]] | None,
@@ -1349,6 +1501,9 @@ def _build_link_branch(
 
     Does not switch sticky mainline or upgrade hero action; cards stay observation
     path with an extra size damp (BOARD_LINK_SIZE_MULT).
+
+    When ``similar_peers`` is empty, falls back to same-theme / score-near boards.
+    A high-sim side runner is absorbed into the link narrative (not dual-empty).
     """
     from market_desk.config import BOARD_LINK_MAX_STOCKS, BOARD_LINK_SIM_MIN, BOARD_LINK_SIZE_MULT
 
@@ -1361,8 +1516,6 @@ def _build_link_branch(
         return None, None
 
     peers = list(main.get("similar_peers") or [])
-    if not peers:
-        return None, None
     by_name = {
         str(b.get("name") or "").strip(): b
         for b in (hot or [])
@@ -1371,10 +1524,14 @@ def _build_link_branch(
     side_name = str((side_info or {}).get("name") or "").strip()
     chosen: dict[str, Any] | None = None
     chosen_sim = 0.0
+    fallback = ""
     best = -1.0
     for peer in peers:
         name = str(peer.get("name") or "").strip()
-        if not name or name == main_name or name == side_name:
+        if not name or name == main_name:
+            continue
+        # Prefer promoting side into link later; skip it here so we can absorb.
+        if name == side_name:
             continue
         try:
             sim = float(peer.get("sim") or 0)
@@ -1383,20 +1540,44 @@ def _build_link_branch(
         if sim < float(BOARD_LINK_SIM_MIN):
             continue
         board = by_name.get(name)
-        if not board:
+        if not _link_board_ok(board, main_name=main_name, side_name=side_name):
             continue
-        status = str(board.get("status") or "")
-        if status in ("尖峰禁追", "退潮"):
-            continue
-        if _blocks_chi_star_stocks(name):
-            continue
+        status = str((board or {}).get("status") or "")
         rank = sim + (0.12 if status == "确认中" else 0.0) + min(
-            float(board.get("zt_n") or 0) * 0.01, 0.08
+            float((board or {}).get("zt_n") or 0) * 0.01, 0.08
         )
         if rank > best:
             best = rank
             chosen = board
             chosen_sim = sim
+            fallback = "peer"
+
+    # Promote side into link when it clears the sim floor (or theme fallback).
+    if side_name:
+        side_sim = _peer_sim_for_name(peers, side_name)
+        if side_sim is None and same_theme(main_name, side_name):
+            from market_desk.config import BOARD_LINK_THEME_FALLBACK_SIM
+
+            side_sim = float(BOARD_LINK_THEME_FALLBACK_SIM)
+        side_board = by_name.get(side_name)
+        if (
+            side_board
+            and side_sim is not None
+            and float(side_sim) >= float(BOARD_LINK_SIM_MIN)
+            and _link_board_ok(
+                side_board, main_name=main_name, side_name=side_name, allow_side_name=True
+            )
+        ):
+            # Prefer side absorption over a weaker peer, or fill empty peer slot.
+            if chosen is None or float(side_sim) + 0.05 >= float(chosen_sim):
+                chosen = side_board
+                chosen_sim = float(side_sim)
+                fallback = "from_side"
+
+    if not chosen:
+        chosen, chosen_sim, fallback = _pick_link_fallback_board(
+            hot=hot, main=main, side_info=side_info, peers=peers
+        )
     if not chosen:
         return None, None
 
@@ -1449,6 +1630,7 @@ def _build_link_branch(
         item["ready"] = False
         item["link_board"] = True
         item["link_sim"] = round(chosen_sim, 2)
+        item["link_fallback"] = fallback or "peer"
         if item.get("wait_price") is not None:
             item["buy_price"] = item.get("wait_price")
         kind = item.get("kind") or "stock"
@@ -1456,16 +1638,31 @@ def _build_link_branch(
             f"联动ETF·{peer_name}" if kind == "etf" else f"联动·{peer_name}"
         )
         reason = str(item.get("reason") or "")
-        tip = f"相似主线 {main_name}（{int(round(chosen_sim * 100))}%）"
+        if fallback == "from_side" or fallback == "from_side_soft":
+            tip = f"支线并入联动 {peer_name}（相对主线 {main_name}）"
+        elif fallback == "theme":
+            tip = f"同主题兜底 {peer_name}（相对主线 {main_name}）"
+        elif fallback == "score":
+            tip = f"分差兜底 {peer_name}（相对主线 {main_name}）"
+        else:
+            tip = f"相似主线 {main_name}（{int(round(chosen_sim * 100))}%）"
         item["reason"] = f"{tip}；{reason}" if reason else tip
     rec["buy"] = False
     rec["link"] = True
     rec["link_sim"] = round(chosen_sim, 2)
     rec["link_why"] = link_why
+    rec["link_fallback"] = fallback or "peer"
     rec["title"] = f"板块联动 · {peer_name}"
+    fb_hint = {
+        "from_side": "支线并入",
+        "from_side_soft": "支线软并入",
+        "theme": "同主题兜底",
+        "score": "分差兜底",
+    }.get(fallback, "")
     rec["size_note"] = _join_hint(
         f"{link_why}；相似板块回踩可小仓（建议再×{BOARD_LINK_SIZE_MULT:g}），不改 sticky 主线",
         f"相似 {int(round(chosen_sim * 100))}%"
+        + (f" · {fb_hint}" if fb_hint else "")
         + (f" · 载体近似 {vehicle.get('name')}" if soft and vehicle.get("name") else ""),
     )
     if not (rec.get("items") or []):
@@ -1490,6 +1687,8 @@ def _build_link_branch(
         "pool_codes": _pool_codes_from_board(chosen),
         "mainline_name": main_name,
         "why": link_why,
+        "fallback": fallback or "peer",
+        "from_side": fallback in ("from_side", "from_side_soft"),
     }
     return info, rec
 

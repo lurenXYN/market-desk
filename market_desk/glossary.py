@@ -77,7 +77,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "主线质量": {
         "mean": "顶栏旁一行仪表：主题、分差/换防门槛、持有时长、粘滞或已换防、短因。",
-        "algo": "复用 verdict.mainline.why（explain_mainline）。\n"
+        "algo": "复用 verdict.mainline.why（explain_mainline）；门槛与 pick_mainline 共用 switch_margin_need\n"
+        "（含衰退×FADE、同主题×2 / fade 跳过×2、持有窗×HOLD、精确ETF×0.75）。\n"
         "kept 且 gap&lt;need 时标「差 X 换防」；详情仍在「主线为什么是它」。",
     },
     "风控总览": {
@@ -108,10 +109,10 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "主线透明": {
         "mean": "作战台主线下的说明条：主题、得分、与挑战者分差、持有时长、为何没换防。",
-        "algo": "explain_mainline：对比池内最高分与 sticky；同主题/持有期提高换防门槛；\n"
+        "algo": "explain_mainline 与 pick_mainline 共用 switch_margin_need：同主题×2、持有期×HOLD、\n"
+        "衰退/退潮×FADE（同主题 fade 可跳过×2）、无精确ETF对有ETF挑战者×0.75；前任退潮且同主题未退潮则立即换板。\n"
         "UI 换防旁注：kept=false 时展示 sticky→现主线及分差；kept=true 且有挑战者时展示「保留·挑战者未达标」。\n"
-        "无精确ETF的粘性主线，对有精确ETF的挑战者换防门槛×0.75；展示池内前三。\n"
-        "换防学习：近几日 mainline_switch 日均次数偏高→粘性分差×(1+夹紧)；偏低→略降门槛。",
+        "展示池内前三。换防学习：近几日切换偏多→粘性分差夹紧；偏低→略降门槛。",
     },
     "异动": {
         "mean": "只观察、不推荐买。把当天最吵的主板名字分组摊开，避免漏看，不等于买点。",
@@ -207,7 +208,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "板块联动": {
         "mean": "主线暂时没有现买点或全贴不追价时，从相似板块挖回踩票作副卡，减少「买不到 / 追主线高位」两头空。",
         "algo": "触发：sticky 主线 recommend 无 ready，或全部有价卡片 last≥chase×BOARD_LINK_CHASE_RATIO。\n"
-        "从 similar_peers 选 sim≥BOARD_LINK_SIM_MIN、非尖峰/退潮、非创业科创禁个股池的同伴（优先确认中），挖 ETF/主板回踩票。\n"
+        "优先 similar_peers 且 sim≥BOARD_LINK_SIM_MIN、非尖峰/退潮；无 peer 时兜底：同 theme_key / 分差内次热 / 支线并入。\n"
+        "观察支线若 sim≥门槛（或同主题）→ 并入联动叙事，不再双挂支线卡。\n"
         "独立 link_recommend 副卡；observe_only（不升顶栏可买入、不改 sticky）；\n"
         "仓位再×BOARD_LINK_SIZE_MULT（默认0.75）；卖侧主题集合可含联动板块。",
     },
@@ -279,9 +281,10 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "观察支线": {
         "mean": "同池里紧跟主线的第二名板块，只展示回踩观察，永不 ready、不当现买主推。",
-        "algo": "pick_side_mainline：行业池（无则全热点）按主线同分排序，取非主线、非退潮、\n"
+        "algo": "pick_side_mainline：行业池（无则全热点）按主线同分排序，取非主线、非同主题、非退潮、\n"
         "且 main−side 分差 ≤ side_mainline_gap（默认 12；设 0 关闭）的最高分者。\n"
         "走观察回踩定价；日线标注后仍强制 ready=False、buy=False。不改主线 sticky / 主 recommend。\n"
+        "若与主线 sim≥BOARD_LINK_SIM_MIN（或同主题）且主线需联动 → 并入「板块联动」副卡，不再单独挂支线。\n"
         "卖点会把支线纳入卖侧主题集合，所属仓位可按其退潮/衰退软减。",
     },
     "仓位": {
@@ -423,6 +426,7 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "开盘后 open_mute_minutes（默认5）分钟静音只看不买；\n"
         "竞价开盘桥：09:30–09:45 内竞价中位≥2% 且开盘偏弱（指数弱/沪深300≤-0.3%/主线或载体收绿）→\n"
         "可买入降观察回踩、降仓、algo「竞价开盘桥」、revoke_probe 禁试探（BUY_DEMOTE_LOCK）。\n"
+        "若同时处于开盘静音窗：algo 追加「开盘静音+竞价开盘桥叠乘·禁试探」，size_hint 注明叠乘。\n"
         "随后开盘半小时未完全确认则降为观察回踩且宜小仓；\n"
         "午前正常；午后遇高潮/恐慌新开仓降级。尾盘 tail_mute_minutes（默认30，即14:30起）静音买入/决策 toast，风险类仍提醒。\n"
         "每段最新结论写入本地库，条带可回看。",
@@ -439,8 +443,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "板块阶段雷达：萌芽 / 主升 / 衰退。完整三列在「板块」页顶；作战台只显示当前主线阶段。",
         "algo": "萌芽：点火、涨停跃迁、低位回升、确认天数偏少；主升：多日确认/尖峰仍扩散；\n"
         "衰退：板块退潮、修复、A杀、涨停连续衰减或斜率转负。\n"
-        "复盘买入命中率偏低(n≥8且<40%)时，衰退判定更敏感。主线若判为衰退，结论降为观察回踩。\n"
-        "注意：主升描述扩散强度，不等于可买入（尖峰仍可能落在主升桶）。",
+        "复盘买入命中率偏低(n≥5且&lt;35%，与相位软降同口径)时，衰退判定更敏感。主线若判为衰退，结论降为观察回踩。\n"
+        "注意：主升描述扩散强度，不等于可买入；尖峰禁追仍可能落在主升桶，顶栏会标「主升·尖峰仅观察」。",
     },
     "相似日": {
         "mean": "用近端同相位、温度接近的交易日，对照次日情绪冷热；降温时缩建议仓位，不直接关掉可买入。",

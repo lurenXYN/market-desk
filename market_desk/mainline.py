@@ -188,6 +188,91 @@ def same_theme(a: str | None, b: str | None) -> bool:
     return bool(ka and kb and ka == kb)
 
 
+def switch_margin_need(
+    *,
+    margin: float | None = None,
+    incumbent: dict[str, Any] | None,
+    challenger: dict[str, Any] | None,
+    sticky_name: str | None,
+    sticky_held_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Compute the effective score gap required to flip sticky mainline.
+
+    Kept in sync with ``pick_mainline`` so ``explain_mainline`` shows the same
+    bar the picker actually uses (fade easing, same-theme ×2, hold window, ETF).
+    """
+    from market_desk.lifecycle import classify_lifecycle
+
+    base = float(margin) if margin is not None else float(setting("sticky_margin", 12.0))
+    need = base
+    hold_min = float(setting("switch_min_seconds", 300) or 0)
+    held = float(sticky_held_seconds) if sticky_held_seconds is not None else None
+    sticky = str(sticky_name or "").strip()
+    lead_name = str((challenger or {}).get("name") or "").strip()
+    same = bool(sticky and lead_name and same_theme(sticky, lead_name))
+
+    inc_status = str((incumbent or {}).get("status") or "")
+    lead_status = str((challenger or {}).get("status") or "")
+    inc_ending = bool(incumbent) and (
+        classify_lifecycle(incumbent) == "ending" or inc_status == "退潮"
+    )
+    # Sticky already 退潮 while challenger is not → pick flips immediately.
+    force_flip_fade = bool(
+        same and inc_status == "退潮" and lead_status != "退潮" and lead_name
+    )
+
+    fade_mult_applied = False
+    if inc_ending:
+        need = need * float(MAINLINE_FADE_SWITCH_MULT)
+        fade_mult_applied = True
+
+    theme_fade_skip = False
+    if same and not force_flip_fade:
+        if inc_ending and MAINLINE_THEME_FADE_SKIP:
+            theme_fade_skip = True
+        else:
+            need = need * float(MAINLINE_THEME_SWITCH_MULT)
+
+    # Hold-window inflation only applies on cross-theme challenges (pick early-returns
+    # on same-theme before this multiplier).
+    in_hold = bool(
+        held is not None
+        and hold_min > 0
+        and held < hold_min
+        and not inc_ending
+        and not same
+        and not force_flip_fade
+    )
+    if in_hold:
+        need = need * float(MAINLINE_HOLD_SWITCH_MULT)
+
+    etf_ease = False
+    if (
+        lead_name
+        and sticky
+        and etf_spec_for_name(lead_name)
+        and not etf_spec_for_name(sticky)
+        and not same
+        and not force_flip_fade
+    ):
+        need = need * 0.75
+        etf_ease = True
+
+    return {
+        "need": 0.0 if force_flip_fade else round(float(need), 1),
+        "base_need": round(base, 1),
+        "same_theme": same,
+        "inc_ending": inc_ending,
+        "theme_fade_skip": theme_fade_skip,
+        "fade_mult_applied": fade_mult_applied,
+        "force_flip_fade": force_flip_fade,
+        "in_hold": in_hold,
+        "etf_ease": etf_ease,
+        "held_seconds": None if held is None else int(held),
+        "hold_min_seconds": int(hold_min) if hold_min else 0,
+    }
+
+
 def pick_mainline(
     hot: list[dict[str, Any]] | None,
     sticky_name: str | None = None,
@@ -220,43 +305,18 @@ def pick_mainline(
     if (leader.get("name") or "") == sticky:
         return leader
 
-    need = float(margin) if margin is not None else float(setting("sticky_margin", 12.0))
+    meta = switch_margin_need(
+        margin=margin,
+        incumbent=incumbent,
+        challenger=leader,
+        sticky_name=sticky,
+        sticky_held_seconds=sticky_held_seconds,
+    )
+    if meta.get("force_flip_fade"):
+        return leader
+    need = float(meta["need"])
     lead_s = mainline_score(leader)
     hold_s = mainline_score(incumbent)
-    # Ending / 退潮 sticky: lower the bar so identity catches up with sell bias.
-    from market_desk.lifecycle import classify_lifecycle
-
-    inc_status = str(incumbent.get("status") or "")
-    inc_ending = classify_lifecycle(incumbent) == "ending" or inc_status == "退潮"
-    if inc_ending:
-        need = need * float(MAINLINE_FADE_SWITCH_MULT)
-    # Same theme: treat as continuity, not a "mainline change", unless clearly stronger
-    # or the incumbent is already fading.
-    if same_theme(sticky, leader.get("name")):
-        if inc_status == "退潮" and (leader.get("status") or "") != "退潮":
-            return leader
-        # Ending sticky: do not inflate same-theme margin (identity should catch sell bias).
-        if inc_ending and MAINLINE_THEME_FADE_SKIP:
-            theme_need = need
-        else:
-            theme_need = need * float(MAINLINE_THEME_SWITCH_MULT)
-        if lead_s >= hold_s + theme_need:
-            return leader
-        return incumbent
-
-    # Fresh sticky hold: demand a clearer breakout before flipping live.
-    hold_min = float(setting("switch_min_seconds", 300) or 0)
-    if (
-        sticky_held_seconds is not None
-        and hold_min > 0
-        and sticky_held_seconds < hold_min
-        and not inc_ending
-    ):
-        need = need * float(MAINLINE_HOLD_SWITCH_MULT)
-    # Easier to adopt a challenger that has an exact ETF map when sticky does not.
-    if etf_spec_for_name(str(leader.get("name") or "")) and not etf_spec_for_name(sticky):
-        need = need * 0.75
-
     if lead_s >= hold_s + need:
         return leader
     return incumbent
@@ -383,7 +443,6 @@ def explain_mainline(
     chosen = chosen or {}
     name = str(chosen.get("name") or "").strip()
     sticky = (sticky_name or "").strip()
-    need = float(margin) if margin is not None else float(setting("sticky_margin", 12.0))
     hold_min = float(setting("switch_min_seconds", 300) or 0)
     held = float(sticky_held_seconds) if sticky_held_seconds is not None else None
 
@@ -397,22 +456,18 @@ def explain_mainline(
     if lead_s is not None and hold_s is not None:
         gap = round(lead_s - hold_s, 1)
 
-    effective_need = need
-    same = bool(sticky and lead_name and same_theme(sticky, lead_name))
-    in_hold = bool(held is not None and hold_min > 0 and held < hold_min)
-    if same:
-        effective_need = need * float(MAINLINE_THEME_SWITCH_MULT)
-    elif in_hold:
-        effective_need = need * float(MAINLINE_HOLD_SWITCH_MULT)
-    if (
-        lead_name
-        and sticky
-        and etf_spec_for_name(lead_name)
-        and not etf_spec_for_name(sticky)
-        and not same
-    ):
-        effective_need = float(effective_need) * 0.75
-    effective_need = round(float(effective_need), 1)
+    meta = switch_margin_need(
+        margin=margin,
+        incumbent=incumbent,
+        challenger=leader,
+        sticky_name=sticky,
+        sticky_held_seconds=sticky_held_seconds,
+    )
+    effective_need = float(meta["need"])
+    same = bool(meta.get("same_theme"))
+    in_hold = bool(meta.get("in_hold"))
+    inc_ending = bool(meta.get("inc_ending"))
+    force_flip = bool(meta.get("force_flip_fade"))
 
     if not name:
         reason = "热点池为空，主线未明"
@@ -421,10 +476,15 @@ def explain_mainline(
         reason = "首任主线（无粘性前任）"
         kept = False
     elif name == sticky:
+        fade_bit = ""
+        if inc_ending:
+            fade_bit = "·衰退降门槛" if meta.get("fade_mult_applied") else ""
+            if meta.get("theme_fade_skip"):
+                fade_bit += "·同主题不×2"
         if same and lead_name and lead_name != sticky:
             reason = (
                 f"同主题粘滞：挑战者 {lead_name} 分差 {gap if gap is not None else '—'} "
-                f"< 需 {effective_need}"
+                f"< 需 {effective_need}{fade_bit}"
             )
         elif in_hold and lead_name and lead_name != sticky:
             reason = (
@@ -434,7 +494,7 @@ def explain_mainline(
         elif lead_name and lead_name != sticky:
             reason = (
                 f"迟滞保留：挑战者 {lead_name} 分差 {gap if gap is not None else '—'} "
-                f"< 需 {effective_need}"
+                f"< 需 {effective_need}{fade_bit}"
             )
         else:
             reason = "仍为池内最高分（或并列领先）"
@@ -445,16 +505,21 @@ def explain_mainline(
         else:
             reason = f"前任 {sticky} 离开热点池，改认 {name}"
         kept = False
+    elif force_flip and name != sticky:
+        reason = f"前任退潮、同主题换板：{sticky} → {name}"
+        kept = False
     elif same and name != sticky:
         reason = (
             f"同主题换板：{sticky} → {name}，分差 {gap if gap is not None else '—'} "
             f"≥ 需 {effective_need}"
+            + ("（衰退降门槛）" if meta.get("fade_mult_applied") else "")
         )
         kept = False
     else:
         reason = (
             f"分差达标换防：{sticky} → {name}，分差 {gap if gap is not None else '—'} "
             f"≥ 需 {effective_need}"
+            + ("（衰退降门槛）" if meta.get("fade_mult_applied") else "")
         )
         kept = False
 
@@ -477,10 +542,15 @@ def explain_mainline(
         "challenger_score": lead_s,
         "gap": gap,
         "need": effective_need,
-        "base_need": round(need, 1),
+        "base_need": float(meta["base_need"]),
         "held_seconds": None if held is None else int(held),
         "hold_min_seconds": int(hold_min) if hold_min else 0,
         "in_hold": in_hold,
+        "inc_ending": inc_ending,
+        "fade_eased": bool(meta.get("fade_mult_applied")),
+        "theme_fade_skip": bool(meta.get("theme_fade_skip")),
+        "force_flip_fade": force_flip,
+        "etf_ease": bool(meta.get("etf_ease")),
         "same_theme_challenge": same and bool(lead_name and lead_name != sticky),
         "kept": kept,
         "reason": reason,

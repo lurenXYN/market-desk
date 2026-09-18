@@ -495,6 +495,9 @@ BOARD_LINK_SIM_MIN = 0.45       # reuse peer floor; raise to be stricter
 BOARD_LINK_SIZE_MULT = 0.75     # extra size damp vs mainline risk plan
 BOARD_LINK_MAX_STOCKS = 2
 BOARD_LINK_CHASE_RATIO = 0.997  # last ≥ chase * this → counts as hug-chase
+# Soft link when similar_peers is empty: same-theme / score-near runners.
+BOARD_LINK_THEME_FALLBACK_SIM = 0.52
+BOARD_LINK_SCORE_FALLBACK_SIM = 0.48
 # Watchlist「可试探」desk side cards (same soft tier as board link).
 WATCH_TRIAL_SIZE_MULT = 0.75
 WATCH_TRIAL_MAX_ITEMS = 4
