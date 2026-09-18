@@ -1676,3 +1676,36 @@ def backup_import(
 
     get_settings(refresh=True)
     return {"ok": True, "counts": counts}
+
+
+class BacktestIn(BaseModel):
+    """Parameters for a lightweight signal-replay backtest run."""
+
+    date_from: str
+    date_to: str
+    mode: str = "wait"
+    include_sells: bool = True
+    ready_only: bool = False
+    limit: int = Field(default=120, ge=20, le=400)
+
+
+@app.post("/api/backtest/run")
+async def backtest_run(
+    body: BacktestIn,
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Replay paper signals with daily OHLC simulated fills (read-only)."""
+    del user
+    from market_desk.backtest import run_signal_backtest
+
+    mode = str(body.mode or "wait").strip().lower()
+    if mode not in ("wait", "plan", "mid"):
+        raise HTTPException(400, "mode must be wait|plan|mid")
+    return await run_signal_backtest(
+        date_from=str(body.date_from)[:10],
+        date_to=str(body.date_to)[:10],
+        mode=mode,
+        include_sells=bool(body.include_sells),
+        ready_only=bool(body.ready_only),
+        limit=int(body.limit),
+    )

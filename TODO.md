@@ -18,9 +18,10 @@ Agents: **at the start of each session involving this app, read this file before
 - [ ] **自动下单 / 券商对接**
 - [ ] **大改主线打分** — 近期已够复杂。
 - [ ] **AI 荐股层**
-- [ ] **模拟撮合 / 回测引擎**
 
 ## Done recently (context)
+
+- [x] **模拟撮合 / 回测引擎（轻量）** — 日线价带假成交 + 复盘 outcome；页签「回测」；不改真实 traded。*(2026-09-18)*
 
 - [x] **健康条下钻** — banner 点开源 ok/fail/timeout 明细表。*(2026-09-18)*
 - [x] **卖侧日记反哺** — sell_exec 贴计划/偏晚/偏早进复盘。*(2026-09-18)*

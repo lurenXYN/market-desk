@@ -2646,6 +2646,7 @@
       <button type="button" data-main="auction">竞价<span class="hint">策略</span></button>
       <button type="button" data-main="pos">仓位</button>
       <button type="button" data-main="review">复盘<span class="hint">信号</span></button>
+      <button type="button" data-main="backtest">回测<span class="hint">撮合</span></button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
       <button type="button" class="rev-col-btn" id="glossaryBtn" style="margin-left:auto" title="浏览全部术语">术语</button>
       <button type="button" class="rev-col-btn" id="settingsBtn">参数</button>
@@ -3313,9 +3314,42 @@
         </div>
       </section>
     </section>
-  </div>
 
-  <div id="termPop" class="term-pop" hidden></div>
+    <section class="tab-panel" id="panel-backtest" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">信号回测<button type="button" class="q" data-term="信号回测">?</button></h2>
+        <p class="meta">用日线高低对计划价带做<strong>模拟成交</strong>（不改真实已交易/成交价），再按复盘同一套标签打分。买：触 wait/plan；开盘已越过不追则顺延。卖：先止损后卖价。</p>
+        <form class="pos-form" id="btForm" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));align-items:end">
+          <label>起<input type="date" name="date_from" id="btFrom" required /></label>
+          <label>止<input type="date" name="date_to" id="btTo" required /></label>
+          <label>买撮合
+            <select name="mode" id="btMode">
+              <option value="wait">理想回踩 wait</option>
+              <option value="plan">建议价 plan</option>
+              <option value="mid">中位 mid</option>
+            </select>
+          </label>
+          <label class="settings-check"><input type="checkbox" id="btReady" /> 仅 ready</label>
+          <label class="settings-check"><input type="checkbox" id="btSells" checked /> 含卖信号</label>
+          <label>条数上限<input type="number" id="btLimit" min="20" max="400" value="120" /></label>
+          <button type="submit">跑回测</button>
+        </form>
+        <div class="pos-sum" id="btSum" style="margin-top:10px"></div>
+        <p class="meta" id="btNote"></p>
+        <div class="rev-table-wrap" style="margin-top:8px">
+          <table class="rev-table m-cards" id="btTable">
+            <thead>
+              <tr>
+                <th>日</th><th>向</th><th>名称</th><th>代码</th><th>计划</th>
+                <th>模拟成交</th><th>触达</th><th>标签</th><th>次日%</th><th>三日%</th>
+              </tr>
+            </thead>
+            <tbody id="btBody"><tr><td colspan="10" class="meta">选日期后点「跑回测」</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </div>
   <div class="chart-mask" id="chartMask" hidden>
     <aside class="chart-drawer" id="chartDrawer">
       <div class="chart-hd">
@@ -4978,7 +5012,7 @@
 
     function snapshotViewForTab(tab) {
       const t = tab || currentMain || "desk";
-      if (t === "review") return "desk";
+      if (t === "review" || t === "backtest") return "desk";
       return t;
     }
 
@@ -6885,6 +6919,107 @@
       }
     }
 
+    function ensureBacktestDefaults() {
+      const toEl = document.getElementById("btTo");
+      const fromEl = document.getElementById("btFrom");
+      if (!toEl || !fromEl) return;
+      const today = (lastData && lastData.trade_date)
+        || new Date().toISOString().slice(0, 10);
+      if (!toEl.value) toEl.value = today;
+      if (!fromEl.value) {
+        const d = new Date(today + "T12:00:00");
+        d.setDate(d.getDate() - 14);
+        fromEl.value = d.toISOString().slice(0, 10);
+      }
+    }
+    function paintBacktest(payload) {
+      const sum = (payload && payload.summary) || {};
+      const note = document.getElementById("btNote");
+      const sumEl = document.getElementById("btSum");
+      const body = document.getElementById("btBody");
+      if (note) note.textContent = payload.note || "";
+      if (sumEl) {
+        const bits = [
+          `买 ${sum.buy_filled_n ?? 0}/${sum.buy_n ?? 0}`
+            + (sum.buy_fill_rate != null ? `（触达 ${sum.buy_fill_rate}%）` : ""),
+          sum.buy_hit_rate != null
+            ? `买命中 ${sum.buy_hit_rate}%（${sum.buy_hit_n ?? 0}/${sum.buy_scored_n ?? 0}）`
+            : "买命中 —",
+          sum.buy_avg_day1 != null
+            ? `买次日均 ${sum.buy_avg_day1 > 0 ? "+" : ""}${sum.buy_avg_day1}%`
+            : "",
+          `卖 ${sum.sell_filled_n ?? 0}/${sum.sell_n ?? 0}`,
+          sum.sell_hit_rate != null
+            ? `卖命中 ${sum.sell_hit_rate}%`
+            : "",
+        ].filter(Boolean);
+        sumEl.innerHTML = bits.map((b) => `<span>${b}</span>`).join("");
+      }
+      const items = (payload && payload.items) || [];
+      if (!body) return;
+      if (!items.length) {
+        body.innerHTML = `<tr><td colspan="10" class="meta">该区间无信号或未触达</td></tr>`;
+        return;
+      }
+      body.innerHTML = items.map((it) => {
+        const side = it.side === "sell" ? "卖" : "买";
+        const plan = it.plan_price != null ? it.plan_price
+          : (it.wait_price != null ? it.wait_price : "—");
+        const fill = it.sim_filled
+          ? `${it.sim_fill_price ?? "—"}<div class="meta">${it.sim_fill_date || ""}</div>`
+          : "—";
+        const d1 = it.outcome_day1_pct;
+        const d3 = it.outcome_day3_pct;
+        const d1c = d1 == null ? "" : (d1 >= 0 ? "up" : "down");
+        const d3c = d3 == null ? "" : (d3 >= 0 ? "up" : "down");
+        const nm = (typeof tickerHtml === "function")
+          ? tickerHtml(it.name, it.code)
+          : `${it.name || ""} ${it.code || ""}`;
+        return `<tr>
+          <td data-label="日">${(it.trade_date || "").slice(5)}</td>
+          <td data-label="向">${side}</td>
+          <td data-label="名称">${nm}</td>
+          <td data-label="代码">${it.code || ""}</td>
+          <td data-label="计划">${plan}</td>
+          <td data-label="模拟成交">${fill}</td>
+          <td data-label="触达">${it.note || (it.sim_filled ? "是" : "否")}</td>
+          <td data-label="标签">${it.outcome_label || "—"}</td>
+          <td data-label="次日%" class="${d1c}">${d1 == null ? "—" : ((d1 > 0 ? "+" : "") + d1)}</td>
+          <td data-label="三日%" class="${d3c}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3)}</td>
+        </tr>`;
+      }).join("");
+    }
+    document.getElementById("btForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const bodyEl = document.getElementById("btBody");
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">拉取日线并撮合中…</td></tr>`;
+      const payload = {
+        date_from: document.getElementById("btFrom").value,
+        date_to: document.getElementById("btTo").value,
+        mode: document.getElementById("btMode").value || "wait",
+        ready_only: !!document.getElementById("btReady").checked,
+        include_sells: !!document.getElementById("btSells").checked,
+        limit: Number(document.getElementById("btLimit").value) || 120,
+      };
+      try {
+        const r = await fetch("/api/backtest/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          if (bodyEl) {
+            bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "回测失败"}</td></tr>`;
+          }
+          return;
+        }
+        paintBacktest(d);
+      } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">回测请求失败</td></tr>`;
+      }
+    });
+
     async function loadReview(force, date) {
       const now = Date.now();
       const want = (date !== undefined && date !== null)
@@ -7243,11 +7378,12 @@
       document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
         el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
       );
-      ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review"].forEach((name) => {
+      ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "backtest"].forEach((name) => {
         const el = document.getElementById("panel-" + name);
         if (el) el.hidden = name !== currentMain;
       });
       if (currentMain === "review") loadReview(false);
+      if (currentMain === "backtest" && typeof ensureBacktestDefaults === "function") ensureBacktestDefaults();
       if (currentMain === "funds") ensureFundFlowFull();
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
       if (currentMain === "pos" && typeof ensurePosDiary === "function") ensurePosDiary(false);

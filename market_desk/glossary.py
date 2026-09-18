@@ -340,6 +340,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "股东户数/户数增减%/户均市值：东财季度披露，打开复盘日按代码批量拉取；ETF 无此项。\n"
         "年内涨停：日历年截至复盘日的日线涨停次数（未复权收盘涨幅阈值）；ETF 无。",
     },
+    "信号回测": {
+        "mean": "用日线高低对历史纸面信号做价带模拟成交，再按复盘同一套标签看命中；不改真实已交易。",
+        "algo": "POST /api/backtest/run。买：wait/plan/mid 触达 low；信号日开盘≥chase 则顺延。卖：同日先止损后卖价。\n"
+        "成交后复用 score_signal_with_closes；命中=次日红/三日红。只读，不写 fill/traded。",
+    },
     "信号历史": {
         "mean": "复盘里点某票「历史」，看这只股票在系统里出现过多少次信号，以及每次的价带与隔日结果。",
         "algo": "GET /api/review/history/{code}：按 code 读 signals（最多约120条），汇总次数/买卖/已交易买/买命中率。\n"
