@@ -403,10 +403,14 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "命中集合 BUY_HIT_LABELS={次日红,三日红}；虚红/冲高回落不进命中率。",
     },
     "复盘评测标准": {
-        "mean": "复盘两套口径：现行=成交价/建议价看隔日收盘；当日建议价=须当天碰到 plan 才算买到，入场用当天建议价，结果仍看隔日收盘（贴合 T+1）。",
-        "algo": "settings.outcome_standard / GET /api/review?oc=。classic 写入 signals；same_day_plan 仅 overlay。\n"
-        "same_day_plan：trade_date.low≤plan 否则「当日未触达」；有隔日后按次日红/绿等同现行标签。\n"
-        "卖出：次日 high 不计入卖飞 MAE（开盘反应）。",
+        "mean": "三套口径可切换：现行（成交价缺省用建议价·隔日）；当日建议价（须当天碰到 plan·隔日）；实盘成交（只用你填的成交价·隔日，无成交则标无成交）。",
+        "algo": "settings.outcome_standard / GET /api/review?oc=classic|same_day_plan|filled。\n"
+        "classic 写入 signals；另两套 overlay。卖出 MAE 忽略次日 high（开盘毛刺）。\n"
+        "开盘卖出缓冲窗（09:30–09:45 must/watch 两轨）见 TODO，尚未接线。",
+    },
+    "开盘卖出缓冲": {
+        "mean": "计划中的卖出开盘决策：止损等「必须卖」开盘即提示；软减/止盈可观察到 09:45 再定案，避免开盘毛刺误判卖飞。",
+        "algo": "草案见 TODO「卖出开盘决策算法」。must=立即；watch=分时观察到 T+15min 再定。复盘 exit 对 watch 用 09:45 有效价。",
     },
     "Ready风格": {
         "mean": "价带放松：现价已近建议价且未到不追时，半仓 ready（分时贴尖不挡）；严格=旧闸门，只给可试探不升 ready。",

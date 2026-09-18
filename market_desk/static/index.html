@@ -2692,9 +2692,10 @@
           </select>
         </label>
         <label>复盘评测标准 <button type="button" class="q" data-term="复盘评测标准">?</button>
-          <select id="setOutcomeStd" title="库内仍存现行口径；当日建议价=当天触达 plan，结果看隔日收盘">
+          <select id="setOutcomeStd" title="库内仍存现行口径；另两套为展示重算">
             <option value="classic">现行（隔日收盘）</option>
-            <option value="same_day_plan">当日建议价入场·隔日收盘</option>
+            <option value="same_day_plan">当日建议价入场·隔日</option>
+            <option value="filled">实盘成交价·隔日</option>
           </select>
         </label>
         <label>Ready 风格 <button type="button" class="q" data-term="Ready风格">?</button>
@@ -3295,9 +3296,10 @@
               </select>
             </label>
             <label>评测标准 <button type="button" class="q" data-term="复盘评测标准">?</button>
-              <select id="revOcMode" title="现行=隔日收盘；当日建议价=须当天碰到 plan，入场用建议价，结果仍看隔日">
+              <select id="revOcMode" title="三套可切换；库内默认存现行">
                 <option value="classic">现行·隔日</option>
                 <option value="same_day_plan">当日plan·隔日</option>
+                <option value="filled">实盘成交·隔日</option>
               </select>
             </label>
             <label class="wide" style="display:flex;align-items:center;gap:6px;grid-column:auto">
@@ -3364,8 +3366,8 @@
           <label>止<input type="date" name="date_to" id="btTo" required /></label>
           <label>买撮合 <button type="button" class="q" data-term="买撮合">?</button>
             <select name="mode" id="btMode">
+              <option value="plan" selected>建议价 plan</option>
               <option value="wait">理想回踩 wait</option>
-              <option value="plan">建议价 plan</option>
               <option value="mid">中位 mid</option>
             </select>
           </label>
@@ -3601,13 +3603,25 @@
         probe ? "probe-ok" : "",
         near && !wait ? "near-entry" : (near ? "near-touch" : ""),
       ].filter(Boolean).join(" ");
-      const entryBadge = near
-        ? (probe
-          ? `<span class="entry-badge entry-badge-probe">可小仓试探</span>`
-          : (wait
-            ? `<span class="entry-badge entry-badge-soft">触及建议价</span>`
-            : `<span class="entry-badge">建议价附近·可买</span>`))
-        : "";
+      const relaxed = !!it.ready_relaxed;
+      const entryBadge = (() => {
+        if (!wait && relaxed) {
+          return `<span class="entry-badge entry-badge-probe" title="价带放松：未到不追半仓 ready">可买·半</span>`;
+        }
+        if (!wait && near) {
+          return `<span class="entry-badge" title="确认充分可现买">可买·满</span>`;
+        }
+        if (!wait) {
+          return `<span class="entry-badge">可买·满</span>`;
+        }
+        if (probe) {
+          return `<span class="entry-badge entry-badge-probe">可小仓试探</span>`;
+        }
+        if (near) {
+          return `<span class="entry-badge entry-badge-soft" title="到位但未 ready：观察">观察·到位</span>`;
+        }
+        return "";
+      })();
       const fails = (it.confirm_fail || []).filter(Boolean);
       const softFails = (it.confirm_soft || []).filter(Boolean);
       const minute = it.minute || {};
@@ -6972,6 +6986,7 @@
     function ensureBacktestDefaults() {
       const toEl = document.getElementById("btTo");
       const fromEl = document.getElementById("btFrom");
+      const modeEl = document.getElementById("btMode");
       if (!toEl || !fromEl) return;
       const today = (lastData && lastData.trade_date)
         || new Date().toISOString().slice(0, 10);
@@ -6980,6 +6995,10 @@
         const d = new Date(today + "T12:00:00");
         d.setDate(d.getDate() - 14);
         fromEl.value = d.toISOString().slice(0, 10);
+      }
+      // Default to plan (human ops); only set when untouched.
+      if (modeEl && !modeEl.dataset.userSet) {
+        modeEl.value = "plan";
       }
     }
     function paintBacktest(payload) {
@@ -7077,7 +7096,7 @@
       return Object.assign({
         date_from: document.getElementById("btFrom").value,
         date_to: document.getElementById("btTo").value,
-        mode: document.getElementById("btMode").value || "wait",
+        mode: document.getElementById("btMode").value || "plan",
         ready_only: !!document.getElementById("btReady").checked,
         include_sells: !!document.getElementById("btSells").checked,
         limit: Number(document.getElementById("btLimit").value) || 120,
@@ -9031,7 +9050,7 @@
       ] },
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "信号回测", "模拟成交", "触达", "计划价带", "理想回踩", "建议价", "不追上限", "买撮合", "预览匹配数", "仅ready",
-        "复盘评测标准", "Ready风格",
+        "复盘评测标准", "Ready风格", "开盘卖出缓冲",
         "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
         "独立人气回踩", "情绪龙", "中军龙", "年内涨停",

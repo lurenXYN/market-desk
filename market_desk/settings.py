@@ -298,7 +298,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
         hit_mode = "traded"
     out["hit_rate_mode"] = hit_mode
     oc = str(out.get("outcome_standard") or "classic").strip().lower()
-    if oc not in ("classic", "same_day_plan"):
+    if oc not in ("classic", "same_day_plan", "filled"):
         oc = "classic"
     out["outcome_standard"] = oc
     rs = str(out.get("ready_style") or cfg.READY_STYLE_DEFAULT).strip().lower()

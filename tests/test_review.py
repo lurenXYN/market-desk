@@ -126,6 +126,35 @@ class ReviewTests(unittest.TestCase):
         assert out is not None
         self.assertEqual(out.get("outcome_label"), "当日未触达")
 
+    def test_filled_standard_uses_fill(self) -> None:
+        sig = {
+            "signal_type": "buy",
+            "trade_date": "2026-09-10",
+            "price": 10.0,
+            "fill_price": 9.8,
+        }
+        closes = [10.0, 10.0, 10.1]
+        dates = ["2026-09-10", "2026-09-11", "2026-09-12"]
+        out = score_signal_with_closes(sig, closes, dates, standard="filled")
+        self.assertIsNotNone(out)
+        assert out is not None
+        # day1 10.0 vs fill 9.8 → +2.04% → 次日红
+        self.assertEqual(out.get("outcome_label"), "次日红")
+        self.assertAlmostEqual(float(out["outcome_day1_pct"]), 2.04, places=1)
+
+    def test_filled_standard_no_fill(self) -> None:
+        sig = {
+            "signal_type": "buy",
+            "trade_date": "2026-09-10",
+            "price": 10.0,
+        }
+        closes = [10.0, 10.2]
+        dates = ["2026-09-10", "2026-09-11"]
+        out = score_signal_with_closes(sig, closes, dates, standard="filled")
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out.get("outcome_label"), "无成交")
+
     def test_sell_open_grace_ignores_day1_high(self) -> None:
         sig = {
             "signal_type": "sell",
@@ -135,7 +164,7 @@ class ReviewTests(unittest.TestCase):
         }
         closes = [10.0, 10.05, 10.1]
         dates = ["2026-09-10", "2026-09-11", "2026-09-12"]
-        highs = [10.0, 11.0, 10.2]  # day1 spike should not alone mark 卖飞 via MAE
+        highs = [10.0, 11.0, 10.2]
         lows = [9.9, 10.0, 10.0]
         opens = [10.0, 10.8, 10.05]
         out = score_signal_with_closes(
@@ -143,7 +172,6 @@ class ReviewTests(unittest.TestCase):
         )
         self.assertIsNotNone(out)
         assert out is not None
-        # d1 ≈ -0.5% (price rose slightly) → not 卖飞 by day1; MAE uses day1 close not 11
         self.assertNotEqual(out.get("outcome_label"), "卖飞")
 
 

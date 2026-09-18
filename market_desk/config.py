@@ -211,7 +211,9 @@ OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
 # v4: sell MAE ignores day1 high (open-reaction grace); same_day_plan is display-only.
 OUTCOME_FORMULA_VERSION = 4
 # Review display standards (DB always stores classic).
-OUTCOME_STANDARDS = ("classic", "same_day_plan")
+OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
+# Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
+SELL_OPEN_WATCH_MINUTES = 15
 
 # Wait price as a fraction of last (shallower wait → nearer entry tags).
 ETF_WAIT_GAP = 0.9955   # ~0.45% below last

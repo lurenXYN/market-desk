@@ -788,6 +788,7 @@ def score_signal_with_closes(
       - ``classic``: entry = fill else plan; buy labels use next-session close.
       - ``same_day_plan``: entry = plan; require signal-day low ≤ plan; then score
         the **next** session(s) like classic (T+1-friendly, not same-day close).
+      - ``filled``: entry = fill_price only (no fill → 「无成交」); next-session score.
 
     Sell MAE ignores the signal+1 session's **high** (open-reaction grace): day1
     contributes only via close so a noisy open spike is less likely to mark 卖飞.
@@ -810,6 +811,20 @@ def score_signal_with_closes(
 
     if std == "same_day_plan" and is_buy_signal(sig_type):
         price = plan
+    elif std == "filled":
+        price = fill if fill is not None and fill > 0 else None
+        if price is None and is_buy_signal(sig_type):
+            return {
+                "outcome_day1_pct": None,
+                "outcome_day3_pct": None,
+                "outcome_mfe_pct": None,
+                "outcome_mae_pct": None,
+                "outcome_label": "无成交",
+                "outcome_standard": std,
+                "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        if price is None:
+            price = plan
     else:
         price = fill if fill is not None and fill > 0 else plan
     if price is None or price <= 0 or not closes:
