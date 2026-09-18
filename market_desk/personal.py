@@ -137,22 +137,38 @@ def attach_personal_layer(
             similar=out.get("similar_days"),
             metrics=out.get("metrics"),
         )
-        # Soft take / half: minute fade gate when series available (cache miss = soft pass).
+        # Soft take / half: minute fade gate + open-buffer minute refine.
         try:
             from market_desk.minute_confirm import apply_sell_minute_gates
+            from market_desk.sell_open_buffer import apply_sell_open_buffer
 
             advice = out["sell_advice"] or {}
-            need_codes = [
-                str(it.get("code") or "").zfill(6)
-                for it in (advice.get("all_items") or advice.get("items") or [])
-                if it.get("minute_gate") and it.get("code")
-            ]
+            pool = list(advice.get("all_items") or advice.get("items") or [])
+            need_codes = []
+            for it in pool:
+                code = str(it.get("code") or "").zfill(6)
+                if not code or len(code) != 6:
+                    continue
+                if it.get("minute_gate") or it.get("open_buffer_track") or it.get("ready"):
+                    need_codes.append(code)
+            need_codes = sorted(set(need_codes))
             minutes: dict[str, list] = {}
             if need_codes and callable(minutes_for):
                 try:
                     minutes = dict(minutes_for(need_codes) or {})
                 except Exception:
                     minutes = {}
+            if minutes:
+                try:
+                    from market_desk.config import SELL_OPEN_WATCH_MINUTES
+                    from market_desk.settings import setting
+
+                    watch_m = int(setting("sell_open_watch_minutes", SELL_OPEN_WATCH_MINUTES))
+                except Exception:
+                    watch_m = 15
+                advice = apply_sell_open_buffer(
+                    advice, watch_minutes=watch_m, minutes_by_code=minutes
+                )
             out["sell_advice"] = apply_sell_minute_gates(advice, minutes)
         except Exception:
             pass

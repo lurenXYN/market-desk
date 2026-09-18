@@ -683,6 +683,7 @@ class DeskEngine:
                         block_arm=block_arm,
                     )
                 await self._apply_recommend_minutes(client, verdict)
+                await self._prefetch_position_minutes(client, pos_codes)
                 # Rematch near-entry after minutes so only minute.ok=True arms.
                 verdict["recommend"] = mark_pullback_entries(
                     verdict.get("recommend"),
@@ -2224,6 +2225,45 @@ class DeskEngine:
             verdict["dragon_recommend"] = apply_minute_confirmations(
                 dragon, minutes_by_code
             )
+
+    async def _prefetch_position_minutes(
+        self,
+        client: httpx.AsyncClient,
+        codes: list[str] | None,
+    ) -> None:
+        """Warm minute cache for open positions (sell buffer + soft-take gates)."""
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for raw in codes or []:
+            code = str(raw or "").zfill(6)
+            if len(code) != 6 or code in seen:
+                continue
+            seen.add(code)
+            uniq.append(code)
+            if len(uniq) >= 10:
+                break
+        if not uniq:
+            return
+        now_ts = datetime.now(CN_TZ).timestamp()
+        need: list[str] = []
+        for code in uniq:
+            hit = self._minute_cache.get(code)
+            if hit and now_ts - hit[0] < 45:
+                continue
+            need.append(code)
+        if not need:
+            return
+        fetched = await asyncio.gather(
+            *[fetch_minute_trends(client, c) for c in need],
+            return_exceptions=True,
+        )
+        for code, rows in zip(need, fetched):
+            if isinstance(rows, Exception):
+                log.debug("position minute fetch %s failed: %s", code, rows)
+                continue
+            series = list(rows or [])
+            if series:
+                self._minute_cache[code] = (now_ts, series)
 
     def apply_trend_override(self, code: str, verdict_flag: str) -> dict[str, Any]:
         """Persist a manual trend judgment and refresh recommend cards in-memory."""

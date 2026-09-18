@@ -174,6 +174,39 @@ class ReviewTests(unittest.TestCase):
         assert out is not None
         self.assertNotEqual(out.get("outcome_label"), "卖飞")
 
+    def test_watch_track_uses_day0_open_proxy(self) -> None:
+        """Early soft-sell print should not mark 卖飞 vs open-proxy decision."""
+        sig = {
+            "signal_type": "sell",
+            "trade_date": "2026-09-10",
+            "price": 9.7,
+            "fill_price": 9.7,
+            "signaled_at": "2026-09-10 09:32:00",
+            "payload": {"open_buffer_track": "watch"},
+        }
+        closes = [10.0, 10.2, 10.1]
+        dates = ["2026-09-10", "2026-09-11", "2026-09-12"]
+        opens = [10.0, 10.15, 10.05]
+        highs = [10.1, 10.25, 10.2]
+        lows = [9.6, 10.0, 10.0]
+        plain = score_signal_with_closes(
+            {**sig, "payload": {}},
+            closes,
+            dates,
+            opens=opens,
+            lows=lows,
+            highs=highs,
+        )
+        watch = score_signal_with_closes(
+            sig, closes, dates, opens=opens, lows=lows, highs=highs
+        )
+        self.assertIsNotNone(plain)
+        self.assertIsNotNone(watch)
+        assert plain is not None and watch is not None
+        self.assertEqual(plain.get("outcome_label"), "卖飞")
+        self.assertEqual(watch.get("outcome_exit_basis"), "watch_945_open_proxy")
+        self.assertNotEqual(watch.get("outcome_label"), "卖飞")
+
 
 if __name__ == "__main__":
     unittest.main()

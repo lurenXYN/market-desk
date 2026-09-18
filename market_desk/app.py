@@ -158,6 +158,8 @@ class SettingsIn(BaseModel):
     outcome_standard: str | None = None
     # Ready style: strict | band.
     ready_style: str | None = None
+    # Soft-sell open buffer minutes after 09:30.
+    sell_open_watch_minutes: int | None = None
     morning_push: bool | None = None
     phase_panic_temp: int | None = None
     phase_ferment_temp: int | None = None

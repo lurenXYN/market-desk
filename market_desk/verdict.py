@@ -4760,6 +4760,7 @@ def build_sell_advice(
     trends_by_code: dict[str, dict[str, Any]] | None = None,
     similar: dict[str, Any] | None = None,
     metrics: dict[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build sell / hold cards for locally recorded positions."""
     verdict = verdict or {}
@@ -4859,7 +4860,7 @@ def build_sell_advice(
         size_note = "未触发卖点时，建议卖=目标价，止损按成本下方。"
         if t1_n:
             size_note = f"有 {t1_n} 只当日买入（T+1），隔日才能卖。" + size_note
-    return {
+    advice = {
         "sell": bool(sell_now),
         "empty": False,
         "title": "建议卖出" if sell_now else "仓位观察",
@@ -4870,6 +4871,17 @@ def build_sell_advice(
         "primary": primary if items else None,
         "sell_bias": sell_bias_out,
     }
+    from market_desk.config import SELL_OPEN_WATCH_MINUTES
+    from market_desk.sell_open_buffer import apply_sell_open_buffer
+    from market_desk.settings import setting
+
+    try:
+        watch_m = int(setting("sell_open_watch_minutes", SELL_OPEN_WATCH_MINUTES))
+    except Exception:
+        watch_m = int(SELL_OPEN_WATCH_MINUTES)
+    return apply_sell_open_buffer(
+        advice, now=now or datetime.now(), watch_minutes=watch_m
+    )
 
 
 def _ready_buy_codes(verdict: dict[str, Any] | None) -> set[str]:
@@ -5434,6 +5446,8 @@ def attach_position_sell_hints(
         item["sell_ready"] = bool(hint.get("ready"))
         item["regret_hold"] = bool(hint.get("regret_hold"))
         item["role_label"] = hint.get("role_label")
+        item["open_buffer_track"] = hint.get("open_buffer_track")
+        item["open_buffer_phase"] = hint.get("open_buffer_phase")
         out.append(item)
     return out
 
@@ -6344,6 +6358,8 @@ def _sell_item(
         "switch_guard_held": switch_guard_held,
         "yday_repaired": yday_repaired,
         "hold_peak": round(hold_peak, 4) if hold_peak else None,
+        "open": _px(row.get("open"), digits) if row.get("open") not in (None, "") else None,
+        "prev": _px(row.get("prev"), digits) if row.get("prev") not in (None, "") else None,
     }
     return _enrich_sell_next_action(
         out,

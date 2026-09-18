@@ -208,8 +208,8 @@ OUTCOME_FAKE_RED_LOW_PCT = -2.0   # day1 low vs entry ≤ this → 次日虚红
 OUTCOME_FAKE_RED_OPEN_PCT = 1.5   # day1 open ≥ this and close weak → 次日冲高回落
 OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
 # Bump when buy/sell outcome label semantics change; review refresh migrates old rows.
-# v4: sell MAE ignores day1 high (open-reaction grace); same_day_plan is display-only.
-OUTCOME_FORMULA_VERSION = 4
+# v5: watch-track sell fly uses day0 open as 09:45 decision-price proxy.
+OUTCOME_FORMULA_VERSION = 5
 # Review display standards (DB always stores classic).
 OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.

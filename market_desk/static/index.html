@@ -2676,6 +2676,9 @@
         <label>切换去抖秒<input id="setSwitch" type="number" min="30" max="900" /></label>
         <label>通知冷却秒<input id="setToastCd" type="number" min="30" max="900" title="决策类冷却；止损60s/可买带600s/不追300s 固定" /></label>
         <label>开盘静音分<input id="setOpenMute" type="number" min="0" max="30" step="1" title="9:30后静音分钟数，0=关闭；默认5" /></label>
+        <label>卖出开盘缓冲分 <button type="button" class="q" data-term="开盘卖出缓冲">?</button>
+          <input id="setSellOpenWatch" type="number" min="0" max="30" step="1" title="软卖 9:30 后观察分钟；止损/清仓不等待；0=关闭缓冲" />
+        </label>
         <label>尾盘静音分<input id="setTailMute" type="number" min="0" max="90" step="5" title="收盘前静音买入/决策提醒分钟数，默认30（14:30起）；0=关闭；止损等风险仍提醒" /></label>
         <label>价带范围
           <select id="setAlertMode">
@@ -3793,9 +3796,26 @@
       } else if (it.minute_gate) {
         tuneHtml += `<div class="meta">分时卖 · 分时未验（软）</div>`;
       }
-      return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}">
+      let bufHtml = "";
+      const track = it.open_buffer_track;
+      const phase = it.open_buffer_phase;
+      if (track === "must") {
+        bufHtml = `<div class="meta"><span class="entry-badge" style="border-color:#f87171;color:#fecaca">开盘必卖</span>${phase === "auction_preview" ? " · 竞价预告" : ""}</div>`;
+      } else if (track === "watch" && phase === "watching") {
+        bufHtml = `<div class="meta"><span class="entry-badge entry-badge-soft">开盘观察中</span> · 缓冲窗内不催软卖</div>`;
+      } else if (track === "watch" && phase === "released") {
+        bufHtml = `<div class="meta"><span class="entry-badge entry-badge-probe">缓冲后持有</span></div>`;
+      } else if (track === "watch" && phase === "armed") {
+        bufHtml = `<div class="meta"><span class="entry-badge">缓冲后仍卖</span></div>`;
+      }
+      const minBuf = it.open_buffer_minute || (it.open_buffer_judge && it.open_buffer_judge.minute);
+      if (minBuf && minBuf.note) {
+        bufHtml += `<div class="meta">分时缓冲 · ${minBuf.note}${minBuf.sample_n ? `（n=${minBuf.sample_n}）` : ""}</div>`;
+      }
+      return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}${phase === "watching" ? " near-touch" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
+        ${bufHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
           <div class="sell"><div class="lab">建议卖</div><div class="val">${fmtPx(sell, kind)}</div></div>
@@ -7299,7 +7319,9 @@
         const risk = (it.summary && it.summary.seat_risk) || "ok";
         const riskBadge = risk === "bad"
           ? `<span class="lhb-tag smash">席位偏坏</span>`
-          : (risk === "warn" ? `<span class="lhb-tag quant">席位偏弱</span>` : "");
+          : (risk === "warn" ? `<span class="lhb-tag quant">席位偏弱</span>`
+            : (risk === "ok" ? `<span class="lhb-tag institution">席位偏稳</span>` : ""));
+        const riskWhy = (it.summary && it.summary.risk_reason) || "";
         const buys = (it.buys || []).map(_seatLi).join("") || `<li class="meta">无买入席位</li>`;
         const sells = (it.sells || []).map(_seatLi).join("") || `<li class="meta">无卖出席位</li>`;
         return `<div class="pos-lhb-card">`
@@ -7307,6 +7329,7 @@
           + `<span class="meta">${it.trade_date || ""}</span>`
           + `<span class="${netCls}">净买 ${it.net_yi == null ? "—" : it.net_yi + "亿"}</span>${chg}${riskBadge}</div>`
           + `<div class="meta">${it.reason || "—"} · 风格 ${styleLine}</div>`
+          + (riskWhy ? `<div class="hints">${riskWhy}</div>` : "")
           + (hints ? `<div class="hints">${hints}</div>` : "")
           + `<div class="pos-lhb-seats"><div><h4>买入席位</h4><ul>${buys}</ul></div>`
           + `<div><h4>卖出席位</h4><ul>${sells}</ul></div></div></div>`;
@@ -7314,6 +7337,13 @@
     }
     function maybeToastLhbSeatEdge(items) {
       const STORAGE = "desk-lhb-seat-edge";
+      const FLAG_ZH = {
+        smash_sell: "砸盘王席卖出",
+        inst_net_sell: "机构净卖",
+        nb_net_sell: "北向净卖",
+        quant_net_sell: "量化席净卖偏多",
+      };
+      const rank = { ok: 0, warn: 1, bad: 2 };
       let prev = {};
       try { prev = JSON.parse(localStorage.getItem(STORAGE) || "{}") || {}; } catch (e) { prev = {}; }
       const next = {};
@@ -7322,20 +7352,34 @@
       (items || []).forEach((it) => {
         if (!it || !it.on_list) return;
         const code = String(it.code || "").padStart(6, "0");
-        const flags = ((it.summary && it.summary.risk_flags) || []).slice().sort();
+        const flags = ((it.summary && it.summary.risk_flags) || []).slice().filter(Boolean).sort();
         const risk = (it.summary && it.summary.seat_risk) || "ok";
         const sig = `${it.trade_date || ""}|${risk}|${flags.join(",")}`;
         next[code] = sig;
-        if (seeded) return; // first paint only seeds fingerprints
+        if (seeded) return;
         if (prev[code] === sig) return;
-        if (risk !== "bad" && risk !== "warn") return;
-        const prevRisk = String(prev[code] || "").split("|")[1] || "ok";
-        const rank = { ok: 0, warn: 1, bad: 2 };
-        if ((rank[risk] || 0) <= (rank[prevRisk] || 0) && prev[code]) return;
-        const hint = ((it.summary && it.summary.hints) || []).slice(0, 2).join(" · ");
+        const parts = String(prev[code] || "").split("|");
+        const prevRisk = parts[1] || "ok";
+        const prevFlags = (parts[2] ? parts[2].split(",") : []).filter(Boolean);
+        const prevSet = new Set(prevFlags);
+        const curSet = new Set(flags);
+        const added = flags.filter((f) => !prevSet.has(f));
+        const cleared = prevFlags.filter((f) => !curSet.has(f));
+        const curRank = rank[risk] || 0;
+        const prevRank = rank[prevRisk] || 0;
+        let title = "";
+        if (curRank > prevRank) title = "龙虎席位变坏";
+        else if (curRank < prevRank) title = "龙虎席位变好";
+        else if (added.length || cleared.length) title = "龙虎席位结构变化";
+        else return;
+        const bits = [];
+        if (added.length) bits.push("新增 " + added.map((f) => FLAG_ZH[f] || f).join("、"));
+        if (cleared.length) bits.push("消退 " + cleared.map((f) => FLAG_ZH[f] || f).join("、"));
+        const riskWhy = (it.summary && it.summary.risk_reason) || "";
+        if (riskWhy) bits.push(riskWhy);
         alerts.push({
-          title: "龙虎席位变坏",
-          body: `${it.name || ""} ${code}${hint ? " · " + hint : ""}`,
+          title,
+          body: `${it.name || ""} ${code}${bits.length ? " · " + bits.join("；") : ""}`,
         });
       });
       try { localStorage.setItem(STORAGE, JSON.stringify(next)); } catch (e) {}
@@ -8806,6 +8850,8 @@
         document.getElementById("setFermentT").value = s.phase_ferment_temp ?? 45;
         document.getElementById("setClimaxT").value = s.phase_climax_temp ?? 72;
         document.getElementById("setOpenMute").value = s.open_mute_minutes ?? 5;
+        const sowEl = document.getElementById("setSellOpenWatch");
+        if (sowEl) sowEl.value = s.sell_open_watch_minutes ?? 15;
         document.getElementById("setTailMute").value = s.tail_mute_minutes ?? 30;
         document.getElementById("setLossCap").value = s.daily_loss_cap_pct ?? -3;
         document.getElementById("setCoolN").value = s.cool_after_losses ?? 3;
@@ -8919,6 +8965,7 @@
         phase_ferment_temp: Number(document.getElementById("setFermentT").value),
         phase_climax_temp: Number(document.getElementById("setClimaxT").value),
         open_mute_minutes: Number(document.getElementById("setOpenMute").value),
+        sell_open_watch_minutes: Number(document.getElementById("setSellOpenWatch")?.value ?? 15),
         tail_mute_minutes: Number(document.getElementById("setTailMute").value),
         daily_loss_cap_pct: Number(document.getElementById("setLossCap").value),
         cool_after_losses: Number(document.getElementById("setCoolN").value),

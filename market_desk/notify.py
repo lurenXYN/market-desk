@@ -430,7 +430,11 @@ def lhb_seat_edge_alerts(
     """Diff LHB seat_risk fingerprints; return (alerts, next_fp).
 
     First seed (empty prev) only stores fingerprints — no push.
+    Alerts cover worsen and improve (and same-rank flag structure changes),
+    each with an explicit Chinese reason.
     """
+    from market_desk.lhb import explain_seat_risk_change
+
     prev = dict(prev_fp or {})
     next_fp: dict[str, str] = {}
     alerts: list[tuple[str, str, str]] = []
@@ -443,26 +447,38 @@ def lhb_seat_edge_alerts(
             continue
         summary = it.get("summary") if isinstance(it.get("summary"), dict) else {}
         risk = str(summary.get("seat_risk") or "ok")
-        flags = sorted(str(x) for x in (summary.get("risk_flags") or []))
+        flags = sorted(str(x) for x in (summary.get("risk_flags") or []) if x)
         sig = f"{it.get('trade_date') or ''}|{risk}|{','.join(flags)}"
         next_fp[code] = sig
         if seeded:
             continue
         if prev.get(code) == sig:
             continue
-        if risk not in ("bad", "warn"):
+        prev_raw = str(prev.get(code) or "")
+        parts = prev_raw.split("|")
+        prev_risk = parts[1] if len(parts) > 1 else "ok"
+        prev_flags = [x for x in (parts[2].split(",") if len(parts) > 2 else []) if x]
+        change = explain_seat_risk_change(
+            prev_risk=prev_risk,
+            prev_flags=prev_flags,
+            risk=risk,
+            risk_flags=flags,
+            hints=list(summary.get("hints") or []),
+            list_reason=str(it.get("reason") or ""),
+        )
+        if change.get("direction") in (None, "none"):
             continue
-        rank = {"ok": 0, "warn": 1, "bad": 2}
-        prev_risk = str(prev.get(code) or "").split("|")[1] if prev.get(code) else "ok"
-        if rank.get(risk, 0) <= rank.get(prev_risk, 0) and prev.get(code):
-            continue
-        hints = " · ".join((summary.get("hints") or [])[:2])
         name = it.get("name") or code
+        reason = str(change.get("reason") or "").strip()
+        body = f"{name} {code}"
+        if reason:
+            body = f"{body} · {reason}"
+        direction = str(change.get("direction") or "worsen")
         alerts.append(
             (
-                f"lhb:{risk}:{code}",
-                "龙虎席位变坏",
-                f"{name} {code}" + (f" · {hints}" if hints else ""),
+                f"lhb:{direction}:{code}",
+                str(change.get("title") or "龙虎席位变化"),
+                body,
             )
         )
     return alerts[:4], next_fp

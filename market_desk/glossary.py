@@ -303,11 +303,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "qty=0 标「今日已平」，不进建议卖出/风控占比；下一交易日 purge。",
     },
     "持仓龙虎榜": {
-        "mean": "只看账上持仓股票最近一次龙虎榜：买卖席位、机构/北向，以及常见席位口碑标签（砸盘王、量化倾向、游资绰号等）。席位变坏会边沿 toast。",
+        "mean": "只看账上持仓股票最近一次龙虎榜：买卖席位、机构/北向，以及常见席位口碑标签（砸盘王、量化倾向、游资绰号等）。席位变坏或变好都会边沿 toast，并写明原因。",
         "algo": "东财 RPT_DAILYBILLBOARD_DETAILS + DAILYDETAILSBUY/SELL；按持仓代码取最近披露日。\n"
         "席位风格见 lhb_seats 词典（名称子串匹配，经验标签非官方）。只读，不改买卖结论。\n"
         "summary.risk_flags：smash_sell / inst_net_sell / nb_net_sell / quant_net_sell；\n"
-        "seat_risk=bad|warn|ok。前端对坏席指纹变化推页内提醒条。",
+        "seat_risk=bad|warn|ok；risk_reason 一句中文因。指纹变化：变坏/变好/结构变化均推送，含新增·消退标志。",
     },
     "信号复盘": {
         "mean": "按交易日浏览可买/建议卖信号，隔日用收盘价打分，看命中率而不是凭感觉。",
@@ -406,11 +406,15 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "三套口径可切换：现行（成交价缺省用建议价·隔日）；当日建议价（须当天碰到 plan·隔日）；实盘成交（只用你填的成交价·隔日，无成交则标无成交）。",
         "algo": "settings.outcome_standard / GET /api/review?oc=classic|same_day_plan|filled。\n"
         "classic 写入 signals；另两套 overlay。卖出 MAE 忽略次日 high（开盘毛刺）。\n"
-        "开盘卖出缓冲窗（09:30–09:45 must/watch 两轨）见 TODO，尚未接线。",
+        "开盘卖出缓冲见「开盘卖出缓冲」词条（must/watch）。",
     },
     "开盘卖出缓冲": {
-        "mean": "计划中的卖出开盘决策：止损等「必须卖」开盘即提示；软减/止盈可观察到 09:45 再定案，避免开盘毛刺误判卖飞。",
-        "algo": "草案见 TODO「卖出开盘决策算法」。must=立即；watch=分时观察到 T+15min 再定。复盘 exit 对 watch 用 09:45 有效价。",
+        "mean": "开盘后软卖先观察一段时间（默认 09:30–09:45），止损/清仓「必卖」立即提示；缓冲结束用分时（破开盘/均价/放量）判定仍卖或持有，无分时则回退现价。",
+        "algo": "sell_open_buffer.apply_sell_open_buffer。must=urgency stop 或 exit clear；watch=软 half/trim/take。\n"
+        "in_watch：watch 暂 ready=false；after：evaluate_watch_still_weak（优先分钟线 broke_open/below_vwap/vol_panic）。\n"
+        "仓位预拉分时进 _minute_cache；落库 payload.open_buffer_track。\n"
+        "复盘 watch 轨卖飞：用 09:45 决策价（存 decision_price 或日线开盘代理）；OUTCOME_FORMULA_VERSION=5。\n"
+        "settings.sell_open_watch_minutes（0–30，默认15）。",
     },
     "Ready风格": {
         "mean": "价带放松：现价已近建议价且未到不追时，半仓 ready（分时贴尖不挡）；严格=旧闸门，只给可试探不升 ready。",
@@ -548,8 +552,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "关闭 Windows 通知时仍写入页内提醒条。",
     },
     "Server酱": {
-        "mean": "用 Server酱³ 把买卖点、龙虎席位变坏、收盘一页纸推到微信。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
-        "algo": "推 buy: / sell: / lhb: / eod:。买点附主线/相位/阶段/作战结论。\n"
+        "mean": "用 Server酱³ 把买卖点、龙虎席位变坏/变好、收盘一页纸、可选早决策推到微信。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
+        "algo": "推 buy: / sell: / lhb: / eod: / morning:。买点附主线/相位/阶段/作战结论。\n"
+        "lhb 含变坏与变好，正文写新增/消退标志与 risk_reason。\n"
         "users.serverchan_sendkey + serverchan_on（本人）+ serverchan_allowed（管理员）。\n"
         "POST sctapi.ftqq.com/{SendKey}.send；与 Windows toast 并行。Key 只存 desk.db，不进 Git。",
     },
@@ -613,7 +618,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "卖点内部口径：d1=(卖出价/次日收−1)×100，正=卖后跌（卖对），负=卖后涨（偏早）。\n"
         "卖飞：d1≤约−2.5%（次日继续涨），或卖后最高相对卖出价留下≥约3%（|MAE|）。\n"
         "看板展示已换成股价涨跌：次日涨跌=−d1，留桌上=正数错过的空间。\n"
-        "计入卖点偏早样本与 MFE（卖飞样本加权）；公式版本 OUTCOME_FORMULA_VERSION=3 起重算。",
+        "计入卖点偏早样本与 MFE（卖飞样本加权）；公式版本 OUTCOME_FORMULA_VERSION=5 起重算。\n"
+        "watch 轨开盘缓冲：用 09:45 决策价（有则用分时价，否则信号日开盘代理）再算卖飞。",
     },
     "今日三词": {
         "mean": "作战台顶部常驻：相位 · 实时主线 · 生命周期阶段，减少来回点开术语。",

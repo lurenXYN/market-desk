@@ -29,6 +29,7 @@ USER_PRIVATE_KEYS = frozenset(
         "hit_rate_mode",
         "outcome_standard",
         "ready_style",
+        "sell_open_watch_minutes",
         "open_mute_minutes",
         "tail_mute_minutes",
         "morning_push",
@@ -54,6 +55,7 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "hit_rate_mode",
         "outcome_standard",
         "ready_style",
+        "sell_open_watch_minutes",
         "morning_push",
         "sticky_margin",
         "switch_min_seconds",
@@ -147,6 +149,8 @@ DEFAULTS: dict[str, Any] = {
     "outcome_standard": "classic",
     # Ready style: strict | band (near_entry below chase → soft ready).
     "ready_style": str(cfg.READY_STYLE_DEFAULT),
+    # Soft-sell open buffer minutes after 09:30 (must-sell ignores this).
+    "sell_open_watch_minutes": int(cfg.SELL_OPEN_WATCH_MINUTES),
     # Per-user: push morning brief via Server酱 once near open (needs Key).
     "morning_push": False,
     # Phase temperature cutoffs (see classify_phase).
@@ -305,6 +309,8 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     if rs not in ("strict", "band"):
         rs = str(cfg.READY_STYLE_DEFAULT)
     out["ready_style"] = rs
+    sow = max(0, min(30, int(out.get("sell_open_watch_minutes") or cfg.SELL_OPEN_WATCH_MINUTES)))
+    out["sell_open_watch_minutes"] = sow
     out["morning_push"] = bool(out.get("morning_push"))
     panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))
     ferment_t = max(panic_t + 1, min(80, int(out.get("phase_ferment_temp") or cfg.PHASE_FERMENT_TEMP)))

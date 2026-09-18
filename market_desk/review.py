@@ -719,6 +719,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "board_match": board_cmp["match"],
                     "context": trade_ctx or None,
                     "owner_user_id": sell_owner,
+                    "open_buffer_track": item.get("open_buffer_track"),
+                    "open_buffer_phase": item.get("open_buffer_phase"),
+                    "open_buffer_decision_price": item.get("open_buffer_decision_price"),
                 },
             }
         )
@@ -792,6 +795,8 @@ def score_signal_with_closes(
 
     Sell MAE ignores the signal+1 session's **high** (open-reaction grace): day1
     contributes only via close so a noisy open spike is less likely to mark 卖飞.
+    Watch-track sells (open buffer) use day0 open as a 09:45 decision-price proxy
+    when fill/plan looks like an early-open print, so 卖飞 is not judged on 09:31 noise.
     """
     from market_desk.config import (
         OUTCOME_FAKE_RED_CLOSE_MAX,
@@ -808,6 +813,16 @@ def score_signal_with_closes(
     sig_type = signal.get("signal_type") or "buy"
     plan = num(signal.get("price"))
     fill = num(signal.get("fill_price"))
+    payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
+    open_buffer_track = str(
+        signal.get("open_buffer_track")
+        or payload.get("open_buffer_track")
+        or ""
+    ).strip().lower()
+    buffer_decision = num(
+        signal.get("open_buffer_decision_price")
+        or payload.get("open_buffer_decision_price")
+    )
 
     if std == "same_day_plan" and is_buy_signal(sig_type):
         price = plan
@@ -855,6 +870,31 @@ def score_signal_with_closes(
     if is_sell_signal(sig_type):
         if not after_dates:
             return None
+        exit_basis = "fill_or_plan"
+        # Watch-track open buffer: score 卖飞 vs 09:45 decision price (minute
+        # decision_price when stored; else day0 open as daily proxy). Skip when
+        # signal already stamped after the buffer window.
+        if open_buffer_track == "watch":
+            late_enough = False
+            stamped = str(signal.get("signaled_at") or "")
+            if len(stamped) >= 16:
+                try:
+                    hhmm = stamped[11:16]
+                    late_enough = hhmm >= "09:45"
+                except Exception:
+                    late_enough = False
+            if not late_enough:
+                day0_open = num(day0.get("open"))
+                proxy = buffer_decision
+                if proxy is None or proxy <= 0:
+                    proxy = day0_open
+                if proxy is not None and proxy > 0:
+                    price = float(proxy)
+                    exit_basis = (
+                        "watch_945_minute"
+                        if buffer_decision is not None and buffer_decision > 0
+                        else "watch_945_open_proxy"
+                    )
         after_closes = [float(bar_by_day[d]["close"]) for d in after_dates]  # type: ignore[index]
         day1 = after_closes[0]
         day3 = after_closes[min(2, len(after_closes) - 1)]
@@ -893,6 +933,8 @@ def score_signal_with_closes(
             "outcome_mae_pct": round(mae, 2),
             "outcome_label": label,
             "outcome_standard": "classic",
+            "outcome_exit_basis": exit_basis,
+            "outcome_exit_price": round(float(price), 4),
             "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 

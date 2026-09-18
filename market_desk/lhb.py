@@ -101,6 +101,109 @@ def _pack_seat(row: dict[str, Any], *, side: str) -> dict[str, Any]:
     }
 
 
+# Stable keys → short Chinese for toast / Server酱 reasons.
+SEAT_RISK_FLAG_ZH: dict[str, str] = {
+    "smash_sell": "砸盘王席卖出",
+    "inst_net_sell": "机构净卖",
+    "nb_net_sell": "北向净卖",
+    "quant_net_sell": "量化席净卖偏多",
+}
+
+_SEAT_RISK_RANK = {"ok": 0, "warn": 1, "bad": 2}
+
+
+def seat_risk_reason(
+    seat_risk: str,
+    risk_flags: list[str] | None,
+    hints: list[str] | None = None,
+) -> str:
+    """Explain current seat_risk in one short Chinese line."""
+    flags = [str(x) for x in (risk_flags or []) if x]
+    flag_zh = [SEAT_RISK_FLAG_ZH.get(f, f) for f in flags]
+    risk = str(seat_risk or "ok")
+    if risk == "bad":
+        return "偏坏：" + ("、".join(flag_zh) if flag_zh else "警戒席卖压")
+    if risk == "warn":
+        return "偏弱：" + ("、".join(flag_zh) if flag_zh else "席位偏弱")
+    # ok — prefer positive hints, else cleared-flag note
+    pos = [h for h in (hints or []) if "净买" in str(h)]
+    if pos:
+        return "偏稳：" + " · ".join(pos[:2])
+    if not flags:
+        return "偏稳：未见砸盘王卖出/机构·北向明显净卖"
+    return "偏稳：" + ("、".join(flag_zh) if flag_zh else "无警戒标志")
+
+
+def explain_seat_risk_change(
+    *,
+    prev_risk: str,
+    prev_flags: list[str] | None,
+    risk: str,
+    risk_flags: list[str] | None,
+    hints: list[str] | None = None,
+    list_reason: str | None = None,
+) -> dict[str, Any]:
+    """Describe a fingerprint change: worsen / improve / structure.
+
+    Returns ``direction`` in {worsen, improve, structure, none} plus title/reason.
+    """
+    prev_r = str(prev_risk or "ok")
+    cur_r = str(risk or "ok")
+    prev_f = {str(x) for x in (prev_flags or []) if x}
+    cur_f = {str(x) for x in (risk_flags or []) if x}
+    prev_rank = _SEAT_RISK_RANK.get(prev_r, 0)
+    cur_rank = _SEAT_RISK_RANK.get(cur_r, 0)
+    added = sorted(cur_f - prev_f)
+    cleared = sorted(prev_f - cur_f)
+    bits: list[str] = []
+    if added:
+        bits.append(
+            "新增 " + "、".join(SEAT_RISK_FLAG_ZH.get(f, f) for f in added)
+        )
+    if cleared:
+        bits.append(
+            "消退 " + "、".join(SEAT_RISK_FLAG_ZH.get(f, f) for f in cleared)
+        )
+    cur_line = seat_risk_reason(cur_r, list(cur_f), hints)
+    if cur_line:
+        bits.append(cur_line)
+    lr = str(list_reason or "").strip()
+    if lr and len(lr) <= 40:
+        bits.append(f"上榜：{lr}")
+    reason = "；".join(bits) if bits else cur_line
+    if cur_rank > prev_rank:
+        return {
+            "direction": "worsen",
+            "title": "龙虎席位变坏",
+            "reason": reason,
+            "from_risk": prev_r,
+            "to_risk": cur_r,
+        }
+    if cur_rank < prev_rank:
+        return {
+            "direction": "improve",
+            "title": "龙虎席位变好",
+            "reason": reason,
+            "from_risk": prev_r,
+            "to_risk": cur_r,
+        }
+    if added or cleared:
+        return {
+            "direction": "structure",
+            "title": "龙虎席位结构变化",
+            "reason": reason,
+            "from_risk": prev_r,
+            "to_risk": cur_r,
+        }
+    return {
+        "direction": "none",
+        "title": "",
+        "reason": "",
+        "from_risk": prev_r,
+        "to_risk": cur_r,
+    }
+
+
 def _summarize_seats(buys: list[dict[str, Any]], sells: list[dict[str, Any]]) -> dict[str, Any]:
     """Build a short reading of seat mix for one listing day."""
     all_seats = list(buys) + list(sells)
@@ -168,6 +271,7 @@ def _summarize_seats(buys: list[dict[str, Any]], sells: list[dict[str, Any]]) ->
         "smash_sell_yi": _yi(smash_sell),
         "risk_flags": risk_flags,
         "seat_risk": seat_risk,
+        "risk_reason": seat_risk_reason(seat_risk, risk_flags, hints),
     }
 
 
