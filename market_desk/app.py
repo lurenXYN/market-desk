@@ -1687,6 +1687,7 @@ class BacktestIn(BaseModel):
     include_sells: bool = True
     ready_only: bool = False
     limit: int = Field(default=120, ge=20, le=400)
+    dry_run: bool = False
 
 
 @app.post("/api/backtest/run")
@@ -1701,11 +1702,15 @@ async def backtest_run(
     mode = str(body.mode or "wait").strip().lower()
     if mode not in ("wait", "plan", "mid"):
         raise HTTPException(400, "mode must be wait|plan|mid")
-    return await run_signal_backtest(
+    out = await run_signal_backtest(
         date_from=str(body.date_from)[:10],
         date_to=str(body.date_to)[:10],
         mode=mode,
         include_sells=bool(body.include_sells),
         ready_only=bool(body.ready_only),
         limit=int(body.limit),
+        dry_run=bool(body.dry_run),
     )
+    if not out.get("ok"):
+        raise HTTPException(400, str(out.get("detail") or "backtest failed"))
+    return out

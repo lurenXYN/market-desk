@@ -3319,6 +3319,7 @@
       <section class="card">
         <h2 style="text-transform:none">信号回测<button type="button" class="q" data-term="信号回测">?</button></h2>
         <p class="meta">用日线高低对计划价带做<strong>模拟成交</strong>（不改真实已交易/成交价），再按复盘同一套标签打分。买：触 wait/plan；开盘已越过不追则顺延。卖：先止损后卖价。</p>
+        <p class="data-banner warn" id="btDisclaimer" style="display:block;margin:8px 0">⚠ 日线 OHLC 会高估可成交性（事后高低点/瞬时穿刺）；结果仅供策略粗筛，不可等价实盘收益。单次跨度最多 90 天。</p>
         <form class="pos-form" id="btForm" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));align-items:end">
           <label>起<input type="date" name="date_from" id="btFrom" required /></label>
           <label>止<input type="date" name="date_to" id="btTo" required /></label>
@@ -3332,6 +3333,7 @@
           <label class="settings-check"><input type="checkbox" id="btReady" /> 仅 ready</label>
           <label class="settings-check"><input type="checkbox" id="btSells" checked /> 含卖信号</label>
           <label>条数上限<input type="number" id="btLimit" min="20" max="400" value="120" /></label>
+          <button type="button" class="rev-col-btn" id="btPreview">预览匹配数</button>
           <button type="submit">跑回测</button>
         </form>
         <div class="pos-sum" id="btSum" style="margin-top:10px"></div>
@@ -6937,28 +6939,62 @@
       const note = document.getElementById("btNote");
       const sumEl = document.getElementById("btSum");
       const body = document.getElementById("btBody");
-      if (note) note.textContent = payload.note || "";
+      const disc = document.getElementById("btDisclaimer");
+      if (disc && payload && payload.disclaimer) {
+        disc.textContent = "⚠ " + payload.disclaimer
+          + (payload.max_span_days ? ` 单次跨度最多 ${payload.max_span_days} 天。` : "");
+      }
+      if (note) note.textContent = payload.note || payload.disclaimer || "";
       if (sumEl) {
-        const bits = [
-          `买 ${sum.buy_filled_n ?? 0}/${sum.buy_n ?? 0}`
-            + (sum.buy_fill_rate != null ? `（触达 ${sum.buy_fill_rate}%）` : ""),
-          sum.buy_hit_rate != null
-            ? `买命中 ${sum.buy_hit_rate}%（${sum.buy_hit_n ?? 0}/${sum.buy_scored_n ?? 0}）`
-            : "买命中 —",
-          sum.buy_avg_day1 != null
-            ? `买次日均 ${sum.buy_avg_day1 > 0 ? "+" : ""}${sum.buy_avg_day1}%`
-            : "",
-          `卖 ${sum.sell_filled_n ?? 0}/${sum.sell_n ?? 0}`,
-          sum.sell_hit_rate != null
-            ? `卖命中 ${sum.sell_hit_rate}%`
-            : "",
-        ].filter(Boolean);
-        sumEl.innerHTML = bits.map((b) => `<span>${b}</span>`).join("");
+        if (payload && payload.dry_run) {
+          sumEl.innerHTML = [
+            `<span>预览匹配 <b>${payload.matched_n ?? sum.matched_n ?? 0}</b></span>`,
+            `<span>买 ${payload.buy_n ?? sum.buy_n ?? 0}</span>`,
+            `<span>卖 ${payload.sell_n ?? sum.sell_n ?? 0}</span>`,
+          ].join("");
+        } else {
+          const bits = [
+            `买 ${sum.buy_filled_n ?? 0}/${sum.buy_n ?? 0}`
+              + (sum.buy_fill_rate != null ? `（触达 ${sum.buy_fill_rate}%）` : ""),
+            sum.buy_hit_rate != null
+              ? `买命中 ${sum.buy_hit_rate}%（${sum.buy_hit_n ?? 0}/${sum.buy_scored_n ?? 0}）`
+              : "买命中 —",
+            sum.buy_avg_day1 != null
+              ? `买次日均 ${sum.buy_avg_day1 > 0 ? "+" : ""}${sum.buy_avg_day1}%`
+              : "",
+            `卖 ${sum.sell_filled_n ?? 0}/${sum.sell_n ?? 0}`,
+            sum.sell_hit_rate != null
+              ? `卖命中 ${sum.sell_hit_rate}%`
+              : "",
+          ].filter(Boolean);
+          sumEl.innerHTML = bits.map((b) => `<span>${b}</span>`).join("");
+        }
       }
       const items = (payload && payload.items) || [];
       if (!body) return;
       if (!items.length) {
         body.innerHTML = `<tr><td colspan="10" class="meta">该区间无信号或未触达</td></tr>`;
+        return;
+      }
+      if (payload && payload.dry_run) {
+        body.innerHTML = items.map((it) => {
+          const side = it.side === "sell" ? "卖" : "买";
+          const nm = (typeof tickerHtml === "function")
+            ? tickerHtml(it.name, it.code)
+            : `${it.name || ""} ${it.code || ""}`;
+          return `<tr>
+            <td data-label="日">${(it.trade_date || "").slice(5)}</td>
+            <td data-label="向">${side}</td>
+            <td data-label="名称">${nm}</td>
+            <td data-label="代码">${it.code || ""}</td>
+            <td data-label="计划">—</td>
+            <td data-label="模拟成交">预览</td>
+            <td data-label="触达">ready ${it.ready ? "是" : "否"}</td>
+            <td data-label="标签">—</td>
+            <td data-label="次日%">—</td>
+            <td data-label="三日%">—</td>
+          </tr>`;
+        }).join("");
         return;
       }
       body.innerHTML = items.map((it) => {
@@ -6989,23 +7025,46 @@
         </tr>`;
       }).join("");
     }
-    document.getElementById("btForm")?.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const bodyEl = document.getElementById("btBody");
-      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">拉取日线并撮合中…</td></tr>`;
-      const payload = {
+    function btPayload(extra) {
+      return Object.assign({
         date_from: document.getElementById("btFrom").value,
         date_to: document.getElementById("btTo").value,
         mode: document.getElementById("btMode").value || "wait",
         ready_only: !!document.getElementById("btReady").checked,
         include_sells: !!document.getElementById("btSells").checked,
         limit: Number(document.getElementById("btLimit").value) || 120,
-      };
+      }, extra || {});
+    }
+    document.getElementById("btPreview")?.addEventListener("click", async () => {
+      const bodyEl = document.getElementById("btBody");
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">预览匹配中…</td></tr>`;
       try {
         const r = await fetch("/api/backtest/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(btPayload({ dry_run: true })),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          if (bodyEl) {
+            bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "预览失败"}</td></tr>`;
+          }
+          return;
+        }
+        paintBacktest(d);
+      } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">预览请求失败</td></tr>`;
+      }
+    });
+    document.getElementById("btForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const bodyEl = document.getElementById("btBody");
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">拉取日线并撮合中…</td></tr>`;
+      try {
+        const r = await fetch("/api/backtest/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(btPayload({ dry_run: false })),
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || d.ok === false) {

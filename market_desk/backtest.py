@@ -19,6 +19,97 @@ from market_desk.review import (
     score_signal_with_closes,
 )
 
+# Hard cap for one sync run (calendar days inclusive span).
+MAX_BACKTEST_SPAN_DAYS = 90
+
+BACKTEST_DISCLAIMER = (
+    "日线 OHLC 回测会高估可成交性（事后高低点/瞬时穿刺无法在实盘保证成交）；"
+    "结果仅供策略粗筛，不可等价实盘收益。不改真实 traded/fill；"
+    "命中口径与复盘一致（次日红/三日红）。"
+)
+
+
+def validate_backtest_range(date_from: str, date_to: str) -> tuple[str, str] | dict[str, Any]:
+    """Return ``(d0, d1)`` or an error payload dict with ``ok=False``."""
+    d0 = str(date_from or "")[:10]
+    d1 = str(date_to or "")[:10]
+    if not d0 or not d1 or d0 > d1:
+        return {
+            "ok": False,
+            "detail": "date_from/date_to invalid",
+            "items": [],
+            "summary": {},
+            "disclaimer": BACKTEST_DISCLAIMER,
+        }
+    try:
+        a = datetime.strptime(d0, "%Y-%m-%d")
+        b = datetime.strptime(d1, "%Y-%m-%d")
+    except ValueError:
+        return {
+            "ok": False,
+            "detail": "dates must be YYYY-MM-DD",
+            "items": [],
+            "summary": {},
+            "disclaimer": BACKTEST_DISCLAIMER,
+        }
+    span = (b - a).days + 1
+    if span > int(MAX_BACKTEST_SPAN_DAYS):
+        return {
+            "ok": False,
+            "detail": f"单次回测跨度最多 {MAX_BACKTEST_SPAN_DAYS} 天（当前 {span} 天）",
+            "max_span_days": MAX_BACKTEST_SPAN_DAYS,
+            "items": [],
+            "summary": {},
+            "disclaimer": BACKTEST_DISCLAIMER,
+        }
+    return d0, d1
+
+
+def collect_backtest_signals(
+    *,
+    date_from: str,
+    date_to: str,
+    include_sells: bool = True,
+    ready_only: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Load and filter paper signals in range (newest first, capped)."""
+    from market_desk.db import list_signal_trade_dates, load_signals_for_date
+
+    d0, d1 = date_from, date_to
+    dates = [d for d in list_signal_trade_dates(limit=120) if d0 <= d <= d1]
+    if not dates:
+        cur = datetime.strptime(d0, "%Y-%m-%d")
+        end = datetime.strptime(d1, "%Y-%m-%d")
+        while cur <= end:
+            dates.append(cur.strftime("%Y-%m-%d"))
+            cur += timedelta(days=1)
+
+    rows: list[dict[str, Any]] = []
+    for day in dates:
+        for row in load_signals_for_date(day):
+            rows.append(_flatten_signal_prices(row))
+    rows = sorted(
+        rows,
+        key=lambda r: (
+            str(r.get("trade_date") or ""),
+            str(r.get("signaled_at") or ""),
+            int(r.get("id") or 0),
+        ),
+        reverse=True,
+    )
+    picked: list[dict[str, Any]] = []
+    for row in rows:
+        if is_buy_signal(row.get("signal_type")):
+            if ready_only and not int(row.get("ready") or 0):
+                continue
+            picked.append(row)
+        elif include_sells and is_sell_signal(row.get("signal_type")):
+            picked.append(row)
+        if len(picked) >= max(20, min(400, int(limit or 200))):
+            break
+    return picked
+
 
 def _bar_maps(
     dates: list[str],
@@ -265,51 +356,68 @@ async def run_signal_backtest(
     include_sells: bool = True,
     ready_only: bool = False,
     limit: int = 200,
+    dry_run: bool = False,
     client: Any | None = None,
 ) -> dict[str, Any]:
     """Replay paper signals in ``[date_from, date_to]`` with OHLC simulated fills.
 
     Read-only: never mutates ``signals`` / user meta.
+    When ``dry_run`` is True, only count matching signals (no kline fetch).
     """
     import httpx
 
-    from market_desk.db import list_signal_trade_dates, load_signals_for_date
     from market_desk.eastmoney import fetch_daily_klines_many
 
-    d0 = str(date_from or "")[:10]
-    d1 = str(date_to or "")[:10]
-    if not d0 or not d1 or d0 > d1:
-        return {"ok": False, "detail": "date_from/date_to invalid", "items": [], "summary": {}}
+    checked = validate_backtest_range(date_from, date_to)
+    if isinstance(checked, dict):
+        return checked
+    d0, d1 = checked
 
-    dates = [d for d in list_signal_trade_dates(limit=80) if d0 <= d <= d1]
-    if not dates:
-        # Fall back to calendar walk when no signal index yet.
-        cur = datetime.strptime(d0, "%Y-%m-%d")
-        end = datetime.strptime(d1, "%Y-%m-%d")
-        while cur <= end:
-            dates.append(cur.strftime("%Y-%m-%d"))
-            cur += timedelta(days=1)
-
-    rows: list[dict[str, Any]] = []
-    for day in dates:
-        for row in load_signals_for_date(day):
-            rows.append(_flatten_signal_prices(row))
-    # Newest first then cap.
-    rows = sorted(
-        rows,
-        key=lambda r: (str(r.get("trade_date") or ""), str(r.get("signaled_at") or ""), int(r.get("id") or 0)),
-        reverse=True,
+    picked = collect_backtest_signals(
+        date_from=d0,
+        date_to=d1,
+        include_sells=include_sells,
+        ready_only=ready_only,
+        limit=limit,
     )
-    picked: list[dict[str, Any]] = []
-    for row in rows:
-        if is_buy_signal(row.get("signal_type")):
-            if ready_only and not int(row.get("ready") or 0):
-                continue
-            picked.append(row)
-        elif include_sells and is_sell_signal(row.get("signal_type")):
-            picked.append(row)
-        if len(picked) >= max(20, min(400, int(limit or 200))):
-            break
+    buy_n = sum(1 for r in picked if is_buy_signal(r.get("signal_type")))
+    sell_n = sum(1 for r in picked if is_sell_signal(r.get("signal_type")))
+
+    if dry_run:
+        preview_items = [
+            {
+                "id": r.get("id"),
+                "side": "buy" if is_buy_signal(r.get("signal_type")) else "sell",
+                "code": normalize_code(r.get("code")),
+                "name": r.get("name"),
+                "trade_date": str(r.get("trade_date") or "")[:10],
+                "signal_type": r.get("signal_type"),
+                "ready": int(r.get("ready") or 0),
+            }
+            for r in picked[:80]
+        ]
+        return {
+            "ok": True,
+            "dry_run": True,
+            "date_from": d0,
+            "date_to": d1,
+            "mode": str(mode or "wait"),
+            "ready_only": bool(ready_only),
+            "include_sells": bool(include_sells),
+            "max_span_days": MAX_BACKTEST_SPAN_DAYS,
+            "matched_n": len(picked),
+            "buy_n": buy_n,
+            "sell_n": sell_n,
+            "n": len(picked),
+            "summary": {
+                "matched_n": len(picked),
+                "buy_n": buy_n,
+                "sell_n": sell_n,
+            },
+            "items": preview_items,
+            "disclaimer": BACKTEST_DISCLAIMER,
+            "note": BACKTEST_DISCLAIMER + " 本结果为预览（未拉日线、未撮合）。",
+        }
 
     codes = [normalize_code(r.get("code")) for r in picked]
     own_client = client is None
@@ -422,13 +530,16 @@ async def run_signal_backtest(
     summary = _summarize_backtest(items)
     return {
         "ok": True,
+        "dry_run": False,
         "date_from": d0,
         "date_to": d1,
         "mode": str(mode or "wait"),
         "ready_only": bool(ready_only),
         "include_sells": bool(include_sells),
+        "max_span_days": MAX_BACKTEST_SPAN_DAYS,
         "n": len(items),
         "summary": summary,
         "items": items,
-        "note": "日线价带模拟成交；不改真实 traded/fill。命中口径与复盘一致（次日红/三日红）。",
+        "disclaimer": BACKTEST_DISCLAIMER,
+        "note": BACKTEST_DISCLAIMER,
     }

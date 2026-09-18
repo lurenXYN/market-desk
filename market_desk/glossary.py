@@ -342,8 +342,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "信号回测": {
         "mean": "用日线高低对历史纸面信号做价带模拟成交，再按复盘同一套标签看命中；不改真实已交易。",
-        "algo": "POST /api/backtest/run。买：wait/plan/mid 触达 low；信号日开盘≥chase 则顺延。卖：同日先止损后卖价。\n"
-        "成交后复用 score_signal_with_closes；命中=次日红/三日红。只读，不写 fill/traded。",
+        "algo": "POST /api/backtest/run（dry_run=预览匹配数）。跨度≤90天。买：wait/plan/mid 触达 low；信号日开盘≥chase 则顺延。卖：同日先止损后卖价。\n"
+        "成交后复用 score_signal_with_closes；命中=次日红/三日红。只读。汇总强制 disclaimer：日线高估可成交性。",
     },
     "信号历史": {
         "mean": "复盘里点某票「历史」，看这只股票在系统里出现过多少次信号，以及每次的价带与隔日结果。",

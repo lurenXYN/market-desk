@@ -103,3 +103,14 @@ def test_summarize_hit_rate() -> None:
     assert s["buy_n"] == 3
     assert s["buy_filled_n"] == 2
     assert s["buy_hit_rate"] == 50.0
+
+
+def test_validate_span_cap() -> None:
+    from market_desk.backtest import MAX_BACKTEST_SPAN_DAYS, validate_backtest_range
+
+    bad = validate_backtest_range("2025-01-01", "2025-12-31")
+    assert isinstance(bad, dict)
+    assert bad["ok"] is False
+    assert str(MAX_BACKTEST_SPAN_DAYS) in str(bad.get("detail") or "")
+    ok = validate_backtest_range("2026-09-01", "2026-09-18")
+    assert ok == ("2026-09-01", "2026-09-18")

@@ -8,21 +8,26 @@ Agents: **at the start of each session involving this app, read this file before
 
 （暂无）
 
-### 有空再加
+### 有空再加（回测深化）
 
-（暂无）
+- [ ] **回测独立结果表** — `signal_backtest_run` + `signal_backtest_fill`；禁 payload.sim_* 多轮堆叠；支持多参数组对比与清理。
+- [ ] **sim_exec_score** — 模拟成交相对 wait/chase 的执行分类，与真人 `build_exec_score` 彻底分列。
+- [ ] **回测异步任务** — 超长区间后台跑 + 前端轮询（当前靠 ≤90 天同步护栏）。
+- [ ] **流动性过滤** — 触 wait 当日量能门槛，过滤瞬时插针无成交。
+- [ ] **跳空/滑点分支** — 缺口低开、可配置滑点；低估实盘冲击。
+- [ ] **分钟 K 高保真模式** — 可选高级撮合（识别 chase 突破前后时序）。
 
 ### 以后可做（刻意缓做）
 
-- [ ] **再叠硬清仓 / 波浪硬关买卖** — 短期别堆阈值。
+- [ ] **再叠硬清仓 / 波浪硬关买卖** — 短期别堆阈值；若做先「强提示+一键」勿全硬关。
 - [ ] **自动下单 / 券商对接**
-- [ ] **大改主线打分** — 近期已够复杂。
-- [ ] **AI 荐股层**
+- [ ] **大改主线打分** — 近期已够复杂；宜先有回测对照再动权重。
+- [ ] **AI 荐股层** — 仅旁路叙事，不进 ready。
 
 ## Done recently (context)
 
+- [x] **回测护栏** — 日线高估免责声明置顶；跨度≤90天；`dry_run` 预览匹配数。*(2026-09-18)*
 - [x] **模拟撮合 / 回测引擎（轻量）** — 日线价带假成交 + 复盘 outcome；页签「回测」；不改真实 traded。*(2026-09-18)*
-
 - [x] **健康条下钻** — banner 点开源 ok/fail/timeout 明细表。*(2026-09-18)*
 - [x] **卖侧日记反哺** — sell_exec 贴计划/偏晚/偏早进复盘。*(2026-09-18)*
 - [x] **买卡未 ready 短因** — 顶栏 short_miss「还差：…」+ 卡面 progress。*(2026-09-18)*
@@ -55,3 +60,4 @@ Agents: **at the start of each session involving this app, read this file before
 - Prefer picking an **Open → 优先 / 有空再加** item unless the user names something else.
 - 「以后可做」默认可做，但先征得用户同意再开工。
 - Keep changes small and testable; update this file when closing items.
+- Backtest persistence: never multi-run via `payload.sim_*`; use dedicated tables when storing runs.
