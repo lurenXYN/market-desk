@@ -10,11 +10,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ### 有空再加
 
-- [ ] **健康条下钻** — tip 点开看各源 ok/fail/timeout 明细表。
-- [ ] **卖侧日记反哺** — 卖点执行质量进复盘（对称买侧 diary）。
-- [ ] **买卡未 ready 短因** — 顶栏/卡面一行「还差：分时/离日高…」。
-- [ ] **VPS 库备份** — 定时 dump / 保留策略。
-- [ ] **早决策可选推送** — Server酱 早盘摘要开关。
+（暂无）
 
 ### 以后可做（刻意缓做）
 
@@ -26,6 +22,11 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **健康条下钻** — banner 点开源 ok/fail/timeout 明细表。*(2026-09-18)*
+- [x] **卖侧日记反哺** — sell_exec 贴计划/偏晚/偏早进复盘。*(2026-09-18)*
+- [x] **买卡未 ready 短因** — 顶栏 short_miss「还差：…」+ 卡面 progress。*(2026-09-18)*
+- [x] **VPS 库备份** — 收盘 JSON + desk.db 副本；`backup_keep` 可配；admin 列表。*(2026-09-18)*
+- [x] **早决策可选推送** — 个人开关；约 9:25–9:50 Server酱一次。*(2026-09-18)*
 - [x] **收盘一页纸完善** — 盈亏优先、成交/日记、漏买复盘、尖峰一句、明日看点、tune 一行；主线切换压缩；Server酱底部去重。*(2026-09-18)*
 - [x] **当日盈亏 lot 分锚 + 加权卖价** — decorate 按 FIFO lot 今买/隔夜分锚；`day_sell_notional` VWAP。*(2026-09-18)*
 - [x] **手动仓试匹配信号 + diary source=manual** — 记账默认可匹配当日买信号；无价带不计硬执行分。*(2026-09-18)*

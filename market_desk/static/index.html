@@ -1648,6 +1648,24 @@
     .data-banner.ok-soft {
       display: block; border-color: #2f5a3a; background: #102018; color: #86efac;
     }
+    .data-banner details { margin-top: 6px; }
+    .data-banner summary {
+      cursor: pointer; list-style: none; color: inherit; opacity: 0.9;
+    }
+    .data-banner summary::-webkit-details-marker { display: none; }
+    .data-banner .health-drill {
+      margin-top: 6px; width: 100%; border-collapse: collapse; font-size: 12px;
+    }
+    .data-banner .health-drill th,
+    .data-banner .health-drill td {
+      text-align: left; padding: 2px 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      font-variant-numeric: tabular-nums;
+    }
+    .data-banner .health-drill .bad { color: #f87171; font-weight: 600; }
+    .gate-hint .short-miss {
+      display: block; margin-top: 2px; font-weight: 700; letter-spacing: 0.02em;
+    }
     .toast-strip {
       display: none;
       margin: 0 0 10px;
@@ -2689,6 +2707,9 @@
           <input id="setScOn" type="checkbox" /> 微信推送（买卖点）
         </label>
         <label class="settings-check">
+          <input id="setMorningPush" type="checkbox" /> 早决策微信推送（约 9:25–9:50 一次）
+        </label>
+        <label class="settings-check">
           <input id="setScClear" type="checkbox" /> 清除已存 Key
         </label>
         <label>单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
@@ -2706,6 +2727,8 @@
         <label class="settings-check">
           <input id="setAutoBackup" type="checkbox" /> 收盘自动备份
         </label>
+        <label>备份保留份数<input id="setBackupKeep" type="number" min="5" max="90" step="1" title="auto JSON 与 desk.db 副本各保留 N 份" /></label>
+        <div class="meta" id="setBackupHint" style="grid-column:1/-1"></div>
       </div>
       </div>
       <div class="settings-foot">
@@ -3539,7 +3562,9 @@
         ? `<div class="buy-progress"><span class="bp-sum">${bp.summary || "距可买"}</span>`
           + (bpSteps ? `<span class="bp-steps">${bpSteps}</span>` : "")
           + `</div>`
-        : "";
+        : (!wait && (it.confirm_fail || []).length
+          ? `<div class="buy-progress"><span class="bp-sum">还差：${(it.confirm_fail || []).slice(0, 3).join(" · ")}</span></div>`
+          : "");
       return `<article class="${cardCls}">
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
@@ -3894,14 +3919,22 @@
             gateEl.innerHTML = `<b>可现买</b> · ${hint || act}`;
           } else if (gate.can_probe) {
             gateEl.innerHTML = `<b>可小仓试探</b> · ${hint || reasons[0] || act}`
-              + (reasons.length > 1
-                ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
-                : "");
+              + (gate.short_miss
+                ? `<span class="short-miss">${gate.short_miss}</span>`
+                : (reasons.length > 1
+                  ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+                  : ""));
           } else {
-            gateEl.innerHTML = `<b>${(hint || "").startsWith("靠近买点") ? "靠近买点" : "为何不能现买"}</b> · ${hint || reasons[0] || act}`
-              + (reasons.length > 1
-                ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+            const missLine = gate.short_miss
+              || ((gate.progress && gate.progress.missing && gate.progress.missing.length)
+                ? `还差：${gate.progress.missing.slice(0, 3).join(" · ")}`
                 : "");
+            gateEl.innerHTML = `<b>${(hint || "").startsWith("靠近买点") ? "靠近买点" : "为何不能现买"}</b> · ${hint || reasons[0] || act}`
+              + (missLine
+                ? `<span class="short-miss">${missLine}</span>`
+                : (reasons.length > 1
+                  ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+                  : ""));
           }
         } else {
           gateEl.hidden = true;
@@ -4522,7 +4555,26 @@
           warns.unshift("数据降级");
         }
         warnEl.className = "data-banner " + (lvl === "ok" ? "ok-soft" : (lvl === "warn" ? "warn" : "on"));
-        warnEl.innerHTML = `⚠ ${warns.join(" · ")} <button type="button" class="q" data-term="健康度">?</button>`;
+        const srcs = Array.isArray(health.sources) ? health.sources : [];
+        let drill = "";
+        if (srcs.length) {
+          const rows = srcs.map((s) => {
+            const rate = s.fail_rate;
+            const bad = rate != null && Number(rate) >= 30;
+            return `<tr class="${bad ? "bad" : ""}">`
+              + `<td>${s.name || "—"}</td>`
+              + `<td>${s.ok ?? 0}</td>`
+              + `<td>${s.fail ?? 0}</td>`
+              + `<td>${s.timeout ?? 0}</td>`
+              + `<td>${rate == null ? "—" : rate + "%"}</td>`
+              + `</tr>`;
+          }).join("");
+          drill = `<details><summary>源明细 · 点开看 ok/fail/timeout</summary>`
+            + `<table class="health-drill"><thead><tr>`
+            + `<th>源</th><th>ok</th><th>fail</th><th>timeout</th><th>失败率</th>`
+            + `</tr></thead><tbody>${rows}</tbody></table></details>`;
+        }
+        warnEl.innerHTML = `⚠ ${warns.join(" · ")} <button type="button" class="q" data-term="健康度">?</button>${drill}`;
       } else {
         warnEl.className = "data-banner";
         warnEl.textContent = "";
@@ -6327,10 +6379,20 @@
         `<div class="hd">${dayLabel}计划执行分<button type="button" class="q" data-term="计划执行分">?</button></div>`
         + `执行分 <b>${ex.score == null ? "—" : ex.score}</b> · 已成交买 ${ex.traded_buy_n ?? 0}`
         + (ex.diary_n ? `（含日记 ${ex.diary_n}）` : "")
+        + (ex.unplanned_n ? ` · 无计划 ${ex.unplanned_n}` : "")
         + ` · 价带内 ${ex.in_band_n ?? 0} · 追高 ${ex.chase_n ?? 0}`
         + ` · 更低更好 ${ex.below_n ?? 0} · 其他 ${ex.other_n ?? 0}`
         + `<div class="meta" style="margin-top:4px">ETF ${etfEx.score == null ? "—" : etfEx.score}（${etfEx.traded_buy_n ?? 0}）`
-        + ` · 个股 ${stkEx.score == null ? "—" : stkEx.score}（${stkEx.traded_buy_n ?? 0}）</div>`;
+        + ` · 个股 ${stkEx.score == null ? "—" : stkEx.score}（${stkEx.traded_buy_n ?? 0}）</div>`
+        + (() => {
+          const se = sum.sell_exec || {};
+          if (se.traded_sell_n == null && se.score == null) return "";
+          return `<div class="meta" style="margin-top:6px">卖侧执行 <b>${se.score == null ? "—" : se.score}</b>`
+            + ` · 已成交卖 ${se.traded_sell_n ?? 0}`
+            + (se.diary_n ? `（含日记 ${se.diary_n}）` : "")
+            + ` · 贴计划 ${se.in_band_n ?? 0} · 偏晚 ${se.late_n ?? 0}`
+            + ` · 偏早 ${se.early_n ?? 0}</div>`;
+        })();
       const missed = sum.missed_buys || [];
       document.getElementById("revMissed").innerHTML = missed.length
         ? (`<div class="hd">漏买清单<button type="button" class="q" data-term="漏买清单">?</button> · ${missed.length}</div>`
@@ -8447,6 +8509,7 @@
         const r = await fetch("/api/settings");
         const d = await r.json();
         const s = d.settings || {};
+        window.__lastSettings = s;
         document.getElementById("setRefresh").value = s.refresh_seconds ?? 20;
         document.getElementById("setAuctionRefresh").value = s.auction_refresh_seconds ?? 5;
         document.getElementById("setIdle").value = s.idle_seconds ?? 60;
@@ -8471,6 +8534,8 @@
         document.getElementById("setEqualW").checked = s.equal_weight_target !== false;
         document.getElementById("setBatch").checked = s.batch_plan !== false;
         document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
+        const keepEl = document.getElementById("setBackupKeep");
+        if (keepEl) keepEl.value = s.backup_keep ?? 30;
         window.__portableSettings = d.portable || null;
         window.__settingsPresets = d.presets || null;
       } catch (e) {}
@@ -8480,6 +8545,7 @@
         const scOn = document.getElementById("setScOn");
         const scClear = document.getElementById("setScClear");
         const scHint = document.getElementById("setScHint");
+        const morningEl = document.getElementById("setMorningPush");
         if (scEl) scEl.value = "";
         if (scClear) scClear.checked = false;
         const sr = await fetch("/api/me/serverchan", { credentials: "same-origin" });
@@ -8492,19 +8558,38 @@
             scHint.textContent = "管理员未允许本账号微信推送；可先填 Key，待开通后再开。";
           } else {
             scHint.textContent = sc.configured
-              ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 买卖/LHB/收盘一页纸；无 Key 不推`
-              : "未配置 Key · 填 SCT… 后勾选开启；推买卖、LHB 变坏、收盘一页纸";
+              ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 买卖/LHB/收盘一页纸/早决策；无 Key 不推`
+              : "未配置 Key · 填 SCT… 后勾选开启；推买卖、LHB、收盘一页纸、可选早决策";
           }
         }
         if (scOn) {
           scOn.checked = !!sc.on;
           scOn.disabled = !sc.allowed;
         }
+        if (morningEl) {
+          morningEl.checked = !!s.morning_push;
+          morningEl.disabled = !sc.allowed;
+        }
         if (scEl) scEl.disabled = false;
       } catch (e) {
         const scHint = document.getElementById("setScHint");
         if (scHint) scHint.textContent = "微信推送配置加载失败";
       }
+      try {
+        const br = await fetch("/api/backup/auto?limit=6", { credentials: "same-origin" });
+        const bd = await br.json().catch(() => ({}));
+        const hint = document.getElementById("setBackupHint");
+        if (hint) {
+          if (br.ok && bd.ok) {
+            const items = bd.items || [];
+            hint.textContent = items.length
+              ? `最近备份：${items.slice(0, 3).map((x) => x.name).join(" · ")}（保留 ${bd.keep ?? "—"} 份）`
+              : `尚无自动备份（收盘后写入；保留 ${bd.keep ?? 30} 份）`;
+          } else {
+            hint.textContent = "备份列表仅管理员可见；收盘仍会按全局开关备份。";
+          }
+        }
+      } catch (e) {}
       panel.hidden = false;
     }
     document.getElementById("settingsBtn").addEventListener("click", (ev) => {
@@ -8560,6 +8645,8 @@
         equal_weight_target: !!document.getElementById("setEqualW").checked,
         batch_plan: !!document.getElementById("setBatch").checked,
         auto_backup: !!document.getElementById("setAutoBackup").checked,
+        backup_keep: Number(document.getElementById("setBackupKeep")?.value || 30),
+        morning_push: !!document.getElementById("setMorningPush")?.checked,
       };
       const r = await fetch("/api/settings", {
         method: "POST",

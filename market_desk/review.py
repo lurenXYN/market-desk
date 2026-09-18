@@ -1139,6 +1139,163 @@ def merge_exec_score_rows(
     return rows + extras
 
 
+def classify_sell_fill_execution(row: dict[str, Any]) -> str | None:
+    """Classify a traded sell fill versus the suggested sell / stop band.
+
+    Returns ``None`` when there is no plan price (unplanned manual trim).
+    ``in_band`` = at/below suggested sell; ``late`` = sold well above the plan;
+    ``early`` = dumped near/under stop when only stop is known.
+    """
+    typ = str(row.get("signal_type") or "").strip().lower()
+    if typ not in ("sell", "half", "clear", "trim") and not is_sell_signal(typ):
+        return None
+    if not int(row.get("traded") or 0):
+        return None
+    fill = num(row.get("fill_price"))
+    if fill is None:
+        return None
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    sell_px = num(
+        row.get("sell_price")
+        if row.get("sell_price") is not None
+        else payload.get("sell_price") or row.get("price")
+    )
+    stop_px = num(
+        row.get("stop_price")
+        if row.get("stop_price") is not None
+        else payload.get("stop_price")
+    )
+    if sell_px is None and stop_px is None:
+        return None
+    if sell_px is not None:
+        if fill <= sell_px * 1.005:
+            return "in_band"
+        if fill >= sell_px * 1.02:
+            return "late"
+        return "in_band"
+    if stop_px is not None:
+        if fill <= stop_px * 1.01:
+            return "early"
+        return "in_band"
+    return "other"
+
+
+def diary_rows_as_sell_fills(
+    diary: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Map sell-side exec diary rows into pseudo traded-signal shapes for scoring."""
+    out: list[dict[str, Any]] = []
+    for row in diary or []:
+        side = str(row.get("side") or "").strip().lower()
+        if side not in ("sell", "half", "clear", "trim"):
+            continue
+        fill = num(row.get("price"))
+        if fill is None or fill <= 0:
+            continue
+        advice = row.get("advice") if isinstance(row.get("advice"), dict) else {}
+        sell = advice.get("sell") if isinstance(advice.get("sell"), dict) else {}
+        sell_px = num(sell.get("sell_price") or sell.get("price") or sell.get("last"))
+        stop_px = num(sell.get("stop_price"))
+        if sell_px is None and stop_px is None:
+            continue
+        out.append(
+            {
+                "id": f"diary-sell:{row.get('id')}",
+                "signal_type": "sell",
+                "traded": 1,
+                "code": str(row.get("code") or "").zfill(6),
+                "name": row.get("name"),
+                "kind": str(sell.get("kind") or row.get("kind") or "stock"),
+                "fill_price": fill,
+                "price": sell_px if sell_px is not None else fill,
+                "sell_price": sell_px,
+                "stop_price": stop_px,
+                "trade_date": str(row.get("trade_date") or "")[:10],
+                "signaled_at": str(row.get("created_at") or ""),
+                "payload": {
+                    "sell_price": sell_px,
+                    "stop_price": stop_px,
+                    "exec_source": "diary",
+                    "advice_source": advice.get("source") or "manual",
+                },
+                "exec_source": "diary",
+            }
+        )
+    return out
+
+
+def merge_sell_exec_score_rows(
+    signals: list[dict[str, Any]] | None,
+    diary: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Prefer traded sell signals; fill gaps with diary sells (same day+code)."""
+    rows = list(signals or [])
+    traded_keys: set[str] = set()
+    for r in rows:
+        if str(r.get("signal_type") or "") != "sell":
+            continue
+        if not int(r.get("traded") or 0):
+            continue
+        day = str(r.get("trade_date") or "")[:10]
+        code = str(r.get("code") or "").zfill(6)
+        if day and code:
+            traded_keys.add(f"{day}|{code}")
+    extras: list[dict[str, Any]] = []
+    for pseudo in diary_rows_as_sell_fills(diary):
+        day = str(pseudo.get("trade_date") or "")[:10]
+        code = str(pseudo.get("code") or "").zfill(6)
+        key = f"{day}|{code}"
+        if key in traded_keys:
+            continue
+        extras.append(pseudo)
+        traded_keys.add(key)
+    return rows + extras
+
+
+def build_sell_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score how well sell fills followed the suggested exit plan."""
+    counts = {"in_band": 0, "late": 0, "early": 0, "other": 0}
+    diary_n = 0
+    unplanned_n = 0
+    items = [
+        r
+        for r in rows
+        if str(r.get("signal_type") or "") == "sell" and int(r.get("traded") or 0)
+    ]
+    for row in items:
+        if str(row.get("exec_source") or "") == "diary" or str(row.get("id") or "").startswith(
+            "diary-sell:"
+        ):
+            diary_n += 1
+        kind = classify_sell_fill_execution(row)
+        if kind is None:
+            unplanned_n += 1
+            continue
+        if kind in counts:
+            counts[kind] += 1
+        else:
+            counts["other"] += 1
+    n = sum(counts.values())
+    points = (
+        counts["in_band"] * 100
+        + counts["early"] * 70
+        + counts["other"] * 40
+        + counts["late"] * 20
+    )
+    score = None if n == 0 else round(points / n, 1)
+    return {
+        "score": score,
+        "traded_sell_n": len(items),
+        "scored_n": n,
+        "unplanned_n": unplanned_n,
+        "diary_n": diary_n,
+        "in_band_n": counts["in_band"],
+        "late_n": counts["late"],
+        "early_n": counts["early"],
+        "other_n": counts["other"],
+    }
+
+
 def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Score how well fills followed the original price plan."""
 
@@ -2636,6 +2793,7 @@ def build_review_payload(
     summary["vs_mainline_of"] = compare_ml
     summary["history"] = load_review_digests(limit=20)
     summary["exec"] = digest.get("exec") or build_exec_score(day_rows)
+    summary["sell_exec"] = build_sell_exec_score(day_rows)
     # Merge per-user exec diary buys so unsignaled book fills still score.
     if user_id is not None:
         try:
@@ -2644,6 +2802,8 @@ def build_review_payload(
             diary = load_exec_diary(user_id=int(user_id), trade_date=day, limit=80)
             merged = merge_exec_score_rows(day_rows, diary)
             summary["exec"] = build_exec_score(merged)
+            sell_merged = merge_sell_exec_score_rows(day_rows, diary)
+            summary["sell_exec"] = build_sell_exec_score(sell_merged)
         except Exception:
             pass
     summary["phase_hits"] = build_phase_hit_rates(global_rows)

@@ -148,11 +148,13 @@ class SettingsIn(BaseModel):
     equal_weight_target: bool | None = None
     batch_plan: bool | None = None
     auto_backup: bool | None = None
+    backup_keep: int | None = None
     account_equity: float | None = None
     risk_pct_per_trade: float | None = None
     min_stock_mv_yi: float | None = None
     # Review hit-rate: traded (executed only) | all (paper signals too).
     hit_rate_mode: str | None = None
+    morning_push: bool | None = None
     phase_panic_temp: int | None = None
     phase_ferment_temp: int | None = None
     phase_climax_temp: int | None = None
@@ -1641,6 +1643,22 @@ def report_morning(user: dict = Depends(current_user_required)) -> dict:
 def backup_export(user: dict = Depends(current_member_required)) -> dict:
     """Export this user's personal desk data as JSON."""
     return {"ok": True, "backup": export_user_backup_payload(int(user["id"]))}
+
+
+@app.get("/api/backup/auto")
+def backup_auto_list(
+    limit: int = Query(default=12, ge=1, le=40),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """List recent auto JSON / SQLite backups on the server (admin)."""
+    from market_desk.backup_store import list_auto_backups
+    from market_desk.settings import get_settings
+
+    return {
+        "ok": True,
+        "items": list_auto_backups(limit=limit),
+        "keep": int(get_settings().get("backup_keep") or 30),
+    }
 
 
 @app.post("/api/backup/import")

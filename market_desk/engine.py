@@ -156,6 +156,7 @@ class DeskEngine:
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._eod_date: str | None = None
+        self._morning_push_date: str | None = None
         self._theme_settle_date: str | None = None
         self._toast_armed = False
         self._toast_sent: dict[str, float] = {}
@@ -381,7 +382,8 @@ class DeskEngine:
                         self._eod_date = today
                         if bool(setting("auto_backup", True)):
                             try:
-                                path = write_auto_backup(trade_date=today)
+                                keep = int(setting("backup_keep", 30) or 30)
+                                path = write_auto_backup(trade_date=today, keep=keep)
                                 log.info("auto backup written %s", path)
                             except Exception:
                                 log.exception("auto backup failed")
@@ -389,6 +391,10 @@ class DeskEngine:
                             await self._write_eod_onepager(today)
                         except Exception:
                             log.exception("eod onepager failed")
+                    try:
+                        await self._maybe_push_morning_brief(now)
+                    except Exception:
+                        log.exception("morning push failed")
                 except Exception as exc:
                     log.exception("refresh failed")
                     self.snapshot["ok"] = False
@@ -1068,6 +1074,70 @@ class DeskEngine:
             },
         )
         log.info("eod onepager push day=%s ok=%s", day_s, ok_n)
+
+    async def _maybe_push_morning_brief(self, now: datetime) -> None:
+        """Push morning decision brief once per day (09:25–09:50) when enabled."""
+        if not is_trading_day(now):
+            return
+        mins = _minutes(now)
+        # After auction lock window through early open.
+        if mins < 9 * 60 + 25 or mins > 9 * 60 + 50:
+            return
+        day_s = now.strftime("%Y-%m-%d")
+        if self._morning_push_date == day_s:
+            return
+        from market_desk.db import list_serverchan_recipients, load_setting, save_setting
+        from market_desk.notify import format_serverchan_desp, notify_serverchan
+        from market_desk.report import build_morning_brief
+        from market_desk.settings import get_settings_for_user
+
+        push_flag = f"morning_pushed:{day_s}"
+        if load_setting(push_flag):
+            self._morning_push_date = day_s
+            return
+        try:
+            recipients = list_serverchan_recipients()
+        except Exception:
+            log.exception("list serverchan recipients for morning failed")
+            recipients = []
+        brief = (self.snapshot or {}).get("morning_brief") or build_morning_brief(
+            self.snapshot
+        )
+        title = str(brief.get("title") or f"早决策 · {day_s}")
+        focus = str(brief.get("focus") or "").strip()
+        bullets = [str(b) for b in (brief.get("bullets") or []) if b][:8]
+        body_lines = [focus] if focus else []
+        for b in bullets:
+            body_lines.append(f"· {b}")
+        body = "\n".join(x for x in body_lines if x)
+        if not body:
+            return
+        ok_n = 0
+        for user in recipients:
+            uid = user.get("id")
+            sendkey = str(user.get("serverchan_sendkey") or "").strip()
+            if not sendkey or uid is None:
+                continue
+            try:
+                us = get_settings_for_user(int(uid))
+                if not bool(us.get("morning_push")):
+                    continue
+            except Exception:
+                continue
+            alert_key = f"morning:{day_s}"
+            desp = format_serverchan_desp(alert_key, title, body, self.snapshot)
+            if notify_serverchan(sendkey, title, desp):
+                ok_n += 1
+        save_setting(
+            push_flag,
+            {
+                "ok_n": ok_n,
+                "at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        self._morning_push_date = day_s
+        if ok_n:
+            log.info("morning brief push day=%s ok=%s", day_s, ok_n)
 
     async def build_review(
         self,
@@ -2913,20 +2983,31 @@ def _build_health(
         score -= 8
         tips.append("上证日线不足，大盘波浪暂不可用")
     fail_rates: dict[str, float] = {}
+    sources: list[dict[str, Any]] = []
     degraded = False
     try:
         stats = getattr(engine, "_source_stats", {}) or {}
         rate_bits: list[str] = []
-        for label, bucket in stats.items():
+        for label, bucket in sorted(stats.items(), key=lambda kv: str(kv[0])):
             ok_n = int(bucket.get("ok") or 0)
             fail_n = int(bucket.get("fail") or 0)
             to_n = int(bucket.get("timeout") or 0)
             total = ok_n + fail_n
+            rate = round(100.0 * fail_n / total, 1) if total else None
+            sources.append(
+                {
+                    "name": str(label),
+                    "ok": ok_n,
+                    "fail": fail_n,
+                    "timeout": to_n,
+                    "total": total,
+                    "fail_rate": rate,
+                }
+            )
             if total < 4:
                 continue
-            rate = round(100.0 * fail_n / total, 1)
-            fail_rates[str(label)] = rate
-            if rate >= 30:
+            fail_rates[str(label)] = float(rate or 0)
+            if float(rate or 0) >= 30:
                 degraded = True
                 bit = f"{label}失败率{rate}%"
                 if to_n:
@@ -2936,7 +3017,7 @@ def _build_health(
             score -= min(20, 5 * len(rate_bits))
             tips.append("源失败率：" + "、".join(rate_bits[:4]))
     except Exception:
-        pass
+        sources = []
     stale_sec = None
     if updated_at:
         try:
@@ -2960,6 +3041,7 @@ def _build_health(
         "trading_day": trading,
         "failed_sources": failed,
         "fail_rates": fail_rates,
+        "sources": sources,
         "degraded": degraded,
         "stale_seconds": stale_sec,
         "tips": tips[:8],

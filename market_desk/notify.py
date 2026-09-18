@@ -271,9 +271,9 @@ def select_toasts_for_round(
 
 
 def is_serverchan_alert(key: str) -> bool:
-    """Return True for buy/sell/lhb/eod alerts that may go to ServerChan."""
+    """Return True for buy/sell/lhb/eod/morning alerts that may go to ServerChan."""
     k = str(key or "")
-    return k.startswith(("buy:", "sell:", "lhb:", "eod:"))
+    return k.startswith(("buy:", "sell:", "lhb:", "eod:", "morning:"))
 
 
 def filter_serverchan_alerts(
@@ -297,7 +297,7 @@ def format_serverchan_desp(
     cur = current or {}
     key_s = str(key or "")
     body_md = str(body or "").replace("\n", "\n\n")
-    if key_s.startswith("eod:"):
+    if key_s.startswith("eod:") or key_s.startswith("morning:"):
         return "\n".join(
             [
                 f"**{title}**",

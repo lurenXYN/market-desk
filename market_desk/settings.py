@@ -29,6 +29,7 @@ USER_PRIVATE_KEYS = frozenset(
         "hit_rate_mode",
         "open_mute_minutes",
         "tail_mute_minutes",
+        "morning_push",
     }
 )
 
@@ -49,10 +50,13 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "open_mute_minutes",
         "tail_mute_minutes",
         "hit_rate_mode",
+        "morning_push",
         "sticky_margin",
         "switch_min_seconds",
         "min_stock_mv_yi",
         "side_mainline_gap",
+        "auto_backup",
+        "backup_keep",
     }
 )
 
@@ -118,6 +122,8 @@ DEFAULTS: dict[str, Any] = {
     "equal_weight_target": True,
     "batch_plan": True,
     "auto_backup": True,
+    # How many auto-*.json / desk-*.db copies to keep under data/backup.
+    "backup_keep": 30,
     "account_equity": 50000.0,
     "risk_pct_per_trade": 1.0,
     # Total market-cap floor (亿元) for stock recommend cards; 0 = off.
@@ -130,6 +136,8 @@ DEFAULTS: dict[str, Any] = {
     "tail_mute_minutes": 30,
     # Review hit-rate: traded (executed only) | all (paper signals too).
     "hit_rate_mode": "traded",
+    # Per-user: push morning brief via Server酱 once near open (needs Key).
+    "morning_push": False,
     # Phase temperature cutoffs (see classify_phase).
     "phase_panic_temp": int(cfg.PHASE_PANIC_TEMP),
     "phase_ferment_temp": int(cfg.PHASE_FERMENT_TEMP),
@@ -267,6 +275,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["equal_weight_target"] = bool(out["equal_weight_target"])
     out["batch_plan"] = bool(out["batch_plan"])
     out["auto_backup"] = bool(out["auto_backup"])
+    out["backup_keep"] = max(5, min(90, int(out.get("backup_keep") or 30)))
     out["account_equity"] = max(1000.0, min(5_000_000.0, float(out["account_equity"])))
     out["risk_pct_per_trade"] = max(0.2, min(5.0, float(out["risk_pct_per_trade"])))
     out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
@@ -277,6 +286,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     if hit_mode not in ("traded", "all"):
         hit_mode = "traded"
     out["hit_rate_mode"] = hit_mode
+    out["morning_push"] = bool(out.get("morning_push"))
     panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))
     ferment_t = max(panic_t + 1, min(80, int(out.get("phase_ferment_temp") or cfg.PHASE_FERMENT_TEMP)))
     climax_t = max(ferment_t, min(95, int(out.get("phase_climax_temp") or cfg.PHASE_CLIMAX_TEMP)))

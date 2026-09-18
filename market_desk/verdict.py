@@ -1097,6 +1097,7 @@ def build_desk_gate_summary(
             "can_probe": False,
             "reasons": [],
             "hint": _desk_gate_buy_hint(action, ready_items, rec),
+            "short_miss": "",
             "progress": progress,
         }
 
@@ -1223,12 +1224,14 @@ def build_desk_gate_summary(
         hint = "靠近买点 · 现买确认未齐"
     else:
         hint = _desk_gate_block_hint(action, reasons, rec, mainline)
+    short_miss = f"还差：{miss_txt}" if miss_txt else ""
     return {
         "action": action,
         "can_buy": False,
         "can_probe": can_probe,
         "reasons": reasons[:5],
         "hint": hint,
+        "short_miss": short_miss,
         "progress": progress,
     }
 
