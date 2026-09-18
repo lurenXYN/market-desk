@@ -442,6 +442,12 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "价带边沿触发；每轮最多 2 条。冷却：止损 60s、可买带 600s、不追 300s、决策用参数「通知冷却秒」。\n"
         "关闭 Windows 通知时仍写入页内提醒条。",
     },
+    "Server酱": {
+        "mean": "用 Server酱³ 把买卖点推到微信。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
+        "algo": "仅推 buy: / sell:（可买入、建议卖出）。买点附主线/相位/阶段/作战结论。\n"
+        "users.serverchan_sendkey + serverchan_on（本人）+ serverchan_allowed（管理员）。\n"
+        "POST sctapi.ftqq.com/{SendKey}.send；与 Windows toast 并行。Key 只存 desk.db，不进 Git。",
+    },
     "建议卖出": {
         "mean": "对着已记账仓位给卖点：止损清仓、冲高回落/结构回撤、衰退先减或清仓；已减半后有反悔窗，轻止盈过卖侧分时确认。",
         "algo": "分层 exit_mode：clear=清仓，half=先减一半（100股四舍五入）。\n"

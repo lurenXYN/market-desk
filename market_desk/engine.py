@@ -94,6 +94,7 @@ from market_desk.notify import (
     filter_alerts_for_policy,
     is_buy_quiet_window,
     notify_windows,
+    push_serverchan_alerts,
     select_toasts_for_round,
 )
 from market_desk.sentiment import (
@@ -1465,6 +1466,10 @@ class DeskEngine:
                 log.info("toast(page) %s | %s", title, body)
         if chosen:
             current["recent_toasts"] = list(self._toast_feed)
+            try:
+                push_serverchan_alerts(chosen, current)
+            except Exception:
+                log.exception("serverchan fan-out failed")
 
     async def _resolve_daily_closes(
         self,

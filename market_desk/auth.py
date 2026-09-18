@@ -78,6 +78,7 @@ def public_user(row: dict[str, Any] | None) -> dict[str, Any] | None:
     role = str(row.get("role") or "user")
     username = str(row.get("username") or "")
     guest = role == "guest" or username.strip().lower() == GUEST_USERNAME
+    key = str(row.get("serverchan_sendkey") or "").strip()
     return {
         "id": int(row["id"]),
         "username": username,
@@ -89,6 +90,9 @@ def public_user(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "is_guest": guest,
         # Guest may view market / paper review; personal books stay locked.
         "can_personal": not guest,
+        "serverchan_allowed": bool(int(row.get("serverchan_allowed") or 0)),
+        "serverchan_on": bool(int(row.get("serverchan_on") or 0)),
+        "serverchan_configured": bool(key) and not guest,
     }
 
 
@@ -224,6 +228,102 @@ def require_admin(user: dict[str, Any] | None) -> dict[str, Any]:
     if not user or user.get("role") != "admin" or user.get("status") != "active":
         raise ValueError("需要管理员权限")
     return user
+
+
+def mask_serverchan_key(sendkey: str | None) -> str | None:
+    """Return a masked SendKey for UI (never echo the full secret)."""
+    key = str(sendkey or "").strip()
+    if not key:
+        return None
+    if len(key) <= 8:
+        return key[:2] + "***"
+    return f"{key[:3]}***{key[-4:]}"
+
+
+def get_my_serverchan(user_id: int) -> dict[str, Any]:
+    """Return ServerChan settings for the logged-in user (key masked)."""
+    row = get_user_by_id(int(user_id))
+    if not row:
+        raise ValueError("用户不存在")
+    pub = public_user(row) or {}
+    if is_guest(pub):
+        raise ValueError("游客不能配置推送")
+    return {
+        "allowed": bool(pub.get("serverchan_allowed")),
+        "on": bool(pub.get("serverchan_on")),
+        "configured": bool(pub.get("serverchan_configured")),
+        "sendkey_masked": mask_serverchan_key(row.get("serverchan_sendkey")),
+    }
+
+
+def update_my_serverchan(
+    user_id: int,
+    *,
+    sendkey: str | None = None,
+    enabled: bool | None = None,
+    clear_key: bool = False,
+) -> dict[str, Any]:
+    """Let a user set their own SendKey / on switch.
+
+    SendKey may be saved before admin grants push. Turning ``on`` requires
+    ``serverchan_allowed`` and a stored key.
+    """
+    from market_desk.db import update_user_serverchan
+
+    row = get_user_by_id(int(user_id))
+    if not row:
+        raise ValueError("用户不存在")
+    pub = public_user(row) or {}
+    if is_guest(pub):
+        raise ValueError("游客不能配置推送")
+    allowed = bool(pub.get("serverchan_allowed"))
+    key_arg: str | None
+    if clear_key:
+        key_arg = ""
+    elif sendkey is not None:
+        key_arg = str(sendkey).strip()
+        if key_arg and not (
+            key_arg.upper().startswith("SCT") or key_arg.upper().startswith("SCU")
+        ):
+            raise ValueError("SendKey 格式不正确（应以 SCT 开头）")
+    else:
+        key_arg = None
+    on_arg = enabled
+    if enabled is True:
+        if not allowed:
+            raise ValueError("管理员未允许此账号开启微信推送")
+        has_key = bool(
+            (key_arg if key_arg is not None else str(row.get("serverchan_sendkey") or "").strip())
+        )
+        if not has_key:
+            raise ValueError("请先填写 SendKey 再开启推送")
+    if not allowed and enabled is None:
+        # Saving only a key while not allowed: force on=0.
+        on_arg = False
+    updated = update_user_serverchan(
+        int(user_id),
+        sendkey=key_arg,
+        enabled=on_arg,
+    )
+    if not updated:
+        raise ValueError("保存失败")
+    return get_my_serverchan(int(user_id))
+
+
+def admin_set_push_allowed(user_id: int, admin_id: int, allowed: bool) -> dict[str, Any]:
+    """Admin grant/revoke ServerChan permission for another account."""
+    del admin_id
+    from market_desk.db import set_user_serverchan_allowed
+
+    target = get_user_by_id(int(user_id))
+    if not target:
+        raise ValueError("用户不存在")
+    if is_guest(public_user(target)):
+        raise ValueError("不能给游客开推送")
+    row = set_user_serverchan_allowed(int(user_id), bool(allowed))
+    if not row:
+        raise ValueError("保存失败")
+    return public_user(row) or {}
 
 
 def admin_list_users() -> list[dict[str, Any]]:

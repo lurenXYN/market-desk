@@ -403,6 +403,22 @@ def _ensure_auth_and_user_scope(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    user_cols = _table_cols(conn, "users")
+    for col, decl in (
+        ("serverchan_sendkey", "TEXT"),
+        ("serverchan_on", "INTEGER NOT NULL DEFAULT 0"),
+        ("serverchan_allowed", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if col not in user_cols:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+    # Admins may enable push by default; others wait for admin grant.
+    conn.execute(
+        """
+        UPDATE users
+        SET serverchan_allowed = 1
+        WHERE role = 'admin' AND COALESCE(serverchan_allowed, 0) = 0
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -567,12 +583,14 @@ def create_user(
 ) -> dict[str, Any]:
     """Insert a user row and return it."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    allowed = 1 if str(role) == "admin" else 0
     with _connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO users(
-                username, password_hash, role, status, must_change_password, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                username, password_hash, role, status, must_change_password, created_at,
+                serverchan_on, serverchan_allowed
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
             """,
             (
                 str(username).strip(),
@@ -581,6 +599,7 @@ def create_user(
                 status,
                 1 if must_change_password else 0,
                 now,
+                allowed,
             ),
         )
         uid = int(cur.lastrowid)
@@ -592,6 +611,83 @@ def create_user(
         conn.commit()
         row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     return dict(row)
+
+
+def update_user_serverchan(
+    user_id: int,
+    *,
+    sendkey: str | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any] | None:
+    """Update one user's ServerChan SendKey and/or on switch."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (int(user_id),)
+        ).fetchone()
+        if not row:
+            return None
+        key = row["serverchan_sendkey"]
+        on = int(row["serverchan_on"] or 0)
+        if sendkey is not None:
+            key = str(sendkey or "").strip() or None
+        if enabled is not None:
+            on = 1 if enabled else 0
+        conn.execute(
+            """
+            UPDATE users
+            SET serverchan_sendkey = ?, serverchan_on = ?
+            WHERE id = ?
+            """,
+            (key, on, int(user_id)),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (int(user_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_user_serverchan_allowed(user_id: int, allowed: bool) -> dict[str, Any] | None:
+    """Admin grant/revoke ServerChan push permission for one account."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET serverchan_allowed = ? WHERE id = ?",
+            (1 if allowed else 0, int(user_id)),
+        )
+        if not allowed:
+            conn.execute(
+                "UPDATE users SET serverchan_on = 0 WHERE id = ?",
+                (int(user_id),),
+            )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (int(user_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_serverchan_recipients() -> list[dict[str, Any]]:
+    """Return active users with push allowed, enabled, and a SendKey set."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, username, role, serverchan_sendkey
+            FROM users
+            WHERE status = 'active'
+              AND role != 'guest'
+              AND COALESCE(serverchan_allowed, 0) = 1
+              AND COALESCE(serverchan_on, 0) = 1
+              AND serverchan_sendkey IS NOT NULL
+              AND trim(serverchan_sendkey) != ''
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        item = dict(r)
+        if str(item.get("username") or "").strip().lower() == "guest":
+            continue
+        out.append(item)
+    return out
 
 
 def get_user_by_username(username: str) -> dict[str, Any] | None:

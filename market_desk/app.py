@@ -19,13 +19,16 @@ from market_desk.auth import (
     admin_delete_user,
     admin_list_users,
     admin_reject,
+    admin_set_push_allowed,
     change_password,
     ensure_bootstrap_admin,
+    get_my_serverchan,
     is_guest,
     login_guest,
     login_user,
     logout_token,
     register_user,
+    update_my_serverchan,
 )
 from market_desk.deps import (
     current_admin_required,
@@ -210,6 +213,20 @@ class PasswordChangeIn(BaseModel):
     new_password: str
 
 
+class ServerChanIn(BaseModel):
+    """Per-user ServerChan SendKey / enable switch."""
+
+    sendkey: str | None = None
+    on: bool | None = None
+    clear_key: bool = False
+
+
+class AdminPushAllowIn(BaseModel):
+    """Admin grant/revoke WeChat push for one account."""
+
+    allowed: bool
+
+
 class BackupIn(BaseModel):
     """JSON backup import payload."""
 
@@ -325,6 +342,48 @@ def auth_password(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
+
+
+@app.get("/api/me/serverchan")
+def me_serverchan_get(user: dict = Depends(current_member_required)) -> dict:
+    """Return masked ServerChan settings for the logged-in user."""
+    try:
+        row = get_my_serverchan(int(user["id"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "serverchan": row}
+
+
+@app.post("/api/me/serverchan")
+def me_serverchan_save(
+    body: ServerChanIn,
+    user: dict = Depends(current_member_required),
+) -> dict:
+    """Save the logged-in user's SendKey and/or enable switch."""
+    try:
+        row = update_my_serverchan(
+            int(user["id"]),
+            sendkey=body.sendkey,
+            enabled=body.on,
+            clear_key=bool(body.clear_key),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "serverchan": row}
+
+
+@app.post("/api/admin/users/{uid}/push")
+def admin_user_push(
+    uid: int,
+    body: AdminPushAllowIn,
+    admin: dict = Depends(current_admin_required),
+) -> dict:
+    """Grant or revoke ServerChan push for one account."""
+    try:
+        row = admin_set_push_allowed(uid, int(admin["id"]), bool(body.allowed))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "user": row}
 
 
 @app.get("/api/admin/users")

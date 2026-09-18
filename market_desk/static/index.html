@@ -2343,6 +2343,16 @@
         <label style="flex-direction:row;align-items:center;gap:8px;margin-top:18px">
           <input id="setDecisionOn" type="checkbox" /> 决策提醒
         </label>
+        <label style="grid-column:1/-1;margin-top:8px">Server酱 SendKey
+          <input id="setScKey" type="password" autocomplete="off" placeholder="SCTxxxx（留空不改；仅本人）" title="每人自己的 SendKey；无 Key 不推送" />
+        </label>
+        <div class="meta" id="setScHint" style="grid-column:1/-1"></div>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-top:8px">
+          <input id="setScOn" type="checkbox" /> 微信推送（买卖点）
+        </label>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-top:8px">
+          <input id="setScClear" type="checkbox" /> 清除已存 Key
+        </label>
         <label>单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
         <label>连亏降温只数<input id="setCoolN" type="number" min="1" max="10" /></label>
         <label>目标总成本<input id="setTargetCost" type="number" min="1000" step="1000" /></label>
@@ -6615,11 +6625,14 @@
         const guest = u.is_guest || u.role === "guest";
         const isSelf = selfId != null && Number(u.id) === Number(selfId);
         const canDelete = !guest && !isSelf;
-        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}${guest ? " · 游客" : ""}${isSelf ? " · 当前" : ""}</span>`
+        return `<div class="row"><span>${u.username} · ${u.status}${u.role === "admin" ? " · admin" : ""}${guest ? " · 游客" : ""}${isSelf ? " · 当前" : ""}${u.serverchan_configured ? " · 已配Key" : ""}${u.serverchan_on ? " · 推送开" : ""}</span>`
           + `<span>`
           + (pending
             ? `<button type="button" data-approve="${u.id}">同意</button> `
               + `<button type="button" data-reject="${u.id}">拒绝</button> `
+            : "")
+          + (!guest
+            ? `<button type="button" data-push="${u.id}" data-allowed="${u.serverchan_allowed ? "1" : "0"}">${u.serverchan_allowed ? "禁推送" : "允推送"}</button> `
             : "")
           + (canDelete
             ? `<button type="button" class="danger" data-delete="${u.id}" data-name="${String(u.username || "").replace(/"/g, "&quot;")}">删除</button>`
@@ -6638,6 +6651,18 @@
         btn.onclick = async () => {
           await fetch("/api/admin/users/" + btn.dataset.reject + "/reject", {
             method: "POST", credentials: "same-origin",
+          });
+          refreshAdminUsers();
+        };
+      });
+      box.querySelectorAll("[data-push]").forEach((btn) => {
+        btn.onclick = async () => {
+          const next = btn.dataset.allowed !== "1";
+          await fetch("/api/admin/users/" + btn.dataset.push + "/push", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ allowed: next }),
           });
           refreshAdminUsers();
         };
@@ -7591,6 +7616,37 @@
         document.getElementById("setBatch").checked = s.batch_plan !== false;
         document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
       } catch (e) {}
+      // Per-user Server酱 (separate from shared runtime settings).
+      try {
+        const scEl = document.getElementById("setScKey");
+        const scOn = document.getElementById("setScOn");
+        const scClear = document.getElementById("setScClear");
+        const scHint = document.getElementById("setScHint");
+        if (scEl) scEl.value = "";
+        if (scClear) scClear.checked = false;
+        const sr = await fetch("/api/me/serverchan", { credentials: "same-origin" });
+        const sd = await sr.json();
+        const sc = (sd && sd.serverchan) || {};
+        if (scHint) {
+          if (!sd.ok) {
+            scHint.textContent = sd.detail || "无法加载微信推送配置（游客不可用）";
+          } else if (!sc.allowed) {
+            scHint.textContent = "管理员未允许本账号微信推送；可先填 Key，待开通后再开。";
+          } else {
+            scHint.textContent = sc.configured
+              ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 仅推买卖点；无 Key 不推`
+              : "未配置 Key · 填 SCT… 后勾选开启；仅推买卖点";
+          }
+        }
+        if (scOn) {
+          scOn.checked = !!sc.on;
+          scOn.disabled = !sc.allowed;
+        }
+        if (scEl) scEl.disabled = false;
+      } catch (e) {
+        const scHint = document.getElementById("setScHint");
+        if (scHint) scHint.textContent = "微信推送配置加载失败";
+      }
       panel.hidden = false;
     }
     document.getElementById("settingsBtn").addEventListener("click", (ev) => {
@@ -7643,6 +7699,26 @@
         alert("保存失败");
         return;
       }
+      // Personal Server酱 (ignore errors for guests).
+      try {
+        const scBody = {
+          on: !!document.getElementById("setScOn").checked,
+          clear_key: !!document.getElementById("setScClear").checked,
+        };
+        const keyVal = (document.getElementById("setScKey").value || "").trim();
+        if (keyVal) scBody.sendkey = keyVal;
+        const sr = await fetch("/api/me/serverchan", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(scBody),
+        });
+        const sd = await sr.json().catch(() => ({}));
+        if (!sr.ok || sd.ok === false) {
+          alert("运行参数已保存；微信推送未保存：" + (sd.detail || "请检查是否已允许推送 / SendKey"));
+          return;
+        }
+      } catch (e) {}
       document.getElementById("settingsPanel").hidden = true;
       alert("已保存。刷新间隔下一轮生效。");
     });
@@ -7657,8 +7733,8 @@
         "聚集度", "总龙头", "卡位龙", "冰点", "冷冻", "相对最冷", "传染", "传染预警", "看好板块", "看好板块买卖",
       ] },
       { id: "desk", label: "作战/仓位", keys: [
-        "推荐买入", "建议卖出", "Playbook", "风险股数", "分批计划", "仓位", "T+1",
-        "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
+        "推荐买入", "建议卖出", "反悔窗", "卖飞", "Playbook", "风险股数", "分批计划", "仓位", "T+1",
+        "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "Server酱", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
         "为何不能现买",
       ] },
       { id: "review", label: "复盘/观察", keys: [

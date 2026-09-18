@@ -56,11 +56,22 @@ def build_toast_alerts(
         code = primary.get("code") or rec.get("code") or ""
         name = primary.get("name") or rec.get("name") or ""
         px = primary.get("buy_price") or primary.get("last") or rec.get("price") or ""
+        life = (cur_v.get("mainline") or {}).get("lifecycle") or ""
+        life_zh = {"starting": "萌芽", "ongoing": "主升", "ending": "衰退"}.get(
+            str(life), str(life) or "—"
+        )
+        size = (cur_v.get("playbook") or {}).get("size_note") or rec.get("size_note") or ""
+        body = (
+            f"主线 {cur_ml or '—'} · 相位 {cur_phase or '—'} · 阶段 {life_zh}\n"
+            f"{name} {code} 建议买 {px}"
+        ).strip()
+        if size:
+            body = f"{body}\n{str(size)[:80]}"
         alerts.append(
             (
                 f"buy:{code or cur_ml}",
                 "可买入",
-                f"主线 {cur_ml or '—'} · {name} {code} 建议买 {px}".strip(),
+                body,
             )
         )
     elif prev_action == "可买入" and cur_action in ("观望", "观察回踩"):
@@ -257,3 +268,130 @@ def select_toasts_for_round(
             continue
         chosen.append((key, title, body))
     return chosen, next_latched
+
+
+def is_serverchan_alert(key: str) -> bool:
+    """Return True for buy/sell alerts that may go to ServerChan."""
+    k = str(key or "")
+    return k.startswith("buy:") or k.startswith("sell:")
+
+
+def filter_serverchan_alerts(
+    alerts: list[tuple[str, str, str]],
+) -> list[tuple[str, str, str]]:
+    """Keep only buy / sell advice for WeChat push."""
+    return [(k, t, b) for k, t, b in alerts if is_serverchan_alert(k)]
+
+
+def format_serverchan_desp(
+    key: str,
+    title: str,
+    body: str,
+    current: dict[str, Any] | None = None,
+) -> str:
+    """Build markdown body for ServerChan (buy includes desk context)."""
+    cur = current or {}
+    v = cur.get("verdict") or {}
+    ml = (v.get("mainline") or {}).get("name") or cur.get("mainline") or "—"
+    phase = cur.get("phase") or "—"
+    life = (v.get("mainline") or {}).get("lifecycle") or ""
+    life_zh = {"starting": "萌芽", "ongoing": "主升", "ending": "衰退"}.get(
+        str(life), str(life) or "—"
+    )
+    action = v.get("action") or "—"
+    lines = [
+        f"**{title}**",
+        "",
+        str(body or "").replace("\n", "\n\n"),
+        "",
+        "---",
+        f"- 作战结论：{action}",
+        f"- 主线：{ml}",
+        f"- 相位：{phase}",
+        f"- 阶段：{life_zh}",
+        f"- 交易日：{cur.get('trade_date') or '—'}",
+    ]
+    if str(key or "").startswith("buy:"):
+        rec = v.get("recommend") or {}
+        primary = rec.get("primary") or {}
+        why = primary.get("reason") or rec.get("text") or ""
+        if why:
+            lines.extend(["", f"> {str(why)[:200]}"])
+    return "\n".join(lines)
+
+
+def notify_serverchan(sendkey: str, title: str, desp: str) -> bool:
+    """POST one message to Server酱³. Return True on HTTP success."""
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    key = str(sendkey or "").strip()
+    if not key:
+        return False
+    url = f"https://sctapi.ftqq.com/{urllib.parse.quote(key)}.send"
+    payload = urllib.parse.urlencode(
+        {
+            "title": str(title or "作战台")[:100],
+            "desp": str(desp or "")[:4000],
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw)
+            # SCT returns {code:0,...} on success
+            if isinstance(data, dict) and data.get("code") not in (0, "0", None):
+                log.warning("serverchan reject: %s", data.get("message") or raw[:120])
+                return False
+        except json.JSONDecodeError:
+            pass
+        return True
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        log.warning("serverchan failed: %s", exc)
+        return False
+
+
+def push_serverchan_alerts(
+    alerts: list[tuple[str, str, str]],
+    current: dict[str, Any] | None = None,
+) -> int:
+    """Fan-out buy/sell alerts to every user with ServerChan enabled.
+
+    No SendKey / not allowed / off → skip. Returns number of successful POSTs.
+    """
+    sc = filter_serverchan_alerts(alerts)
+    if not sc:
+        return 0
+    try:
+        from market_desk.db import list_serverchan_recipients
+
+        recipients = list_serverchan_recipients()
+    except Exception:
+        log.exception("list serverchan recipients failed")
+        return 0
+    if not recipients:
+        return 0
+    ok_n = 0
+    for user in recipients:
+        key = str(user.get("serverchan_sendkey") or "").strip()
+        if not key:
+            continue
+        for alert_key, title, body in sc:
+            desp = format_serverchan_desp(alert_key, title, body, current)
+            if notify_serverchan(key, title, desp):
+                ok_n += 1
+                log.info(
+                    "serverchan -> user %s | %s",
+                    user.get("username") or user.get("id"),
+                    title,
+                )
+    return ok_n
