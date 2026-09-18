@@ -7634,6 +7634,8 @@
         closeSigHist();
         const gPanel = document.getElementById("glossaryPanel");
         if (gPanel && !gPanel.hidden) gPanel.hidden = true;
+        const sPanel = document.getElementById("settingsPanel");
+        if (sPanel && !sPanel.hidden) sPanel.hidden = true;
         return;
       }
       const tag = ((ev.target && ev.target.tagName) || "").toUpperCase();
