@@ -2107,6 +2107,35 @@ def load_exec_diary(
     return out
 
 
+def load_recent_buy_diary(*, limit: int = 40) -> list[dict[str, Any]]:
+    """Return recent buy-side diary rows across users (for global exec-score adapt)."""
+    import json
+
+    lim = max(1, min(int(limit or 40), 120))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, trade_date, created_at, side, code, name,
+                   qty, price, advice_json, note
+            FROM exec_diary
+            WHERE side = 'buy'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (lim,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        raw = item.pop("advice_json", None)
+        try:
+            item["advice"] = json.loads(raw) if raw else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["advice"] = {}
+        out.append(item)
+    return out
+
+
 def _position_item(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     """Normalize a positions table row for API / decorate use."""
     item = dict(row)

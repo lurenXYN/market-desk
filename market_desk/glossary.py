@@ -27,10 +27,10 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "黑名单代码不进入个股回踩推荐。",
     },
     "计划执行分": {
-        "mean": "看你有没有按计划成交：价带内最好，追高最差。可拆 ETF / 个股对照；差时自动轻缩仓。",
-        "algo": "仅统计已交易买入且填写成交价：\n"
+        "mean": "看你有没有按计划成交：价带内最好，追高最差。可拆 ETF / 个股对照；差时自动轻缩仓。含执行日记补记。",
+        "algo": "已交易买入且填写成交价；日记 buy 转伪信号并入，同日同码优先正式 signal 防双计。\n"
         "价带内(建议/回踩≤成交<不追)=100；更低更好=90；其他=40；≥不追=0。取平均。\n"
-        "by_kind.etf / by_kind.stock 分组同口径。\n"
+        "by_kind.etf / by_kind.stock 分组同口径；展示 diary_n。\n"
         "近20笔：执行分&lt;50→仓位×0.70；&lt;70→×0.85；追高占比≥40%→再压到≤×0.75。不禁买。",
     },
     "漏买清单": {
@@ -61,8 +61,15 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "target_total_cost；equal_weight_target 时目标占比=100/n；偏差≥15%/12% 进 tips。",
     },
     "健康度": {
-        "mean": "行情源是否齐全、快照是否过旧、今日是否交易日。",
-        "algo": "100 分起扣：失败源、ETF/板块/指数空、盘中超时；level=ok/warn/bad。",
+        "mean": "行情源是否齐全、快照是否过旧、今日是否交易日；偏弱时标数据降级。",
+        "algo": "100 分起扣：失败源、ETF/板块/指数空、盘中超时、热点偏少。\n"
+        "滚动统计各源 ok/fail/timeout；样本≥4 且失败率≥30% → degraded + tip。\n"
+        "level=ok/warn/bad；degraded 时至少 warn。",
+    },
+    "主线质量": {
+        "mean": "顶栏旁一行仪表：主题、分差/换防门槛、持有时长、粘滞或已换防、短因。",
+        "algo": "复用 verdict.mainline.why（explain_mainline）。\n"
+        "kept 且 gap&lt;need 时标「差 X 换防」；详情仍在「主线为什么是它」。",
     },
     "风控总览": {
         "mean": "持仓结构一眼看清：占比、盈亏分布、是否触软上限，并含亏损帽/目标仓提示。",
@@ -72,7 +79,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "相位命中": {
         "mean": "按信号落库时的大盘相位，汇总买入命中率；并拆 ETF / 个股与相位×品种交叉，附调参提示。",
         "algo": "默认只统计已点「已交易」且有 outcome_label 的买入信号（hit_rate_mode=traded）；可切 all 含纸面。\n"
-        "次日红/三日红计命中（收盘口径；次日虚红/冲高回落不计）。另输出 kind_hits、phase_kind_hits、gate_kills、sell_bias；漏买/闸门误杀/卖点偏早时给 tune_hints。\n"
+        "次日红/三日红计命中（收盘口径；次日虚红/冲高回落不计）。另输出 kind_hits、phase_kind_hits、theme_hits、gate_kills、sell_bias；\n"
+        "漏买/闸门误杀/卖点偏早/题材与交叉偏低时给 tune_hints（含可操作回踩放宽幅度）。\n"
+        "复盘传入当前时段×波动 context，与 auto_tune 对齐。\n"
         "作战台：当前相位 n≥5 且命中&lt;35% → 降为观察回踩 + 仓位×0.75（软降），不再 stock_block 清空个股池。",
     },
     "闸门归因": {

@@ -1054,12 +1054,82 @@ def classify_fill_execution(row: dict[str, Any]) -> str | None:
     return "other"
 
 
+def diary_rows_as_exec_fills(
+    diary: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Map buy-side exec diary rows into pseudo traded-signal shapes for scoring."""
+    out: list[dict[str, Any]] = []
+    for row in diary or []:
+        side = str(row.get("side") or "").strip().lower()
+        if side not in ("buy",):
+            continue
+        fill = num(row.get("price"))
+        if fill is None or fill <= 0:
+            continue
+        advice = row.get("advice") if isinstance(row.get("advice"), dict) else {}
+        buy = advice.get("buy") if isinstance(advice.get("buy"), dict) else {}
+        wait = num(buy.get("wait_price") or buy.get("buy_price") or buy.get("price"))
+        chase = num(buy.get("chase_price"))
+        suggest = num(buy.get("price") or buy.get("buy_price") or wait)
+        kind = str(buy.get("kind") or row.get("kind") or "stock")
+        out.append(
+            {
+                "id": f"diary:{row.get('id')}",
+                "signal_type": "buy",
+                "traded": 1,
+                "code": str(row.get("code") or "").zfill(6),
+                "name": row.get("name"),
+                "kind": kind,
+                "fill_price": fill,
+                "price": suggest if suggest is not None else fill,
+                "wait_price": wait,
+                "chase_price": chase,
+                "trade_date": str(row.get("trade_date") or "")[:10],
+                "signaled_at": str(row.get("created_at") or ""),
+                "payload": {"wait_price": wait, "chase_price": chase, "exec_source": "diary"},
+                "exec_source": "diary",
+            }
+        )
+    return out
+
+
+def merge_exec_score_rows(
+    signals: list[dict[str, Any]] | None,
+    diary: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Prefer traded signals; fill gaps with diary buys (same day+code, no double count)."""
+    rows = list(signals or [])
+    traded_keys: set[str] = set()
+    for r in rows:
+        if not is_buy_signal(r.get("signal_type")):
+            continue
+        if not int(r.get("traded") or 0):
+            continue
+        day = str(r.get("trade_date") or "")[:10]
+        code = str(r.get("code") or "").zfill(6)
+        if day and code:
+            traded_keys.add(f"{day}|{code}")
+    extras: list[dict[str, Any]] = []
+    for pseudo in diary_rows_as_exec_fills(diary):
+        day = str(pseudo.get("trade_date") or "")[:10]
+        code = str(pseudo.get("code") or "").zfill(6)
+        key = f"{day}|{code}"
+        if key in traded_keys:
+            continue
+        extras.append(pseudo)
+        traded_keys.add(key)
+    return rows + extras
+
+
 def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Score how well fills followed the original price plan."""
 
     def _score_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         counts = {"in_band": 0, "chase": 0, "below": 0, "other": 0}
+        diary_n = 0
         for row in items:
+            if str(row.get("exec_source") or "") == "diary" or str(row.get("id") or "").startswith("diary:"):
+                diary_n += 1
             kind = classify_fill_execution(row)
             if kind in counts:
                 counts[kind] += 1
@@ -1076,6 +1146,7 @@ def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "score": score,
             "traded_buy_n": len(items),
+            "diary_n": diary_n,
             "in_band_n": counts["in_band"],
             "chase_n": counts["chase"],
             "below_n": counts["below"],
@@ -1346,6 +1417,8 @@ def build_tune_hints(
     gate_kills: list[dict[str, Any]] | None = None,
     sell_bias: dict[str, Any] | None = None,
     current_context: dict[str, Any] | None = None,
+    theme_hits: list[dict[str, Any]] | None = None,
+    phase_kind_hits: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Return short threshold-tuning hints from review buckets (not orders)."""
     from market_desk.adapt import count_missed_by_context
@@ -1355,16 +1428,17 @@ def build_tune_hints(
     missed_n = len(missed or [])
     by_ctx = count_missed_by_context(missed)
     clamp_pct = int(float(ADAPT_TUNE_CLAMP) * 100)
+    clamp_frac = float(ADAPT_TUNE_CLAMP)
     ctx = current_context or {}
     if ctx.get("tagged") and ctx.get("key"):
         bucket_n = int(by_ctx.get(str(ctx["key"])) or 0)
         if bucket_n >= int(ADAPT_MISSED_MIN_N):
+            loosen = max(1, int(round(clamp_frac * 50)))
             hints.append(
-                f"{ctx.get('label')}漏买 {bucket_n} 笔：auto_tune 略放宽回踩"
-                f"（共用夹紧±{clamp_pct}%·不串桶）"
+                f"{ctx.get('label')}漏买 {bucket_n} 笔：建议回踩门槛放宽约 {loosen}%"
+                f"（auto_tune 夹紧±{clamp_pct}%·不串桶）"
             )
         elif missed_n >= 3:
-            # Show other buckets as info only.
             top = sorted(by_ctx.items(), key=lambda kv: -kv[1])[:2]
             extra = "、".join(f"{k}×{v}" for k, v in top) if top else "他桶不足"
             hints.append(
@@ -1396,6 +1470,27 @@ def build_tune_hints(
             hints.append(f"高潮相位命中 {rate}%：继续默认降观察回踩，勿追尖")
         if phase == "恐慌" and float(rate) < 30:
             hints.append(f"恐慌相位命中 {rate}%：维持禁开仓")
+    for row in theme_hits or []:
+        rate = row.get("hit_rate")
+        n = int(row.get("scored_n") or 0)
+        if rate is None or n < 5:
+            continue
+        label = row.get("label") or row.get("theme") or "题材"
+        if float(rate) < 35:
+            hints.append(f"题材「{label}」命中 {rate}%（n={n}）偏低：该主题宜更小仓")
+        elif float(rate) >= 55 and n >= 8:
+            hints.append(f"题材「{label}」命中 {rate}%（n={n}）尚可：可维持当前门槛")
+    for row in phase_kind_hits or []:
+        rate = row.get("hit_rate")
+        n = int(row.get("scored_n") or 0)
+        if rate is None or n < 5:
+            continue
+        phase = str(row.get("phase") or "")
+        label = row.get("label") or row.get("kind") or ""
+        if float(rate) < 32:
+            hints.append(
+                f"{phase}·{label}命中 {rate}%（n={n}）偏低：该交叉情景宜更严 ready / 更小仓"
+            )
     for row in (gate_kills or [])[:3]:
         fk = int(row.get("false_kill_n") or 0)
         kn = int(row.get("kill_n") or 0)
@@ -1416,7 +1511,7 @@ def build_tune_hints(
             f"卖点偏准（卖后回落命中 {sb.get('hit_rate')}%，n={sb.get('n')}）："
             f"已略收紧止盈回撤"
         )
-    return hints[:6]
+    return hints[:8]
 
 
 def _gate_bucket(flag: str) -> str:
@@ -2517,6 +2612,16 @@ def build_review_payload(
     summary["vs_mainline_of"] = compare_ml
     summary["history"] = load_review_digests(limit=20)
     summary["exec"] = digest.get("exec") or build_exec_score(day_rows)
+    # Merge per-user exec diary buys so unsignaled book fills still score.
+    if user_id is not None:
+        try:
+            from market_desk.db import load_exec_diary
+
+            diary = load_exec_diary(user_id=int(user_id), trade_date=day, limit=80)
+            merged = merge_exec_score_rows(day_rows, diary)
+            summary["exec"] = build_exec_score(merged)
+        except Exception:
+            pass
     summary["phase_hits"] = build_phase_hit_rates(global_rows)
     summary["kind_hits"] = build_kind_hit_rates(global_rows)
     summary["phase_kind_hits"] = build_phase_kind_hit_rates(global_rows)
@@ -2529,13 +2634,25 @@ def build_review_payload(
         summary["sell_fly_board"] = build_sell_fly_board(global_rows)
     except Exception:
         summary["sell_fly_board"] = {"ok": False, "n": 0, "note": "卖飞看板暂不可用"}
+    try:
+        from market_desk.adapt import make_trade_context
+
+        live_ctx = make_trade_context(
+            segment_key=None,
+            signaled_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            metrics=None,
+        )
+    except Exception:
+        live_ctx = None
     summary["tune_hints"] = build_tune_hints(
         missed=summary["missed_buys"],
         phase_hits=summary["phase_hits"],
         kind_hits=summary["kind_hits"],
         gate_kills=summary["gate_kills"],
         sell_bias=summary["sell_bias"].get("all") or summary["sell_bias"],
-        current_context=None,
+        current_context=live_ctx,
+        theme_hits=summary["theme_hits"],
+        phase_kind_hits=summary["phase_kind_hits"],
     )
     try:
         from market_desk.whitebox import fit_whitebox

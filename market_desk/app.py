@@ -607,7 +607,11 @@ def _advice_snapshot_for_code(code: str) -> dict[str, Any]:
     if buy_hit is not None:
         out["buy"] = {
             "buy_price": buy_hit.get("buy_price") or buy_hit.get("last"),
+            "price": buy_hit.get("buy_price") or buy_hit.get("price") or buy_hit.get("last"),
+            "wait_price": buy_hit.get("wait_price") or buy_hit.get("buy_price"),
+            "chase_price": buy_hit.get("chase_price"),
             "stop_price": buy_hit.get("stop_price"),
+            "kind": buy_hit.get("kind") or "stock",
             "ready": buy_hit.get("ready"),
             "role_label": buy_hit.get("role_label"),
             "reason": (str(buy_hit.get("reason") or ""))[:160],

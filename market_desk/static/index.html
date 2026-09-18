@@ -190,6 +190,31 @@
       font-size: 12px; color: #cbd5e1; background: #111827;
     }
     .ml-why .top { margin-top: 4px; font-size: 12px; color: #94a3b8; }
+    .ml-meter {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      align-items: center;
+      margin: 6px 0 2px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .ml-meter[hidden] { display: none !important; }
+    .ml-meter .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #0c1218;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .ml-meter .chip.warn { border-color: #b45309; color: #fdba74; }
+    .ml-meter .chip.ok { border-color: #166534; color: #86efac; }
+    .ml-meter .chip.switch { border-color: #7c3aed; color: #c4b5fd; }
+    .ml-meter .why-short { color: var(--muted); max-width: 100%; }
     .theme-mem {
       margin: 10px 0 0; padding: 10px 12px;
       border: 1px solid var(--line); border-radius: 8px;
@@ -2613,6 +2638,7 @@
             <span class="dot">·</span>
             <span class="w stage" id="trioStage">—</span>
           </div>
+          <div class="ml-meter" id="mlMeter" hidden title="主线质量：分差 / 持有 / 为何不切"></div>
           <h1 class="mainline-title" id="headline">等待数据</h1>
           <div class="ml-why" id="mlWhy" hidden></div>
           <div class="no-etf-banner" id="noEtfBanner" hidden>
@@ -3705,6 +3731,62 @@
         + (softEtf
           ? `<span class="soft-etf-badge">近似ETF</span>`
           : (noExactEtf ? `<span class="no-etf-badge">无ETF映射</span>` : ""));
+      const meterEl = document.getElementById("mlMeter");
+      if (meterEl) {
+        const why = (v.mainline && v.mainline.why) || {};
+        if (why.reason || why.theme || why.gap != null) {
+          meterEl.hidden = false;
+          const heldSec = why.held_seconds;
+          let heldTxt = "—";
+          if (heldSec != null) {
+            const hs = Number(heldSec);
+            heldTxt = hs >= 60
+              ? `${Math.floor(hs / 60)}分${hs % 60 ? (hs % 60) + "秒" : ""}`
+              : `${hs}秒`;
+            if (why.hold_min_seconds) {
+              const needHold = Number(why.hold_min_seconds);
+              heldTxt += needHold >= 60
+                ? `/${Math.floor(needHold / 60)}分`
+                : `/${needHold}秒`;
+            }
+          }
+          const gap = why.gap;
+          const need = why.need;
+          let gapCls = "";
+          let gapTxt = "分差 —";
+          if (gap != null && need != null) {
+            const remain = Number(need) - Number(gap);
+            gapTxt = `分差 ${gap > 0 ? "+" : ""}${gap}/${need}`;
+            if (why.kept && remain > 0) {
+              gapTxt += ` · 差${remain.toFixed(1)}换防`;
+              gapCls = " warn";
+            } else if (!why.kept) {
+              gapCls = " switch";
+            } else {
+              gapCls = " ok";
+            }
+          } else if (gap != null) {
+            gapTxt = `分差 ${gap > 0 ? "+" : ""}${gap}`;
+          }
+          const shortWhy = String(why.reason || "")
+            .replace(/分差[^；。]*/g, "")
+            .replace(/[；。]\s*$/, "")
+            .slice(0, 36);
+          meterEl.innerHTML =
+            `<span class="chip">主题 ${why.theme || "—"}</span>`
+            + `<span class="chip${gapCls}">${gapTxt}</span>`
+            + `<span class="chip${why.in_hold ? " warn" : ""}">持有 ${heldTxt}</span>`
+            + (why.kept === false
+              ? `<span class="chip switch">已换防</span>`
+              : (why.kept ? `<span class="chip ok">粘滞</span>` : ""))
+            + (shortWhy
+              ? `<span class="why-short" title="${(why.reason || "").replace(/"/g, "&quot;")}">${shortWhy}${(why.reason || "").length > 36 ? "…" : ""} <button type="button" class="q" data-term="主线质量">?</button></span>`
+              : `<button type="button" class="q" data-term="主线质量">?</button>`);
+        } else {
+          meterEl.hidden = true;
+          meterEl.innerHTML = "";
+        }
+      }
       const whyEl = document.getElementById("mlWhy");
       if (whyEl) {
         const why = (v.mainline && v.mainline.why) || {};
@@ -4218,8 +4300,13 @@
       if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0 && !tips.some((t) => t.includes("热点"))) {
         warns.push("热点板块为空，东财板块源可能失败");
       }
-      if (warns.length) {
-        const lvl = health.level || (d.warnings && d.warnings.length ? "bad" : "warn");
+      if (warns.length || health.degraded) {
+        const lvl = health.degraded && health.level === "ok"
+          ? "warn"
+          : (health.level || (d.warnings && d.warnings.length ? "bad" : "warn"));
+        if (health.degraded && !warns.some((w) => String(w).includes("降级") || String(w).includes("失败率"))) {
+          warns.unshift("数据降级");
+        }
         warnEl.className = "data-banner " + (lvl === "ok" ? "ok-soft" : (lvl === "warn" ? "warn" : "on"));
         warnEl.innerHTML = `⚠ ${warns.join(" · ")} <button type="button" class="q" data-term="健康度">?</button>`;
       } else {
@@ -6024,6 +6111,7 @@
       document.getElementById("revExec").innerHTML =
         `<div class="hd">${dayLabel}计划执行分<button type="button" class="q" data-term="计划执行分">?</button></div>`
         + `执行分 <b>${ex.score == null ? "—" : ex.score}</b> · 已成交买 ${ex.traded_buy_n ?? 0}`
+        + (ex.diary_n ? `（含日记 ${ex.diary_n}）` : "")
         + ` · 价带内 ${ex.in_band_n ?? 0} · 追高 ${ex.chase_n ?? 0}`
         + ` · 更低更好 ${ex.below_n ?? 0} · 其他 ${ex.other_n ?? 0}`
         + `<div class="meta" style="margin-top:4px">ETF ${etfEx.score == null ? "—" : etfEx.score}（${etfEx.traded_buy_n ?? 0}）`
@@ -6136,8 +6224,9 @@
       const hintHtml = hints.length
         ? (`<ul class="tune-hints">` + hints.map((h) => `<li>${h}</li>`).join("") + `</ul>`)
         : "";
-      document.getElementById("revPhase").innerHTML = (boardHtml || ph.length || kh.length || dh.length || th.length || gates.length || sellLine || wbLine)
+      document.getElementById("revPhase").innerHTML = (boardHtml || ph.length || kh.length || dh.length || th.length || gates.length || sellLine || wbLine || hints.length)
         ? (`<div class="hd">命中率看板（跨日）<button type="button" class="q" data-term="命中率看板">?</button></div>`
+          + (hintHtml ? `<div class="hd" style="margin-top:4px">调参建议</div>${hintHtml}` : "")
           + boardHtml
           + (ph.length
             ? `<div style="margin-top:6px">相位 ${ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · ")}</div>`
@@ -6148,8 +6237,7 @@
           + (crossLine ? `<div class="meta" style="margin-top:4px">${crossLine}</div>` : "")
           + (gateLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="闸门归因">?</button> ${gateLine}</div>` : "")
           + (sellLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="卖点闭环">?</button> ${sellLine}</div>` : "")
-          + (wbLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="白盒特征权重">?</button> ${wbLine}</div>` : "")
-          + hintHtml)
+          + (wbLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="白盒特征权重">?</button> ${wbLine}</div>` : ""))
         : `<div class="hd">命中率看板（跨日）</div><span class="meta">有隔日打分后按来源 / 题材 / 相位汇总</span>`;
       const hist = sum.history || [];
       document.getElementById("revHist").innerHTML = hist.length

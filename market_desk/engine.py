@@ -181,6 +181,20 @@ class DeskEngine:
         self._fund_flow_lock = asyncio.Lock()
         # Live marks for all users' position / watchlist codes (not in public snap).
         self._book_quotes: dict[str, dict[str, Any]] = {}
+        # Rolling source ok/fail/timeout counters for the health strip.
+        self._source_stats: dict[str, dict[str, int]] = {}
+
+    def _note_source(self, label: str, *, ok: bool = False, timeout: bool = False) -> None:
+        """Increment one source outcome counter for the data-health strip."""
+        key = str(label or "src").strip() or "src"
+        bucket = self._source_stats.setdefault(key, {"ok": 0, "fail": 0, "timeout": 0})
+        if timeout:
+            bucket["timeout"] = int(bucket.get("timeout") or 0) + 1
+            bucket["fail"] = int(bucket.get("fail") or 0) + 1
+        elif ok:
+            bucket["ok"] = int(bucket.get("ok") or 0) + 1
+        else:
+            bucket["fail"] = int(bucket.get("fail") or 0) + 1
 
     def start(self) -> None:
         """Create tables and start the polling task."""
@@ -2573,10 +2587,21 @@ def _board_etf_codes(boards: list[dict[str, Any]] | None) -> list[str]:
 
 async def _safe(fn, *args, errors: list[str], label: str):
     try:
-        return await fn(*args)
+        result = await fn(*args)
+        try:
+            engine._note_source(label, ok=True)
+        except Exception:
+            pass
+        return result
     except Exception as exc:
         log.warning("%s: %s", label, exc)
         errors.append(f"{label}: {exc}")
+        msg = str(exc).lower()
+        is_to = "timeout" in msg or "timed out" in msg or "time out" in msg
+        try:
+            engine._note_source(label, ok=False, timeout=is_to)
+        except Exception:
+            pass
         return []
 
 
@@ -2786,10 +2811,39 @@ def _build_health(
     if live and not (payload.get("indices") or []):
         score -= 10
         tips.append("指数为空")
+    hot_n = len(payload.get("hot_boards") or [])
+    if live and trading and 0 < hot_n < 3:
+        score -= 8
+        tips.append(f"热点板偏少（{hot_n}），主线样本偏薄")
     ew = payload.get("elliott") if isinstance(payload.get("elliott"), dict) else {}
     if ew.get("ok") is False and "日线" in str(ew.get("note") or ""):
         score -= 8
         tips.append("上证日线不足，大盘波浪暂不可用")
+    fail_rates: dict[str, float] = {}
+    degraded = False
+    try:
+        stats = getattr(engine, "_source_stats", {}) or {}
+        rate_bits: list[str] = []
+        for label, bucket in stats.items():
+            ok_n = int(bucket.get("ok") or 0)
+            fail_n = int(bucket.get("fail") or 0)
+            to_n = int(bucket.get("timeout") or 0)
+            total = ok_n + fail_n
+            if total < 4:
+                continue
+            rate = round(100.0 * fail_n / total, 1)
+            fail_rates[str(label)] = rate
+            if rate >= 30:
+                degraded = True
+                bit = f"{label}失败率{rate}%"
+                if to_n:
+                    bit += f"（超时{to_n}）"
+                rate_bits.append(bit)
+        if rate_bits:
+            score -= min(20, 5 * len(rate_bits))
+            tips.append("源失败率：" + "、".join(rate_bits[:4]))
+    except Exception:
+        pass
     stale_sec = None
     if updated_at:
         try:
@@ -2798,17 +2852,24 @@ def _build_health(
             if live and stale_sec > int(setting("refresh_seconds", 20)) * 3:
                 score -= 20
                 tips.append(f"快照偏旧约 {stale_sec}s")
+                degraded = True
         except Exception:
             stale_sec = None
+    if live and failed:
+        degraded = True
     score = max(0, min(100, score))
     level = "ok" if score >= 80 else ("warn" if score >= 50 else "bad")
+    if degraded and level == "ok":
+        level = "warn"
     return {
         "score": score,
         "level": level,
         "trading_day": trading,
         "failed_sources": failed,
+        "fail_rates": fail_rates,
+        "degraded": degraded,
         "stale_seconds": stale_sec,
-        "tips": tips,
+        "tips": tips[:8],
     }
 
 
