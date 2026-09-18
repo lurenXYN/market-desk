@@ -18,6 +18,7 @@ from market_desk.verdict import (
     decorate_positions,
     finalize_recommend_buy_ux,
     position_summary,
+    reconcile_buy_sell_conflict,
     _attach_risk_sizing,
 )
 
@@ -159,23 +160,9 @@ def attach_personal_layer(
         advice = out.get("sell_advice") or {}
         all_items = list(advice.get("all_items") or advice.get("items") or [])
         advice["items"] = all_items[:4]
-        # Keep all_items for sell-signal logging, then strip from API payload.
         if all_items:
             advice["all_items"] = all_items
         out["sell_advice"] = advice
-        try:
-            from market_desk.review import record_sell_advice_signals
-
-            record_sell_advice_signals(out)
-        except Exception:
-            pass
-        advice.pop("all_items", None)
-        out["sell_advice"] = advice
-        positions = attach_position_sell_hints(positions, all_items)
-        out["positions"] = positions
-        out["position_summary"] = position_summary(positions)
-        cap = float((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
-        out["risk_overview"] = build_risk_overview(positions, size_cap_pct=cap)
 
         # Re-size recommend cards with this user's equity / open book.
         for key in ("recommend", "side_recommend", "link_recommend"):
@@ -192,6 +179,35 @@ def attach_personal_layer(
                 allow_probe=(key == "recommend"),
             )
         verdict = apply_size_cap_gate(verdict, positions)
+
+        # Soft sell vs ready buy / held-code buy: prefer hold, never dual-signal.
+        try:
+            verdict, advice = reconcile_buy_sell_conflict(
+                verdict, out.get("sell_advice"), positions
+            )
+            out["sell_advice"] = advice
+        except Exception:
+            pass
+
+        advice = out.get("sell_advice") or {}
+        all_items = list(advice.get("all_items") or advice.get("items") or [])
+        advice["items"] = all_items[:4]
+        if all_items:
+            advice["all_items"] = all_items
+        out["sell_advice"] = advice
+        try:
+            from market_desk.review import record_sell_advice_signals
+
+            record_sell_advice_signals(out)
+        except Exception:
+            pass
+        advice.pop("all_items", None)
+        out["sell_advice"] = advice
+        positions = attach_position_sell_hints(positions, all_items)
+        out["positions"] = positions
+        out["position_summary"] = position_summary(positions)
+        cap = float((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
+        out["risk_overview"] = build_risk_overview(positions, size_cap_pct=cap)
         out["verdict"] = verdict
 
         wl_raw = load_watchlist(user_id=uid)

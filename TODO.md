@@ -15,6 +15,7 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **买卖冲突协调** — 软卖遇可买→继续持有；已持仓/硬卖→买侧不加仓；主线内强票豁免高开低走。*(2026-09-18)*
 - [x] **题材信誉高/中优化** — 结算加宽；fade 收紧；薄样本弱进主线；面板分项 auto/成交/手调；公式 v3。*(2026-09-18)*
 - [x] **复盘卖出按账号隔离** — `owner_user_id`；卖点只见本账号；买点仍共享。*(2026-09-18)*
 - [x] **卖点落复盘** — 个人层 ready 卖点写入 signals。*(2026-09-18)*
@@ -31,3 +32,4 @@ Agents: **at the start of each session involving this app, read this file before
 - Keep changes scoped; match existing style; update this file when closing items.
 - **题材信誉**：fade/persist → auto_adj；+ manual + trade = score_adj；薄样本 `rep_adj`×0.2 进主线；面板分项展示。
 - **复盘卖出**：`owner_user_id`；买点 owner=0 共享；卖点按账号过滤。
+- **买卖冲突**：软 half 遇同码 ready 买或「可买入」主题 → hold；硬止损保留；持仓同码买侧降级。
