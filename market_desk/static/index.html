@@ -6048,11 +6048,22 @@
           ? (`<ul class="fly-recent">` + recent.map((r) => {
               const lab = r.outcome_label || "";
               const tagCls = lab === "卖后回落" ? "fly-tag hit" : "fly-tag";
-              const d1 = r.outcome_day1_pct == null ? ""
-                : ` <span class="dim">· 次日${Number(r.outcome_day1_pct) > 0 ? "+" : ""}${Number(r.outcome_day1_pct).toFixed(1)}%</span>`;
-              const mae = r.outcome_mae_pct == null ? ""
-                : ` <span class="dim">· 留桌上${Number(r.outcome_mae_pct).toFixed(1)}%</span>`;
-              return `<li><span class="${tagCls}">${lab}</span>${(r.trade_date || "").slice(5)} ${r.name || r.code} <span class="dim">${r.code || ""}</span>${d1}${mae}</li>`;
+              // Sell outcomes store "avoidance" sign (↑ after sell → negative).
+              // Show price change after sell so 卖飞 reads as 次日涨 / 留桌上正数.
+              let d1Bit = "";
+              if (r.outcome_day1_pct != null && r.outcome_day1_pct !== "") {
+                const pxChg = -Number(r.outcome_day1_pct);
+                d1Bit = ` <span class="dim">· 次日${pxChg > 0 ? "+" : ""}${pxChg.toFixed(1)}%</span>`;
+              }
+              let maeBit = "";
+              if (r.outcome_mae_pct != null && r.outcome_mae_pct !== "") {
+                const mae = Number(r.outcome_mae_pct);
+                const left = mae <= 0 ? Math.abs(mae) : 0;
+                maeBit = left > 0
+                  ? ` <span class="dim">· 留桌上 +${left.toFixed(1)}%</span>`
+                  : ` <span class="dim">· 未留桌上</span>`;
+              }
+              return `<li><span class="${tagCls}">${lab}</span>${(r.trade_date || "").slice(5)} ${r.name || r.code} <span class="dim">${r.code || ""}</span>${d1Bit}${maeBit}</li>`;
             }).join("") + `</ul>`)
           : `<div class="meta">暂无卖飞/续涨样本</div>`;
         flyBox.innerHTML =
