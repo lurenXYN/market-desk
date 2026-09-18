@@ -44,8 +44,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "decision_alerts：控制可买入/主线/相位类；卖出与止损不受它关闭。",
     },
     "分批计划": {
-        "mean": "推荐卡上的 1/2/3 笔示意仓：试错→确认→加仓，各约一手。真实多笔买入请看仓位「分批」列（FIFO 记账）。",
-        "algo": "settings.batch_plan 开启时，按建议价×100 估算每笔成本；不自动下单。\n"
+        "mean": "推荐卡上的 1/2/3 笔示意仓：试错→确认→加仓，各约一手；点档位可一键记入独立 lot。",
+        "algo": "settings.batch_plan 开启时，按建议价×100 估算每笔成本；UI 按钮走 /api/positions（或复盘 trade）写入 position_lots。\n"
         "仓位加仓写入 position_lots；减仓按先进先出扣批；decorate 挂 lots/lot_count。",
     },
     "执行日记": {
@@ -57,8 +57,17 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "position_summary.day_pnl_pct（缺省回退 pnl_pct）≤ daily_loss_cap_pct（默认 -3%）→ tips。",
     },
     "目标仓位": {
-        "mean": "总成本相对目标资金的偏差，以及等权下单票偏离。",
-        "algo": "target_total_cost；equal_weight_target 时目标占比=100/n；偏差≥15%/12% 进 tips。",
+        "mean": "总成本相对目标资金的偏差；作战台与仓位页常驻进度条一眼可见。",
+        "algo": "target_total_cost；equal_weight_target 时目标占比=100/n；偏差≥15%/12% 进 tips。\n"
+        "UI：#posTargetBar 实际成本/目标 · 填充宽度 min(100%, pct)。",
+    },
+    "参数预设": {
+        "mean": "防守/平衡/进攻三套个人风控快切；可导出/导入可移植 JSON（不含 SendKey）。",
+        "algo": "SETTINGS_PRESETS + /api/settings/preset|/import；仅 USER_PRIVATE 与 SETTINGS_PORTABLE_KEYS。",
+    },
+    "主题链": {
+        "mean": "点题材信誉卡片，看该主题簇近日「续热/熄火」时间线，而不只相邻板名。",
+        "algo": "GET /api/theme-chain → theme_day_outcome 按 theme_key；outcome=persist/fade/unclear。",
     },
     "健康度": {
         "mean": "行情源是否齐全、快照是否过旧、今日是否交易日；偏弱时标数据降级。",
@@ -209,11 +218,12 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "与板块联动同级观察副卡；不改 sticky / 顶栏 action。",
     },
     "题材信誉": {
-        "mean": "这条题材历史上爱不爱一日游：次日熄火扣分，续热加分；管理员可手动微调；平仓盈亏会回写。",
+        "mean": "这条题材历史上爱不爱一日游：次日熄火扣分，续热加分；点卡片可看主题链时间线；管理员可手动微调；平仓盈亏会回写。",
         "algo": "每日结算昨→今：昨主题够热才计分（主线+次热，最多约10条；门槛 zt≥2 或 pct≥1.5）。\n"
         "同题材多板块取涨停家数 max。续热→persist；fade 更严：缺板仅主线/昨强板，退潮须伴随热度塌缩。\n"
         "近12次按0.85^龄衰减加权。自动分：净续热率×约7.5；置信度分母约4.5；极端一边倒另±约2。\n"
         "样本&lt;3：标签观察中；进主线的 rep_adj 再×约0.2（薄样本弱进主线）。总夹约−12～+8。\n"
+        "UI：点卡片 → GET /api/theme-chain 看 persist/fade 时间线。\n"
         "score_adj = auto_adj + manual_adj + trade_adj（手调约±8，交易回写约±6）；面板分项展示。\n"
         "公式版本 THEME_REP_FORMULA_VERSION=3：升级后启动重算 auto_adj，保留 manual/trade。\n"
         "只软改主线排名，不硬禁买。",
@@ -388,8 +398,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "须年内≥1涨停。落库 desk_source=independent_pop / buy_indep。容量约5。",
     },
     "收盘一页纸": {
-        "mean": "复盘页一张纸：相位、主线切换、执行分、漏买、今日盈亏（相对昨收/今日买价），可复制。",
-        "algo": "数据来自当日 digest + position_summary + mainline_switches；规则生成 Markdown，无 LLM。",
+        "mean": "复盘页一张纸：相位、主线切换、执行分、漏买、今日盈亏（相对昨收/今日买价），可复制；收盘后自动落库并可微信推送。",
+        "algo": "数据来自当日 digest + position_summary + mainline_switches；规则生成 Markdown，无 LLM。\n"
+        "盘后引擎 _write_eod_onepager → settings eod:{date}；Server酱 key=eod: 每天至多推一次。",
     },
     "明日看点": {
         "mean": "收盘后生成的次日观察清单：先风险/禁追，再主线回踩姿势与自选备注；不改可买入闸门，不推「可现买」通知。",
@@ -468,8 +479,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "关闭 Windows 通知时仍写入页内提醒条。",
     },
     "Server酱": {
-        "mean": "用 Server酱³ 把买卖点推到微信。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
-        "algo": "仅推 buy: / sell:（可买入、建议卖出）。买点附主线/相位/阶段/作战结论。\n"
+        "mean": "用 Server酱³ 把买卖点、龙虎席位变坏、收盘一页纸推到微信。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
+        "algo": "推 buy: / sell: / lhb: / eod:。买点附主线/相位/阶段/作战结论。\n"
         "users.serverchan_sendkey + serverchan_on（本人）+ serverchan_allowed（管理员）。\n"
         "POST sctapi.ftqq.com/{SendKey}.send；与 Windows toast 并行。Key 只存 desk.db，不进 Git。",
     },

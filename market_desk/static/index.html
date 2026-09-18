@@ -215,6 +215,81 @@
     .ml-meter .chip.ok { border-color: #166534; color: #86efac; }
     .ml-meter .chip.switch { border-color: #7c3aed; color: #c4b5fd; }
     .ml-meter .why-short { color: var(--muted); max-width: 100%; }
+    .pos-target-bar {
+      margin: 8px 0 4px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0c1218;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .pos-target-bar[hidden] { display: none !important; }
+    .pos-target-bar .hd {
+      display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline;
+      margin-bottom: 6px; color: var(--text); font-weight: 650;
+    }
+    .pos-target-bar .hd .meta { font-weight: 500; color: var(--muted); }
+    .pos-target-bar .track {
+      height: 8px; border-radius: 999px; background: #1a2330; overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .pos-target-bar .fill {
+      height: 100%; border-radius: 999px; background: #3b82f6;
+      max-width: 100%; transition: width 0.25s ease;
+    }
+    .pos-target-bar .fill.over { background: #f59e0b; }
+    .pos-target-bar .fill.hot { background: #ef4444; }
+    .theme-chain {
+      margin: 8px 0 0; padding: 8px 10px;
+      border: 1px dashed #3b5a8b; border-radius: 8px;
+      background: #0a121c; font-size: 12px;
+    }
+    .theme-chain[hidden] { display: none !important; }
+    .theme-chain .hd {
+      display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
+      margin-bottom: 6px; color: var(--text); font-weight: 650;
+    }
+    .theme-chain .tl {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch;
+    }
+    .theme-chain .node {
+      min-width: 72px; max-width: 110px; padding: 5px 7px;
+      border: 1px solid var(--line); border-radius: 6px;
+      background: #10161f; line-height: 1.35;
+    }
+    .theme-chain .node.persist { border-color: #166534; }
+    .theme-chain .node.fade { border-color: #b45309; }
+    .theme-chain .node .d { color: var(--muted); font-size: 11px; }
+    .theme-chain .node .o { font-weight: 700; }
+    .theme-chain .node.persist .o { color: #86efac; }
+    .theme-chain .node.fade .o { color: #fdba74; }
+    .theme-mem-item { cursor: pointer; }
+    .theme-mem-item:hover { border-color: #64748b; }
+    .theme-mem-item.active { border-color: #3b82f6; box-shadow: 0 0 0 1px #1d4ed8 inset; }
+    .rec-batch .batch-lot {
+      display: inline-block; margin: 2px 4px 0 0; padding: 1px 7px;
+      border: 1px solid var(--line); border-radius: 4px;
+      background: #182230; color: #cbd5e1; font-size: 11px; cursor: pointer;
+      line-height: 1.4;
+    }
+    .rec-batch .batch-lot:hover { border-color: #64748b; color: #fff; }
+    .settings-presets {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      margin: 0 0 8px; grid-column: 1 / -1;
+    }
+    .settings-presets .lab { color: var(--muted); font-size: 12px; margin-right: 2px; }
+    .settings-presets button, .settings-io button {
+      border: 1px solid var(--line); background: #182230; color: #cbd5e1;
+      border-radius: 4px; font-size: 12px; padding: 3px 9px; cursor: pointer;
+    }
+    .settings-presets button:hover, .settings-io button:hover {
+      border-color: #64748b; color: #fff;
+    }
+    .settings-io {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      margin: 0 0 8px;
+    }
     .theme-mem {
       margin: 10px 0 0; padding: 10px 12px;
       border: 1px solid var(--line); border-radius: 8px;
@@ -2612,6 +2687,17 @@
       </div>
       </div>
       <div class="settings-foot">
+        <div class="settings-presets">
+          <span class="lab">个人风控预设</span>
+          <button type="button" id="setPresetDef" title="更小风险/目标仓">防守</button>
+          <button type="button" id="setPresetBal" title="默认平衡">平衡</button>
+          <button type="button" id="setPresetAgg" title="更大风险/目标仓">进攻</button>
+        </div>
+        <div class="settings-io">
+          <button type="button" id="settingsExport" title="导出可移植参数 JSON">导出参数</button>
+          <button type="button" id="settingsImport" title="导入可移植参数 JSON">导入参数</button>
+          <input type="file" id="settingsImportFile" accept="application/json,.json" hidden />
+        </div>
         <div class="meta">快捷键：1–7 切页 · 复盘页 T 确认首条未交易 · Esc 关图</div>
         <div class="ft">
           <button type="button" class="rev-col-btn" id="settingsSave">保存</button>
@@ -2649,6 +2735,13 @@
             <div class="pb do"><div class="lab">能做 <button type="button" class="q" data-term="Playbook">?</button></div><div class="txt" id="pbDo">—</div></div>
             <div class="pb dont"><div class="lab">不做</div><div class="txt" id="pbDont">—</div></div>
             <div class="pb size"><div class="lab">仓位</div><div class="txt" id="pbSize">—</div></div>
+          </div>
+          <div class="pos-target-bar" id="posTargetBar" hidden title="目标总成本 vs 实际持仓成本">
+            <div class="hd">
+              <span>仓位目标 <button type="button" class="q" data-term="目标仓位">?</button></span>
+              <span class="meta" id="posTargetMeta">—</span>
+            </div>
+            <div class="track"><div class="fill" id="posTargetFill" style="width:0%"></div></div>
           </div>
           <div class="season-desk" id="seasonDesk" hidden>
             <div class="k">日历提醒 <button type="button" class="q" data-term="季节性日历">?</button>
@@ -2751,6 +2844,14 @@
             </div>
             <div class="theme-mem-note meta" id="themeMemNote"></div>
             <div class="theme-mem-list" id="themeMemBody"></div>
+            <div class="theme-chain" id="themeChain" hidden>
+              <div class="hd">
+                <span>主题链时间线 <button type="button" class="q" data-term="主题链">?</button></span>
+                <span class="meta" id="themeChainMeta"></span>
+                <button type="button" class="copy-btn" id="themeChainClose" title="关闭">关闭</button>
+              </div>
+              <div class="tl" id="themeChainBody"></div>
+            </div>
           </div>
           <div class="adapt-note meta" id="adaptNote" hidden></div>
           <div class="whitebox" id="whiteboxPanel" hidden>
@@ -2999,6 +3100,13 @@
           <button type="submit">记账</button>
         </form>
         <div class="pos-sum" id="posSum"></div>
+        <div class="pos-target-bar" id="posTargetBarPos" hidden title="目标总成本 vs 实际持仓成本">
+          <div class="hd">
+            <span>仓位目标 <button type="button" class="q" data-term="目标仓位">?</button></span>
+            <span class="meta" id="posTargetMetaPos">—</span>
+          </div>
+          <div class="track"><div class="fill" id="posTargetFillPos" style="width:0%"></div></div>
+        </div>
         <div class="risk-box" id="riskBox"></div>
         <table class="m-cards" id="posTable">
           <thead>
@@ -3303,9 +3411,22 @@
       } else if (it.trend) {
         trendHtml = `<div class="trend-warn">日线 · ${it.trend}（软减分，不关现买）</div>`;
       }
-      const batch = (it.batch_plan || []).map((b) =>
-        `${b.lot}·${b.label}${b.qty}股${b.approx_cost != null ? "≈" + b.approx_cost : ""}`
-      ).join(" → ");
+      const batch = (it.batch_plan || []).map((b) => {
+        const qty = Number(b.qty) || 100;
+        const lotPx = buy != null ? buy : (it.last != null ? it.last : "");
+        const cost = b.approx_cost != null ? `≈${b.approx_cost}` : "";
+        return `<button type="button" class="batch-lot"
+          data-code="${it.code || ""}"
+          data-name="${it.name || ""}"
+          data-price="${lotPx ?? ""}"
+          data-suggest="${buy ?? ""}"
+          data-last="${it.last ?? ""}"
+          data-qty="${qty}"
+          data-lot="${b.lot || ""}"
+          data-label="${b.label || ""}"
+          data-desk-source="${it.desk_source || (it.independent_pop ? "independent_pop" : "")}"
+          title="一键记入独立 lot：${b.label || ""} ${qty}股">第${b.lot}·${b.label}${qty}股${cost}</button>`;
+      }).join(" ");
       const batchHtml = batch
         ? `<div class="rec-batch"><button type="button" class="q" data-term="分批计划">?</button> 分批 ${batch}</div>`
         : "";
@@ -3661,6 +3782,38 @@
       el.title = o.title || (String(ts || "") + (kind ? ` · ${kind}` : ""));
     }
 
+    function paintPosTargetBar(d) {
+      // Paint target-vs-actual cost bar on desk + positions tab.
+      const risk = d.risk_overview || d.position_summary || {};
+      const sum = d.position_summary || {};
+      const target = Number(risk.target_total_cost);
+      const cost = Number(sum.cost != null ? sum.cost : 0);
+      const hasTarget = Number.isFinite(target) && target > 0;
+      const pct = hasTarget ? Math.round((cost / target) * 1000) / 10 : 0;
+      const fillPct = hasTarget ? Math.min(100, pct) : 0;
+      const dev = risk.target_dev_pct;
+      const over = hasTarget && pct > 100;
+      const hot = hasTarget && pct >= 115;
+      const meta = hasTarget
+        ? `实际 ${fmtMoney(cost)} / 目标 ${fmtMoney(target)} · ${pct}%`
+          + (dev == null ? "" : `（偏差 ${dev > 0 ? "+" : ""}${dev}%）`)
+        : "未设目标总成本";
+      const fillCls = "fill" + (hot ? " hot" : (over ? " over" : ""));
+      [
+        ["posTargetBar", "posTargetMeta", "posTargetFill"],
+        ["posTargetBarPos", "posTargetMetaPos", "posTargetFillPos"],
+      ].forEach(([barId, metaId, fillId]) => {
+        const bar = document.getElementById(barId);
+        const metaEl = document.getElementById(metaId);
+        const fill = document.getElementById(fillId);
+        if (!bar || !metaEl || !fill) return;
+        bar.hidden = !hasTarget;
+        metaEl.textContent = meta;
+        fill.className = fillCls;
+        fill.style.width = fillPct + "%";
+      });
+    }
+
     function render(d) {
       if (d.glossary) GLOSSARY = d.glossary;
       const v = d.verdict || {};
@@ -3857,6 +4010,7 @@
       document.getElementById("pbDo").textContent = pb.do || (pb.lines && pb.lines[0]) || "—";
       document.getElementById("pbDont").textContent = pb.dont || (pb.lines && pb.lines[1]) || "—";
       document.getElementById("pbSize").textContent = pb.size || (pb.lines && pb.lines[2]) || "—";
+      paintPosTargetBar(d);
       const seasonDesk = document.getElementById("seasonDesk");
       const seasonHint = ((d.seasonality || {}).desk) || {};
       if (seasonDesk) {
@@ -4140,6 +4294,7 @@
           if (themeMemNote) {
             const canAdj = !!(authUser && authUser.role === "admin");
             themeMemNote.textContent = (bits.join(" · ") || "按主题记忆软调主线分")
+              + " · 点卡片看主题链"
               + (canAdj ? " · admin 可手动 ±1 / 清零" : " · 手调仅管理员");
           }
           setModStamp("themeMemStamp", d.updated_at, { label: "刷新" });
@@ -7424,6 +7579,52 @@
       paintCycleEvents(lastData);
     });
     async function onDeskRecClick(ev) {
+      const lotBtn = ev.target.closest(".batch-lot");
+      if (lotBtn) {
+        const code = (lotBtn.dataset.code || "").trim();
+        const name = (lotBtn.dataset.name || "").trim();
+        if (!code) return;
+        let px = lotBtn.dataset.last || lotBtn.dataset.price || "";
+        const suggest = lotBtn.dataset.suggest || lotBtn.dataset.price || "";
+        let qty = Number(lotBtn.dataset.qty || 100) || 100;
+        const label = lotBtn.dataset.label || ("第" + (lotBtn.dataset.lot || ""));
+        const hint = [
+          px ? `默认现价 ${px}` : "请填写实际成交价",
+          suggest && String(suggest) !== String(px) ? `计划建议价 ${suggest}` : "",
+          `分批档 ${label} · ${qty}股`,
+        ].filter(Boolean).join("；");
+        const pxIn = prompt(`${name || code}\n成交价（${hint}）`, px || "");
+        if (pxIn === null) return;
+        if (String(pxIn).trim()) px = String(pxIn).trim();
+        const qtyIn = prompt(`成交数量（股，默认本档 ${qty}）`, String(qty));
+        if (qtyIn === null) return;
+        if (String(qtyIn).trim()) qty = Number(qtyIn);
+        qty = Math.max(0, Math.floor(Number(qty) || 0));
+        const price = Number(px);
+        if (!(price > 0) || !(qty > 0)) {
+          alert("请填写有效成交价和数量");
+          return;
+        }
+        if (!confirm(`确认记入独立 lot？\n${name || code} ${code}\n${label} ${price} × ${qty} 股\n（仅本地记账，不会下单）`)) {
+          return;
+        }
+        const fromFav = (ev.currentTarget && ev.currentTarget.id === "favDesk");
+        const deskSrc = lotBtn.dataset.deskSource || "";
+        let note = fromFav ? `看好板块·分批${label}` : `作战台·分批${label}`;
+        if (deskSrc === "independent_pop") note = `独立人气·分批${label}`;
+        else if (deskSrc === "emotion_dragon" || deskSrc === "mid_army_dragon" || deskSrc === "dragon")
+          note = `龙头排·分批${label}`;
+        try {
+          const ok = await bookBuyToPosition({ code, name, price, qty, note });
+          if (ok) {
+            await tick();
+            applyMain("pos");
+          }
+        } catch (e) {
+          alert("记入仓位失败");
+        }
+        return;
+      }
       const bookBtn = ev.target.closest(".rec-book");
       if (bookBtn) {
         const code = (bookBtn.dataset.code || "").trim();
@@ -7594,38 +7795,93 @@
     if (favDeskSell) favDeskSell.addEventListener("click", onDeskSellClick);
     document.getElementById("themeMemBody")?.addEventListener("click", async (ev) => {
       const btn = ev.target.closest("[data-theme-adj], [data-theme-clear]");
-      if (!btn || btn.disabled) return;
-      if (!(authUser && authUser.role === "admin")) {
-        alert("题材手调仅管理员可用");
-        return;
-      }
-      const card = btn.closest("[data-theme]");
-      const theme = card && card.getAttribute("data-theme");
-      if (!theme) return;
-      const body = { theme_key: theme };
-      if (btn.hasAttribute("data-theme-clear")) body.clear = true;
-      else body.delta = Number(btn.getAttribute("data-theme-adj") || 0);
-      try {
-        const r = await fetch("/api/theme-reputation", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const d = await r.json();
-        if (!r.ok || !d.ok) {
-          alert(typeof d.detail === "string" ? d.detail : (d.error || "手调失败"));
+      if (btn) {
+        if (btn.disabled) return;
+        if (!(authUser && authUser.role === "admin")) {
+          alert("题材手调仅管理员可用");
           return;
         }
-        if (lastData && d.theme_memory) {
-          lastData.theme_memory = d.theme_memory;
-          paintVisible(lastData);
-        } else {
-          tick(true);
+        const card = btn.closest("[data-theme]");
+        const theme = card && card.getAttribute("data-theme");
+        if (!theme) return;
+        const body = { theme_key: theme };
+        if (btn.hasAttribute("data-theme-clear")) body.clear = true;
+        else body.delta = Number(btn.getAttribute("data-theme-adj") || 0);
+        try {
+          const r = await fetch("/api/theme-reputation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (!r.ok || !d.ok) {
+            alert(typeof d.detail === "string" ? d.detail : (d.error || "手调失败"));
+            return;
+          }
+          if (lastData && d.theme_memory) {
+            lastData.theme_memory = d.theme_memory;
+            paintVisible(lastData);
+          } else {
+            tick(true);
+          }
+        } catch (e) {
+          alert("手调请求失败");
         }
-      } catch (e) {
-        alert("手调请求失败");
+        return;
       }
+      const card = ev.target.closest(".theme-mem-item[data-theme]");
+      if (!card) return;
+      const theme = card.getAttribute("data-theme");
+      if (theme) loadThemeChain(theme);
     });
+    document.getElementById("themeChainClose")?.addEventListener("click", () => {
+      const el = document.getElementById("themeChain");
+      if (el) el.hidden = true;
+      document.querySelectorAll(".theme-mem-item.active").forEach((n) => n.classList.remove("active"));
+    });
+    async function loadThemeChain(theme) {
+      const box = document.getElementById("themeChain");
+      const body = document.getElementById("themeChainBody");
+      const meta = document.getElementById("themeChainMeta");
+      if (!box || !body) return;
+      document.querySelectorAll(".theme-mem-item.active").forEach((n) => n.classList.remove("active"));
+      const active = document.querySelector(`.theme-mem-item[data-theme="${CSS.escape(theme)}"]`);
+      if (active) active.classList.add("active");
+      box.hidden = false;
+      if (meta) meta.textContent = "加载中…";
+      body.innerHTML = `<div class="meta">拉取 ${theme} …</div>`;
+      try {
+        const r = await fetch("/api/theme-chain?theme=" + encodeURIComponent(theme) + "&limit=14");
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+          body.innerHTML = `<div class="meta">加载失败</div>`;
+          if (meta) meta.textContent = "";
+          return;
+        }
+        const items = d.items || [];
+        if (meta) meta.textContent = `${d.theme_key || theme} · ${items.length} 日`;
+        if (!items.length) {
+          body.innerHTML = `<div class="meta">暂无次日结算样本</div>`;
+          return;
+        }
+        const outLabel = { persist: "续热", fade: "熄火", unclear: "不明" };
+        body.innerHTML = items.map((it) => {
+          const oc = String(it.outcome || "unclear");
+          const day = String(it.trade_date || "").slice(5) || "—";
+          const zt = it.zt_n != null ? `昨${it.zt_n}` : "";
+          const nzt = it.next_zt_n != null ? `次${it.next_zt_n}` : "";
+          const heat = [zt, nzt].filter(Boolean).join("/");
+          return `<div class="node ${oc}" title="${(it.mainline || it.theme_key || "")}">
+            <div class="d">${day}</div>
+            <div class="o">${outLabel[oc] || oc}</div>
+            <div class="d">${heat || "—"}</div>
+          </div>`;
+        }).join("");
+      } catch (e) {
+        body.innerHTML = `<div class="meta">请求失败</div>`;
+        if (meta) meta.textContent = "";
+      }
+    }
     async function onDeskSellClick(ev) {
       if (ev.target.closest(".sell-go")) {
         applyMain("pos");
@@ -8145,6 +8401,8 @@
         document.getElementById("setEqualW").checked = s.equal_weight_target !== false;
         document.getElementById("setBatch").checked = s.batch_plan !== false;
         document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
+        window.__portableSettings = d.portable || null;
+        window.__settingsPresets = d.presets || null;
       } catch (e) {}
       // Per-user Server酱 (separate from shared runtime settings).
       try {
@@ -8164,8 +8422,8 @@
             scHint.textContent = "管理员未允许本账号微信推送；可先填 Key，待开通后再开。";
           } else {
             scHint.textContent = sc.configured
-              ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 仅推买卖点；无 Key 不推`
-              : "未配置 Key · 填 SCT… 后勾选开启；仅推买卖点";
+              ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 买卖/LHB/收盘一页纸；无 Key 不推`
+              : "未配置 Key · 填 SCT… 后勾选开启；推买卖、LHB 变坏、收盘一页纸";
           }
         }
         if (scOn) {
@@ -8266,11 +8524,80 @@
       alert("已保存。刷新间隔下一轮生效。");
     });
 
+    async function applySettingsPreset(name) {
+      const zh = { defensive: "防守", balanced: "平衡", aggressive: "进攻" };
+      if (!confirm(`应用「${zh[name] || name}」个人风控预设？\n将覆盖风险%/亏损帽/目标仓/静音等个人项。`)) return;
+      try {
+        const r = await fetch("/api/settings/preset?name=" + encodeURIComponent(name), {
+          method: "POST",
+          credentials: "same-origin",
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          alert(typeof d.detail === "string" ? d.detail : "预设应用失败");
+          return;
+        }
+        await openSettings();
+        alert(`已应用「${zh[name] || name}」预设，可再微调后点保存。`);
+      } catch (e) {
+        alert("预设请求失败");
+      }
+    }
+    document.getElementById("setPresetDef")?.addEventListener("click", () => applySettingsPreset("defensive"));
+    document.getElementById("setPresetBal")?.addEventListener("click", () => applySettingsPreset("balanced"));
+    document.getElementById("setPresetAgg")?.addEventListener("click", () => applySettingsPreset("aggressive"));
+    document.getElementById("settingsExport")?.addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/settings");
+        const d = await r.json();
+        const portable = d.portable || window.__portableSettings || {};
+        const blob = new Blob([JSON.stringify({ settings: portable, exported_at: new Date().toISOString() }, null, 2)], {
+          type: "application/json",
+        });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "market-desk-settings.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) {
+        alert("导出失败");
+      }
+    });
+    document.getElementById("settingsImport")?.addEventListener("click", () => {
+      document.getElementById("settingsImportFile")?.click();
+    });
+    document.getElementById("settingsImportFile")?.addEventListener("change", async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      ev.target.value = "";
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const raw = JSON.parse(text);
+        const payload = (raw && typeof raw.settings === "object") ? raw : { settings: raw };
+        if (!confirm("导入可移植参数并覆盖当前个人项？")) return;
+        const r = await fetch("/api/settings/import", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          alert(typeof d.detail === "string" ? d.detail : "导入失败");
+          return;
+        }
+        await openSettings();
+        alert("已导入：" + ((d.imported || []).join("、") || "完成"));
+      } catch (e) {
+        alert("导入失败：JSON 无效或网络错误");
+      }
+    });
+
     const GLOSSARY_GROUPS = [
       { id: "phase", label: "相位", keys: ["相位", "恐慌", "分歧", "发酵", "高潮", "温度"] },
       { id: "action", label: "结论", keys: ["现金", "可小仓", "可买入", "观望", "观察回踩", "回踩到位", "禁追", "观察"] },
       { id: "board", label: "板块", keys: [
-        "实时主线", "观察支线", "板块联动", "主线切换", "主线透明", "主线生命周期", "板块相似度", "题材信誉",
+        "实时主线", "观察支线", "板块联动", "主线切换", "主线透明", "主线生命周期", "板块相似度", "题材信誉", "主题链",
         "仓位热度", "仓位合流", "个股信誉", "自适应卖点", "回踩甜区", "漏买情景", "自适应调参", "白盒特征权重", "确认中", "尖峰禁追", "退潮",
         "点火", "一波", "二波", "加速", "滞涨", "A杀", "修复", "反包", "天地",
         "聚集度", "总龙头", "卡位龙", "冰点", "冷冻", "相对最冷", "传染", "传染预警", "看好板块", "看好板块买卖",
@@ -8278,7 +8605,7 @@
       { id: "desk", label: "作战/仓位", keys: [
         "推荐买入", "建议卖出", "反悔窗", "卖飞", "卖飞看板", "下一动作", "减半价", "Playbook", "风险股数", "分批计划", "仓位", "T+1",
         "早决策摘要", "收盘一页纸", "今日三词", "盘中分段", "系统通知", "Server酱", "提醒分级", "风控总览", "单日亏损帽", "目标仓位",
-        "为何不能现买",
+        "参数预设", "执行日记", "为何不能现买",
       ] },
       { id: "review", label: "复盘/观察", keys: [
         "信号复盘", "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",

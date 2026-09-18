@@ -385,6 +385,10 @@ class DeskEngine:
                                 log.info("auto backup written %s", path)
                             except Exception:
                                 log.exception("auto backup failed")
+                        try:
+                            await self._write_eod_onepager(today)
+                        except Exception:
+                            log.exception("eod onepager failed")
                 except Exception as exc:
                     log.exception("refresh failed")
                     self.snapshot["ok"] = False
@@ -975,6 +979,79 @@ class DeskEngine:
                 },
                 min_seconds=int(setting("switch_min_seconds", 300)),
             )
+
+    async def _write_eod_onepager(self, day: str) -> None:
+        """Persist the end-of-day one-pager and push ServerChan once per day.
+
+        Market-level brief is stored under ``eod:{date}``. Eligible users with
+        Server酱 enabled get a personalized body (own books) at most once.
+        """
+        from market_desk.db import list_serverchan_recipients, load_setting, save_setting
+        from market_desk.notify import format_serverchan_desp, notify_serverchan
+        from market_desk.report import build_eod_onepager
+
+        day_s = str(day or "").strip()[:10]
+        if not day_s:
+            return
+        review = await self.build_review(view_date=day_s)
+        brief = build_eod_onepager(snapshot=self.snapshot, review=review)
+        store_key = f"eod:{day_s}"
+        prev = load_setting(store_key)
+        if not (isinstance(prev, dict) and prev.get("markdown")):
+            save_setting(
+                store_key,
+                {
+                    "title": brief.get("title"),
+                    "focus": brief.get("focus"),
+                    "bullets": brief.get("bullets"),
+                    "markdown": brief.get("markdown"),
+                    "date": day_s,
+                    "as_of": brief.get("as_of"),
+                    "saved_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            log.info("eod onepager saved %s", day_s)
+
+        push_flag = f"eod_pushed:{day_s}"
+        if load_setting(push_flag):
+            return
+        try:
+            recipients = list_serverchan_recipients()
+        except Exception:
+            log.exception("list serverchan recipients for eod failed")
+            recipients = []
+        title = str(brief.get("title") or f"收盘一页纸 · {day_s}")
+        ok_n = 0
+        for user in recipients:
+            sendkey = str(user.get("serverchan_sendkey") or "").strip()
+            if not sendkey:
+                continue
+            uid = user.get("id")
+            snap = self.snapshot
+            ubrief = brief
+            try:
+                if uid is not None:
+                    snap = self.snapshot_for_user(int(uid))
+                    urev = await self.build_review(view_date=day_s, user_id=int(uid))
+                    ubrief = build_eod_onepager(snapshot=snap, review=urev)
+            except Exception:
+                log.exception("eod personal brief failed user=%s", uid)
+            body_lines = [str(ubrief.get("focus") or "").strip()]
+            for b in (ubrief.get("bullets") or [])[:6]:
+                body_lines.append(f"· {b}")
+            body = "\n".join(x for x in body_lines if x)
+            alert_key = f"eod:{day_s}"
+            desp = format_serverchan_desp(alert_key, title, body, snap)
+            if notify_serverchan(sendkey, title, desp):
+                ok_n += 1
+        save_setting(
+            push_flag,
+            {
+                "ok_n": ok_n,
+                "at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        log.info("eod onepager push day=%s ok=%s", day_s, ok_n)
 
     async def build_review(
         self,

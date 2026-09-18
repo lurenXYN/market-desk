@@ -27,8 +27,77 @@ USER_PRIVATE_KEYS = frozenset(
         "toast_cooldown",
         "decision_alerts",
         "hit_rate_mode",
+        "open_mute_minutes",
+        "tail_mute_minutes",
     }
 )
+
+# Portable keys for export / import / presets (no secrets).
+SETTINGS_PORTABLE_KEYS = frozenset(
+    {
+        "account_equity",
+        "risk_pct_per_trade",
+        "daily_loss_cap_pct",
+        "cool_after_losses",
+        "target_total_cost",
+        "equal_weight_target",
+        "batch_plan",
+        "alert_mode",
+        "toast_enabled",
+        "toast_cooldown",
+        "decision_alerts",
+        "open_mute_minutes",
+        "tail_mute_minutes",
+        "hit_rate_mode",
+        "sticky_margin",
+        "switch_min_seconds",
+        "min_stock_mv_yi",
+        "side_mainline_gap",
+    }
+)
+
+# Risk/sizing profiles (user private knobs only).
+SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
+    "defensive": {
+        "risk_pct_per_trade": 0.6,
+        "daily_loss_cap_pct": -2.0,
+        "cool_after_losses": 2,
+        "target_total_cost": 30000.0,
+        "account_equity": 50000.0,
+        "equal_weight_target": True,
+        "batch_plan": True,
+        "open_mute_minutes": 10,
+        "tail_mute_minutes": 45,
+        "alert_mode": "traded_watch",
+        "decision_alerts": False,
+    },
+    "balanced": {
+        "risk_pct_per_trade": 1.0,
+        "daily_loss_cap_pct": -3.0,
+        "cool_after_losses": 3,
+        "target_total_cost": 50000.0,
+        "account_equity": 50000.0,
+        "equal_weight_target": True,
+        "batch_plan": True,
+        "open_mute_minutes": 5,
+        "tail_mute_minutes": 30,
+        "alert_mode": "traded_watch",
+        "decision_alerts": True,
+    },
+    "aggressive": {
+        "risk_pct_per_trade": 1.8,
+        "daily_loss_cap_pct": -5.0,
+        "cool_after_losses": 4,
+        "target_total_cost": 80000.0,
+        "account_equity": 80000.0,
+        "equal_weight_target": False,
+        "batch_plan": True,
+        "open_mute_minutes": 0,
+        "tail_mute_minutes": 15,
+        "alert_mode": "all",
+        "decision_alerts": True,
+    },
+}
 
 DEFAULTS: dict[str, Any] = {
     "refresh_seconds": int(cfg.SESSION_REFRESH_SECONDS),
@@ -214,4 +283,34 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["phase_panic_temp"] = panic_t
     out["phase_ferment_temp"] = ferment_t
     out["phase_climax_temp"] = climax_t
+    return out
+
+
+def export_portable_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a JSON-safe subset of settings suitable for download / import."""
+    src = settings or {}
+    return {k: src[k] for k in sorted(SETTINGS_PORTABLE_KEYS) if k in src}
+
+
+def preset_patch(name: str) -> dict[str, Any] | None:
+    """Return a settings patch for defensive / balanced / aggressive."""
+    key = str(name or "").strip().lower()
+    aliases = {
+        "防守": "defensive",
+        "defense": "defensive",
+        "平衡": "balanced",
+        "进攻": "aggressive",
+        "攻击": "aggressive",
+    }
+    key = aliases.get(key, key)
+    patch = SETTINGS_PRESETS.get(key)
+    return dict(patch) if patch else None
+
+
+def filter_portable_patch(patch: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep only portable keys from an import payload."""
+    out: dict[str, Any] = {}
+    for k, v in (patch or {}).items():
+        if k in SETTINGS_PORTABLE_KEYS and v is not None:
+            out[k] = v
     return out

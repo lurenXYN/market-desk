@@ -693,7 +693,40 @@ async def positions_lhb(
 ) -> dict:
     """Return dragon-tiger seats for the caller's open positions (view-only)."""
     snap = engine.snapshot_for_user(int(user["id"]))
-    return await build_positions_lhb(snap.get("positions") or [], force=force)
+    payload = await build_positions_lhb(snap.get("positions") or [], force=force)
+    try:
+        from market_desk.db import load_setting, save_setting
+        from market_desk.notify import lhb_seat_edge_alerts, push_serverchan_alerts
+
+        fp_key = f"lhb_seat_edge:{int(user['id'])}"
+        prev = load_setting(fp_key) or {}
+        if not isinstance(prev, dict):
+            prev = {}
+        alerts, next_fp = lhb_seat_edge_alerts(payload.get("items") or [], prev_fp=prev)
+        save_setting(fp_key, next_fp)
+        if alerts:
+            push_serverchan_alerts(alerts, snap)
+            payload["pushed_alerts"] = len(alerts)
+    except Exception:
+        pass
+    return payload
+
+
+@app.get("/api/theme-chain")
+def theme_chain(
+    theme: str = Query(..., min_length=1),
+    limit: int = Query(default=14, ge=3, le=40),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return day outcomes for one theme chain (oldest→newest for timeline UI)."""
+    del user
+    from market_desk.db import load_theme_outcomes_for_theme
+    from market_desk.mainline import theme_key
+
+    key = theme_key(theme) or str(theme or "").strip()
+    rows = load_theme_outcomes_for_theme(key, limit=limit)
+    timeline = list(reversed(rows))
+    return {"ok": True, "theme_key": key, "n": len(timeline), "items": timeline}
 
 
 @app.post("/api/positions")
@@ -1167,7 +1200,59 @@ def trade_signal(
 def read_settings(user: dict = Depends(current_user_required)) -> dict:
     """Return runtime settings (merged with user private knobs when allowed)."""
     uid = None if is_guest(user) else int(user["id"])
-    return {"ok": True, "settings": get_settings_for_user(uid), "auth_user": user}
+    from market_desk.settings import SETTINGS_PRESETS, export_portable_settings
+
+    settings = get_settings_for_user(uid)
+    return {
+        "ok": True,
+        "settings": settings,
+        "portable": export_portable_settings(settings),
+        "presets": {k: dict(v) for k, v in SETTINGS_PRESETS.items()},
+        "auth_user": user,
+    }
+
+
+@app.post("/api/settings/preset")
+def apply_settings_preset(
+    name: str = Query(..., min_length=1),
+    user: dict = Depends(current_member_required),
+) -> dict:
+    """Apply defensive / balanced / aggressive personal risk preset."""
+    from market_desk.settings import preset_patch
+
+    patch = preset_patch(name)
+    if not patch:
+        raise HTTPException(400, "unknown preset (defensive|balanced|aggressive)")
+    return {
+        "ok": True,
+        "preset": name,
+        "settings": update_settings(patch, user_id=int(user["id"])),
+        "auth_user": user,
+    }
+
+
+@app.post("/api/settings/import")
+def import_settings_payload(
+    body: dict[str, Any],
+    user: dict = Depends(current_member_required),
+) -> dict:
+    """Import a portable settings JSON (only known portable keys)."""
+    from market_desk.settings import USER_PRIVATE_KEYS, filter_portable_patch
+
+    raw = body.get("settings") if isinstance(body.get("settings"), dict) else body
+    patch = filter_portable_patch(raw if isinstance(raw, dict) else {})
+    if not patch:
+        raise HTTPException(400, "no portable settings in payload")
+    if any(k not in USER_PRIVATE_KEYS for k in patch) and user.get("role") != "admin":
+        patch = {k: v for k, v in patch.items() if k in USER_PRIVATE_KEYS}
+        if not patch:
+            raise HTTPException(403, "全局参数仅管理员可导入")
+    return {
+        "ok": True,
+        "settings": update_settings(patch, user_id=int(user["id"])),
+        "imported": sorted(patch.keys()),
+        "auth_user": user,
+    }
 
 
 @app.post("/api/settings")
@@ -1399,7 +1484,21 @@ async def report_eod(
     snap = engine.snapshot_for_user(int(user["id"]))
     review = await engine.build_review(view_date=date, user_id=uid)
     brief = build_eod_onepager(snapshot=snap, review=review)
-    return {"ok": True, "brief": brief, "markdown": brief.get("markdown") or ""}
+    cached = None
+    day = str(date or brief.get("date") or "").strip()[:10]
+    if day:
+        from market_desk.db import load_setting
+
+        raw = load_setting(f"eod:{day}")
+        if isinstance(raw, dict) and raw.get("markdown"):
+            cached = raw
+    return {
+        "ok": True,
+        "brief": brief,
+        "markdown": brief.get("markdown") or "",
+        "cached": cached,
+        "auto_saved": bool(cached),
+    }
 
 
 @app.get("/api/report/tomorrow")

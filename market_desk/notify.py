@@ -271,15 +271,15 @@ def select_toasts_for_round(
 
 
 def is_serverchan_alert(key: str) -> bool:
-    """Return True for buy/sell alerts that may go to ServerChan."""
+    """Return True for buy/sell/lhb/eod alerts that may go to ServerChan."""
     k = str(key or "")
-    return k.startswith("buy:") or k.startswith("sell:")
+    return k.startswith(("buy:", "sell:", "lhb:", "eod:"))
 
 
 def filter_serverchan_alerts(
     alerts: list[tuple[str, str, str]],
 ) -> list[tuple[str, str, str]]:
-    """Keep only buy / sell advice for WeChat push."""
+    """Keep buy / sell / lhb / eod advice for WeChat push."""
     return [(k, t, b) for k, t, b in alerts if is_serverchan_alert(k)]
 
 
@@ -395,3 +395,57 @@ def push_serverchan_alerts(
                     title,
                 )
     return ok_n
+
+
+def push_named_serverchan(
+    alerts: list[tuple[str, str, str]],
+    current: dict[str, Any] | None = None,
+) -> int:
+    """Push arbitrary ServerChan-eligible alerts (same recipient fan-out)."""
+    return push_serverchan_alerts(alerts, current)
+
+
+def lhb_seat_edge_alerts(
+    items: list[dict[str, Any]] | None,
+    *,
+    prev_fp: dict[str, str] | None = None,
+) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+    """Diff LHB seat_risk fingerprints; return (alerts, next_fp).
+
+    First seed (empty prev) only stores fingerprints — no push.
+    """
+    prev = dict(prev_fp or {})
+    next_fp: dict[str, str] = {}
+    alerts: list[tuple[str, str, str]] = []
+    seeded = not prev
+    for it in items or []:
+        if not it or not it.get("on_list"):
+            continue
+        code = str(it.get("code") or "").zfill(6)
+        if len(code) != 6:
+            continue
+        summary = it.get("summary") if isinstance(it.get("summary"), dict) else {}
+        risk = str(summary.get("seat_risk") or "ok")
+        flags = sorted(str(x) for x in (summary.get("risk_flags") or []))
+        sig = f"{it.get('trade_date') or ''}|{risk}|{','.join(flags)}"
+        next_fp[code] = sig
+        if seeded:
+            continue
+        if prev.get(code) == sig:
+            continue
+        if risk not in ("bad", "warn"):
+            continue
+        rank = {"ok": 0, "warn": 1, "bad": 2}
+        prev_risk = str(prev.get(code) or "").split("|")[1] if prev.get(code) else "ok"
+        if rank.get(risk, 0) <= rank.get(prev_risk, 0) and prev.get(code):
+            continue
+        hints = " · ".join((summary.get("hints") or [])[:2])
+        name = it.get("name") or code
+        alerts.append(
+            (
+                f"lhb:{risk}:{code}",
+                "龙虎席位变坏",
+                f"{name} {code}" + (f" · {hints}" if hints else ""),
+            )
+        )
+    return alerts[:4], next_fp

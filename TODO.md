@@ -4,15 +4,6 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Open
 
-### 有空再加
-
-- [ ] **参数导出/导入 + 防守/平衡/进攻预设**
-- [ ] **仓位目标 vs 实际常驻条** — 风控盒已有一部分，做成一眼可见条。
-- [ ] **主题链时间线** — 显示「煤链」等主题簇，而不只动力煤↔煤炭。
-- [ ] **盘后自动一页纸** — 收盘落库 + 可选本地/微信。
-- [ ] **LHB 席位变坏走 Server酱** — 现仅页内 toast。
-- [ ] **买卡分批档一键记独立 lot** — lots 表已支持，UI 仍偏示意。
-
 ### 以后可做（刻意缓做）
 
 - [ ] **再叠硬清仓 / 波浪硬关买卖** — 短期别堆阈值。
@@ -23,6 +14,12 @@ Agents: **at the start of each session involving this app, read this file before
 
 ## Done recently (context)
 
+- [x] **参数导出/导入 + 防守/平衡/进攻预设** — *(2026-09-18)*
+- [x] **仓位目标 vs 实际常驻条** — 作战台/仓位页进度条。*(2026-09-18)*
+- [x] **主题链时间线** — 点题材信誉卡看 persist/fade。*(2026-09-18)*
+- [x] **盘后自动一页纸** — eod:{date} 落库 + Server酱每日一次。*(2026-09-18)*
+- [x] **LHB 席位变坏走 Server酱** — *(2026-09-18)*
+- [x] **买卡分批档一键记独立 lot** — *(2026-09-18)*
 - [x] **主线质量仪表** — 顶栏主题/分差/持有/粘滞短因；详情仍在 mlWhy。*(2026-09-18)*
 - [x] **执行日记反哺** — diary→伪信号并入执行分；同码去重；adapt 近20笔含日记。*(2026-09-18)*
 - [x] **复盘调参闭环** — tune_hints 加题材/交叉与可操作回踩幅度；传入当前 context。*(2026-09-18)*
@@ -34,6 +31,6 @@ Agents: **at the start of each session involving this app, read this file before
 ## Notes for agents
 
 - Publish via independent repo only: sync `apps/market-desk/` → `D:\Source\Repos\market-desk` → commit/push there. **Never push go-learning.**
-- Prefer picking an **Open → 有空再加** item unless the user names something else.
+- Prefer picking an **Open → 有空再加** item unless the user names something else. (Open 有空再加 currently empty.)
 - 「以后可做」默认可做，但先征得用户同意再开工。
 - Keep changes small and testable; update this file when closing items.
