@@ -26,7 +26,12 @@ from market_desk.config import (
     THEME_REP_MIN_SAMPLES,
     THEME_REP_NEWEST_TIP,
     THEME_REP_RATE_SCALE,
+    THEME_REP_SETTLE_MAX,
+    THEME_REP_SETTLE_PCT_MIN,
+    THEME_REP_SETTLE_ZT_MIN,
     THEME_REP_STREAK_BONUS,
+    THEME_REP_THIN_FEED_MULT,
+    THEME_REP_THIN_N,
     THEME_SIM_INHERIT,
     THEME_SIM_INHERIT_MIN,
     THEME_SIM_PEER_MIN,
@@ -450,13 +455,21 @@ def attach_board_affinity(
                 inherit = min(inherit, abs(own_adj) * 0.6 + 1.0)
         total = own_adj + inherit
         total = max(float(THEME_REP_ADJ_MIN), min(float(THEME_REP_ADJ_MAX), round(total, 2)))
-        board["rep_adj"] = total
-        board["rep_own_adj"] = own_adj
-        board["rep_auto_adj"] = auto_adj
-        board["rep_manual_adj"] = manual_adj
+        trade_adj = float(own.get("trade_adj") or 0)
         fade_n = int(own.get("fade_n") or 0)
         persist_n = int(own.get("persist_n") or 0)
         sample_n = fade_n + persist_n
+        # Thin history: keep full score for UI, shrink what mainline_score eats.
+        feed = total
+        if sample_n < int(THEME_REP_THIN_N):
+            feed = round(float(total) * float(THEME_REP_THIN_FEED_MULT), 2)
+        board["rep_adj"] = feed
+        board["rep_adj_full"] = total
+        board["rep_thin"] = sample_n < int(THEME_REP_THIN_N)
+        board["rep_own_adj"] = own_adj
+        board["rep_auto_adj"] = auto_adj
+        board["rep_manual_adj"] = manual_adj
+        board["rep_trade_adj"] = trade_adj
         board["rep_fade_n"] = fade_n
         board["rep_persist_n"] = persist_n
         board["rep_sample_n"] = sample_n
@@ -517,7 +530,11 @@ def classify_theme_next_day(
     *,
     was_mainline: bool = False,
 ) -> str:
-    """Return fade / persist / unclear for one theme across consecutive sessions."""
+    """Return fade / persist / unclear for one theme across consecutive sessions.
+
+    Fade is intentionally strict: missing boards and bare 「退潮」 alone are not
+    enough unless heat also collapsed.
+    """
     if not prior:
         return "unclear"
     p_zt = int((prior or {}).get("zt_n") or 0)
@@ -528,9 +545,10 @@ def classify_theme_next_day(
     # Only grade themes that were meaningfully hot yesterday.
     if p_zt < 2 and p_pct < 1.5:
         return "unclear"
+    drop_thr = max(1, int(round(p_zt * float(THEME_FADE_ZT_DROP))))
     if not nxt:
-        # Missing from today's pool: only fade sticky/mainline or strong prior.
-        if was_mainline or p_zt >= 4:
+        # Missing from today's pool: only fade sticky/mainline or very strong prior.
+        if was_mainline or p_zt >= 5:
             return "fade"
         return "unclear"
     n_zt = int(nxt.get("zt_n") or 0)
@@ -539,12 +557,16 @@ def classify_theme_next_day(
     except (TypeError, ValueError):
         n_pct = 0.0
     status = str(nxt.get("status") or "")
+    collapsed = n_zt <= drop_thr and n_pct <= float(THEME_FADE_PCT_MAX)
+    # 「退潮」 is soft: only fade when heat also collapsed (or mainline vanished);
+    # still-hot 退潮 stays unclear so we do not credit persist either.
     if status == "退潮":
-        return "fade"
+        if collapsed or was_mainline:
+            return "fade"
+        return "unclear"
     if n_zt >= int(THEME_PERSIST_ZT_MIN) or n_pct >= float(THEME_PERSIST_PCT_MIN):
         return "persist"
-    drop_thr = max(1, int(round(p_zt * float(THEME_FADE_ZT_DROP))))
-    if n_zt <= drop_thr and n_pct <= float(THEME_FADE_PCT_MAX):
+    if collapsed:
         return "fade"
     return "unclear"
 
@@ -553,7 +575,8 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
     """Settle yesterday→today theme outcomes once per trade date.
 
     Uses ``daily_snapshot`` mainline plus ``board_daily`` aggregates. Idempotent
-    via ``theme_day_outcome`` primary key.
+    via ``theme_day_outcome`` primary key. Grades mainline plus secondary hot
+    themes (wider than the old top-6 / zt≥3 gate).
     """
     from market_desk.db import (
         load_board_rows_for_date,
@@ -600,13 +623,16 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
         key=lambda kv: (int(kv[1].get("zt_n") or 0), float(kv[1].get("pct") or 0)),
         reverse=True,
     )
+    settle_max = int(THEME_REP_SETTLE_MAX)
+    zt_floor = int(THEME_REP_SETTLE_ZT_MIN)
+    pct_floor = float(THEME_REP_SETTLE_PCT_MIN)
     for theme, st in ranked:
         if theme in focus:
             continue
-        if int(st.get("zt_n") or 0) < 3 and float(st.get("pct") or 0) < 2.0:
+        if int(st.get("zt_n") or 0) < zt_floor and float(st.get("pct") or 0) < pct_floor:
             continue
         focus.append(theme)
-        if len(focus) >= 6:
+        if len(focus) >= settle_max:
             break
 
     settled = 0
@@ -649,6 +675,7 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
         "fades": fades,
         "persists": persists,
         "mainline": prior_ml or None,
+        "focus_n": len(focus),
     }
 
 

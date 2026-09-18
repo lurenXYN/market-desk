@@ -3941,11 +3941,9 @@
             const man = Number(r.manual_adj) || 0;
             const trade = Number(r.trade_adj) || 0;
             const cls = adj <= -2 ? "bad" : (adj >= 2 ? "good" : "");
-            const adjTxt = adj === 0 ? "0" : ((adj > 0 ? "+" : "") + adj);
-            const autoTxt = auto === 0 ? "0" : ((auto > 0 ? "+" : "") + auto);
-            const manTxt = man === 0 ? "" : `<span class="man">手调 ${man > 0 ? "+" : ""}${man}</span>`;
-            const tradeTxt = trade === 0 ? "" : `<span class="man">成交 ${trade > 0 ? "+" : ""}${trade}</span>`;
+            const fmt = (v) => (v === 0 ? "0" : ((v > 0 ? "+" : "") + v));
             const key = String(r.theme_key || "").replace(/"/g, "&quot;");
+            const thin = (Number(r.fade_n) || 0) + (Number(r.persist_n) || 0) < 3;
             const adjRow = canAdj
               ? `<div class="adj-row">
                 <button type="button" class="adj-btn" data-theme-adj="-1" title="手动 −1">−1</button>
@@ -3955,8 +3953,9 @@
               : "";
             return `<div class="theme-mem-item ${cls}" data-theme="${key}">
               <div class="name">${r.theme_key || "—"}</div>
-              <div class="lab">${r.label || "中性"} · ${adjTxt}</div>
-              <div class="meta">自动 ${autoTxt} · fade ${r.fade_n ?? 0} / persist ${r.persist_n ?? 0}${manTxt ? " · " + manTxt : ""}${tradeTxt ? " · " + tradeTxt : ""}</div>
+              <div class="lab">${r.label || "中性"} · 合计 ${fmt(adj)}${thin ? " · 薄样本弱进主线" : ""}</div>
+              <div class="meta">自动 ${fmt(auto)} · 成交 ${fmt(trade)} · 手调 ${fmt(man)}</div>
+              <div class="meta">fade ${r.fade_n ?? 0} / persist ${r.persist_n ?? 0}</div>
               ${adjRow}
             </div>`;
           }).join("");
@@ -4234,7 +4233,7 @@
           <div class="meta" style="margin-top:6px">${lead}</div>
           <div class="tag-row">${tags}</div>
           <div class="meta" style="margin-top:4px">${
-            (b.rep_label ? `信誉 ${b.rep_label}${b.rep_adj ? ` (${b.rep_adj > 0 ? "+" : ""}${b.rep_adj})` : ""}` : "")
+            (b.rep_label ? `信誉 ${b.rep_label}${b.rep_adj ? ` (${b.rep_adj > 0 ? "+" : ""}${b.rep_adj})` : ""}${b.rep_thin ? "·薄" : ""}` : "")
             + (b.rep_persist_rate != null
               ? `${b.rep_label ? " · " : ""}续热 ${b.rep_persist_rate}%（n=${b.rep_sample_n || 0}）`
               : "")

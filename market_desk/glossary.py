@@ -196,14 +196,13 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "题材信誉": {
         "mean": "这条题材历史上爱不爱一日游：次日熄火扣分，续热加分；管理员可手动微调；平仓盈亏会回写。",
-        "algo": "每日结算昨→今：昨主题够热才计分。同题材多板块取涨停家数 max（不累加，避免重叠个股虚高）。\n"
-        "续热→persist；退潮→fade。近12次按0.85^龄衰减，再按涨停强弱加权（强板崩塌/续热加重，虚续热减轻）。\n"
-        "自动分：净续热率 (persist−fade)×约7.5 为主；样本置信度压薄样本；极端一边倒另±约2；\n"
-        "连续同侧≥2 对称奖惩；最近一次 outcome 轻推。总夹约−12～+8。\n"
-        "score_adj = auto_adj + manual_adj + trade_adj（手调约±8，交易回写约±6）。\n"
-        "公式版本 THEME_REP_FORMULA_VERSION：升级后启动时按 theme_day_outcome 重算 auto_adj，\n"
-        "保留 manual_adj/trade_adj；settings.theme_rep_formula_v 记已迁移版本。\n"
-        "自动刷新保留手调/交易分。手调仅 admin（±1 / 清手调）。只软改主线排名，不硬禁买。",
+        "algo": "每日结算昨→今：昨主题够热才计分（主线+次热，最多约10条；门槛 zt≥2 或 pct≥1.5）。\n"
+        "同题材多板块取涨停家数 max。续热→persist；fade 更严：缺板仅主线/昨强板，退潮须伴随热度塌缩。\n"
+        "近12次按0.85^龄衰减加权。自动分：净续热率×约7.5；置信度分母约4.5；极端一边倒另±约2。\n"
+        "样本&lt;3：标签观察中；进主线的 rep_adj 再×约0.2（薄样本弱进主线）。总夹约−12～+8。\n"
+        "score_adj = auto_adj + manual_adj + trade_adj（手调约±8，交易回写约±6）；面板分项展示。\n"
+        "公式版本 THEME_REP_FORMULA_VERSION=3：升级后启动重算 auto_adj，保留 manual/trade。\n"
+        "只软改主线排名，不硬禁买。",
     },
     "仓位热度": {
         "mean": "用最近成交的胜率与连亏，自动放大或缩小单笔风险仓位。",
@@ -476,8 +475,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "资金流出：仅流出→只降 soft 门槛；流出+主题退潮才缩放 pb。\n"
         "昨买今弱：窗内偏弱默认先减；现价收复成本或日涨回升过阈值→今弱已修复，取消轻减。\n"
         "独立人气回踩来源持仓豁免昨买今弱轻减。\n"
-        "建议卖出落库：个人层算完 ready 卖点后 ``record_sell_advice_signals`` 写入；"
-        "共享引擎快照里 sell_advice 恒为空，故引擎轮询本身不会记卖出信号。\n"
+        "建议卖出落库：个人层 ready 卖点后 ``record_sell_advice_signals`` 写入，带 owner_user_id；\n"
+        "复盘列表按账号过滤卖出（买点仍共享纸面）。共享引擎快照 sell_advice 恒为空。\n"
         "T+1：last_buy_date=当日则 ready 关掉，复盘不可记卖出。",
     },
     "下一动作": {

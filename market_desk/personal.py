@@ -59,6 +59,7 @@ def attach_personal_layer(
     """
     out = copy.deepcopy(snapshot or {})
     uid = int(user_id)
+    out["auth_user_id"] = uid
     trade_date = str(out.get("trade_date") or "")
     trade_dash = (
         f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"

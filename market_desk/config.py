@@ -460,15 +460,20 @@ STOCK_TURN_MIN_MID = 3.0              # 100–500亿: turnover < this → drop
 STOCK_TURN_MIN_LARGE = 2.0            # >500亿: turnover < this → drop
 STOCK_MV_MID_MAX_YI = 500.0
 # Theme reputation / board affinity (soft mainline score feed).
-THEME_FADE_ZT_DROP = 0.45       # next-day zt ≤ prior * this → fade candidate
-THEME_FADE_PCT_MAX = 0.5        # and/or weak pct with thin zt
+THEME_FADE_ZT_DROP = 0.35       # next-day zt ≤ prior * this → fade (stricter)
+THEME_FADE_PCT_MAX = 0.3        # weak pct with thin zt (stricter)
 THEME_PERSIST_ZT_MIN = 2
 THEME_PERSIST_PCT_MIN = 1.5
-THEME_REP_MIN_SAMPLES = 2       # mild adj before this; full after
+THEME_REP_MIN_SAMPLES = 3       # label / extreme tip need this many graded days
+THEME_REP_THIN_N = 3            # below → shrink feed into mainline
+THEME_REP_THIN_FEED_MULT = 0.2  # mainline rep_adj scale when thin
+THEME_REP_SETTLE_MAX = 10       # max themes graded per day (was 6)
+THEME_REP_SETTLE_ZT_MIN = 2     # prior heat floor for secondary themes
+THEME_REP_SETTLE_PCT_MIN = 1.5
 THEME_REP_ADJ_MIN = -12.0
 THEME_REP_ADJ_MAX = 8.0         # room for sticky persist bonus
-# Bump when compute_rep_adj / outcome weights change; startup rebuilds auto_adj.
-THEME_REP_FORMULA_VERSION = 2
+# Bump when compute_rep_adj / outcome weights / settle rules change.
+THEME_REP_FORMULA_VERSION = 3
 THEME_SIM_PEER_MIN = 0.45       # show peers above this
 # Soft board-linkage buys: similar peer cards when mainline has no ready / overheated.
 BOARD_LINK_SIM_MIN = 0.45       # reuse peer floor; raise to be stricter
@@ -497,7 +502,7 @@ THEME_REP_DECAY = 0.85          # per older outcome when refreshing adj
 THEME_REP_EARLY_MULT = 0.35     # legacy; compute_rep_adj now uses conf curve
 THEME_REP_STREAK_BONUS = 1.5    # |bonus| for 2+ same-side streak (persist or fade)
 THEME_REP_RATE_SCALE = 7.5      # (persist_rate - fade_rate) * scale → primary adj
-THEME_REP_CONF_DENOM = 3.5      # conf = min(1, sample_w / denom); softens thin samples
+THEME_REP_CONF_DENOM = 4.5      # conf = min(1, sample_w / denom); softens thin samples
 THEME_REP_EXTREME_RATE = 0.65   # lopsided habit bonus/penalty kicks in above this
 THEME_REP_NEWEST_TIP = 0.55     # extra nudge from the most recent outcome
 THEME_MANUAL_ADJ_MIN = -8.0

@@ -16,6 +16,7 @@ from market_desk.db import (
     load_signals_for_date,
     mark_signal_outcome,
     apply_signal_user_meta,
+    filter_signals_for_viewer,
     save_review_digest,
     upsert_signal,
     delete_signal,
@@ -481,7 +482,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
       - watch_trial_recommend → ``buy_trial``
       - independent_recommend → ``buy_indep``
       - dragon_recommend → ``buy_dragon``
-    Sell: ready items from sell_advice → ``sell``.
+    Sell: ready items from sell_advice → ``sell`` with ``owner_user_id``.
     Note: shared engine snap keeps sell_advice empty; ready sells are
     recorded via ``record_sell_advice_signals`` after the personal layer.
     """
@@ -669,6 +670,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     )
 
     sell = snapshot.get("sell_advice") or {}
+    try:
+        sell_owner = int(snapshot.get("auth_user_id") or sell.get("owner_user_id") or 0)
+    except (TypeError, ValueError):
+        sell_owner = 0
     for item in sell.get("items") or []:
         if not item.get("ready"):
             continue
@@ -698,6 +703,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                 "price": float(price),
                 "last": num(item.get("last")),
                 "ready": 1,
+                "owner_user_id": sell_owner,
                 "payload": {
                     "buy_price": item.get("buy_price"),
                     "stop_price": item.get("stop_price"),
@@ -712,6 +718,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "vs_mainline": board_cmp["vs_mainline"],
                     "board_match": board_cmp["match"],
                     "context": trade_ctx or None,
+                    "owner_user_id": sell_owner,
                 },
             }
         )
@@ -724,10 +731,16 @@ def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
 
     Sell cards are built per-user in ``attach_personal_layer``; the engine
     snapshot always stores an empty ``sell_advice``. Call this after the
-    personal layer is attached so 复盘 can see 建议卖出 rows.
+    personal layer is attached so 复盘 can see 建议卖出 rows owned by that user.
     """
     trade_date = snapshot.get("trade_date") or ""
     if not trade_date:
+        return 0
+    try:
+        owner = int(snapshot.get("auth_user_id") or 0)
+    except (TypeError, ValueError):
+        owner = 0
+    if owner <= 0:
         return 0
     sell = snapshot.get("sell_advice") or {}
     items = list(sell.get("all_items") or sell.get("items") or [])
@@ -743,7 +756,8 @@ def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
         "hot_boards": snapshot.get("hot_boards") or [],
         "pin_boards": snapshot.get("pin_boards") or [],
         "metrics": snapshot.get("metrics"),
-        "sell_advice": {"items": ready},
+        "auth_user_id": owner,
+        "sell_advice": {"items": ready, "owner_user_id": owner},
     }
     # Avoid re-logging buys: temporarily strip recommend trees.
     v = dict(slim["verdict"])
@@ -758,7 +772,6 @@ def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
         v.pop(key, None)
     slim["verdict"] = v
     return record_session_signals(slim)
-
 def score_signal_with_closes(
     signal: dict[str, Any],
     closes: list[float],
@@ -2420,8 +2433,9 @@ def build_review_payload(
 ) -> dict[str, Any]:
     """Load one trade-date's signals plus global summary for the review tab.
 
-    ``user_id`` overlays per-user traded / fill annotations. Shared digest
-    history is saved without personal fills so users do not pollute each other.
+    ``user_id`` overlays per-user traded / fill annotations and filters sells to
+    that account. Shared digest history is saved without personal fills so users
+    do not pollute each other.
     """
     calendar_today = datetime.now().strftime("%Y-%m-%d")
     day = str(trade_date or calendar_today).strip()[:10] or calendar_today
@@ -2452,11 +2466,13 @@ def build_review_payload(
         for r in (_flatten_signal_prices(r) for r in load_signals(limit=limit))
         if not _dragon_hide_from_review(r)
     ]
+    global_rows = filter_signals_for_viewer(global_rows, user_id)
     day_rows = [
         r
         for r in (_flatten_signal_prices(r) for r in load_signals_for_date(day))
         if not _dragon_hide_from_review(r)
     ]
+    day_rows = filter_signals_for_viewer(day_rows, user_id)
     if quotes:
         day_rows = enrich_signals_with_live_marks(day_rows, quotes)
     day_rows = enrich_signals_with_boards(

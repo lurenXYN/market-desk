@@ -24,6 +24,105 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_signals_owner_user(conn: sqlite3.Connection) -> None:
+    """Add ``owner_user_id`` and rebuild UNIQUE so sells can be per-account.
+
+    Buys stay at ``owner_user_id=0`` (shared paper). Sells use the real user id.
+    Preserves row ids so ``signal_user_meta`` FKs stay valid.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()}
+    if "owner_user_id" not in cols:
+        conn.execute(
+            "ALTER TABLE signals ADD COLUMN owner_user_id INTEGER NOT NULL DEFAULT 0"
+        )
+    # Already on the 4-key unique? Check table DDL / indexes.
+    create_sql = ""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='signals'"
+    ).fetchone()
+    if row and row[0]:
+        create_sql = str(row[0])
+    if "owner_user_id" in create_sql and "UNIQUE(trade_date, code, signal_type, owner_user_id)" in create_sql.replace(" ", ""):
+        return
+    # Also accept spaced form.
+    compact = create_sql.replace(" ", "").replace("\n", "")
+    if "UNIQUE(trade_date,code,signal_type,owner_user_id)" in compact:
+        return
+    # Rebuild table to replace 3-col UNIQUE with 4-col UNIQUE.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signals_owner_mig (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            signaled_at TEXT NOT NULL,
+            signal_type TEXT NOT NULL,
+            action TEXT,
+            phase TEXT,
+            mainline TEXT,
+            code TEXT NOT NULL,
+            name TEXT,
+            kind TEXT,
+            price REAL NOT NULL,
+            last REAL,
+            ready INTEGER,
+            payload TEXT,
+            outcome_day1_pct REAL,
+            outcome_day3_pct REAL,
+            outcome_mfe_pct REAL,
+            outcome_mae_pct REAL,
+            outcome_label TEXT,
+            outcome_checked_at TEXT,
+            note TEXT,
+            skipped INTEGER DEFAULT 0,
+            traded INTEGER DEFAULT 0,
+            fill_price REAL,
+            fill_qty INTEGER,
+            owner_user_id INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(trade_date, code, signal_type, owner_user_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO signals_owner_mig(
+            id, trade_date, signaled_at, signal_type, action, phase, mainline,
+            code, name, kind, price, last, ready, payload,
+            outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+            outcome_label, outcome_checked_at, note, skipped, traded,
+            fill_price, fill_qty, owner_user_id
+        )
+        SELECT
+            id, trade_date, signaled_at, signal_type, action, phase, mainline,
+            code, name, kind, price, last, ready, payload,
+            outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
+            outcome_label, outcome_checked_at, note, skipped, traded,
+            fill_price, fill_qty, COALESCE(owner_user_id, 0)
+        FROM signals
+        """
+    )
+    conn.execute("DROP TABLE signals")
+    conn.execute("ALTER TABLE signals_owner_mig RENAME TO signals")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON signals(trade_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_signals_owner ON signals(owner_user_id, trade_date)"
+    )
+    try:
+        mx = conn.execute("SELECT MAX(id) FROM signals").fetchone()[0]
+        if mx:
+            conn.execute(
+                "DELETE FROM sqlite_sequence WHERE name = ?",
+                ("signals",),
+            )
+            conn.execute(
+                "INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)",
+                ("signals", int(mx)),
+            )
+    except sqlite3.Error:
+        pass
+
+
 def init_db() -> None:
     """Create tables if they do not exist."""
     with _connect() as conn:
@@ -154,7 +253,8 @@ def init_db() -> None:
                 traded INTEGER DEFAULT 0,
                 fill_price REAL,
                 fill_qty INTEGER,
-                UNIQUE(trade_date, code, signal_type)
+                owner_user_id INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(trade_date, code, signal_type, owner_user_id)
             )
             """
         )
@@ -173,6 +273,7 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signals ADD COLUMN fill_price REAL")
         if "fill_qty" not in cols:
             conn.execute("ALTER TABLE signals ADD COLUMN fill_qty INTEGER")
+        _migrate_signals_owner_user(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS review_digest (
@@ -2339,8 +2440,9 @@ def is_t1_locked(row: dict[str, Any] | None, trade_date: str | None) -> bool:
 
 
 def upsert_signal(row: dict[str, Any]) -> None:
-    """Insert or refresh a same-day signal keyed by date + code + type.
+    """Insert or refresh a same-day signal keyed by date + code + type + owner.
 
+    ``owner_user_id``: ``0`` = shared paper (buys); positive = personal sells.
     ``signaled_at`` and ``price`` are kept from the first insert so the review
     panel shows the first watch time and the first suggested entry price.
     Payload is merged; first non-empty ``board_names`` is locked so later hot-board
@@ -2349,15 +2451,19 @@ def upsert_signal(row: dict[str, Any]) -> None:
     trade_date = row.get("trade_date")
     code = row.get("code")
     signal_type = row.get("signal_type")
+    try:
+        owner_id = int(row.get("owner_user_id") or 0)
+    except (TypeError, ValueError):
+        owner_id = 0
     incoming = dict(row.get("payload") or {})
     with _connect() as conn:
         existing = conn.execute(
             """
             SELECT signaled_at, price, payload
             FROM signals
-            WHERE trade_date = ? AND code = ? AND signal_type = ?
+            WHERE trade_date = ? AND code = ? AND signal_type = ? AND owner_user_id = ?
             """,
-            (trade_date, code, signal_type),
+            (trade_date, code, signal_type, owner_id),
         ).fetchone()
         old_payload: dict[str, Any] = {}
         if existing and existing["payload"]:
@@ -2438,9 +2544,9 @@ def upsert_signal(row: dict[str, Any]) -> None:
             """
             INSERT INTO signals(
                 trade_date, signaled_at, signal_type, action, phase, mainline,
-                code, name, kind, price, last, ready, payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(trade_date, code, signal_type) DO UPDATE SET
+                code, name, kind, price, last, ready, payload, owner_user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_date, code, signal_type, owner_user_id) DO UPDATE SET
                 action = excluded.action,
                 phase = excluded.phase,
                 mainline = excluded.mainline,
@@ -2452,7 +2558,7 @@ def upsert_signal(row: dict[str, Any]) -> None:
             """,
             (
                 trade_date,
-                row.get("signaled_at"),
+                row.get("signaled_at") if not existing else existing["signaled_at"],
                 signal_type,
                 row.get("action"),
                 row.get("phase"),
@@ -2460,10 +2566,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 code,
                 row.get("name"),
                 row.get("kind"),
-                row.get("price"),
+                row.get("price") if not existing else existing["price"],
                 row.get("last"),
                 int(row.get("ready") or 0),
                 now_payload,
+                owner_id,
             ),
         )
         conn.commit()
@@ -2473,31 +2580,13 @@ def load_signal(signal_id: int) -> dict[str, Any] | None:
     """Return one signal row by id, or None."""
     with _connect() as conn:
         row = conn.execute(
-            """
-            SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
-                   code, name, kind, price, last, ready, payload,
-                   outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
-                   outcome_label, outcome_checked_at, note, skipped, traded,
-                   fill_price, fill_qty
-            FROM signals
-            WHERE id = ?
-            """,
+            _SIGNAL_SELECT + " WHERE id = ?",
             (int(signal_id),),
         ).fetchone()
     if not row:
         return None
-    item = dict(row)
-    raw = item.get("payload")
-    if isinstance(raw, str) and raw:
-        try:
-            item["payload"] = json.loads(raw)
-        except json.JSONDecodeError:
-            item["payload"] = {}
-    else:
-        item["payload"] = {}
-    item["skipped"] = int(item.get("skipped") or 0)
-    item["traded"] = int(item.get("traded") or 0)
-    return item
+    items = _decode_signal_rows([row])
+    return items[0] if items else None
 
 
 _SIGNAL_SELECT = """
@@ -2505,7 +2594,7 @@ _SIGNAL_SELECT = """
            code, name, kind, price, last, ready, payload,
            outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
            outcome_label, outcome_checked_at, note, skipped, traded,
-           fill_price, fill_qty
+           fill_price, fill_qty, COALESCE(owner_user_id, 0) AS owner_user_id
     FROM signals
 """
 
@@ -2525,6 +2614,49 @@ def _decode_signal_rows(rows: list[Any]) -> list[dict[str, Any]]:
             item["payload"] = {}
         item["skipped"] = int(item.get("skipped") or 0)
         item["traded"] = int(item.get("traded") or 0)
+        try:
+            item["owner_user_id"] = int(item.get("owner_user_id") or 0)
+        except (TypeError, ValueError):
+            item["owner_user_id"] = 0
+        out.append(item)
+    return out
+
+
+def filter_signals_for_viewer(
+    rows: list[dict[str, Any]] | None,
+    user_id: int | None,
+) -> list[dict[str, Any]]:
+    """Keep shared buys for everyone; keep sells only for the owning account.
+
+    Legacy sells with ``owner_user_id=0`` stay visible to logged-in users.
+    """
+    out: list[dict[str, Any]] = []
+    uid = None
+    try:
+        if user_id is not None:
+            uid = int(user_id)
+    except (TypeError, ValueError):
+        uid = None
+    for raw in rows or []:
+        item = dict(raw)
+        st = str(item.get("signal_type") or "")
+        try:
+            owner = int(item.get("owner_user_id") or 0)
+        except (TypeError, ValueError):
+            owner = 0
+        if st == "sell":
+            if owner == 0:
+                if uid is None:
+                    continue
+                out.append(item)
+                continue
+            if uid is None or owner != uid:
+                continue
+            out.append(item)
+            continue
+        if owner not in (0,):
+            if uid is None or owner != uid:
+                continue
         out.append(item)
     return out
 
