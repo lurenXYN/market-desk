@@ -165,6 +165,13 @@ def attach_personal_layer(
         out["sell_advice"] = advice
 
         # Re-size recommend cards with this user's equity / open book.
+        bridge = (verdict.get("auction_open_bridge") or {}) if isinstance(verdict, dict) else {}
+        seg_v = (verdict.get("segment") or {}) if isinstance(verdict, dict) else {}
+        block_arm = (
+            bool(seg_v.get("open_mute"))
+            or bool(verdict.get("auction_only"))
+            or bool(bridge.get("revoke_probe"))
+        )
         for key in ("recommend", "side_recommend", "link_recommend"):
             rec = verdict.get(key)
             if not rec:
@@ -176,6 +183,7 @@ def attach_personal_layer(
             )
             verdict[key] = finalize_recommend_buy_ux(
                 sized,
+                block_arm=block_arm,
                 allow_probe=(key == "recommend"),
             )
         verdict = apply_size_cap_gate(verdict, positions)

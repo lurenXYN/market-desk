@@ -232,6 +232,7 @@ BUY_DEMOTE_LOCK_NOTES = (
     "竞价观望",
     "竞价弱开闸门",
     "竞价强开防追",
+    "竞价开盘桥",
 )
 # Minute-structure tip / shallow pullback (percent of recent minute high).
 MINUTE_TIP_THR_NARROW = 0.25
@@ -239,6 +240,20 @@ MINUTE_TIP_THR_WIDE = 0.35
 MINUTE_GRIND_PULLBACK = 0.55
 MINUTE_SHALLOW = 0.28
 MINUTE_VOL_PULLBACK = 0.55
+# Tip / shallow labels still block full ready, but allow half-size probe.
+TIP_PROBE_ALLOW_FAILS = frozenset(
+    {
+        "分时贴近近期高点",
+        "分时仍在抬高点",
+        "分时回撤过浅",
+    }
+)
+# After sticky mainline switches: protect new-theme strong bags this long.
+SWITCH_SELL_GRACE_SECONDS = 45 * 60  # 45 minutes (within 30–60 band)
+# Strong auction + weak open (first N minutes after 09:30) → demote / revoke probe.
+AUCTION_OPEN_BRIDGE_MINUTES = 15
+AUCTION_OPEN_STRONG_MEDIAN = 2.0
+AUCTION_OPEN_WEAK_HS300 = -0.3
 
 # Ready / structure gates (centralized; was scattered magic numbers).
 ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可买入

@@ -185,6 +185,22 @@ def _soft_scale_qty(item: dict[str, Any], mult: float, tip: str) -> None:
         item["risk_plan"] = plan
 
 
+def _is_tip_structure_fail(flag: str, verdict: dict[str, Any] | None = None) -> bool:
+    """Return True when the minute fail is tip / grind / shallow (probe-allowed)."""
+    from market_desk.config import TIP_PROBE_ALLOW_FAILS
+
+    text = str(flag or "").strip()
+    if text in TIP_PROBE_ALLOW_FAILS:
+        return True
+    v = verdict or {}
+    if v.get("at_tip"):
+        return True
+    for raw in v.get("fails") or []:
+        if str(raw or "").strip() in TIP_PROBE_ALLOW_FAILS:
+            return True
+    return False
+
+
 def apply_minute_confirmations(
     recommend: dict[str, Any] | None,
     minutes_by_code: dict[str, list[dict[str, Any]]] | None,
@@ -240,9 +256,17 @@ def apply_minute_confirmations(
             if flag not in fails:
                 fails.append(flag)
             item["confirm_fail"] = fails
+            # Near-entry + tip/grind fail: keep hard ready blocked, allow probe path.
+            tip_related = _is_tip_structure_fail(flag, verdict)
+            if tip_related and item.get("near_entry"):
+                item["fake_pullback_tip"] = True
+                item["role_label"] = (
+                    "ETF·贴尖试探" if kind == "etf" else "主线·贴尖试探"
+                )
             item["reason"] = (str(item.get("reason") or "") + f"；确认失败：{flag}").strip("；")
         else:
             item["minute_pending"] = False
+            item.pop("fake_pullback_tip", None)
     if soft_pending:
         note = str(rec.get("size_note") or "")
         extra = "分时样本不足·软缩仓（不关现买）"

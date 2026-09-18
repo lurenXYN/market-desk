@@ -216,6 +216,18 @@ def build_verdict(
         segment_key=str(seg.get("key") or "closed"),
     )
     algo_notes.extend(gate_notes)
+    action, reason, size_hint, bridge_notes, auction_open_bridge = apply_auction_open_bridge(
+        action,
+        reason,
+        size_hint,
+        now=now,
+        segment_key=str(seg.get("key") or "closed"),
+        auction=auction,
+        metrics=metrics,
+        mainline_pct=main.get("pct"),
+        carrier_pct=pct,
+    )
+    algo_notes.extend(bridge_notes)
     action, reason, size_hint, stock_block, review_notes = apply_review_bias(
         action, reason, size_hint, phase=phase
     )
@@ -490,6 +502,21 @@ def build_verdict(
         link_recommend=link_recommend,
         life_stage=life_stage,
     )
+    switch_guard = build_switch_guard(
+        now=now,
+        sticky_since=sticky_since,
+        current_name=board_name,
+        prev_name=prev_name,
+    )
+    if switch_guard.get("active") and switch_guard.get("from_name"):
+        sell_themes = inject_switch_from_theme(
+            sell_themes, switch_guard, hot=hot
+        )
+        tip = (
+            f"换防护栏={switch_guard.get('from_name')}→{switch_guard.get('to_name')}"
+        )
+        if tip not in algo_notes:
+            algo_notes.append(tip)
     out = {
         "action": action,
         "headline": headline,
@@ -505,6 +532,8 @@ def build_verdict(
         "dragon_recommend": None,
         "independent_recommend": None,
         "sell_themes": sell_themes,
+        "switch_guard": switch_guard,
+        "auction_open_bridge": auction_open_bridge,
         "playbook": playbook,
         "algo_notes": algo_notes,
         "mainline": {
@@ -554,7 +583,11 @@ def build_verdict(
         "similar": similar or {},
         "adapt": adapt_bundle,
     }
-    block_arm = bool(seg.get("open_mute")) or auction_only
+    block_arm = (
+        bool(seg.get("open_mute"))
+        or auction_only
+        or bool((auction_open_bridge or {}).get("revoke_probe"))
+    )
     out["recommend"] = mark_pullback_entries(
         out.get("recommend"), block_arm=block_arm
     )
@@ -2284,6 +2317,237 @@ def apply_market_gates(
     return act, why, hint, notes[:6]
 
 
+def apply_auction_open_bridge(
+    action: str,
+    reason: str,
+    size_hint: str,
+    *,
+    now: datetime,
+    segment_key: str,
+    auction: dict[str, Any] | None,
+    metrics: dict[str, Any] | None,
+    mainline_pct: Any = None,
+    carrier_pct: Any = None,
+) -> tuple[str, str, str, list[str], dict[str, Any]]:
+    """Demote buys when a strong auction fades in the first open minutes.
+
+    Window: 09:30–09:45 (continuous session start). Strong median open plus a
+    weak index / soft mainline-carrier print → observe + revoke probes.
+    """
+    from market_desk.config import (
+        AUCTION_OPEN_BRIDGE_MINUTES,
+        AUCTION_OPEN_STRONG_MEDIAN,
+        AUCTION_OPEN_WEAK_HS300,
+    )
+
+    notes: list[str] = []
+    bridge: dict[str, Any] = {
+        "active": False,
+        "revoke_probe": False,
+        "median_open": None,
+        "window_minutes": int(AUCTION_OPEN_BRIDGE_MINUTES),
+        "segment_key": str(segment_key or ""),
+    }
+    act = action
+    why = reason
+    hint = size_hint or ""
+    minutes = now.hour * 60 + now.minute
+    open_m = 9 * 60 + 30
+    end_m = open_m + int(AUCTION_OPEN_BRIDGE_MINUTES)
+    # First N minutes of continuous auction (covers open_mute overlay on open30).
+    in_window = open_m <= minutes < end_m
+    if not in_window:
+        return act, why, hint, notes, bridge
+
+    auc = auction or {}
+    med = auc.get("median_open")
+    try:
+        med_f = float(med) if med is not None else None
+    except (TypeError, ValueError):
+        med_f = None
+    bridge["median_open"] = med_f
+    if med_f is None or med_f < float(AUCTION_OPEN_STRONG_MEDIAN):
+        return act, why, hint, notes, bridge
+
+    m = metrics or {}
+    weak = bool(m.get("weak_index"))
+    try:
+        hs = m.get("hs300_pct")
+        if hs is not None and float(hs) <= float(AUCTION_OPEN_WEAK_HS300):
+            weak = True
+    except (TypeError, ValueError):
+        pass
+    try:
+        if mainline_pct is not None and float(mainline_pct) < 0:
+            weak = True
+    except (TypeError, ValueError):
+        pass
+    try:
+        if carrier_pct is not None and float(carrier_pct) < 0:
+            weak = True
+    except (TypeError, ValueError):
+        pass
+    if not weak:
+        return act, why, hint, notes, bridge
+
+    bridge["active"] = True
+    bridge["revoke_probe"] = True
+    notes.append("竞价开盘桥")
+    if act == "可买入":
+        act = "观察回踩"
+        why = f"竞价强但开盘偏弱，降级观察回踩：{why}"
+    hint = _join_hint(hint, "竞价强开盘弱·降仓")
+    return act, why, hint, notes, bridge
+
+
+def _switch_age_from_since(sticky_since: str | None, now: datetime) -> float | None:
+    """Return seconds since sticky_since wall clock, or None if unparseable."""
+    text = str(sticky_since or "").strip()
+    if not text:
+        return None
+    try:
+        from datetime import datetime as _dt
+
+        since_dt = _dt.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+        return max(0.0, (now_naive - since_dt).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def build_switch_guard(
+    *,
+    now: datetime,
+    sticky_since: str | None,
+    current_name: str,
+    prev_name: str | None,
+    grace_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Build a grace-window guard when sticky mainline just switched."""
+    from market_desk.config import SWITCH_SELL_GRACE_SECONDS
+
+    grace = float(
+        grace_seconds if grace_seconds is not None else SWITCH_SELL_GRACE_SECONDS
+    )
+    cur = str(current_name or "").strip()
+    prev = str(prev_name or "").strip()
+    age = _switch_age_from_since(sticky_since, now)
+    from_name = ""
+    to_name = cur
+    active = False
+    if cur and prev and cur != prev:
+        # Flip on this tick: sticky_since was just reset.
+        from_name = prev
+        if age is None:
+            age = 0.0
+        active = age <= grace
+    elif cur and age is not None and age <= grace:
+        # Same sticky name still inside grace after an earlier flip today.
+        active = True
+        to_name = cur
+    return {
+        "active": bool(active and cur),
+        "from_name": from_name,
+        "to_name": to_name,
+        "grace_seconds": grace,
+        "age_seconds": None if age is None else round(float(age), 1),
+    }
+
+
+def inject_switch_from_theme(
+    sell_themes: list[dict[str, Any]] | None,
+    switch_guard: dict[str, Any] | None,
+    *,
+    hot: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Inject the previous sticky theme as an observe/fade sell peer."""
+    themes = list(sell_themes or [])
+    sg = switch_guard or {}
+    from_name = str(sg.get("from_name") or "").strip()
+    if not sg.get("active") or not from_name:
+        return themes
+    if any(str(t.get("name") or "").strip() == from_name for t in themes):
+        # Already present: force fade observation so old bags enter soft sell set.
+        out: list[dict[str, Any]] = []
+        for t in themes:
+            row = dict(t)
+            if str(row.get("name") or "").strip() == from_name:
+                if str(row.get("role") or "") == "primary":
+                    out.append(row)
+                    continue
+                row["role"] = row.get("role") or "switch_from"
+                if str(row.get("status") or "") not in ("退潮",):
+                    row["status"] = "退潮"
+                if str(row.get("lifecycle") or "") != "ending":
+                    row["lifecycle"] = "ending"
+                row["switch_from"] = True
+            out.append(row)
+        return out
+
+    board = _lookup_hot_board(hot or [], name=from_name)
+    pool = _pool_codes_from_board(board) if board else []
+    entry = _theme_entry(
+        name=from_name,
+        role="switch_from",
+        status="退潮",
+        lifecycle="ending",
+        pool_codes=pool,
+        carrier_code=None,
+        score=None,
+        main_yi=(board or {}).get("main_yi") if board else None,
+    )
+    entry["switch_from"] = True
+    themes.append(entry)
+    return themes
+
+
+def attach_switch_guard(
+    verdict: dict[str, Any] | None,
+    switches: list[dict[str, Any]] | None = None,
+    *,
+    now: datetime | None = None,
+    hot: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Merge same-day switch events into switch_guard and inject old sell theme."""
+    from market_desk.config import SWITCH_SELL_GRACE_SECONDS
+
+    out = dict(verdict or {})
+    grace = float(SWITCH_SELL_GRACE_SECONDS)
+    sg = dict(out.get("switch_guard") or {})
+    clock = now
+    if clock is None:
+        clock = datetime.now()
+    rows = list(switches or [])
+    latest = rows[0] if rows else None
+    if latest:
+        age = _switch_age_from_since(str(latest.get("switched_at") or ""), clock)
+        from_name = str(latest.get("from_name") or "").strip()
+        to_name = str(latest.get("to_name") or "").strip()
+        if age is not None and age <= grace and to_name:
+            sg["active"] = True
+            sg["from_name"] = from_name or str(sg.get("from_name") or "")
+            sg["to_name"] = to_name
+            sg["age_seconds"] = round(float(age), 1)
+            sg["grace_seconds"] = grace
+        elif from_name and not sg.get("from_name"):
+            sg["from_name"] = from_name
+    if not sg.get("grace_seconds"):
+        sg["grace_seconds"] = grace
+    if sg.get("active") is None:
+        sg["active"] = False
+    out["switch_guard"] = sg
+    if sg.get("active") and sg.get("from_name"):
+        out["sell_themes"] = inject_switch_from_theme(
+            out.get("sell_themes"), sg, hot=hot
+        )
+        notes = list(out.get("algo_notes") or [])
+        tip = f"换防护栏={sg.get('from_name')}→{sg.get('to_name')}"
+        if tip not in notes:
+            notes.append(tip)
+            out["algo_notes"] = notes
+    return out
+
+
 def apply_review_bias(
     action: str,
     reason: str,
@@ -2410,6 +2674,13 @@ def is_soft_confirm_flag(flag: str) -> bool:
     return False
 
 
+def is_tip_probe_allow_fail(flag: str) -> bool:
+    """Return True when a hard tip/shallow fail still permits half-size probe."""
+    from market_desk.config import TIP_PROBE_ALLOW_FAILS
+
+    return str(flag or "").strip() in TIP_PROBE_ALLOW_FAILS
+
+
 def hard_confirm_fails(flags: list[Any] | None) -> list[str]:
     """Filter confirm_fail down to hard gates that block ready / arming."""
     out: list[str] = []
@@ -2418,6 +2689,11 @@ def hard_confirm_fails(flags: list[Any] | None) -> list[str]:
         if text and not is_soft_confirm_flag(text):
             out.append(text)
     return out
+
+
+def probe_blocking_fails(flags: list[Any] | None) -> list[str]:
+    """Hard fails that still forbid probe (excludes tip/shallow probe-allow labels)."""
+    return [f for f in hard_confirm_fails(flags) if not is_tip_probe_allow_fail(f)]
 
 
 def _scale_item_qty(item: dict[str, Any], mult: float, tip: str) -> None:
@@ -2684,7 +2960,8 @@ def apply_mainline_probe(
     """Mark near-entry mainline cards as soft probe when full ready is not armed.
 
     Does not upgrade hero action. Shrinks suggested size by ``PROBE_SIZE_MULT``.
-    Hard confirm fails / block_ready / trend_down still forbid probe.
+    Hard confirm fails / block_ready / trend_down still forbid probe, except
+    tip/shallow minute fails which demote ready but still allow half-size probe.
     """
     from market_desk.config import PROBE_SIZE_MULT
 
@@ -2703,20 +2980,26 @@ def apply_mainline_probe(
         ):
             items.append(item)
             continue
-        if hard_confirm_fails(item.get("confirm_fail") or []):
+        hard = hard_confirm_fails(item.get("confirm_fail") or [])
+        blocking = probe_blocking_fails(item.get("confirm_fail") or [])
+        if blocking:
             items.append(item)
             continue
-        # Soft path: price tagged, hard gates clear, full ready not armed yet.
+        tip_only = bool(hard) and not blocking
+        fake_tip = bool(item.get("fake_pullback_tip")) or tip_only
+        # Soft path: price tagged, probe-blocking gates clear, full ready not armed.
         item["probe_ok"] = True
         any_probe = True
         kind = item.get("kind") or "stock"
-        item["role_label"] = "ETF·可试探" if kind == "etf" else "主线·可试探"
+        if fake_tip:
+            item["role_label"] = "ETF·可试探" if kind == "etf" else "主线·可试探"
+            probe_tip = "回踩到位但分时仍贴尖，只试探不升可买"
+        else:
+            item["role_label"] = "ETF·可试探" if kind == "etf" else "主线·可试探"
+            probe_tip = "靠近建议价，可小仓试探（不升顶栏可买入）"
         _scale_item_qty(item, float(PROBE_SIZE_MULT), "主线可试探·半仓")
         item["probe_size_mult"] = round(float(PROBE_SIZE_MULT), 3)
-        item["reason"] = _join_hint(
-            str(item.get("reason") or ""),
-            "靠近建议价，可小仓试探（不升顶栏可买入）",
-        )
+        item["reason"] = _join_hint(str(item.get("reason") or ""), probe_tip)
         items.append(item)
     rec["items"] = items
     if any_probe:
@@ -4169,7 +4452,13 @@ def _sell_theme_context(row: dict[str, Any], verdict: dict[str, Any]) -> dict[st
     strong_hits = [t for t in matches if _is_strong(t)]
     # Prefer primary among equals so sticky context stays visible in reasons.
     def _rank(t: dict[str, Any]) -> tuple[int, float]:
-        role_rank = {"primary": 0, "side": 1, "hot": 2}.get(str(t.get("role") or ""), 9)
+        role_rank = {
+            "primary": 0,
+            "side": 1,
+            "switch_from": 2,
+            "link": 3,
+            "hot": 4,
+        }.get(str(t.get("role") or ""), 9)
         try:
             sc = -float(t.get("score") or 0)
         except (TypeError, ValueError):
@@ -5558,7 +5847,10 @@ def _sell_item(
             if band["mode"] != "neutral":
                 reason_parts.append(f"波段口径 {band['mode_zh']}")
             if on_mainline and theme_role and theme_role != "primary" and theme_label:
-                reason_parts.append(f"卖侧归属「{theme_label}」（{ {'side':'支线','hot':'热点同伴'}.get(theme_role, theme_role) }）")
+                reason_parts.append(
+                    f"卖侧归属「{theme_label}」（"
+                    f"{ {'side':'支线','hot':'热点同伴','link':'联动','switch_from':'换防旧主题'}.get(theme_role, theme_role) }）"
+                )
             if carrier_rel_strong and vs_carrier is not None:
                 reason_parts.append(f"强于主线载体 {vs_carrier:+.1f}pt，先不轻减")
             elif carrier_rel_weak and vs_carrier is not None:
@@ -5642,6 +5934,45 @@ def _sell_item(
                     0,
                     "反悔窗：已减半后仍贴尖/相对强，暂不清仓；破减仓价或深结构再清",
                 )
+
+    # Fresh mainline switch: protect strong NEW-theme bags from soft half/trim chops.
+    switch_guard_held = False
+    sg = verdict.get("switch_guard") or {}
+    if ready and sg.get("active") and urgency != "stop":
+        ml_name = str(mainline.get("name") or "").strip()
+        matched = [str(x) for x in (theme_ctx.get("matched_names") or []) if x]
+        on_new_mainline = bool(ml_name) and (
+            ml_name in matched
+            or (theme_ctx.get("tied") and str(theme_ctx.get("name") or "") == ml_name)
+            or str(theme_role or "") == "primary"
+        )
+        daily_up_sg = bool(trend.get("up")) and not bool(trend.get("down"))
+        strong_bag = bool(rel_strong or at_tip or daily_up_sg)
+        deep_structure = bool(
+            exit_mode == "clear"
+            and urgency == "take"
+            and pullback is not None
+            and pullback >= pb_deep
+            and pnl_pct is not None
+            and float(pnl_pct) >= take_deep_pnl
+        )
+        soft_chop = (
+            urgency in ("trim", "take")
+            and exit_mode == "half"
+        ) or (
+            urgency == "trim" and exit_mode == "clear" and not deep_structure
+        )
+        if on_new_mainline and strong_bag and soft_chop and not deep_structure:
+            ready = False
+            exit_mode = "hold"
+            sell_pct = 0
+            switch_guard_held = True
+            role_label = "换防护栏·继续持有"
+            sell_price = target
+            reason_parts.insert(
+                0,
+                "主线刚换防：新主题强票暂不因软减/非主线误砍（止损与深结构仍可卖）",
+            )
 
     if t1_locked and ready:
         ready = False
@@ -5744,6 +6075,7 @@ def _sell_item(
         "sell_tune": sell_tune,
         "minute_gate": minute_gate,
         "regret_hold": regret_hold,
+        "switch_guard_held": switch_guard_held,
         "yday_repaired": yday_repaired,
         "hold_peak": round(hold_peak, 4) if hold_peak else None,
     }

@@ -392,6 +392,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "同一天按竞价 / 开盘半小时 / 午前 / 午后分段给结论，避免全天一套话。",
         "algo": "竞价(9:15–9:30)只认主线不买；此窗用 auction_refresh_seconds（默认5）加快引擎与行情缓存刷新；\n"
         "开盘后 open_mute_minutes（默认5）分钟静音只看不买；\n"
+        "竞价开盘桥：09:30–09:45 内竞价中位≥2% 且开盘偏弱（指数弱/沪深300≤-0.3%/主线或载体收绿）→\n"
+        "可买入降观察回踩、降仓、algo「竞价开盘桥」、revoke_probe 禁试探（BUY_DEMOTE_LOCK）。\n"
         "随后开盘半小时未完全确认则降为观察回踩且宜小仓；\n"
         "午前正常；午后遇高潮/恐慌新开仓降级。尾盘 tail_mute_minutes（默认30，即14:30起）静音买入/决策 toast，风险类仍提醒。\n"
         "每段最新结论写入本地库，条带可回看。",
@@ -400,7 +402,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "今天主线板块确认换防时记一条时间线，方便回看何时从 A 切到 B。",
         "algo": "相邻两轮对比 sticky 主线名；挑战者须高出约 12 分才换防。\n"
         "持有期内（默认 5 分钟）再乘 1.5 倍分差；同主题（如煤炭↔动力煤）默认不记切换、换板需约 2×分差。\n"
-        "落库去抖：短时翻转撤回噪声；短时 A→B→C 合并为一条 A→C。薄确认（涨停<3）打分打折。",
+        "落库去抖：短时翻转撤回噪声；短时 A→B→C 合并为一条 A→C。薄确认（涨停<3）打分打折。\n"
+        "换防护栏：sticky 刚换后 SWITCH_SELL_GRACE_SECONDS（默认45分钟）内，旧主题注入卖侧观察/退潮集合；\n"
+        "新主题强票（相对强/贴尖/日线升）不因软减误砍，止损与深结构清仓仍可卖；verdict.switch_guard 供面板。",
     },
     "主线生命周期": {
         "mean": "板块阶段雷达：萌芽 / 主升 / 衰退。完整三列在「板块」页顶；作战台只显示当前主线阶段。",
@@ -422,9 +426,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "优先 push2delay（push2 对 ETF 常断连），失败再试 push2 / push2his；空序列不入分钟缓存。\n"
         "优先官方均价线；无则退回近20点均线。近40点高低。样本门槛 MINUTE_SAMPLE_MIN（默认15）。\n"
         "拒（硬关 ready）：贴尖、仍抬高点、均价/均线下、回撤过浅；有量时近5分钟均量>前段×0.95 也拒。\n"
+        "冲高假到位：回踩到位(near_entry)但分时仍贴尖/抬高点/回撤过浅 → ready 仍关，标 fake_pullback_tip，\n"
+        "仅允许主线 probe_ok 半仓（不升可买）；均价下方/量能未缩等非 tip 硬闸仍禁试探。\n"
         "样本不足或拉取失败（ok=None）：标 minute_pending + confirm_soft，仓位×0.85，不关 ready。\n"
         "未贴近买价、尚未拉分时：进度条显示「未验·软」，不要当成样本不足。\n"
-        "到位武装须 minute.ok 为 True；仅样本不足时可走主线「可试探」半档（不升顶栏可买入）。\n"
+        "到位武装须 minute.ok 为 True；仅样本不足或 tip 假到位时可走主线「可试探」半档（不升顶栏可买入）。\n"
         "复盘假杀偏多时 tip/浅回撤/缩量门槛×约0.88；真杀偏多则×约1.12。\n"
         "顺序：near-entry → 分时闸门 → rematch → 离日高/流出 → align → 试探/距可买进度。",
     },
@@ -478,6 +484,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "昨买今弱：窗内偏弱默认先减；现价收复成本或日涨回升过阈值→今弱已修复，取消轻减。\n"
         "独立人气回踩来源持仓豁免昨买今弱轻减。\n"
         "隔夜高开低走：主线内且强于载体/贴尖/日线上升 → 不因形态软减；弱于载体仍可 half。\n"
+        "换防护栏：sticky 刚换后约45分钟，旧主题仓进卖侧观察/退潮集合；新主题强票软 half/trim 暂抑，\n"
+        "止损与深结构 clear 不护。\n"
         "买卖冲突：软减（half+trim/take）遇同码 ready 买或作战台「可买入」且属卖侧主题 → 改为继续持有；\n"
         "止损/清仓不动。已持仓同码与硬卖点 → 买侧降为「已持有/减仓中·不加仓」。\n"
         "建议卖出落库：个人层 ready 卖点后 ``record_sell_advice_signals`` 写入，带 owner_user_id；\n"
@@ -546,7 +554,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "可试探": {
         "mean": "现价已近建议买、硬闸门已过，但全仓现买未武装；允许按建议股数约一半试探，不改顶栏「可买入」。",
-        "algo": "主线：near_entry 且非 ready/block/日线下降，且无硬 confirm_fail → probe_ok，仓位×PROBE_SIZE_MULT（0.5）。\n"
+        "algo": "主线：near_entry 且非 ready/block/日线下降，且无非 tip 硬 confirm_fail → probe_ok，仓位×PROBE_SIZE_MULT（0.5）。\n"
+        "分时贴尖/抬高点/回撤过浅（TIP_PROBE_ALLOW_FAILS）仍关 ready，但可试探，理由「回踩到位但分时仍贴尖，只试探不升可买」。\n"
+        "竞价开盘桥 revoke_probe / 开盘静音 / 竞价观望 → block_arm 禁试探。\n"
         "自选观察页「可试探」另走 watch_trial_recommend（×0.75）。二者均不升顶栏可买入。",
     },
     "点火": {

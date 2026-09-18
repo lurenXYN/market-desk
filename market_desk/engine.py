@@ -127,6 +127,7 @@ from market_desk.verdict import (
     apply_stock_daily_trends,
     attach_board_etf_trends,
     attach_position_daily_trends,
+    attach_switch_guard,
     build_deltas,
     build_desk_gate_summary,
     build_favorite_desk_plans,
@@ -624,7 +625,12 @@ class DeskEngine:
                 # Soft ETF maps block_ready on the vehicle only; stocks may arm.
                 # Holders / watch-trial enrich run after first snapshot publish (Phase A).
                 seg_v = verdict.get("segment") or {}
-                block_arm = bool(seg_v.get("open_mute")) or bool(verdict.get("auction_only"))
+                bridge = verdict.get("auction_open_bridge") or {}
+                block_arm = (
+                    bool(seg_v.get("open_mute"))
+                    or bool(verdict.get("auction_only"))
+                    or bool(bridge.get("revoke_probe"))
+                )
                 verdict["recommend"] = mark_pullback_entries(
                     verdict.get("recommend"),
                     observe_only=False,
@@ -686,7 +692,12 @@ class DeskEngine:
                 aligned = align_action_with_ready(verdict)
                 verdict.clear()
                 verdict.update(aligned)
-                seg_lock = bool(seg_v.get("open_mute")) or bool(verdict.get("auction_only"))
+                bridge = verdict.get("auction_open_bridge") or {}
+                seg_lock = (
+                    bool(seg_v.get("open_mute"))
+                    or bool(verdict.get("auction_only"))
+                    or bool(bridge.get("revoke_probe"))
+                )
                 verdict["recommend"] = finalize_recommend_buy_ux(
                     verdict.get("recommend"),
                     block_arm=seg_lock,
@@ -751,6 +762,15 @@ class DeskEngine:
                     or (verdict.get("segment") or {}).get("key"),
                 )
                 switches = load_mainline_switches(trade_date_dash)
+                try:
+                    verdict = attach_switch_guard(
+                        verdict,
+                        switches,
+                        now=now,
+                        hot=list(hot_cards) + list(pin_cards) + list(fav_cards),
+                    )
+                except Exception:
+                    log.exception("attach_switch_guard failed")
                 payload = {
                     "ok": True,
                     "error": None,
@@ -2030,8 +2050,16 @@ class DeskEngine:
                 )
                 self.snapshot["verdict"] = align_action_with_ready(self.snapshot["verdict"])
                 vv = self.snapshot["verdict"]
+                bridge = vv.get("auction_open_bridge") or {}
+                seg_v = vv.get("segment") or {}
+                block_arm = (
+                    bool(seg_v.get("open_mute"))
+                    or bool(vv.get("auction_only"))
+                    or bool(bridge.get("revoke_probe"))
+                )
                 vv["recommend"] = finalize_recommend_buy_ux(
                     vv.get("recommend"),
+                    block_arm=block_arm,
                     allow_probe=True,
                 )
                 self.snapshot["desk_gate_summary"] = build_desk_gate_summary(
