@@ -28,6 +28,7 @@ USER_PRIVATE_KEYS = frozenset(
         "decision_alerts",
         "hit_rate_mode",
         "outcome_standard",
+        "adapt_follow_outcome",
         "ready_style",
         "sell_open_watch_minutes",
         "open_mute_minutes",
@@ -54,6 +55,7 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "tail_mute_minutes",
         "hit_rate_mode",
         "outcome_standard",
+        "adapt_follow_outcome",
         "ready_style",
         "sell_open_watch_minutes",
         "morning_push",
@@ -145,8 +147,10 @@ DEFAULTS: dict[str, Any] = {
     "tail_mute_minutes": 30,
     # Review hit-rate: traded (executed only) | all (paper signals too).
     "hit_rate_mode": "traded",
-    # Review outcome standard: classic | same_day_plan (display overlay).
+    # Review outcome standard: classic | same_day_plan | filled (display overlay).
     "outcome_standard": "classic",
+    # Soft adapt always uses persisted classic labels unless True (reserved; v1 still classic).
+    "adapt_follow_outcome": False,
     # Ready style: strict | band (near_entry below chase → soft ready).
     "ready_style": str(cfg.READY_STYLE_DEFAULT),
     # Soft-sell open buffer minutes after 09:30 (must-sell ignores this).
@@ -305,6 +309,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     if oc not in ("classic", "same_day_plan", "filled"):
         oc = "classic"
     out["outcome_standard"] = oc
+    out["adapt_follow_outcome"] = bool(out.get("adapt_follow_outcome"))
     rs = str(out.get("ready_style") or cfg.READY_STYLE_DEFAULT).strip().lower()
     if rs not in ("strict", "band"):
         rs = str(cfg.READY_STYLE_DEFAULT)

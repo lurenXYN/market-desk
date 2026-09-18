@@ -14,6 +14,8 @@ from market_desk.numbers import num
 from market_desk.review import (
     BUY_HIT_LABELS,
     _flatten_signal_prices,
+    build_exec_score,
+    classify_fill_execution,
     is_buy_signal,
     is_sell_signal,
     score_signal_with_closes,
@@ -221,11 +223,21 @@ def _clamp_fill(fill: float, lo: float | None, hi: float | None) -> float:
 
 
 def _plan_buy_prices(row: dict[str, Any]) -> dict[str, float | None]:
-    """Resolve wait / plan / chase / stop for a buy signal row."""
+    """Resolve wait / plan / chase / stop for a buy signal row.
+
+    ``plan`` prefers locked ``plan_price`` (survives demote-to-wait); falls back
+    to ``signals.price``. ``wait`` stays the ideal pullback rung.
+    """
     flat = _flatten_signal_prices(row)
     payload = flat.get("payload") if isinstance(flat.get("payload"), dict) else {}
     wait = num(flat.get("wait_price") if flat.get("wait_price") is not None else payload.get("wait_price"))
-    plan = num(flat.get("price"))
+    plan = num(
+        flat.get("plan_price")
+        if flat.get("plan_price") is not None
+        else payload.get("plan_price")
+    )
+    if plan is None:
+        plan = num(flat.get("price"))
     chase = num(
         flat.get("chase_price") if flat.get("chase_price") is not None else payload.get("chase_price")
     )
@@ -501,8 +513,33 @@ def _score_after_fill(
     )
 
 
+def _sim_exec_kind(
+    *,
+    fill_price: float,
+    wait: float | None,
+    plan: float | None,
+    chase: float | None,
+) -> str | None:
+    """Classify a simulated buy fill vs wait/plan/chase (never writes signals)."""
+    pseudo = {
+        "signal_type": "buy",
+        "traded": 1,
+        "fill_price": fill_price,
+        "price": plan if plan is not None else wait,
+        "plan_price": plan,
+        "wait_price": wait,
+        "chase_price": chase,
+        "payload": {
+            "plan_price": plan,
+            "wait_price": wait,
+            "chase_price": chase,
+        },
+    }
+    return classify_fill_execution(pseudo)
+
+
 def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate hit rates and average day1 for filled buys/sells."""
+    """Aggregate hit rates, average day1, and sim exec score for filled buys."""
     buys = [x for x in items if x.get("side") == "buy"]
     sells = [x for x in items if x.get("side") == "sell"]
     buy_filled = [x for x in buys if x.get("sim_filled")]
@@ -523,6 +560,39 @@ def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round(100.0 * len(hits) / len(n), 1)
 
+    # Build pseudo traded rows for build_exec_score (sim-only; not real traded).
+    sim_exec_rows = []
+    for x in buy_filled:
+        if x.get("sim_fill_price") is None:
+            continue
+        sim_exec_rows.append(
+            {
+                "signal_type": "buy",
+                "traded": 1,
+                "kind": x.get("kind") or "stock",
+                "fill_price": x.get("sim_fill_price"),
+                "price": x.get("plan_price") or x.get("wait_price"),
+                "plan_price": x.get("plan_price"),
+                "wait_price": x.get("wait_price"),
+                "chase_price": x.get("chase_price"),
+                "payload": {
+                    "plan_price": x.get("plan_price"),
+                    "wait_price": x.get("wait_price"),
+                    "chase_price": x.get("chase_price"),
+                },
+                "exec_source": "sim",
+                "sim_exec": x.get("sim_exec"),
+            }
+        )
+    sim_exec = build_exec_score(sim_exec_rows) if sim_exec_rows else {
+        "score": None,
+        "scored_n": 0,
+        "in_band_n": 0,
+        "chase_n": 0,
+        "below_n": 0,
+        "other_n": 0,
+    }
+
     return {
         "buy_n": len(buys),
         "buy_filled_n": len(buy_filled),
@@ -541,6 +611,7 @@ def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
         "unfilled_n": sum(1 for x in items if not x.get("sim_filled")),
         "liq_skip_n": sum(1 for x in items if int(x.get("liq_skips") or 0) > 0),
         "gap_fill_n": sum(1 for x in items if x.get("gap_filled")),
+        "sim_exec": sim_exec,
     }
 
 
@@ -699,6 +770,13 @@ async def run_signal_backtest(
                 "liq_skips": int(sim.get("liq_skips") or 0),
                 "gap_filled": bool(sim.get("gap_filled")),
             }
+            if sim.get("filled") and sim.get("fill_price") is not None:
+                item["sim_exec"] = _sim_exec_kind(
+                    fill_price=float(sim["fill_price"]),
+                    wait=band["wait"],
+                    plan=band["plan"],
+                    chase=band["chase"],
+                )
             if sim.get("filled") and sim.get("fill_price") and sim.get("fill_date"):
                 outcome = _score_after_fill(
                     row,

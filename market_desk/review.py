@@ -527,7 +527,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
             if signal_type == "buy_dragon" and _dragon_hide_from_review(item):
                 continue
             kind = item.get("kind") or "stock"
-            price = num(item.get("buy_price"))
+            plan = num(item.get("plan_price"))
+            price = plan if plan is not None else num(item.get("buy_price"))
             if price is None:
                 price = num(item.get("last"))
             if price is None:
@@ -578,9 +579,11 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "desk_source": desk_source,
                         "source_board": source_board or None,
                         "role_label": item.get("role_label"),
+                        "plan_price": plan if plan is not None else price,
                         "wait_price": item.get("wait_price"),
                         "stop_price": item.get("stop_price"),
                         "chase_price": item.get("chase_price"),
+                        "buy_price": item.get("buy_price"),
                         "qty": int(item.get("qty") or 0) or None,
                         "pct": item.get("pct"),
                         "trend": item.get("trend"),
@@ -811,9 +814,14 @@ def score_signal_with_closes(
 
     trade_date = str(signal.get("trade_date") or "")
     sig_type = signal.get("signal_type") or "buy"
-    plan = num(signal.get("price"))
-    fill = num(signal.get("fill_price"))
     payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
+    plan_locked = num(
+        signal.get("plan_price")
+        if signal.get("plan_price") is not None
+        else payload.get("plan_price")
+    )
+    plan = plan_locked if plan_locked is not None else num(signal.get("price"))
+    fill = num(signal.get("fill_price"))
     open_buffer_track = str(
         signal.get("open_buffer_track")
         or payload.get("open_buffer_track")
@@ -828,7 +836,7 @@ def score_signal_with_closes(
         price = plan
     elif std == "filled":
         price = fill if fill is not None and fill > 0 else None
-        if price is None and is_buy_signal(sig_type):
+        if price is None:
             return {
                 "outcome_day1_pct": None,
                 "outcome_day3_pct": None,
@@ -838,8 +846,6 @@ def score_signal_with_closes(
                 "outcome_standard": std,
                 "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-        if price is None:
-            price = plan
     else:
         price = fill if fill is not None and fill > 0 else plan
     if price is None or price <= 0 or not closes:
@@ -932,7 +938,7 @@ def score_signal_with_closes(
             "outcome_mfe_pct": round(mfe, 2),
             "outcome_mae_pct": round(mae, 2),
             "outcome_label": label,
-            "outcome_standard": "classic",
+            "outcome_standard": std,
             "outcome_exit_basis": exit_basis,
             "outcome_exit_price": round(float(price), 4),
             "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1214,7 +1220,12 @@ def classify_fill_execution(row: dict[str, Any]) -> str | None:
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
     wait = num(row.get("wait_price") if row.get("wait_price") is not None else payload.get("wait_price"))
     chase = num(row.get("chase_price") if row.get("chase_price") is not None else payload.get("chase_price"))
-    suggest = num(row.get("price"))
+    plan = num(
+        row.get("plan_price")
+        if row.get("plan_price") is not None
+        else payload.get("plan_price")
+    )
+    suggest = plan if plan is not None else num(row.get("price"))
     low = wait if wait is not None else suggest
     if low is None and chase is None:
         return None
@@ -3033,6 +3044,8 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         item["wait_price"] = num(payload.get("wait_price"))
     if item.get("stop_price") is None:
         item["stop_price"] = num(payload.get("stop_price"))
+    if item.get("plan_price") is None:
+        item["plan_price"] = num(payload.get("plan_price"))
     if item.get("plan_qty") is None:
         pq = num(payload.get("qty"))
         if pq is not None and float(pq) > 0:

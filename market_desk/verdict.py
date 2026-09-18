@@ -329,8 +329,7 @@ def build_verdict(
         for item in recommend.get("items") or []:
             item["block_ready"] = True
             item["ready"] = False
-            if item.get("wait_price") is not None:
-                item["buy_price"] = item.get("wait_price")
+            _demote_buy_to_wait(item)
             if item.get("kind") == "stock":
                 item["role_label"] = "个股盯回踩"
         recommend["buy"] = False
@@ -352,8 +351,7 @@ def build_verdict(
             if item.get("kind") == "etf":
                 item["block_ready"] = True
                 item["ready"] = False
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item.get("wait_price")
+                _demote_buy_to_wait(item)
                 item["role_label"] = "ETF 盯回踩"
         recommend["buy"] = False
         recommend["title"] = "近似ETF · 个股可试回踩"
@@ -905,8 +903,7 @@ def align_action_with_ready(verdict: dict[str, Any] | None) -> dict[str, Any]:
             item["block_ready"] = True
             if item.get("ready"):
                 item["ready"] = False
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item.get("wait_price")
+                _demote_buy_to_wait(item)
         rec["items"] = items
         rec["buy"] = False
         if "盯回踩" not in str(rec.get("title") or ""):
@@ -1286,8 +1283,7 @@ def _build_side_branch(
     rec = _build_recommend("观察回踩", side, vehicle, bounce, stocks, bans)
     for item in rec.get("items") or []:
         item["ready"] = False
-        if item.get("wait_price") is not None:
-            item["buy_price"] = item.get("wait_price")
+        _demote_buy_to_wait(item)
         kind = item.get("kind") or "stock"
         item["role_label"] = "支线ETF盯回踩" if kind == "etf" else "支线个股盯回踩"
     rec["buy"] = False
@@ -1634,8 +1630,7 @@ def _build_link_branch(
         item["link_board"] = True
         item["link_sim"] = round(chosen_sim, 2)
         item["link_fallback"] = fallback or "peer"
-        if item.get("wait_price") is not None:
-            item["buy_price"] = item.get("wait_price")
+        _demote_buy_to_wait(item)
         kind = item.get("kind") or "stock"
         item["role_label"] = (
             f"联动ETF·{peer_name}" if kind == "etf" else f"联动·{peer_name}"
@@ -2072,8 +2067,7 @@ def _dragon_items_for_board(
             item["reason"] = f"{why}。{item.get('reason') or ''}".strip("。")
         if surge_fresh or observe_only:
             item["ready"] = False
-            if item.get("wait_price") is not None:
-                item["buy_price"] = item.get("wait_price")
+            _demote_buy_to_wait(item)
         if observe_only and scope != "main":
             item["reason"] = _join_hint(
                 str(item.get("reason") or ""),
@@ -2283,8 +2277,7 @@ def build_favorite_desk_plans(
             item["ready"] = False
             if soft:
                 item["block_ready"] = True
-            if item.get("wait_price") is not None:
-                item["buy_price"] = item.get("wait_price")
+            _demote_buy_to_wait(item)
         buy["buy"] = False
         buy["title"] = f"看好 · {name}"
         overlap = bool(mainline_name and name == mainline_name)
@@ -3398,8 +3391,7 @@ def _apply_ready_confirmations(
             continue
         changed = True
         item["ready"] = False
-        if item.get("wait_price") is not None:
-            item["buy_price"] = item.get("wait_price")
+        _demote_buy_to_wait(item)
         item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
         item["reason"] = (str(item.get("reason") or "") + "；确认失败：" + "、".join(flags)).strip("；")
         item["confirm_fail"] = flags
@@ -3571,8 +3563,7 @@ def apply_stock_daily_trends(
                 return
             gated = True
             marked["ready"] = False
-            if marked.get("wait_price") is not None:
-                marked["buy_price"] = marked.get("wait_price")
+            _demote_buy_to_wait(marked)
             marked["role_label"] = role_wait
             fails = list(marked.get("confirm_fail") or [])
             if flag not in fails:
@@ -3732,8 +3723,7 @@ def _build_recommend(
         if wait_action:
             for item in items:
                 item["ready"] = False
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item["wait_price"]
+                _demote_buy_to_wait(item)
                 item["role_label"] = "ETF 盯回踩" if item["kind"] == "etf" else "个股盯回踩"
 
     primary = next((x for x in items if x.get("role") == "primary"), None) or (
@@ -4276,6 +4266,8 @@ def _recommend_item(
         "volume": quote.get("volume"),
         "turnover": quote.get("turnover"),
         "buy_price": _px(buy, digits),
+        # Canonical suggest for review/backtest; survives demote-to-wait on the card.
+        "plan_price": _px(buy, digits),
         "wait_price": _px(wait, digits),
         "stop_price": _px(stop, digits),
         "chase_price": _px(chase, digits),
@@ -4287,6 +4279,22 @@ def _recommend_item(
     }
     item["batch_plan"] = _batch_plan_lots(item.get("buy_price") or item.get("last"), etf=etf)
     return item
+
+
+def _ensure_plan_price(item: dict[str, Any] | None) -> dict[str, Any]:
+    """Stamp ``plan_price`` from current buy_price when missing (before demote)."""
+    it = item if isinstance(item, dict) else {}
+    if it.get("plan_price") is None and it.get("buy_price") is not None:
+        it["plan_price"] = it.get("buy_price")
+    return it
+
+
+def _demote_buy_to_wait(item: dict[str, Any] | None) -> dict[str, Any]:
+    """Point the card hang price at wait while keeping canonical ``plan_price``."""
+    it = _ensure_plan_price(item)
+    if it.get("wait_price") is not None:
+        it["buy_price"] = it.get("wait_price")
+    return it
 
 
 def _attach_risk_sizing(
@@ -4480,8 +4488,7 @@ def apply_size_cap_gate(
                 item["ready"] = False
                 item["block_ready"] = True
                 item["size_cap_block"] = True
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item.get("wait_price")
+                _demote_buy_to_wait(item)
                 kind = item.get("kind") or "stock"
                 if item.get("link_board"):
                     item["role_label"] = (
@@ -5073,8 +5080,7 @@ def reconcile_buy_sell_conflict(
                         if (item.get("kind") or "stock") == "stock"
                         else "已持有·ETF不加"
                     )
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item.get("wait_price")
+                _demote_buy_to_wait(item)
                 fails = list(item.get("confirm_fail") or [])
                 if fail not in fails:
                     fails.append(fail)

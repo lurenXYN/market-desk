@@ -11,9 +11,9 @@ Agents: **at the start of each session involving this app, read this file before
 ### 有空再加
 
 - [ ] **回测独立结果表** — `signal_backtest_run` + `signal_backtest_fill`；禁 payload.sim_* 多轮堆叠；支持多参数组对比与清理。
-- [ ] **sim_exec_score** — 模拟成交相对 wait/chase 的执行分类，与真人 `build_exec_score` 彻底分列。
 - [ ] **回测异步任务** — 超长区间后台跑 + 前端轮询（当前靠 ≤90 天同步护栏）。
 - [ ] **分钟 K 高保真模式** — 可选高级撮合（识别 chase 突破前后时序）。
+- [ ] **adapt 真正跟随评测标准** — `adapt_follow_outcome` 预留；需带 closes 重算后再反哺。
 
 ### 卖出开盘决策算法（已接线 · 分时深化）
 
@@ -28,6 +28,7 @@ must 立即 / watch 观察到 09:45；有分时则破开盘·均价·放量判�
 
 ## Done recently (context)
 
+- [x] **口径统一：plan≠wait + sim_exec + 调参经典说明** — 落库 plan_price；回测模拟执行分；adapt 标明 classic。*(2026-09-18)*
 - [x] **回测量能过滤 + 跳空/滑点** — vol_min_ratio / slip_pct / gap_pct 可配；日线带 volume。*(2026-09-18)*
 - [x] **开盘卖出缓冲·分时深化** — 破开盘/均价/放量；复盘 watch 轨 09:45 决策价；公式 v5。*(2026-09-18)*
 - [x] **龙虎席位变坏/变好附原因** — toast + Server酱写明新增/消退标志与 risk_reason。*(2026-09-18)*

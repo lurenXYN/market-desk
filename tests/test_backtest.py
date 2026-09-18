@@ -214,3 +214,89 @@ def test_sell_gap_through_stop() -> None:
     assert sim["exit_mode"] == "stop"
     assert sim["fill_price"] == 9.4
     assert sim.get("gap_filled") is True
+
+
+def test_plan_price_distinct_from_wait() -> None:
+    from market_desk.backtest import _plan_buy_prices
+
+    row = {
+        "price": 10.5,
+        "payload": {
+            "plan_price": 10.5,
+            "wait_price": 10.0,
+            "chase_price": 11.0,
+        },
+    }
+    band = _plan_buy_prices(row)
+    assert band["plan"] == 10.5
+    assert band["wait"] == 10.0
+
+
+def test_sim_exec_in_summary() -> None:
+    items = [
+        {
+            "side": "buy",
+            "kind": "stock",
+            "sim_filled": True,
+            "sim_fill_price": 10.2,
+            "plan_price": 10.0,
+            "wait_price": 9.8,
+            "chase_price": 10.5,
+            "sim_exec": "in_band",
+            "outcome_label": "次日红",
+            "outcome_day1_pct": 2.0,
+        },
+        {
+            "side": "buy",
+            "kind": "stock",
+            "sim_filled": True,
+            "sim_fill_price": 10.6,
+            "plan_price": 10.0,
+            "wait_price": 9.8,
+            "chase_price": 10.5,
+            "sim_exec": "chase",
+            "outcome_label": "次日绿",
+            "outcome_day1_pct": -1.0,
+        },
+    ]
+    s = _summarize_backtest(items)
+    assert s["sim_exec"]["scored_n"] == 2
+    assert s["sim_exec"]["chase_n"] == 1
+    assert s["sim_exec"]["in_band_n"] == 1
+    assert s["sim_exec"]["score"] is not None
+
+
+def test_demote_preserves_plan_price() -> None:
+    from market_desk.verdict import _demote_buy_to_wait
+
+    item = {
+        "buy_price": 10.5,
+        "plan_price": 10.5,
+        "wait_price": 10.0,
+        "chase_price": 11.0,
+    }
+    out = _demote_buy_to_wait(item)
+    assert out["plan_price"] == 10.5
+    assert out["buy_price"] == 10.0
+
+
+def test_filled_sell_no_fill_is_empty() -> None:
+    from market_desk.review import score_signal_with_closes
+
+    sig = {
+        "signal_type": "sell",
+        "trade_date": "2026-09-10",
+        "price": 10.0,
+        "fill_price": None,
+    }
+    out = score_signal_with_closes(
+        sig,
+        closes=[10.0, 10.2],
+        dates=["2026-09-10", "2026-09-11"],
+        opens=[10.0, 10.1],
+        highs=[10.1, 10.3],
+        lows=[9.9, 10.0],
+        standard="filled",
+    )
+    assert out is not None
+    assert out.get("outcome_label") == "无成交"

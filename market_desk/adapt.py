@@ -1231,7 +1231,17 @@ def build_adapt_bundle(
     metrics: dict[str, Any] | None = None,
     trade_date: str | None = None,
 ) -> dict[str, Any]:
-    """Assemble day-scoped adaptive soft controls for the battle desk."""
+    """Assemble day-scoped adaptive soft controls for the battle desk.
+
+    Outcome-based soft knobs always read **persisted classic** labels on
+    ``signals``. UI standards (same_day_plan / filled) are display overlays.
+    ``adapt_follow_outcome`` is reserved; when True the bundle only annotates
+    intent — scoring still uses classic until a dedicated re-score path lands.
+    """
+    from market_desk.settings import setting
+
+    follow = bool(setting("adapt_follow_outcome", False))
+    ui_std = str(setting("outcome_standard", "classic") or "classic").strip().lower()
     try:
         if rows is None:
             from market_desk.db import load_signals
@@ -1340,6 +1350,17 @@ def build_adapt_bundle(
     ]
     return {
         "ok": True,
+        "outcome_basis": "classic",
+        "adapt_follow_outcome": follow,
+        "ui_outcome_standard": ui_std,
+        "outcome_basis_note": (
+            "调参反哺固定用落库 classic 标签"
+            + (
+                f"；界面评测为 {ui_std}（跟随开关已开，重算路径待接）"
+                if follow and ui_std != "classic"
+                else ""
+            )
+        ),
         "size_heat": heat,
         "size_mult": float(composed.get("size_mult") or 1.0),
         "size_compose": composed,

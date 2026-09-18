@@ -419,10 +419,19 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "命中集合 BUY_HIT_LABELS={次日红,三日红}；虚红/冲高回落不进命中率。",
     },
     "复盘评测标准": {
-        "mean": "三套口径可切换：现行（成交价缺省用建议价·隔日）；当日建议价（须当天碰到 plan·隔日）；实盘成交（只用你填的成交价·隔日，无成交则标无成交）。",
+        "mean": "三套口径可切换：现行（成交价缺省用建议价·隔日）；当日建议价（须当天碰到 plan·隔日）；实盘成交（只用你填的成交价·隔日，无成交则标无成交）。调参反哺默认只用落库 classic。",
         "algo": "settings.outcome_standard / GET /api/review?oc=classic|same_day_plan|filled。\n"
         "classic 写入 signals；另两套 overlay。卖出 MAE 忽略次日 high（开盘毛刺）。\n"
+        "plan_price 与 wait 分列落库，same_day_plan/回测 plan 模式不再与 wait 塌缩。\n"
         "开盘卖出缓冲见「开盘卖出缓冲」词条（must/watch）。",
+    },
+    "调参口径": {
+        "mean": "仓位热度、执行分、卖点 MFE 等 soft 调参，一律读库里 classic 结果标签，不跟界面上的「当日建议价/实盘成交」走。",
+        "algo": "build_adapt_bundle.outcome_basis=classic。settings.adapt_follow_outcome 预留；开启仅标注意图，暂不重算。",
+    },
+    "模拟执行分": {
+        "mean": "回测里模拟成交相对 wait/chase 价带的执行分类（贴计划/追高/更低），与真人执行分算法相同，但字段独立、不写 signals。",
+        "algo": "backtest._sim_exec_kind → classify_fill_execution；summary.sim_exec=build_exec_score(伪行)。禁 payload.sim_* 持久化。",
     },
     "开盘卖出缓冲": {
         "mean": "开盘后软卖先观察一段时间（默认 09:30–09:45），止损/清仓「必卖」立即提示；缓冲结束用分时（破开盘/均价/放量）判定仍卖或持有，无分时则回退现价。",

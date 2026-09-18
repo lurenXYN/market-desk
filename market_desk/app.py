@@ -156,6 +156,7 @@ class SettingsIn(BaseModel):
     hit_rate_mode: str | None = None
     # Review outcome standard: classic | same_day_plan.
     outcome_standard: str | None = None
+    adapt_follow_outcome: bool | None = None
     # Ready style: strict | band.
     ready_style: str | None = None
     # Soft-sell open buffer minutes after 09:30.
