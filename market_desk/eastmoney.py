@@ -703,13 +703,14 @@ async def fetch_daily_klines(
     code: str,
     limit: int = 60,
 ) -> tuple[list[str], list[float], dict[str, list[float | None]]]:
-    """Fetch adjusted daily dates, closes, and parallel OHLC lists (oldest → newest)."""
+    """Fetch adjusted daily dates, closes, and parallel OHLC(+volume) lists."""
     bars = await fetch_daily_bars(client, code, limit=limit)
     dates: list[str] = []
     closes: list[float] = []
     opens: list[float | None] = []
     highs: list[float | None] = []
     lows: list[float | None] = []
+    volumes: list[float | None] = []
     for b in bars:
         dates.append(str(b.get("date") or ""))
         closes.append(float(b["close"]))
@@ -725,7 +726,11 @@ async def fetch_daily_klines(
             lows.append(float(b["low"]) if b.get("low") is not None else None)
         except (TypeError, ValueError):
             lows.append(None)
-    return dates, closes, {"open": opens, "high": highs, "low": lows}
+        try:
+            volumes.append(float(b["volume"]) if b.get("volume") is not None else None)
+        except (TypeError, ValueError):
+            volumes.append(None)
+    return dates, closes, {"open": opens, "high": highs, "low": lows, "volume": volumes}
 
 
 def _parse_minute_trends(rows: list[Any]) -> list[dict[str, Any]]:

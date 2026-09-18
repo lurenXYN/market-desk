@@ -1698,6 +1698,10 @@ class BacktestIn(BaseModel):
     ready_only: bool = False
     limit: int = Field(default=120, ge=20, le=400)
     dry_run: bool = False
+    # Realism: volume vs prior median (0=off); buy/sell slip %; gap-down threshold %.
+    vol_min_ratio: float | None = Field(default=None, ge=0, le=2)
+    slip_pct: float | None = Field(default=None, ge=0, le=3)
+    gap_pct: float | None = Field(default=None, ge=0, le=10)
 
 
 @app.post("/api/backtest/run")
@@ -1720,6 +1724,9 @@ async def backtest_run(
         ready_only=bool(body.ready_only),
         limit=int(body.limit),
         dry_run=bool(body.dry_run),
+        vol_min_ratio=body.vol_min_ratio,
+        slip_pct=body.slip_pct,
+        gap_pct=body.gap_pct,
     )
     if not out.get("ok"):
         raise HTTPException(400, str(out.get("detail") or "backtest failed"))

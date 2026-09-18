@@ -23,10 +23,15 @@ from market_desk.review import (
 MAX_BACKTEST_SPAN_DAYS = 90
 
 BACKTEST_DISCLAIMER = (
-    "日线 OHLC 回测会高估可成交性（事后高低点/瞬时穿刺无法在实盘保证成交）；"
-    "结果仅供策略粗筛，不可等价实盘收益。不改真实 traded/fill；"
-    "命中口径与复盘一致（次日红/三日红）。"
+    "日线 OHLC 回测仍会高估可成交性；已加量能门槛与滑点粗校正，"
+    "仍无法等价实盘。不改真实 traded/fill；命中口径与复盘一致（次日红/三日红）。"
 )
+
+# Defaults for realism knobs (0 = off for vol filter / slip).
+DEFAULT_VOL_MIN_RATIO = 0.4
+DEFAULT_SLIP_PCT = 0.15
+DEFAULT_GAP_PCT = 1.0
+VOL_LOOKBACK = 10
 
 
 def validate_backtest_range(date_from: str, date_to: str) -> tuple[str, str] | dict[str, Any]:
@@ -116,10 +121,11 @@ def _bar_maps(
     closes: list[float],
     ohlc: dict[str, list[float | None]] | None,
 ) -> dict[str, dict[str, float | None]]:
-    """Index daily OHLC by YYYY-MM-DD."""
+    """Index daily OHLC(+volume) by YYYY-MM-DD."""
     opens = (ohlc or {}).get("open") or []
     highs = (ohlc or {}).get("high") or []
     lows = (ohlc or {}).get("low") or []
+    vols = (ohlc or {}).get("volume") or []
     out: dict[str, dict[str, float | None]] = {}
     for i, d in enumerate(dates):
         day = str(d or "")[:10]
@@ -130,8 +136,88 @@ def _bar_maps(
             "high": highs[i] if i < len(highs) else None,
             "low": lows[i] if i < len(lows) else None,
             "close": float(closes[i]) if i < len(closes) else None,
+            "volume": vols[i] if i < len(vols) else None,
         }
     return out
+
+
+def _median(vals: list[float]) -> float | None:
+    """Return median of a non-empty float list."""
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return float(s[mid])
+    return (float(s[mid - 1]) + float(s[mid])) / 2.0
+
+
+def _prior_volume_median(
+    bars_by_day: dict[str, dict[str, float | None]],
+    day: str,
+    *,
+    lookback: int = VOL_LOOKBACK,
+) -> float | None:
+    """Median volume of up to ``lookback`` sessions strictly before ``day``."""
+    prior = sorted(d for d in bars_by_day if d < day)[-max(1, int(lookback)) :]
+    vols: list[float] = []
+    for d in prior:
+        v = num((bars_by_day.get(d) or {}).get("volume"))
+        if v is not None and v > 0:
+            vols.append(float(v))
+    return _median(vols)
+
+
+def _liquidity_ok(
+    bars_by_day: dict[str, dict[str, float | None]],
+    day: str,
+    *,
+    vol_min_ratio: float,
+) -> tuple[bool, str]:
+    """Return whether the session has enough volume vs recent median.
+
+    Missing volume data soft-passes so older bars without vol still fill.
+    """
+    ratio = float(vol_min_ratio or 0)
+    if ratio <= 0:
+        return True, ""
+    bar = bars_by_day.get(day) or {}
+    vol = num(bar.get("volume"))
+    if vol is None or vol <= 0:
+        return True, ""
+    med = _prior_volume_median(bars_by_day, day)
+    if med is None or med <= 0:
+        return True, ""
+    if float(vol) < float(med) * ratio:
+        return False, f"量能不足({float(vol):.0f}<{ratio:.0%}×中位{med:.0f})"
+    return True, ""
+
+
+def _apply_buy_slip(fill: float, slip_pct: float) -> float:
+    """Worsen a buy fill by ``slip_pct`` percent (e.g. 0.15 → +0.15%)."""
+    s = max(0.0, float(slip_pct or 0))
+    if s <= 0 or fill <= 0:
+        return float(fill)
+    return float(fill) * (1.0 + s / 100.0)
+
+
+def _apply_sell_slip(fill: float, slip_pct: float) -> float:
+    """Worsen a sell fill by ``slip_pct`` percent (lower exit)."""
+    s = max(0.0, float(slip_pct or 0))
+    if s <= 0 or fill <= 0:
+        return float(fill)
+    return float(fill) * (1.0 - s / 100.0)
+
+
+def _clamp_fill(fill: float, lo: float | None, hi: float | None) -> float:
+    """Keep fill inside the day's traded range when bounds exist."""
+    px = float(fill)
+    if lo is not None and lo > 0 and px < lo:
+        px = float(lo)
+    if hi is not None and hi > 0 and px > hi:
+        px = float(hi)
+    return px
 
 
 def _plan_buy_prices(row: dict[str, Any]) -> dict[str, float | None]:
@@ -167,6 +253,9 @@ def simulate_buy_fill(
     chase: float | None,
     mode: str = "wait",
     look_ahead: int = 2,
+    vol_min_ratio: float = DEFAULT_VOL_MIN_RATIO,
+    slip_pct: float = DEFAULT_SLIP_PCT,
+    gap_pct: float = DEFAULT_GAP_PCT,
 ) -> dict[str, Any] | None:
     """Simulate a buy fill on signal day or the next ``look_ahead`` sessions.
 
@@ -174,6 +263,12 @@ def simulate_buy_fill(
       - ``wait``: fill at wait when low ≤ wait (skip day if open ≥ chase).
       - ``plan``: fill at plan price when low ≤ plan.
       - ``mid``: fill at mid(wait, chase) when low reaches that level.
+
+    Realism knobs:
+      - ``vol_min_ratio``: require day volume ≥ ratio × prior median (0=off).
+      - ``slip_pct``: worsen fill price by this percent.
+      - ``gap_pct``: if open gaps down ≥ this % vs prior close and open ≤ target,
+        fill at open (gap-open path).
     """
     day0 = str(trade_date or "")[:10]
     if not day0 or not bars_by_day:
@@ -195,6 +290,8 @@ def simulate_buy_fill(
         return None
 
     days = sorted(d for d in bars_by_day if d >= day0)[: max(1, int(look_ahead) + 1)]
+    liq_skips = 0
+    last_liq_note = ""
     for day in days:
         bar = bars_by_day.get(day) or {}
         o = num(bar.get("open"))
@@ -205,24 +302,68 @@ def simulate_buy_fill(
         # Gap through the chase ceiling → treat as unfilled that session.
         if chase is not None and o is not None and o >= chase and day == day0:
             continue
-        if lo <= target:
-            # Conservative fill: cannot buy below the day's low; prefer target.
-            fill = float(target)
-            if o is not None and o < fill and lo <= o:
-                # Opened through the band — fill at open.
+        if lo > target:
+            continue
+
+        ok_liq, liq_note = _liquidity_ok(
+            bars_by_day, day, vol_min_ratio=vol_min_ratio
+        )
+        if not ok_liq:
+            liq_skips += 1
+            last_liq_note = liq_note
+            continue
+
+        # Base fill: target, or open if opened through the band.
+        fill = float(target)
+        note = "触达价带"
+        gap_filled = False
+        prev_days = sorted(d for d in bars_by_day if d < day)
+        prev_close = None
+        if prev_days:
+            prev_close = num((bars_by_day.get(prev_days[-1]) or {}).get("close"))
+        gap_th = max(0.0, float(gap_pct or 0))
+        if (
+            gap_th > 0
+            and o is not None
+            and o > 0
+            and prev_close is not None
+            and prev_close > 0
+            and o <= target
+        ):
+            gap_down = (float(prev_close) - float(o)) / float(prev_close) * 100.0
+            if gap_down >= gap_th:
                 fill = float(o)
-            if hi is not None and fill > hi:
-                fill = float(hi)
-            if fill < lo:
-                fill = float(lo)
-            return {
-                "filled": True,
-                "fill_price": round(fill, 4),
-                "fill_date": day,
-                "target": target,
-                "mode": mode_s,
-                "note": "触达价带",
-            }
+                note = f"缺口低开成交({gap_down:.1f}%)"
+                gap_filled = True
+        if not gap_filled and o is not None and o < fill and lo <= o:
+            fill = float(o)
+            note = "开盘砸穿成交"
+
+        fill = _apply_buy_slip(fill, slip_pct)
+        fill = _clamp_fill(fill, lo, hi)
+        if slip_pct and float(slip_pct) > 0:
+            note = f"{note}·滑点+{float(slip_pct):.2f}%"
+        return {
+            "filled": True,
+            "fill_price": round(fill, 4),
+            "fill_date": day,
+            "target": target,
+            "mode": mode_s,
+            "note": note,
+            "liq_skips": liq_skips,
+            "gap_filled": gap_filled,
+            "slip_pct": float(slip_pct or 0),
+        }
+    if liq_skips and last_liq_note:
+        return {
+            "filled": False,
+            "fill_price": None,
+            "fill_date": None,
+            "target": target,
+            "mode": mode_s,
+            "note": f"未触达·{last_liq_note}",
+            "liq_skips": liq_skips,
+        }
     return {
         "filled": False,
         "fill_price": None,
@@ -230,6 +371,7 @@ def simulate_buy_fill(
         "target": target,
         "mode": mode_s,
         "note": "未触达",
+        "liq_skips": liq_skips,
     }
 
 
@@ -240,8 +382,13 @@ def simulate_sell_fill(
     sell: float | None,
     stop: float | None,
     look_ahead: int = 3,
+    slip_pct: float = DEFAULT_SLIP_PCT,
+    gap_pct: float = DEFAULT_GAP_PCT,
 ) -> dict[str, Any] | None:
-    """Simulate a sell: take-profit if high ≥ sell, else stop if low ≤ stop."""
+    """Simulate a sell: take-profit if high ≥ sell, else stop if low ≤ stop.
+
+    Gap-down open through stop fills at open. Slippage worsens exits.
+    """
     day0 = str(trade_date or "")[:10]
     if not day0 or not bars_by_day:
         return None
@@ -251,28 +398,75 @@ def simulate_sell_fill(
         o = num(bar.get("open"))
         lo = num(bar.get("low"))
         hi = num(bar.get("high"))
+        prev_days = sorted(d for d in bars_by_day if d < day)
+        prev_close = None
+        if prev_days:
+            prev_close = num((bars_by_day.get(prev_days[-1]) or {}).get("close"))
+        gap_th = max(0.0, float(gap_pct or 0))
+
+        # Gap-down through stop at open (worse path).
+        if (
+            stop is not None
+            and gap_th > 0
+            and o is not None
+            and o > 0
+            and prev_close is not None
+            and prev_close > 0
+            and o <= stop
+        ):
+            gap_down = (float(prev_close) - float(o)) / float(prev_close) * 100.0
+            if gap_down >= gap_th:
+                fill = _apply_sell_slip(float(o), slip_pct)
+                fill = _clamp_fill(fill, lo, hi)
+                note = f"缺口低开触止损({gap_down:.1f}%)"
+                if slip_pct and float(slip_pct) > 0:
+                    note = f"{note}·滑点-{float(slip_pct):.2f}%"
+                return {
+                    "filled": True,
+                    "fill_price": round(fill, 4),
+                    "fill_date": day,
+                    "exit_mode": "stop",
+                    "note": note,
+                    "gap_filled": True,
+                    "slip_pct": float(slip_pct or 0),
+                }
+
         # Stop first when both fire the same day (worse case for the plan).
         if stop is not None and lo is not None and lo <= stop:
             fill = float(stop)
             if o is not None and o < stop:
                 fill = float(o)
+            fill = _apply_sell_slip(fill, slip_pct)
+            fill = _clamp_fill(fill, lo, hi)
+            note = "触止损"
+            if slip_pct and float(slip_pct) > 0:
+                note = f"{note}·滑点-{float(slip_pct):.2f}%"
             return {
                 "filled": True,
                 "fill_price": round(fill, 4),
                 "fill_date": day,
                 "exit_mode": "stop",
-                "note": "触止损",
+                "note": note,
+                "gap_filled": False,
+                "slip_pct": float(slip_pct or 0),
             }
         if sell is not None and hi is not None and hi >= sell:
             fill = float(sell)
             if o is not None and o > sell:
                 fill = float(o)
+            fill = _apply_sell_slip(fill, slip_pct)
+            fill = _clamp_fill(fill, lo, hi)
+            note = "触卖价"
+            if slip_pct and float(slip_pct) > 0:
+                note = f"{note}·滑点-{float(slip_pct):.2f}%"
             return {
                 "filled": True,
                 "fill_price": round(fill, 4),
                 "fill_date": day,
                 "exit_mode": "take",
-                "note": "触卖价",
+                "note": note,
+                "gap_filled": False,
+                "slip_pct": float(slip_pct or 0),
             }
     return {
         "filled": False,
@@ -345,6 +539,8 @@ def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
         "sell_hit_rate": _rate(sell_hits, sell_scored),
         "sell_avg_day1": _avg(sell_scored, "outcome_day1_pct"),
         "unfilled_n": sum(1 for x in items if not x.get("sim_filled")),
+        "liq_skip_n": sum(1 for x in items if int(x.get("liq_skips") or 0) > 0),
+        "gap_fill_n": sum(1 for x in items if x.get("gap_filled")),
     }
 
 
@@ -357,6 +553,9 @@ async def run_signal_backtest(
     ready_only: bool = False,
     limit: int = 200,
     dry_run: bool = False,
+    vol_min_ratio: float | None = None,
+    slip_pct: float | None = None,
+    gap_pct: float | None = None,
     client: Any | None = None,
 ) -> dict[str, Any]:
     """Replay paper signals in ``[date_from, date_to]`` with OHLC simulated fills.
@@ -373,6 +572,16 @@ async def run_signal_backtest(
         return checked
     d0, d1 = checked
 
+    vol_r = (
+        DEFAULT_VOL_MIN_RATIO
+        if vol_min_ratio is None
+        else max(0.0, min(2.0, float(vol_min_ratio)))
+    )
+    slip = (
+        DEFAULT_SLIP_PCT if slip_pct is None else max(0.0, min(3.0, float(slip_pct)))
+    )
+    gap = DEFAULT_GAP_PCT if gap_pct is None else max(0.0, min(10.0, float(gap_pct)))
+
     picked = collect_backtest_signals(
         date_from=d0,
         date_to=d1,
@@ -382,6 +591,12 @@ async def run_signal_backtest(
     )
     buy_n = sum(1 for r in picked if is_buy_signal(r.get("signal_type")))
     sell_n = sum(1 for r in picked if is_sell_signal(r.get("signal_type")))
+
+    realism = {
+        "vol_min_ratio": vol_r,
+        "slip_pct": slip,
+        "gap_pct": gap,
+    }
 
     if dry_run:
         preview_items = [
@@ -409,6 +624,7 @@ async def run_signal_backtest(
             "buy_n": buy_n,
             "sell_n": sell_n,
             "n": len(picked),
+            "realism": realism,
             "summary": {
                 "matched_n": len(picked),
                 "buy_n": buy_n,
@@ -459,6 +675,9 @@ async def run_signal_backtest(
                 plan=band["plan"],
                 chase=band["chase"],
                 mode=mode,
+                vol_min_ratio=vol_r,
+                slip_pct=slip,
+                gap_pct=gap,
             ) or {"filled": False, "note": "无结果"}
             item: dict[str, Any] = {
                 "id": row.get("id"),
@@ -477,6 +696,8 @@ async def run_signal_backtest(
                 "sim_fill_date": sim.get("fill_date"),
                 "sim_mode": sim.get("mode") or mode,
                 "note": sim.get("note"),
+                "liq_skips": int(sim.get("liq_skips") or 0),
+                "gap_filled": bool(sim.get("gap_filled")),
             }
             if sim.get("filled") and sim.get("fill_price") and sim.get("fill_date"):
                 outcome = _score_after_fill(
@@ -497,6 +718,8 @@ async def run_signal_backtest(
                 bars_by_day=bars,
                 sell=band["sell"],
                 stop=band["stop"],
+                slip_pct=slip,
+                gap_pct=gap,
             ) or {"filled": False, "note": "无结果"}
             item = {
                 "id": row.get("id"),
@@ -513,6 +736,7 @@ async def run_signal_backtest(
                 "sim_fill_date": sim.get("fill_date"),
                 "sim_exit_mode": sim.get("exit_mode"),
                 "note": sim.get("note"),
+                "gap_filled": bool(sim.get("gap_filled")),
             }
             if sim.get("filled") and sim.get("fill_price") and sim.get("fill_date"):
                 outcome = _score_after_fill(
@@ -537,9 +761,13 @@ async def run_signal_backtest(
         "ready_only": bool(ready_only),
         "include_sells": bool(include_sells),
         "max_span_days": MAX_BACKTEST_SPAN_DAYS,
+        "realism": realism,
         "n": len(items),
         "summary": summary,
         "items": items,
         "disclaimer": BACKTEST_DISCLAIMER,
-        "note": BACKTEST_DISCLAIMER,
+        "note": (
+            BACKTEST_DISCLAIMER
+            + f" 量能≥{vol_r:.0%}中位 · 滑点 {slip:.2f}% · 跳空阈值 {gap:.1f}%。"
+        ),
     }

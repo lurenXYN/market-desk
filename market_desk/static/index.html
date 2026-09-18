@@ -3348,6 +3348,7 @@
             <li>选起止日期（默认近 14 天；单次最多 90 天）。区间内要有系统落库的信号，否则预览为 0。</li>
             <li>先点「预览匹配数」确认有多少条信号；再点「跑回测」拉日线做假想成交。</li>
             <li>「买撮合」选用哪档计划价：建议价常用；理想回踩更严、未触达更多；中位折中。</li>
+            <li>量能门槛过滤瞬时穿刺无量触达；滑点略抬买/压卖；跳空低开可按开盘成交。</li>
             <li>表里「计划」=当时锁定的建议/回踩价；「模拟成交」=假想成交价与日期；「触达」=有没有碰到计划价。</li>
             <li>「标签 / 次日% / 三日%」与复盘同口径；命中看次日红、三日红。结果只供粗筛，不可当实盘收益。</li>
           </ol>
@@ -3358,6 +3359,9 @@
             · 模拟成交<button type="button" class="q" data-term="模拟成交">?</button>
             · 触达<button type="button" class="q" data-term="触达">?</button>
             · 买撮合<button type="button" class="q" data-term="买撮合">?</button>
+            · 回测量能<button type="button" class="q" data-term="回测量能">?</button>
+            · 回测滑点<button type="button" class="q" data-term="回测滑点">?</button>
+            · 回测跳空<button type="button" class="q" data-term="回测跳空">?</button>
             · 预览匹配数<button type="button" class="q" data-term="预览匹配数">?</button>
             · 仅 ready<button type="button" class="q" data-term="仅ready">?</button>
             · 次日红<button type="button" class="q" data-term="次日红">?</button>
@@ -3377,6 +3381,15 @@
           <label class="settings-check"><input type="checkbox" id="btReady" /> 仅 ready <button type="button" class="q" data-term="仅ready">?</button></label>
           <label class="settings-check"><input type="checkbox" id="btSells" checked /> 含卖信号</label>
           <label>条数上限<input type="number" id="btLimit" min="20" max="400" value="120" /></label>
+          <label>量能门槛 <button type="button" class="q" data-term="回测量能">?</button>
+            <input type="number" id="btVolRatio" min="0" max="2" step="0.05" value="0.4" title="触达日成交量≥该比例×近10日中位；0=关闭" />
+          </label>
+          <label>滑点% <button type="button" class="q" data-term="回测滑点">?</button>
+            <input type="number" id="btSlip" min="0" max="3" step="0.05" value="0.15" title="买抬价/卖压价百分比；0=关闭" />
+          </label>
+          <label>跳空% <button type="button" class="q" data-term="回测跳空">?</button>
+            <input type="number" id="btGap" min="0" max="10" step="0.5" value="1" title="相对昨收低开≥该%且开盘≤目标则按开盘成交；0=关闭" />
+          </label>
           <button type="button" class="rev-col-btn" id="btPreview" title="只数信号、不拉日线">预览匹配数</button>
           <button type="submit">跑回测</button>
         </form>
@@ -7053,6 +7066,8 @@
             sum.sell_hit_rate != null
               ? `卖命中 ${sum.sell_hit_rate}%`
               : "",
+            sum.liq_skip_n ? `量能跳过 ${sum.liq_skip_n}` : "",
+            sum.gap_fill_n ? `缺口成交 ${sum.gap_fill_n}` : "",
           ].filter(Boolean);
           sumEl.innerHTML = bits.map((b) => `<span>${b}</span>`).join("");
         }
@@ -7120,6 +7135,9 @@
         ready_only: !!document.getElementById("btReady").checked,
         include_sells: !!document.getElementById("btSells").checked,
         limit: Number(document.getElementById("btLimit").value) || 120,
+        vol_min_ratio: Number(document.getElementById("btVolRatio")?.value ?? 0.4),
+        slip_pct: Number(document.getElementById("btSlip")?.value ?? 0.15),
+        gap_pct: Number(document.getElementById("btGap")?.value ?? 1),
       }, extra || {});
     }
     document.getElementById("btPreview")?.addEventListener("click", async () => {
@@ -9096,7 +9114,8 @@
         "参数预设", "执行日记", "为何不能现买",
       ] },
       { id: "review", label: "复盘/观察", keys: [
-        "信号复盘", "信号回测", "模拟成交", "触达", "计划价带", "理想回踩", "建议价", "不追上限", "买撮合", "预览匹配数", "仅ready",
+        "信号复盘", "信号回测", "模拟成交", "触达", "计划价带", "理想回踩", "建议价", "不追上限", "买撮合",
+        "回测量能", "回测滑点", "回测跳空", "预览匹配数", "仅ready",
         "复盘评测标准", "Ready风格", "开盘卖出缓冲",
         "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
