@@ -3269,6 +3269,48 @@ def apply_band_ready_relax(
     return rec
 
 
+def tag_fly_window_items(recommend: dict[str, Any] | None) -> dict[str, Any]:
+    """Mark half-size windows that may run away without a full pullback.
+
+    Soft UX only: sets ``fly_warn`` / ``fly_note`` for toast and card badges.
+    Does not change ready / probe gates.
+    """
+    from market_desk.config import TIP_PROBE_ALLOW_FAILS
+
+    rec = dict(recommend or {})
+    items: list[dict[str, Any]] = []
+    any_fly = False
+    tip_allow = set(TIP_PROBE_ALLOW_FAILS or ())
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        item.pop("fly_warn", None)
+        item.pop("fly_note", None)
+        half = bool(item.get("ready_relaxed") or item.get("probe_ok"))
+        near = bool(item.get("near_entry"))
+        if not half or not near:
+            items.append(item)
+            continue
+        fails = [str(x) for x in (item.get("confirm_fail") or []) if x]
+        minute = item.get("minute") if isinstance(item.get("minute"), dict) else {}
+        tippy = bool(minute.get("at_tip")) or any(
+            f in tip_allow or "贴" in f or "抬高" in f or "过浅" in f for f in fails
+        )
+        # Band-relaxed half-ready is itself a "may fly if you wait" window.
+        if tippy or bool(item.get("ready_relaxed")):
+            item["fly_warn"] = True
+            item["fly_note"] = "半仓试探窗口，再等可能飞"
+            any_fly = True
+        items.append(item)
+    rec["items"] = items
+    if any_fly:
+        rec["fly_warn"] = True
+        rec["size_note"] = _join_hint(
+            str(rec.get("size_note") or ""),
+            "浅踩将飞：半仓窗口优先，勿死等完美回踩",
+        )
+    return rec
+
+
 def finalize_recommend_buy_ux(
     recommend: dict[str, Any] | None,
     *,
@@ -3280,6 +3322,7 @@ def finalize_recommend_buy_ux(
     if allow_probe:
         rec = apply_mainline_probe(rec, block_arm=block_arm)
         rec = apply_band_ready_relax(rec, block_arm=block_arm)
+        rec = tag_fly_window_items(rec)
     else:
         for raw in rec.get("items") or []:
             raw["probe_ok"] = False

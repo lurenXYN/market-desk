@@ -34,14 +34,24 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "近20笔：执行分&lt;50→仓位×0.70；&lt;70→×0.85；追高占比≥40%→再压到≤×0.75。不禁买。",
     },
     "漏买清单": {
-        "mean": "今天该买却没买、价格已经跑掉的名单（跳过或未点已交易，且未回踩上行）。",
-        "algo": "同日买入信号：skipped 或未 traded，且 price_flags 含 miss_pullback / 标记含「未回踩」。",
+        "mean": "今天该买却没买、价格已经跑掉的名单（跳过或未点已交易，且未回踩上行）。调参仍只用这一类。",
+        "algo": "同日买入信号：skipped 或未 traded，且 price_flags 含 miss_pullback / 标记含「未回踩」。miss_kind=never_touched。",
+    },
+    "漏买归因": {
+        "mean": "把未交易漏买拆成三类一眼看清：未触达就走 / 触达未买 / 闸门卡死。展示向，不直接改 adapt。",
+        "algo": "build_miss_attribution：never_touched=miss_pullback；touched_not_bought=in_band/near_wait；"
+        "gate_blocked=有 confirm_fail/block 且现价已高于计划。复盘漏买区展示计数芯片+列表。",
+    },
+    "浅踩将飞": {
+        "mean": "价带半仓或可试探已开、分时仍贴尖/抬高点时，提示「半仓窗口，再等可能飞」。不改闸门，只喊醒执行。",
+        "algo": "tag_fly_window_items → fly_warn；build_fly_window_alerts 边沿 toast（fly:code），跟决策提醒开关；"
+        "可走 Server酱。卡面「将飞·半仓」+ 顶栏操作条。",
     },
     "提醒分级": {
         "mean": "价带提醒范围；决策提醒单独开关。",
         "algo": "alert_mode：traded_watch=已交易或自选（默认）；all=全部计划；watch_only=仅自选；off=关闭价带。\n"
         "已交易或仓位仍持有的代码：不再弹「可买带/不追/靠近建议价」，只保留止损；卖出建议另走仓位逻辑。\n"
-        "decision_alerts：控制可买入/主线/相位类；卖出与止损不受它关闭。",
+        "decision_alerts：控制可买入/浅踩将飞/主线/相位类；卖出与止损不受它关闭。",
     },
     "分批计划": {
         "mean": "推荐卡上的 1/2/3 笔示意仓：试错→确认→加仓，各约一手；点档位可一键记入独立 lot。",

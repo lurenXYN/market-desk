@@ -102,6 +102,8 @@ def build_toast_alerts(
             )
         )
 
+    alerts.extend(build_fly_window_alerts(previous, current))
+
     prev_ready = {
         f"{x.get('urgency')}:{x.get('code')}"
         for x in ((previous.get("sell_advice") or {}).get("items") or [])
@@ -131,12 +133,47 @@ def build_toast_alerts(
     return alerts
 
 
+def _recommend_fly_codes(snap: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Map code → recommend item currently tagged with fly_warn."""
+    out: dict[str, dict[str, Any]] = {}
+    rec = ((snap or {}).get("verdict") or {}).get("recommend") or {}
+    for item in rec.get("items") or []:
+        if not item.get("fly_warn"):
+            continue
+        code = str(item.get("code") or "").strip()
+        if code:
+            out[code] = item
+    return out
+
+
+def build_fly_window_alerts(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Edge-fire when a half-size fly window newly appears on a recommend card."""
+    if not previous or not previous.get("ok") or not current.get("ok"):
+        return []
+    prev = _recommend_fly_codes(previous)
+    cur = _recommend_fly_codes(current)
+    alerts: list[tuple[str, str, str]] = []
+    for code, item in cur.items():
+        if code in prev:
+            continue
+        name = item.get("name") or ""
+        px = item.get("buy_price") or item.get("last") or ""
+        kind = "价带半仓" if item.get("ready_relaxed") else "可试探半仓"
+        note = item.get("fly_note") or "半仓试探窗口，再等可能飞"
+        body = f"{name} {code} · {kind} · 建议 {px}\n{note}".strip()
+        alerts.append((f"fly:{code}", "浅踩将飞·半仓", body))
+    return alerts
+
+
 def toast_priority(key: str) -> int:
     """Return sort rank for one toast key (lower = more urgent)."""
     k = str(key or "")
     if k.startswith("sell:") or k.startswith("band:stop:") or k.startswith("wl:stop:"):
         return 0
-    if k.startswith("buy:"):
+    if k.startswith("buy:") or k.startswith("fly:"):
         return 1
     if k.startswith("band:entry:") or k.startswith("wl:suggest:"):
         return 2
@@ -160,7 +197,7 @@ def is_level_toast(key: str) -> bool:
 def is_decision_toast(key: str) -> bool:
     """Return True for verdict / phase / mainline decision toasts (not sells)."""
     k = str(key or "")
-    return k.startswith(("buy:", "exit:", "mainline:", "phase:"))
+    return k.startswith(("buy:", "fly:", "exit:", "mainline:", "phase:"))
 
 
 def is_risk_toast(key: str) -> bool:
@@ -174,7 +211,7 @@ def cooldown_for_key(key: str, decision_cooldown: float) -> float:
     k = str(key or "")
     if k.startswith(("sell:", "band:stop:", "wl:stop:")):
         return COOLDOWN_STOP_SEC
-    if k.startswith(("band:entry:", "wl:suggest:")):
+    if k.startswith(("band:entry:", "wl:suggest:", "fly:")):
         return COOLDOWN_ENTRY_SEC
     if k.startswith(("band:chase:", "wl:chase:")):
         return COOLDOWN_CHASE_SEC
@@ -273,7 +310,7 @@ def select_toasts_for_round(
 def is_serverchan_alert(key: str) -> bool:
     """Return True for buy/sell/lhb/eod/morning alerts that may go to ServerChan."""
     k = str(key or "")
-    return k.startswith(("buy:", "sell:", "lhb:", "eod:", "morning:"))
+    return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:"))
 
 
 def filter_serverchan_alerts(

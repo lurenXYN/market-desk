@@ -1529,6 +1529,42 @@ def build_exec_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return overall
 
 
+MISS_KIND_LABELS = {
+    "never_touched": "未触达就走",
+    "touched_not_bought": "触达未买",
+    "gate_blocked": "闸门卡死",
+}
+
+
+def classify_miss_kind(row: dict[str, Any]) -> str | None:
+    """Classify why a same-day buy was missed (display / review only).
+
+    - never_touched: plan never hit, price already higher (classic miss_pullback)
+    - touched_not_bought: in band / near wait but not traded
+    - gate_blocked: hard confirm fails while price ran above plan
+    """
+    from market_desk.numbers import num
+
+    flags = list(row.get("price_flags") or [])
+    mark = str(row.get("price_mark") or "")
+    traded = int(row.get("traded") or 0)
+    if traded:
+        return None
+    if "miss_pullback" in flags or "未回踩" in mark:
+        return "never_touched"
+    if "in_band" in flags or "near_wait" in flags or "建议价附近" in mark or "回踩区间" in mark:
+        return "touched_not_bought"
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    fails = list(payload.get("confirm_fail") or row.get("confirm_fail") or [])
+    blocked = bool(payload.get("block_ready") or row.get("block_ready"))
+    ready = int(row.get("ready") or 0)
+    last = num(row.get("live_last") if row.get("live_last") is not None else row.get("last"))
+    plan = num(row.get("price") or row.get("plan_price") or row.get("buy_price"))
+    if (fails or blocked) and not ready and last is not None and plan is not None and last > plan:
+        return "gate_blocked"
+    return None
+
+
 def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[dict[str, Any]]:
     """List same-day buys that were skipped or never traded while price already ran."""
     from market_desk.adapt import context_from_row
@@ -1561,9 +1597,68 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
                 "signaled_at": row.get("signaled_at"),
                 "context": ctx,
                 "context_label": ctx.get("label"),
+                "miss_kind": "never_touched",
+                "miss_kind_label": MISS_KIND_LABELS["never_touched"],
             }
         )
     return out
+
+
+def build_miss_attribution(
+    rows: list[dict[str, Any]],
+    *,
+    trade_date: str,
+) -> dict[str, Any]:
+    """Bucket untraded same-day buys by miss reason for review display.
+
+    Keeps adapt's ``missed_buys`` (never_touched only) unchanged; this board is
+    broader and display-only.
+    """
+    from market_desk.adapt import context_from_row
+
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "never_touched": [],
+        "touched_not_bought": [],
+        "gate_blocked": [],
+    }
+    for row in rows:
+        if str(row.get("trade_date") or "") != trade_date:
+            continue
+        if str(row.get("signal_type") or "") != "buy":
+            continue
+        if int(row.get("traded") or 0):
+            continue
+        kind = classify_miss_kind(row)
+        if not kind or kind not in buckets:
+            continue
+        ctx = context_from_row(row)
+        buckets[kind].append(
+            {
+                "id": row.get("id"),
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "price": row.get("price"),
+                "live_last": row.get("live_last"),
+                "dev_pct": row.get("dev_pct"),
+                "skipped": int(row.get("skipped") or 0),
+                "price_mark": row.get("price_mark"),
+                "mainline": row.get("mainline"),
+                "signaled_at": row.get("signaled_at"),
+                "context_label": ctx.get("label"),
+                "miss_kind": kind,
+                "miss_kind_label": MISS_KIND_LABELS.get(kind, kind),
+            }
+        )
+    counts = {k: len(v) for k, v in buckets.items()}
+    items: list[dict[str, Any]] = []
+    for key in ("never_touched", "touched_not_bought", "gate_blocked"):
+        items.extend(buckets[key])
+    return {
+        "counts": counts,
+        "total": sum(counts.values()),
+        "labels": dict(MISS_KIND_LABELS),
+        "items": items,
+    }
 
 
 def build_desk_source_hit_rates(
@@ -2992,6 +3087,15 @@ def build_review_payload(
     summary["desk_hits"] = build_desk_source_hit_rates(global_rows)
     summary["theme_hits"] = build_theme_hit_rates(global_rows)
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
+    try:
+        summary["miss_attr"] = build_miss_attribution(day_rows, trade_date=day)
+    except Exception:
+        summary["miss_attr"] = {
+            "counts": {"never_touched": 0, "touched_not_bought": 0, "gate_blocked": 0},
+            "total": 0,
+            "labels": dict(MISS_KIND_LABELS),
+            "items": [],
+        }
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     try:

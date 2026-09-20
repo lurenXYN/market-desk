@@ -70,19 +70,50 @@
     }
     .action-pill {
       display: inline-flex; align-items: center; gap: 8px;
-      padding: 6px 12px; border-radius: 999px;
-      font-size: 18px; font-weight: 800; letter-spacing: 0.04em;
+      padding: 8px 16px; border-radius: 999px;
+      font-size: 20px; font-weight: 800; letter-spacing: 0.04em;
       border: 1px solid var(--line); background: #0c1210;
     }
     .banner.buy .action-pill {
       color: #bbf7d0; border-color: #3ecf8e; background: #0f281c;
-      box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.35);
+      box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.35), 0 0 18px rgba(62, 207, 142, 0.25);
+      animation: actionPulse 1.8s ease-in-out infinite;
     }
     .banner.watch .action-pill {
       color: #fde68a; border-color: #eab308; background: #2a2208;
-      box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.4);
+      box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.4), 0 0 14px rgba(234, 179, 8, 0.18);
     }
     .banner.cash .action-pill { color: #fdba74; border-color: #5a3d2a; background: #1a1410; }
+    @keyframes actionPulse {
+      0%, 100% { box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.35), 0 0 12px rgba(62, 207, 142, 0.2); }
+      50% { box-shadow: 0 0 0 2px rgba(62, 207, 142, 0.55), 0 0 22px rgba(62, 207, 142, 0.35); }
+    }
+    .op-strip {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      margin: 0 0 10px; padding: 8px 10px;
+      border: 1px solid #2f5a3a; border-radius: 8px;
+      background: linear-gradient(90deg, #102018 0%, #0c1410 100%);
+    }
+    .op-strip[hidden] { display: none !important; }
+    .op-strip .lab {
+      font-size: 11px; color: var(--muted); letter-spacing: 0.08em; margin-right: 2px;
+    }
+    .op-tag {
+      display: inline-flex; align-items: center;
+      padding: 4px 10px; border-radius: 6px;
+      font-size: 14px; font-weight: 800; letter-spacing: 0.03em;
+      border: 1px solid #3ecf8e; color: #bbf7d0; background: #0f281c;
+    }
+    .op-tag.half { border-color: #86efac; color: #d9f99d; background: #14532d; }
+    .op-tag.probe { border-color: #eab308; color: #fde68a; background: #2a2208; }
+    .op-tag.fly {
+      border-color: #f97316; color: #fed7aa; background: #431407;
+      animation: flyBlink 1.2s ease-in-out infinite;
+    }
+    @keyframes flyBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.72; }
+    }
     .gate-hint {
       margin: 6px 0 2px;
       padding: 6px 8px;
@@ -937,10 +968,10 @@
       color: #bbf7d0; font-weight: 800; font-size: 1.05em;
     }
     .entry-badge {
-      display: inline-block; margin-left: 8px; padding: 1px 8px;
-      border: 1px solid #4ade80; border-radius: 4px;
+      display: inline-block; margin-left: 8px; padding: 3px 10px;
+      border: 1px solid #4ade80; border-radius: 6px;
       color: #bbf7d0; background: #0f281c;
-      font-size: 12px; font-weight: 800; letter-spacing: 0.04em;
+      font-size: 13px; font-weight: 800; letter-spacing: 0.04em;
       vertical-align: middle;
     }
     .entry-badge-soft {
@@ -948,7 +979,38 @@
     }
     .entry-badge-probe {
       border-color: #ca8a04; color: #fef08a; background: #1f1808;
+      font-size: 13px;
     }
+    .entry-badge-fly {
+      border-color: #f97316; color: #fed7aa; background: #431407;
+      animation: flyBlink 1.2s ease-in-out infinite;
+    }
+    .rec-card.fly-warn {
+      border-color: #f97316;
+      box-shadow: inset 3px 0 0 #f97316, 0 0 0 1px rgba(249, 115, 22, 0.35);
+    }
+    .buybox .buyline {
+      font-size: 16px; font-weight: 750; margin: 4px 0 6px;
+    }
+    .buybox.on .buyline { font-size: 17px; }
+    .miss-attr {
+      display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px;
+    }
+    .miss-attr .chip {
+      padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 700;
+      border: 1px solid var(--line); background: #121826; color: var(--text);
+    }
+    .miss-attr .chip.nt { border-color: #b45309; color: #fdba74; }
+    .miss-attr .chip.tb { border-color: #2563eb; color: #93c5fd; }
+    .miss-attr .chip.gb { border-color: #7c3aed; color: #c4b5fd; }
+    .miss-kind {
+      display: inline-block; margin-right: 6px; padding: 1px 6px;
+      border-radius: 4px; font-size: 11px; font-weight: 700;
+      border: 1px solid var(--line); color: var(--muted);
+    }
+    .miss-kind.nt { border-color: #b45309; color: #fdba74; }
+    .miss-kind.tb { border-color: #2563eb; color: #93c5fd; }
+    .miss-kind.gb { border-color: #7c3aed; color: #c4b5fd; }
     .rec-card.probe-ok {
       border-color: #ca8a04;
       background: linear-gradient(180deg, #241c0a 0%, #1a1608 100%);
@@ -2882,6 +2944,10 @@
             <span class="meta" id="phasePill"></span>
             <span class="meta" id="lifePill"></span>
           </div>
+          <div class="op-strip" id="opStrip" hidden title="当前推荐操作（半仓/试探优先于死等回踩）">
+            <span class="lab">现在</span>
+            <span id="opStripTags"></span>
+          </div>
           <div class="gate-hint" id="gateHint" hidden title="本轮为何不能现买（观察提示，不改规则）"></div>
           <div class="today-trio" id="todayTrio" title="今日三词：相位 · 主线 · 阶段">
             <span class="lab">今日三词 <button type="button" class="q" data-term="今日三词">?</button></span>
@@ -3743,9 +3809,14 @@
         wait ? "wait" : "buy-ready",
         probe ? "probe-ok" : "",
         near && !wait ? "near-entry" : (near ? "near-touch" : ""),
+        it.fly_warn ? "fly-warn" : "",
       ].filter(Boolean).join(" ");
       const relaxed = !!it.ready_relaxed;
+      const fly = !!it.fly_warn;
       const entryBadge = (() => {
+        if (fly) {
+          return `<span class="entry-badge entry-badge-fly" title="${it.fly_note || "半仓试探窗口，再等可能飞"}">将飞·半仓</span>`;
+        }
         if (!wait && relaxed) {
           return `<span class="entry-badge entry-badge-probe" title="价带放松：未到不追半仓 ready">可买·半</span>`;
         }
@@ -4135,6 +4206,24 @@
       const ml = (v.mainline && v.mainline.name) || "未明";
       const act = v.action || "观望";
       document.getElementById("actionPill").textContent = act;
+      (() => {
+        const strip = document.getElementById("opStrip");
+        const tags = document.getElementById("opStripTags");
+        if (!strip || !tags) return;
+        const items = ((v.recommend || {}).items) || [];
+        const bits = [];
+        const hasFly = items.some((it) => it.fly_warn);
+        const hasHalf = items.some((it) => it.ready_relaxed);
+        const hasFull = items.some((it) => it.ready && !it.ready_relaxed);
+        const hasProbe = items.some((it) => it.probe_ok);
+        if (hasFly) bits.push(`<span class="op-tag fly">将飞·半仓</span>`);
+        if (hasFull) bits.push(`<span class="op-tag">可买·满</span>`);
+        else if (hasHalf) bits.push(`<span class="op-tag half">可买·半</span>`);
+        if (hasProbe && !hasHalf && !hasFull) bits.push(`<span class="op-tag probe">可试探</span>`);
+        else if (hasProbe && (hasHalf || hasFull)) bits.push(`<span class="op-tag probe">另有试探</span>`);
+        strip.hidden = !bits.length;
+        tags.innerHTML = bits.join("");
+      })();
       document.getElementById("segPill").textContent = seg.label ? ("时段 " + seg.label) : "";
       document.getElementById("phasePill").innerHTML = phase && phase !== "—"
         ? (`相位 ${termHtml(phase)}`) : "";
@@ -6646,15 +6735,32 @@
             + ` · 偏早 ${se.early_n ?? 0}</div>`;
         })();
       const missed = sum.missed_buys || [];
-      document.getElementById("revMissed").innerHTML = missed.length
-        ? (`<div class="hd">漏买清单<button type="button" class="q" data-term="漏买清单">?</button> · ${missed.length}</div>`
-          + `<ul style="margin:0;padding-left:18px">` + missed.map((m) =>
-            `<li>${tickerHtml(m.name, m.code, "", { signal_at: m.signaled_at || "" })}`
+      const missAttr = sum.miss_attr || {};
+      const missCounts = missAttr.counts || {};
+      const missItems = (missAttr.items && missAttr.items.length) ? missAttr.items : missed;
+      const missAttrHtml = (missAttr.total > 0)
+        ? (`<div class="miss-attr">`
+          + `<span class="chip nt">未触达就走 ${missCounts.never_touched || 0}</span>`
+          + `<span class="chip tb">触达未买 ${missCounts.touched_not_bought || 0}</span>`
+          + `<span class="chip gb">闸门卡死 ${missCounts.gate_blocked || 0}</span>`
+          + `</div>`)
+        : "";
+      const missKindCls = (k) => ({ never_touched: "nt", touched_not_bought: "tb", gate_blocked: "gb" }[k] || "");
+      document.getElementById("revMissed").innerHTML = missItems.length
+        ? (`<div class="hd">漏买归因<button type="button" class="q" data-term="漏买归因">?</button> · ${missItems.length}</div>`
+          + missAttrHtml
+          + `<ul style="margin:0;padding-left:18px">` + missItems.map((m) =>
+            `<li>`
+            + (m.miss_kind_label
+              ? `<span class="miss-kind ${missKindCls(m.miss_kind)}">${m.miss_kind_label}</span>`
+              : "")
+            + `${tickerHtml(m.name, m.code, "", { signal_at: m.signaled_at || "" })}`
             + ` 建议 ${m.price ?? "—"} · 现 ${m.live_last ?? "—"}`
             + `${m.dev_pct == null ? "" : " · 偏离 " + ((m.dev_pct > 0 ? "+" : "") + Number(m.dev_pct).toFixed(2) + "%")}`
-            + ` · ${m.skipped ? "已跳过" : "未点已交易"} · ${m.price_mark || "未回踩上行"}</li>`
+            + ` · ${m.skipped ? "已跳过" : "未点已交易"} · ${m.price_mark || "—"}</li>`
           ).join("") + `</ul>`)
-        : `<div class="hd">漏买清单<button type="button" class="q" data-term="漏买清单">?</button></div><span class="meta">${dayLabel}暂无「未交易且未回踩上行」项</span>`;
+        : `<div class="hd">漏买归因<button type="button" class="q" data-term="漏买归因">?</button></div>`
+          + `<span class="meta">${dayLabel}暂无未交易漏买项</span>`;
       paintEodBrief(sum, today, dayLabel);
       paintTomorrowBrief();
       const vsMode = sum.vs_mainline_mode || reviewVsMlMode || "live";
@@ -9310,7 +9416,7 @@
         "信号复盘", "信号回测", "模拟成交", "触达", "计划价带", "理想回踩", "建议价", "不追上限", "买撮合",
         "回测量能", "回测滑点", "回测跳空", "预览匹配数", "仅ready",
         "复盘评测标准", "调参口径", "模拟执行分", "Ready风格", "开盘卖出缓冲",
-        "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "相位命中", "自选", "异动",
+        "对照主线", "股东户数", "年内涨停", "计划执行分", "漏买清单", "漏买归因", "浅踩将飞", "相位命中", "自选", "异动",
         "相似日", "分时确认", "健康度", "高开低走黑名单", "集合竞价策略", "闸门归因", "卖点闭环",
         "独立人气回踩", "情绪龙", "中军龙", "年内涨停",
       ] },
