@@ -2966,6 +2966,12 @@
           <input id="setMorningPush" type="checkbox" /> 早决策微信推送（约 9:25–9:50 一次）
         </label>
         <label class="settings-check">
+          <input id="setNewsRadarOn" type="checkbox" /> 接入新闻雷达（软提示，不改买卖闸门）
+        </label>
+        <label style="grid-column:1/-1">新闻雷达 URL
+          <input id="setNewsRadarUrl" type="text" placeholder="http://127.0.0.1:8770" title="独立 news-radar 服务地址" />
+        </label>
+        <label class="settings-check">
           <input id="setScClear" type="checkbox" /> 清除已存 Key
         </label>
         <label>单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
@@ -3090,6 +3096,7 @@
             <ul id="morningBullets"></ul>
             <div class="chk" id="morningChk"></div>
           </details>
+          <div class="meta" id="newsRadarStrip" style="margin:6px 0 10px;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;" hidden></div>
           <details class="desk-more" id="deskMore">
             <summary>展开原因 / 算法细节</summary>
             <div class="body">
@@ -4616,6 +4623,23 @@
         chk.size ? `<span><b>仓位</b> ${chk.size}</span>` : "",
       ].filter(Boolean).join("");
       window.__morningMarkdown = brief.markdown || "";
+      const nrStrip = document.getElementById("newsRadarStrip");
+      if (nrStrip) {
+        const nr = d.news_radar || {};
+        const rows = (nr.sectors || []).slice(0, 5);
+        if (rows.length) {
+          nrStrip.hidden = false;
+          nrStrip.innerHTML = "新闻雷达 · "
+            + rows.map((r) => {
+              const pct = r.board_pct == null ? "" : ` ${Number(r.board_pct) >= 0 ? "+" : ""}${Number(r.board_pct).toFixed(1)}%`;
+              return `<b>${r.sector || ""}</b>${r.confirm_label ? "(" + r.confirm_label + ")" : ""}${pct}`;
+            }).join(" · ")
+            + (nr.updated_at ? ` <span class="meta">· ${nr.updated_at}</span>` : "");
+        } else {
+          nrStrip.hidden = true;
+          nrStrip.innerHTML = "";
+        }
+      }
       document.getElementById("reason").textContent = v.reason || "";
       document.getElementById("narrative").textContent = v.narrative || "";
       document.getElementById("detail").textContent = v.detail || "";
@@ -9482,6 +9506,10 @@
         document.getElementById("setAutoBackup").checked = s.auto_backup !== false;
         const keepEl = document.getElementById("setBackupKeep");
         if (keepEl) keepEl.value = s.backup_keep ?? 30;
+        const nrOn = document.getElementById("setNewsRadarOn");
+        if (nrOn) nrOn.checked = !!s.news_radar_enabled;
+        const nrUrl = document.getElementById("setNewsRadarUrl");
+        if (nrUrl) nrUrl.value = s.news_radar_url || "http://127.0.0.1:8770";
         window.__portableSettings = d.portable || null;
         window.__settingsPresets = d.presets || null;
       } catch (e) {}
@@ -9597,6 +9625,8 @@
         auto_backup: !!document.getElementById("setAutoBackup").checked,
         backup_keep: Number(document.getElementById("setBackupKeep")?.value || 30),
         morning_push: !!document.getElementById("setMorningPush")?.checked,
+        news_radar_enabled: !!document.getElementById("setNewsRadarOn")?.checked,
+        news_radar_url: (document.getElementById("setNewsRadarUrl")?.value || "").trim(),
       };
       const r = await fetch("/api/settings", {
         method: "POST",

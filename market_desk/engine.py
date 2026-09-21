@@ -910,6 +910,20 @@ class DeskEngine:
                 payload["enrich_pending"] = True
                 payload["health"] = _build_health(now, errors, updated_at, payload)
                 payload["deltas"] = build_deltas(payload, prev)
+                # Soft news-radar attach (never blocks / never changes buy gates).
+                try:
+                    from market_desk.news_radar import fetch_news_radar_export
+                    from market_desk.settings import setting as _setting
+
+                    if bool(_setting("news_radar_enabled", False)):
+                        nr = await fetch_news_radar_export(
+                            base_url=str(_setting("news_radar_url", "") or ""),
+                            limit=8,
+                        )
+                        if nr:
+                            payload["news_radar"] = nr
+                except Exception:
+                    log.exception("news_radar attach failed")
                 payload["morning_brief"] = build_morning_brief(payload)
                 try:
                     self._maybe_ops_health_alert(payload)
@@ -1567,6 +1581,7 @@ class DeskEngine:
             ),
             "desk": (
                 "morning_brief",
+                "news_radar",
                 "seasonality",
                 "deltas",
                 "favorite_desk",

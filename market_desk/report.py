@@ -96,6 +96,15 @@ def build_morning_brief(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     else:
         bullets.append("仓位：空仓 / 未记账")
 
+    nr = snap.get("news_radar") or {}
+    try:
+        from market_desk.news_radar import news_radar_brief_lines
+
+        for line in news_radar_brief_lines(nr, max_n=3):
+            bullets.append(line)
+    except Exception:
+        pass
+
     checklist = [
         pb.get("do") or (pb.get("lines") or [None])[0] or "先认主线，不追尖",
         pb.get("dont") or (pb.get("lines") or [None, None])[1] or "不抄冷门、不摊平",

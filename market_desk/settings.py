@@ -157,6 +157,9 @@ DEFAULTS: dict[str, Any] = {
     "sell_open_watch_minutes": int(cfg.SELL_OPEN_WATCH_MINUTES),
     # Per-user: push morning brief via Server酱 once near open (needs Key).
     "morning_push": False,
+    # Soft link to standalone news-radar (http://host:8770); empty = off.
+    "news_radar_enabled": False,
+    "news_radar_url": "http://127.0.0.1:8770",
     # Phase temperature cutoffs (see classify_phase).
     "phase_panic_temp": int(cfg.PHASE_PANIC_TEMP),
     "phase_ferment_temp": int(cfg.PHASE_FERMENT_TEMP),
@@ -317,6 +320,8 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     sow = max(0, min(30, int(out.get("sell_open_watch_minutes") or cfg.SELL_OPEN_WATCH_MINUTES)))
     out["sell_open_watch_minutes"] = sow
     out["morning_push"] = bool(out.get("morning_push"))
+    out["news_radar_enabled"] = bool(out.get("news_radar_enabled"))
+    out["news_radar_url"] = str(out.get("news_radar_url") or "").strip().rstrip("/")
     panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))
     ferment_t = max(panic_t + 1, min(80, int(out.get("phase_ferment_temp") or cfg.PHASE_FERMENT_TEMP)))
     climax_t = max(ferment_t, min(95, int(out.get("phase_climax_temp") or cfg.PHASE_CLIMAX_TEMP)))
