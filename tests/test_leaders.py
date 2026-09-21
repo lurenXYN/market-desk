@@ -8,8 +8,10 @@ from market_desk.leaders import (
     _independent_vs_board,
     _near_day_low,
     board_surge_fresh,
+    build_independent_pullback_candidates,
     pick_emotion_dragon,
     stock_liquidity_ok,
+    within_n_day_low,
 )
 
 
@@ -43,7 +45,64 @@ class LeadersTests(unittest.TestCase):
         self.assertTrue(_near_day_low({"price": 10.1, "low": 10.0}, max_pct=2.0))
         self.assertFalse(_near_day_low({"price": 10.5, "low": 10.0}, max_pct=2.0))
         self.assertTrue(_independent_vs_board({"pct": 2.5}, 0.5))
+        # Mild sync vs board is no longer independent (fallback path covers it).
         self.assertFalse(_independent_vs_board({"pct": 0.6}, 0.5))
+        self.assertTrue(_independent_vs_board({"pct": 1.5}, 0.5))
+
+    def test_independent_prefers_diverge_then_near_low_fallback(self) -> None:
+        board = {
+            "pct": 1.0,
+            "leader_code": "600099",
+            "pool": [
+                {
+                    "code": "600001",
+                    "name": "独立甲",
+                    "pct": 2.2,
+                    "price": 10.05,
+                    "low": 10.0,
+                    "high": 10.4,
+                    "mv_yi": 200,
+                    "turnover": 4.0,
+                    "amount": 3e8,
+                },
+                {
+                    "code": "600002",
+                    "name": "同步乙",
+                    "pct": 1.1,
+                    "price": 20.1,
+                    "low": 20.0,
+                    "high": 20.5,
+                    "mv_yi": 300,
+                    "turnover": 3.5,
+                    "amount": 5e8,
+                },
+                {
+                    "code": "600003",
+                    "name": "冲高丙",
+                    "pct": 1.0,
+                    "price": 15.0,
+                    "low": 14.0,
+                    "high": 15.2,
+                    "mv_yi": 250,
+                    "turnover": 4.0,
+                    "amount": 8e8,
+                },
+            ],
+        }
+        rows = build_independent_pullback_candidates(board, max_items=5)
+        codes = [r["code"] for r in rows]
+        self.assertIn("600001", codes)
+        self.assertIn("600002", codes)
+        self.assertNotIn("600003", codes)
+        by_code = {r["code"]: r for r in rows}
+        self.assertTrue(by_code["600001"].get("indep_path"))
+        self.assertFalse(by_code["600002"].get("indep_path"))
+        self.assertIn("板内同步", by_code["600002"]["reason"])
+
+    def test_within_n_day_low(self) -> None:
+        lows = [9.5, 9.8, 10.0, 9.7, 9.6]
+        self.assertTrue(within_n_day_low(lows, 9.7, n=5, max_pct=3.5))
+        self.assertFalse(within_n_day_low(lows, 10.5, n=5, max_pct=3.5))
 
     def test_pick_emotion_dragon_highest_boards(self) -> None:
         board = {

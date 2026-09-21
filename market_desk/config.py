@@ -182,6 +182,7 @@ CONSTITUENT_TOP = 20
 # Soft risk hints for the local position book (not hard blocks).
 POSITION_MAX_NAMES = 6
 POSITION_MAX_SINGLE_PCT = 35.0
+POSITION_MAX_THEME_PCT = 50.0  # soft tip when one theme (by theme_key) ≥ this of book market
 POSITION_MAX_TOTAL_COST = 200000.0
 
 # Minimum total market cap (亿元) for main-board stock recommendations; 0 disables.
@@ -472,10 +473,13 @@ SELL_FLY_DAY1_PCT = -2.5
 READY_STYLE_DEFAULT = "band"
 SELL_MINUTE_GATE_ENABLED = True
 
-# Dual-dragon + independent popular pullback.
+# Dual-dragon + independent popular pullback (observe-only; soft filters).
 INDEPENDENT_POP_MAX = 5
 INDEPENDENT_POP_LOW_DAYS = 5
-INDEPENDENT_POP_NEAR_LOW_PCT = 2.0
+INDEPENDENT_POP_NEAR_LOW_PCT = 3.5       # engine 5-day low band (was 2.0; too empty)
+INDEPENDENT_POP_NEAR_DAY_LOW_PCT = 3.5   # session low pre-filter
+INDEPENDENT_POP_PCT_MAX = 5.0            # |pct| soft window (not chase / not collapse)
+INDEPENDENT_POP_KEEP_DAY_LOW_IF_5D_MISS = True  # soft: keep day-low when 5d fails
 # Absolute floor + turnover floors by market-cap bucket (亿元 / %).
 STOCK_MV_HARD_MIN_YI = 100.0          # below → always drop
 STOCK_TURN_MIN_MID = 3.0              # 100–500亿: turnover < this → drop

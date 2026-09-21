@@ -471,17 +471,17 @@ def _independent_vs_board(member: dict[str, Any], board_pct: float | None) -> bo
     except (TypeError, ValueError):
         return False
     if board_pct is None:
-        return abs(pct) >= 1.0
+        return abs(pct) >= 0.8
     try:
         bp = float(board_pct)
     except (TypeError, ValueError):
-        return abs(pct) >= 1.0
+        return abs(pct) >= 0.8
     # Held up while board soft, or sold off while board strong — independent path.
-    if pct >= bp + 1.2:
+    if pct >= bp + 0.8:
         return True
-    if pct <= bp - 1.5 and pct > -4.0:
+    if pct <= bp - 1.0 and pct > -5.0:
         return True
-    return abs(pct - bp) >= 2.0
+    return abs(pct - bp) >= 1.2
 
 
 def build_independent_pullback_candidates(
@@ -492,8 +492,15 @@ def build_independent_pullback_candidates(
 ) -> list[dict[str, Any]]:
     """List mainline constituents for independent popular pullback observe cards.
 
-    Soft pre-filter (day low / vs board). Engine may tighten with 5-day lows + zt_ytd.
+    Prefer board-divergent near-lows; if none, fall back to near-day-low names
+    still in the soft pct window (labeled 板内同步). Engine may soft-check 5-day
+    lows and zt_ytd afterward.
     """
+    from market_desk.config import (
+        INDEPENDENT_POP_NEAR_DAY_LOW_PCT,
+        INDEPENDENT_POP_PCT_MAX,
+    )
+
     card = main or {}
     board_pct = card.get("pct")
     skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
@@ -507,7 +514,11 @@ def build_independent_pullback_candidates(
     skip.add(normalize_code(card.get("leader_code")))
     skip.add(normalize_code(card.get("slot_code")))
 
-    scored: list[tuple[float, dict[str, Any]]] = []
+    pct_max = float(INDEPENDENT_POP_PCT_MAX)
+    near_day = float(INDEPENDENT_POP_NEAR_DAY_LOW_PCT)
+    indep_scored: list[tuple[float, dict[str, Any]]] = []
+    near_scored: list[tuple[float, dict[str, Any]]] = []
+
     for member in card.get("pool") or card.get("members") or []:
         code = normalize_code(member.get("code"))
         name = str(member.get("name") or "")
@@ -527,12 +538,10 @@ def build_independent_pullback_candidates(
             turnover = None
         if not stock_liquidity_ok(mv, turnover, sealed=False):
             continue
-        # Soft 1–2 day pullback window: not chasing highs, not collapsing.
-        if pct > 3.5 or pct < -3.5:
+        # Soft pullback window: not chasing highs, not collapsing.
+        if pct > pct_max or pct < -pct_max:
             continue
-        if not _near_day_low(member, max_pct=2.5):
-            continue
-        if not _independent_vs_board(member, board_pct if board_pct is not None else None):
+        if not _near_day_low(member, max_pct=near_day):
             continue
         try:
             amount = float(member.get("amount") or 0)
@@ -550,13 +559,39 @@ def build_independent_pullback_candidates(
         item["ready"] = False
         item["desk_source"] = "independent_pop"
         item["role_label"] = "独立人气·回踩"
-        item["reason"] = (
-            f"主线板内独立行情·近低回踩观察（vs板 {_fmt_board(board_pct)}，"
-            f"个股 {pct:+.1f}%）"
+        indep = _independent_vs_board(
+            member, board_pct if board_pct is not None else None
         )
-        scored.append((score, item))
-    scored.sort(key=lambda row: row[0], reverse=True)
-    return [row[1] for row in scored[: max(1, int(max_items))]]
+        if indep:
+            item["indep_path"] = True
+            item["reason"] = (
+                f"主线板内独立行情·近低回踩观察（vs板 {_fmt_board(board_pct)}，"
+                f"个股 {pct:+.1f}%）"
+            )
+            indep_scored.append((score + 1.5, item))
+        else:
+            item["indep_path"] = False
+            item["reason"] = (
+                f"主线板内近低观察·板内同步（vs板 {_fmt_board(board_pct)}，"
+                f"个股 {pct:+.1f}%）"
+            )
+            near_scored.append((score, item))
+
+    indep_scored.sort(key=lambda row: row[0], reverse=True)
+    near_scored.sort(key=lambda row: row[0], reverse=True)
+    limit = max(1, int(max_items))
+    picked = [row[1] for row in indep_scored[:limit]]
+    if len(picked) < limit:
+        have = {normalize_code(x.get("code")) for x in picked}
+        for _, item in near_scored:
+            code = normalize_code(item.get("code"))
+            if not code or code in have:
+                continue
+            picked.append(item)
+            have.add(code)
+            if len(picked) >= limit:
+                break
+    return picked
 
 
 def _fmt_board(board_pct: Any) -> str:

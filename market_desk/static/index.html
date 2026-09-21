@@ -271,6 +271,28 @@
     }
     .pos-target-bar .fill.over { background: #f59e0b; }
     .pos-target-bar .fill.hot { background: #ef4444; }
+    .pos-conc {
+      display: flex; flex-wrap: wrap; gap: 6px 10px;
+      margin: 6px 0 0; font-size: 12px; color: var(--muted);
+    }
+    .pos-conc .chip {
+      border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px;
+      background: #121820;
+    }
+    .pos-conc .chip.warn {
+      border-color: #b45309; color: #fdba74;
+    }
+    .pos-conc .chip.hot {
+      border-color: #b91c1c; color: #fca5a5;
+    }
+    .risk-themes {
+      display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px;
+    }
+    .risk-themes .tchip {
+      border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+      font-size: 12px; background: #0c1218;
+    }
+    .risk-themes .tchip.warn { border-color: #b45309; color: #fdba74; }
     .theme-chain {
       margin: 8px 0 0; padding: 8px 10px;
       border: 1px dashed #3b5a8b; border-radius: 8px;
@@ -548,12 +570,45 @@
     .hit-chip {
       border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: #121820;
     }
+    .hit-chip.low-n {
+      opacity: 0.48;
+      filter: grayscale(0.35);
+    }
+    .hit-chip.low-n .rate { color: var(--muted) !important; }
     .hit-chip .lab { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
     .hit-chip .rate { font-size: 18px; font-weight: 700; margin-top: 2px; }
     .hit-chip .rate.hi { color: #4ade80; }
     .hit-chip .rate.mid { color: #fbbf24; }
     .hit-chip .rate.lo { color: #f87171; }
     .hit-chip .n { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .week-exec, .oc-compare {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0c1218;
+      font-size: 13px;
+    }
+    .week-exec .hd, .oc-compare .hd {
+      font-size: 12px; color: var(--muted); margin-bottom: 6px; letter-spacing: 0.04em;
+    }
+    .week-exec .chips, .oc-compare .chips {
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .week-exec .chip {
+      border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px;
+    }
+    body.commute-mode .desk-fold,
+    body.commute-mode .desk-more,
+    body.commute-mode #deskTimelineFold,
+    body.commute-mode .today-trio,
+    body.commute-mode #noEtfBanner,
+    body.commute-mode .verdict-one,
+    body.commute-mode .mainline-title { display: none !important; }
+    body.commute-mode .nav-tabs .nav-sec { display: none !important; }
+    body.commute-mode #commuteBtn.on {
+      color: #0b1220; background: #fbbf24; border-color: #fbbf24;
+    }
     .ew-card.selected { border-color: #38bdf8; box-shadow: inset 0 0 0 1px #38bdf8; }
     .ew-card .ew-pick { font-size: 11px; color: #38bdf8; margin-top: 4px; }
     .rev-vsml {
@@ -1584,7 +1639,7 @@
       width: 12px; height: 12px; font-size: 9px; margin-left: 2px;
     }
     .term-pop {
-      position: fixed; z-index: 80; max-width: 380px;
+      position: fixed; z-index: 120; max-width: 380px;
       background: #151c28; border: 1px solid var(--ice); border-radius: 8px;
       padding: 12px 14px; box-shadow: 0 16px 40px rgba(0,0,0,.5);
     }
@@ -1717,6 +1772,19 @@
     .chart-desc dd.down { color: var(--down, #38bdf8); }
     .chart-box svg { width: 100%; height: 160px; display: block; }
     .chart-empty { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
+    .chart-levels {
+      display: flex; flex-wrap: wrap; gap: 6px 10px;
+      margin: 0 0 10px; padding: 6px 8px;
+      border: 1px solid var(--line); border-radius: 8px; background: #0c1218;
+      font-size: 11px; color: var(--muted);
+    }
+    .chart-levels[hidden] { display: none !important; }
+    .chart-levels .lv {
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .chart-levels .sw {
+      width: 10px; height: 2px; border-radius: 1px; display: inline-block;
+    }
     .sig-hist-drawer {
       width: min(720px, 100%);
     }
@@ -2378,6 +2446,7 @@
       .nav-tabs button[data-main].nav-sec { display: none !important; }
       .nav-tabs button.q,
       .nav-tabs #glossaryBtn,
+      .nav-tabs #commuteBtn,
       .nav-tabs #settingsBtn { display: none !important; }
       .banner .playbook { margin-bottom: 0; }
       .desk-fold > summary, .desk-more > summary { padding: 10px 12px; min-height: 40px; }
@@ -2777,12 +2846,14 @@
         </div>
       </div>
       <div class="hdr-tools" id="hdrTools" aria-label="手机端工具">
+        <button type="button" id="commuteBtnM" title="通勤极简">通勤</button>
         <button type="button" id="glossaryBtnM" title="浏览全部术语">术语</button>
         <button type="button" id="settingsBtnM" title="运行参数">参数</button>
       </div>
     </div>
     <div class="data-banner" id="dataBanner"></div>
     <div class="toast-strip" id="toastStrip"></div>
+    <div class="term-pop" id="termPop" hidden role="dialog" aria-live="polite"></div>
 
     <nav class="nav-tabs" id="navTabs" aria-label="主页签">
       <button type="button" class="on nav-core" data-main="desk">作战<span class="hint">买卖</span></button>
@@ -2797,6 +2868,7 @@
       <button type="button" class="nav-more-btn" id="navMoreBtn" aria-expanded="false" aria-controls="navMoreSheet">更多</button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
       <button type="button" class="rev-col-btn" id="glossaryBtn" style="margin-left:auto" title="浏览全部术语">术语</button>
+      <button type="button" class="rev-col-btn" id="commuteBtn" title="通勤极简：只留买卖/仓位/复盘">通勤</button>
       <button type="button" class="rev-col-btn" id="settingsBtn">参数</button>
     </nav>
     <div class="nav-more-mask" id="navMoreMask" hidden></div>
@@ -2996,6 +3068,7 @@
                   <span class="meta" id="posTargetMeta">—</span>
                 </div>
                 <div class="track"><div class="fill" id="posTargetFill" style="width:0%"></div></div>
+                <div class="pos-conc" id="posConc" hidden></div>
               </div>
               <div class="season-desk" id="seasonDesk" hidden>
                 <div class="k">日历提醒 <button type="button" class="q" data-term="季节性日历">?</button>
@@ -3371,6 +3444,7 @@
             <span class="meta" id="posTargetMetaPos">—</span>
           </div>
           <div class="track"><div class="fill" id="posTargetFillPos" style="width:0%"></div></div>
+          <div class="pos-conc" id="posConcPos" hidden></div>
         </div>
         <div class="risk-box" id="riskBox"></div>
         <table class="m-cards" id="posTable">
@@ -3426,7 +3500,9 @@
         </div>
         <div class="rev-today" id="revToday"></div>
         <div class="rev-exec" id="revExec"></div>
+        <div class="week-exec" id="revWeekExec"></div>
         <div class="rev-missed" id="revMissed"></div>
+        <div class="oc-compare" id="revOcCompare"></div>
         <div class="eod-brief" id="eodBrief">
           <div class="hd">
             <b>收盘一页纸</b>
@@ -3618,6 +3694,7 @@
         <button type="button" class="ghost" id="chartRefresh">刷新图</button>
       </div>
       <div class="chart-desc" id="chartDesc" hidden></div>
+      <div class="chart-levels" id="chartLevels" hidden></div>
       <div class="chart-box">
         <h4>分时</h4>
         <div id="chartMinute"></div>
@@ -3670,6 +3747,57 @@
   <script src="/static/js/md-review.js"></script>
   <script>
     let GLOSSARY = {};
+    let _glossaryLoading = null;
+    async function ensureGlossary(force) {
+      if (!force && Object.keys(GLOSSARY || {}).length > 40) return true;
+      if (_glossaryLoading) return _glossaryLoading;
+      _glossaryLoading = (async () => {
+        try {
+          const r = await fetch("/api/glossary", { credentials: "same-origin" });
+          if (!r.ok) return false;
+          const g = await r.json();
+          if (g && typeof g === "object" && !Array.isArray(g) && !g.detail) {
+            GLOSSARY = Object.assign({}, GLOSSARY, g);
+            return Object.keys(GLOSSARY).length > 0;
+          }
+        } catch (e) {
+          return false;
+        } finally {
+          _glossaryLoading = null;
+        }
+        return Object.keys(GLOSSARY || {}).length > 0;
+      })();
+      return _glossaryLoading;
+    }
+    function showTermPop(btn, key, g) {
+      let pop = document.getElementById("termPop");
+      if (!pop) {
+        pop = document.createElement("div");
+        pop.id = "termPop";
+        pop.className = "term-pop";
+        pop.setAttribute("role", "dialog");
+        pop.setAttribute("aria-live", "polite");
+        document.body.appendChild(pop);
+      }
+      if (!btn) return;
+      const mean = (g && g.mean) ? g.mean : "（暂无摘要）";
+      const algo = (g && g.algo) ? g.algo : "（暂无算法说明）";
+      pop.innerHTML = `<h4>${key || "术语"}</h4>`
+        + `<p class="mean">${mean}</p>`
+        + `<p class="algo">${algo}</p>`
+        + `<p class="meta" style="margin-top:8px">Alt+点击 ? 打开术语表</p>`;
+      pop.hidden = false;
+      const r = btn.getBoundingClientRect();
+      const width = Math.min(380, window.innerWidth - 16);
+      let left = Math.min(r.left, window.innerWidth - width - 8);
+      left = Math.max(8, left);
+      pop.style.left = left + "px";
+      pop.style.top = "0px";
+      const h = pop.offsetHeight || 160;
+      let top = r.bottom + 8;
+      if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - 8 - h);
+      pop.style.top = top + "px";
+    }
     const phaseColor = { "恐慌": "var(--fear)", "分歧": "var(--div)", "发酵": "var(--ferm)", "高潮": "var(--climax)" };
     const fmtPct = (v) => {
       if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -4166,7 +4294,7 @@
     }
 
     function paintPosTargetBar(d) {
-      // Paint target-vs-actual cost bar on desk + positions tab.
+      // Paint target-vs-actual cost bar + concentration chips on desk + positions.
       const risk = d.risk_overview || d.position_summary || {};
       const sum = d.position_summary || {};
       const target = Number(risk.target_total_cost);
@@ -4177,11 +4305,14 @@
       const dev = risk.target_dev_pct;
       const over = hasTarget && pct > 100;
       const hot = hasTarget && pct >= 115;
+      const used = risk.size_used_pct;
       const meta = hasTarget
         ? `实际 ${fmtMoney(cost)} / 目标 ${fmtMoney(target)} · ${pct}%`
           + (dev == null ? "" : `（偏差 ${dev > 0 ? "+" : ""}${dev}%）`)
-        : "未设目标总成本";
+          + (used == null ? "" : ` · 占账户 ${used}%`)
+        : (used == null ? "未设目标总成本" : `占账户 ${used}%`);
       const fillCls = "fill" + (hot ? " hot" : (over ? " over" : ""));
+      const showBar = hasTarget || (used != null);
       [
         ["posTargetBar", "posTargetMeta", "posTargetFill"],
         ["posTargetBarPos", "posTargetMetaPos", "posTargetFillPos"],
@@ -4190,15 +4321,42 @@
         const metaEl = document.getElementById(metaId);
         const fill = document.getElementById(fillId);
         if (!bar || !metaEl || !fill) return;
-        bar.hidden = !hasTarget;
+        bar.hidden = !showBar;
         metaEl.textContent = meta;
         fill.className = fillCls;
-        fill.style.width = fillPct + "%";
+        fill.style.width = hasTarget ? (fillPct + "%") : (used != null ? Math.min(100, used) + "%" : "0%");
+      });
+      const topT = risk.top_theme || ((risk.themes || [])[0]);
+      const topS = risk.top_single || ((risk.items || [])[0]);
+      const themeCap = (risk.caps && risk.caps.max_theme_pct) || 50;
+      const singleCap = (risk.caps && risk.caps.max_single_pct) || 35;
+      const chips = [];
+      if (topT && topT.weight_pct != null) {
+        const cls = topT.over_theme ? "chip hot" : (topT.weight_pct >= themeCap * 0.8 ? "chip warn" : "chip");
+        chips.push(`<span class="${cls}" title="题材集中度">题材 ${topT.theme || "—"} ${topT.weight_pct}%</span>`);
+      }
+      if (topS && topS.weight_pct != null) {
+        const cls = topS.over_weight ? "chip hot" : (topS.weight_pct >= singleCap * 0.8 ? "chip warn" : "chip");
+        chips.push(`<span class="${cls}" title="单票集中度">单票 ${topS.name || topS.code || "—"} ${topS.weight_pct}%</span>`);
+      }
+      ["posConc", "posConcPos"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (!chips.length) {
+          el.hidden = true;
+          el.innerHTML = "";
+          return;
+        }
+        el.hidden = false;
+        el.innerHTML = chips.join("");
       });
     }
 
     function render(d) {
-      if (d.glossary) GLOSSARY = d.glossary;
+      if (d.glossary && typeof d.glossary === "object") {
+        // Merge so a later thin payload never wipes a loaded glossary.
+        GLOSSARY = Object.assign({}, GLOSSARY, d.glossary);
+      }
       const v = d.verdict || {};
       const phase = d.phase || "—";
       const seg = v.segment || {};
@@ -5217,9 +5375,18 @@
       document.getElementById("riskBox").innerHTML =
         `<div class="hd">风控总览<button type="button" class="q" data-term="风控总览">?</button> · `
         + `盈 ${risk.winners ?? 0} / 亏 ${risk.losers ?? 0} / 平 ${risk.flat ?? 0}`
-        + ` · 软上限 只数≤${caps.max_names ?? "—"} 单票≤${caps.max_single_pct ?? "—"}% 总成本≤${caps.max_total_cost ?? "—"}`
+        + ` · 软上限 只数≤${caps.max_names ?? "—"} 单票≤${caps.max_single_pct ?? "—"}%`
+        + ` 题材≤${caps.max_theme_pct ?? "—"}% 总成本≤${caps.max_total_cost ?? "—"}`
         + `${targetBit}</div>`
         + tipHtml
+        + ((risk.themes || []).length
+          ? (`<div class="risk-themes" title="题材集中度">`
+            + (risk.themes || []).slice(0, 5).map((t) =>
+              `<span class="tchip${t.over_theme ? " warn" : ""}">${t.theme || "—"} ${t.weight_pct == null ? "—" : (t.weight_pct + "%")}`
+              + ` · ${t.n || 0}只</span>`
+            ).join("")
+            + `</div>`)
+          : "")
         + ((risk.items || []).length
           ? `<table><thead><tr><th>名称</th><th>占比</th><th>等权偏</th><th>浮盈%</th><th>市值</th></tr></thead><tbody>`
             + (risk.items || []).map((it) =>
@@ -5920,7 +6087,13 @@
       if (pts.length < 2) return `<div class="chart-empty">${(opts && opts.empty) || "暂无数据"}</div>`;
       const w = 420, h = 160, pad = 12;
       const overlays = (opts && opts.overlays) || [];
-      const all = pts.concat(overlays.flatMap((o) => o.values || []));
+      const levels = ((opts && opts.levels) || []).filter((lv) => {
+        const n = Number(lv && lv.price);
+        return Number.isFinite(n) && n > 0;
+      });
+      const all = pts
+        .concat(overlays.flatMap((o) => (o.values || []).map(Number).filter((v) => !Number.isNaN(v))))
+        .concat(levels.map((lv) => Number(lv.price)));
       const min = Math.min(...all);
       const max = Math.max(...all);
       const span = max - min || 1;
@@ -5939,8 +6112,88 @@
         html += `<line x1="${x}" x2="${x}" y1="${pad}" y2="${h - pad}" stroke="#f87171" stroke-width="1.4" stroke-dasharray="3 2"/>`;
         html += `<text x="${x}" y="${pad + 10}" fill="#f87171" font-size="10">信号</text>`;
       }
+      // Horizontal key levels (plan / stop / cost). Stagger labels if y-close.
+      const placed = [];
+      levels.forEach((lv) => {
+        const px = Number(lv.price);
+        let y = yAt(px);
+        for (const py of placed) {
+          if (Math.abs(y - py) < 11) y = py - 11;
+        }
+        placed.push(y);
+        const y1 = yAt(px).toFixed(1);
+        const color = lv.color || "#94a3b8";
+        const lab = String(lv.label || "").slice(0, 4);
+        html += `<line x1="${pad}" x2="${w - pad}" y1="${y1}" y2="${y1}" stroke="${color}" stroke-width="1.1" stroke-dasharray="4 3" opacity="0.9"/>`;
+        html += `<text x="${w - pad - 2}" y="${(y - 2).toFixed(1)}" fill="${color}" font-size="9" text-anchor="end">${lab} ${px}</text>`;
+      });
       html += `</svg>`;
       return html;
+    }
+
+    function resolveChartLevels() {
+      // Collect plan / band / stop / cost levels for the open chart code.
+      const levels = [];
+      const seen = new Set();
+      const add = (price, label, color) => {
+        const n = Number(price);
+        if (!Number.isFinite(n) || n <= 0) return;
+        const key = `${label}|${n.toFixed(4)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        levels.push({ price: n, label, color });
+      };
+      const ctx = resolveChartDescContext(chartRevId);
+      if (ctx) {
+        const payload = (ctx.payload && typeof ctx.payload === "object") ? ctx.payload : {};
+        const st = String(ctx.signal_type || "");
+        const isSell = st === "sell" || st.startsWith("sell");
+        if (isSell) {
+          add(ctx.price ?? payload.sell_price, "建议卖", "#fb7185");
+        } else {
+          add(ctx.price ?? payload.plan_price ?? payload.buy_price, "建议", "#34d399");
+        }
+        add(ctx.wait_price ?? payload.wait_price, "回踩", "#38bdf8");
+        add(ctx.chase_price ?? payload.chase_price, "不追", "#fbbf24");
+        add(ctx.stop_price ?? payload.stop_price, "止损", "#f87171");
+      }
+      const c = String(chartCode || "").replace(/\D/g, "").padStart(6, "0");
+      if (c.length === 6) {
+        const pos = ((lastData && lastData.positions) || []).find(
+          (p) => String(p.code || "").replace(/\D/g, "").padStart(6, "0") === c
+            && Number(p.qty || 0) > 0
+        );
+        if (pos) {
+          add(pos.cost, "成本", "#a78bfa");
+          if (pos.last_sell_price != null && Number(pos.day_sold_qty || 0) > 0) {
+            add(pos.last_sell_price, "已减价", "#c084fc");
+          }
+        }
+        const sellIt = ((((lastData || {}).sell_advice || {}).items) || []).find(
+          (it) => String(it.code || "").replace(/\D/g, "").padStart(6, "0") === c
+        );
+        if (sellIt) {
+          add(sellIt.sell_price, "建议卖", "#fb7185");
+          add(sellIt.stop_price, "止损", "#f87171");
+        }
+      }
+      return levels;
+    }
+
+    function paintChartLevels(levels) {
+      const box = document.getElementById("chartLevels");
+      if (!box) return;
+      if (!levels || !levels.length) {
+        box.hidden = true;
+        box.innerHTML = "";
+        return;
+      }
+      box.hidden = false;
+      box.innerHTML = `<span class="meta">关键位</span>`
+        + levels.map((lv) =>
+          `<span class="lv"><span class="sw" style="background:${lv.color}"></span>`
+          + `${lv.label} ${lv.price}</span>`
+        ).join("");
     }
 
     function paintChart(payload) {
@@ -5957,6 +6210,8 @@
       const a = document.getElementById("chartXq");
       a.href = xq || "#";
       a.textContent = xq ? `雪球看盘 · ${payload.symbol || ""}` : "雪球看盘";
+      const levels = resolveChartLevels();
+      paintChartLevels(levels);
       const minuteRows = payload.minute || [];
       const minutes = minuteRows.map((x) => x.price);
       let markerIndex = null;
@@ -5971,7 +6226,7 @@
         }
       }
       document.getElementById("chartMinute").innerHTML = sparkSvg(minutes, {
-        color: "#34d399", empty: "分时暂无数据（休市或源失败）", markerIndex,
+        color: "#34d399", empty: "分时暂无数据（休市或源失败）", markerIndex, levels,
       });
       const closes = (payload.daily || []).map((x) => x.close);
       const ma = (n) => closes.map((_, i) => {
@@ -5988,6 +6243,7 @@
           { values: ma5, color: "#fbbf24", width: 1.1 },
           { values: ma20, color: "#fb923c", width: 1.1 },
         ],
+        levels,
       });
     }
 
@@ -6066,6 +6322,7 @@
       document.getElementById("chartTitle").textContent = `${name || c} · ${c}`;
       document.getElementById("chartMeta").textContent = "加载中…";
       paintChartDesc(resolveChartDescContext(chartRevId));
+      paintChartLevels([]);
       document.getElementById("chartMinute").innerHTML = `<div class="chart-empty">加载分时…</div>`;
       document.getElementById("chartDaily").innerHTML = `<div class="chart-empty">加载日线…</div>`;
       const xq = xueqiuUrl(c);
@@ -6761,6 +7018,25 @@
           ).join("") + `</ul>`)
         : `<div class="hd">漏买归因<button type="button" class="q" data-term="漏买归因">?</button></div>`
           + `<span class="meta">${dayLabel}暂无未交易漏买项</span>`;
+      const weekBox = document.getElementById("revWeekExec");
+      if (weekBox) {
+        const we = sum.week_exec || {};
+        const mc = we.miss_counts || {};
+        const ms = we.miss_share || {};
+        if (we.ok) {
+          weekBox.innerHTML =
+            `<div class="hd">近周归因 · 计划遵守<button type="button" class="q" data-term="近周归因">?</button></div>`
+            + `<div class="chips">`
+            + `<span class="chip">未触达 ${mc.never_touched || 0}${ms.never_touched != null ? `（${ms.never_touched}%）` : ""}</span>`
+            + `<span class="chip">触达未买 ${mc.touched_not_bought || 0}${ms.touched_not_bought != null ? `（${ms.touched_not_bought}%）` : ""}</span>`
+            + `<span class="chip">闸门 ${mc.gate_blocked || 0}${ms.gate_blocked != null ? `（${ms.gate_blocked}%）` : ""}</span>`
+            + `<span class="chip">半仓窗口遵守 ${we.follow_rate == null ? "—" : (we.follow_rate + "%")}（${we.followed_n || 0}/${we.window_n || 0}）</span>`
+            + `</div>`
+            + `<div class="meta" style="margin-top:6px">${we.note || ""}</div>`;
+        } else {
+          weekBox.innerHTML = `<div class="hd">近周归因</div><span class="meta">${we.note || "暂无"}</span>`;
+        }
+      }
       paintEodBrief(sum, today, dayLabel);
       paintTomorrowBrief();
       const vsMode = sum.vs_mainline_mode || reviewVsMlMode || "live";
@@ -6793,16 +7069,37 @@
         if (n >= 40) return "mid";
         return "lo";
       };
-      const chip = (lab, rate, n) =>
-        `<div class="hit-chip"><div class="lab">${lab}</div>`
+      const ocBox = document.getElementById("revOcCompare");
+      if (ocBox) {
+        const oc = sum.outcome_compare || {};
+        const rows = oc.rows || [];
+        if (rows.length) {
+          ocBox.innerHTML =
+            `<div class="hd">三标准对照<button type="button" class="q" data-term="三标准对照">?</button>`
+            + ` · ${oc.hit_mode === "all" ? "全部已打分" : "仅已交易"}</div>`
+            + `<div class="chips">` + rows.map((r) =>
+              `<div class="hit-chip${r.low_n ? " low-n" : ""}" title="${r.low_n ? "样本不足 n<8" : ""}">`
+              + `<div class="lab">${r.label || r.standard}</div>`
+              + `<div class="rate ${rateCls(r.hit_rate)}">${r.hit_rate == null ? "—" : (r.hit_rate + "%")}</div>`
+              + `<div class="n">样本 ${r.scored_n ?? 0}${r.low_n ? " · 低" : ""}</div></div>`
+            ).join("") + `</div>`
+            + `<div class="meta" style="margin-top:6px">${oc.note || ""}</div>`;
+        } else {
+          ocBox.innerHTML =
+            `<div class="hd">三标准对照<button type="button" class="q" data-term="三标准对照">?</button></div>`
+            + `<span class="meta">${oc.note || "有隔日打分后并排显示"}</span>`;
+        }
+      }
+      const chip = (lab, rate, n, lowN) =>
+        `<div class="hit-chip${lowN ? " low-n" : ""}" title="${lowN ? "样本不足 n<8，灰显参考" : ""}"><div class="lab">${lab}</div>`
         + `<div class="rate ${rateCls(rate)}">${rate == null ? "—" : (rate + "%")}</div>`
-        + `<div class="n">样本 ${n ?? 0}</div></div>`;
+        + `<div class="n">样本 ${n ?? 0}${lowN ? " · 低" : ""}</div></div>`;
       const boardHtml = (() => {
         const chips = [];
-        dh.forEach((k) => chips.push(chip(k.label || k.source, k.hit_rate, k.scored_n)));
-        kh.forEach((k) => chips.push(chip(k.label || k.kind, k.hit_rate, k.scored_n)));
-        th.slice(0, 6).forEach((k) => chips.push(chip(k.label || k.theme, k.hit_rate, k.scored_n)));
-        ph.slice(0, 4).forEach((p) => chips.push(chip("相位·" + (p.phase || "未标"), p.hit_rate, p.scored_n)));
+        dh.forEach((k) => chips.push(chip(k.label || k.source, k.hit_rate, k.scored_n, k.low_n)));
+        kh.forEach((k) => chips.push(chip(k.label || k.kind, k.hit_rate, k.scored_n, k.low_n)));
+        th.slice(0, 6).forEach((k) => chips.push(chip(k.label || k.theme, k.hit_rate, k.scored_n, k.low_n)));
+        ph.slice(0, 4).forEach((p) => chips.push(chip("相位·" + (p.phase || "未标"), p.hit_rate, p.scored_n, p.low_n)));
         if (!chips.length) return "";
         return `<div class="hit-board">${chips.join("")}</div>`;
       })();
@@ -7917,7 +8214,10 @@
         } else {
           lastData = Object.assign({}, lastData || {}, d);
         }
-        if (d.glossary) GLOSSARY = d.glossary;
+        if (d.glossary && typeof d.glossary === "object") {
+          // Merge so a later thin payload never wipes a loaded glossary.
+          GLOSSARY = Object.assign({}, GLOSSARY, d.glossary);
+        }
         if (d.auth_user !== undefined) paintAuthUser(d.auth_user);
         // Always replace personal books when the slice carries them (keep marks fresh).
         if (Array.isArray(d.positions)) lastData.positions = d.positions;
@@ -7981,6 +8281,7 @@
         if (authUser.must_change_password && !isGuestUser(authUser)) {
           showPasswordPanel("请先修改默认密码后再继续使用");
         }
+        ensureGlossary(false);
       } else {
         label.textContent = "未登录";
         if (switchBtn) switchBtn.hidden = true;
@@ -8121,6 +8422,7 @@
       const msg = document.getElementById("authMsg");
       paintAuthUser(user);
       if (msg && okMsg && !(user && user.must_change_password)) msg.textContent = okMsg;
+      await ensureGlossary(true);
       lastData = null;
       if (currentMain === "pos" && !canPersonal()) {
         applyMain("desk");
@@ -9513,6 +9815,25 @@
       }
       openGlossary();
     });
+    (function wireCommuteMode() {
+      const KEY = "desk-commute-mode";
+      function apply(on) {
+        document.body.classList.toggle("commute-mode", !!on);
+        ["commuteBtn", "commuteBtnM"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.classList.toggle("on", !!on);
+        });
+        try { localStorage.setItem(KEY, on ? "1" : "0"); } catch (e) {}
+      }
+      let on = false;
+      try { on = localStorage.getItem(KEY) === "1"; } catch (e) {}
+      apply(on);
+      const toggle = () => apply(!document.body.classList.contains("commute-mode"));
+      const a = document.getElementById("commuteBtn");
+      const b = document.getElementById("commuteBtnM");
+      if (a) a.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+      if (b) b.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+    })();
     const glossaryBtnM = document.getElementById("glossaryBtnM");
     if (glossaryBtnM) {
       glossaryBtnM.addEventListener("click", (ev) => {
@@ -10074,32 +10395,37 @@
     document.addEventListener("click", (ev) => {
       const btn = ev.target.closest(".q");
       if (!btn) {
-        if (!ev.target.closest("#termPop")) pop.hidden = true;
+        const tip = document.getElementById("termPop");
+        if (tip && !ev.target.closest("#termPop")) tip.hidden = true;
         return;
       }
       ev.preventDefault();
       ev.stopPropagation();
       const key = btn.getAttribute("data-term");
-      const g = GLOSSARY[key];
-      if (!g) { pop.hidden = true; return; }
-      // Prefer the glossary drawer for discoverability when user holds Alt.
-      if (ev.altKey) {
-        pop.hidden = true;
-        openGlossary(key);
-        return;
+      const open = () => {
+        const g = GLOSSARY[key];
+        if (ev.altKey) {
+          pop.hidden = true;
+          openGlossary(key);
+          return;
+        }
+        if (!g) {
+          showTermPop(btn, key, {
+            mean: "暂无词条说明（术语表加载中或未收录）。",
+            algo: "可点右上「术语」搜索；或等数据刷新后再点一次 ?。",
+          });
+          ensureGlossary(true).then((ok) => {
+            if (ok && GLOSSARY[key]) showTermPop(btn, key, GLOSSARY[key]);
+          });
+          return;
+        }
+        showTermPop(btn, key, g);
+      };
+      if (!GLOSSARY[key] && Object.keys(GLOSSARY).length < 40) {
+        ensureGlossary(true).then(open);
+      } else {
+        open();
       }
-      pop.innerHTML = `<h4>${key}</h4><p class="mean">${g.mean}</p><p class="algo">${g.algo}</p><p class="meta" style="margin-top:8px">Alt+点击 ? 打开术语表</p>`;
-      pop.hidden = false;
-      const r = btn.getBoundingClientRect();
-      const width = Math.min(380, window.innerWidth - 16);
-      let left = Math.min(r.left, window.innerWidth - width - 8);
-      left = Math.max(8, left);
-      pop.style.left = left + "px";
-      pop.style.top = "0px";
-      const h = pop.offsetHeight || 160;
-      let top = r.bottom + 8;
-      if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - 8 - h);
-      pop.style.top = top + "px";
     });
   </script>
 </body>

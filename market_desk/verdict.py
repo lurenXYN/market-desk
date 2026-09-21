@@ -6868,12 +6868,14 @@ def build_risk_overview(
     *,
     size_cap_pct: float | None = None,
 ) -> dict[str, Any]:
-    """Build a richer risk panel: weights, soft caps, and P&L distribution."""
+    """Build a richer risk panel: weights, theme concentration, soft caps."""
     from market_desk.config import (
         POSITION_MAX_NAMES,
         POSITION_MAX_SINGLE_PCT,
+        POSITION_MAX_THEME_PCT,
         POSITION_MAX_TOTAL_COST,
     )
+    from market_desk.mainline import theme_key
     from market_desk.settings import setting
 
     open_rows = [r for r in rows if int(r.get("qty") or 0) > 0]
@@ -6895,6 +6897,7 @@ def build_risk_overview(
             if weight is not None and equal_share is not None
             else None
         )
+        board = str(r.get("board") or r.get("entry_board") or "").strip()
         items.append(
             {
                 "id": r.get("id"),
@@ -6909,9 +6912,52 @@ def build_risk_overview(
                 "target_weight_pct": equal_share,
                 "weight_dev_pct": weight_dev,
                 "over_weight": bool(weight is not None and weight >= POSITION_MAX_SINGLE_PCT),
+                "board": board or None,
+                "theme": theme_key(board) if board else "",
             }
         )
     items.sort(key=lambda x: float(x.get("weight_pct") or 0), reverse=True)
+
+    # Theme concentration: group by theme_key, fall back to raw board / 未标.
+    theme_buckets: dict[str, dict[str, Any]] = {}
+    for r in open_rows:
+        board = str(r.get("board") or r.get("entry_board") or "").strip()
+        tk = theme_key(board) if board else ""
+        key = tk or (board or "_none")
+        label = tk or board or "未标题材"
+        mkt = float(r.get("market") or 0) if r.get("market") is not None else 0.0
+        bucket = theme_buckets.setdefault(
+            key,
+            {"theme": label, "market": 0.0, "names": [], "codes": []},
+        )
+        bucket["market"] += mkt
+        nm = str(r.get("name") or r.get("code") or "")
+        if nm and nm not in bucket["names"]:
+            bucket["names"].append(nm)
+        code = str(r.get("code") or "")
+        if code and code not in bucket["codes"]:
+            bucket["codes"].append(code)
+    themes: list[dict[str, Any]] = []
+    for bucket in theme_buckets.values():
+        tw = (
+            round(float(bucket["market"]) / market * 100.0, 1)
+            if market > 0 and bucket["market"]
+            else None
+        )
+        themes.append(
+            {
+                "theme": bucket["theme"],
+                "weight_pct": tw,
+                "market": round(float(bucket["market"]), 2),
+                "n": len(bucket["codes"]),
+                "names": bucket["names"][:4],
+                "over_theme": bool(tw is not None and tw >= POSITION_MAX_THEME_PCT),
+            }
+        )
+    themes.sort(key=lambda x: float(x.get("weight_pct") or 0), reverse=True)
+    top_theme = themes[0] if themes else None
+    top_single = items[0] if items else None
+
     winners = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) > 0)
     losers = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) < 0)
     day_pct = base.get("day_pnl_pct")
@@ -6938,23 +6984,46 @@ def build_risk_overview(
         tips.append(f"总成本相对目标 {target_cost:.0f} 偏差 {target_dev:+.1f}%")
     if int(base.get("closed_count") or 0):
         tips.append(f"今日已平 {base['closed_count']} 只，已实现 {base.get('realized_pnl')}，次日自动移出")
+    if top_theme and top_theme.get("over_theme"):
+        tips.append(
+            f"题材「{top_theme.get('theme')}」约占市值 {top_theme.get('weight_pct')}%"
+            f"（≥{POSITION_MAX_THEME_PCT:g}%），注意别押在假主线"
+        )
+    if top_single and top_single.get("over_weight"):
+        tips.append(
+            f"单票「{top_single.get('name') or top_single.get('code')}」"
+            f"约占 {top_single.get('weight_pct')}% ≥ {POSITION_MAX_SINGLE_PCT:g}%"
+        )
     for it in items:
         if it.get("weight_dev_pct") is not None and abs(float(it["weight_dev_pct"])) >= 12:
-            tips.append(
+            tip = (
                 f"{it.get('name') or it.get('code')} 相对等权偏差 "
                 f"{float(it['weight_dev_pct']):+.1f}%"
             )
-            if len(tips) >= 6:
+            if tip not in tips:
+                tips.append(tip)
+            if len(tips) >= 8:
                 break
     return {
         **base,
         "items": items,
+        "themes": themes,
+        "top_theme": top_theme,
+        "top_single": {
+            "name": top_single.get("name") if top_single else None,
+            "code": top_single.get("code") if top_single else None,
+            "weight_pct": top_single.get("weight_pct") if top_single else None,
+            "over_weight": bool(top_single.get("over_weight")) if top_single else False,
+        }
+        if top_single
+        else None,
         "winners": winners,
         "losers": losers,
         "flat": max(0, len(open_rows) - winners - losers),
         "caps": {
             "max_names": POSITION_MAX_NAMES,
             "max_single_pct": POSITION_MAX_SINGLE_PCT,
+            "max_theme_pct": POSITION_MAX_THEME_PCT,
             "max_total_cost": POSITION_MAX_TOTAL_COST,
         },
         "target_total_cost": target_cost,

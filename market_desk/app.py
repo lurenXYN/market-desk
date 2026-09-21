@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from market_desk.glossary import GLOSSARY
 from market_desk.auth import (
     SESSION_COOKIE,
     admin_approve,
@@ -437,6 +438,13 @@ def admin_user_delete(uid: int, admin: dict = Depends(current_admin_required)) -
     return {"ok": True, "user": row}
 
 
+@app.get("/api/glossary")
+def api_glossary(user: dict = Depends(current_user_required)) -> dict:
+    """Return the full UI glossary (independent of snapshot tab slice)."""
+    del user
+    return GLOSSARY
+
+
 @app.get("/api/snapshot")
 def snapshot(
     view: str | None = Query(default=None),
@@ -447,6 +455,9 @@ def snapshot(
     full = engine.snapshot_for_user(uid)
     full["auth_user"] = user
     full["personal_locked"] = bool(is_guest(user) or full.get("personal_locked"))
+    # Always ensure glossary is present even if the shared snap omitted it.
+    if not full.get("glossary"):
+        full["glossary"] = GLOSSARY
     if view:
         # Reuse slice keys on the already-personalized payload.
         engine.snapshot, prev = full, engine.snapshot
@@ -457,6 +468,8 @@ def snapshot(
         sliced["auth_user"] = full.get("auth_user")
         sliced["auth_required_personal"] = full.get("auth_required_personal")
         sliced["personal_locked"] = full.get("personal_locked")
+        if not sliced.get("glossary"):
+            sliced["glossary"] = GLOSSARY
         return JSONResponse(sliced)
     return JSONResponse(full)
 

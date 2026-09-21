@@ -171,6 +171,8 @@ def build_fly_window_alerts(
 def toast_priority(key: str) -> int:
     """Return sort rank for one toast key (lower = more urgent)."""
     k = str(key or "")
+    if k.startswith("ops:"):
+        return 0
     if k.startswith("sell:") or k.startswith("band:stop:") or k.startswith("wl:stop:"):
         return 0
     if k.startswith("buy:") or k.startswith("fly:"):
@@ -201,9 +203,14 @@ def is_decision_toast(key: str) -> bool:
 
 
 def is_risk_toast(key: str) -> bool:
-    """Return True for sell / stop toasts that stay active in quiet windows."""
+    """Return True for sell / stop / ops toasts that stay active in quiet windows."""
     k = str(key or "")
-    return k.startswith("sell:") or k.startswith("band:stop:") or k.startswith("wl:stop:")
+    return (
+        k.startswith("sell:")
+        or k.startswith("band:stop:")
+        or k.startswith("wl:stop:")
+        or k.startswith("ops:")
+    )
 
 
 def cooldown_for_key(key: str, decision_cooldown: float) -> float:
@@ -308,9 +315,9 @@ def select_toasts_for_round(
 
 
 def is_serverchan_alert(key: str) -> bool:
-    """Return True for buy/sell/lhb/eod/morning alerts that may go to ServerChan."""
+    """Return True for buy/sell/lhb/eod/morning/ops alerts that may go to ServerChan."""
     k = str(key or "")
-    return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:"))
+    return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:"))
 
 
 def filter_serverchan_alerts(

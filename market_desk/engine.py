@@ -184,6 +184,10 @@ class DeskEngine:
         self._book_quotes: dict[str, dict[str, Any]] = {}
         # Rolling source ok/fail/timeout counters for the health strip.
         self._source_stats: dict[str, dict[str, int]] = {}
+        # Ops edge alerts (backup fail / health degraded) — once per trade day.
+        self._ops_latch_date: str | None = None
+        self._ops_latched: set[str] = set()
+        self._pending_ops_alerts: list[tuple[str, str, str]] = []
 
     def _note_source(self, label: str, *, ok: bool = False, timeout: bool = False) -> None:
         """Increment one source outcome counter for the data-health strip."""
@@ -385,8 +389,14 @@ class DeskEngine:
                                 keep = int(setting("backup_keep", 30) or 30)
                                 path = write_auto_backup(trade_date=today, keep=keep)
                                 log.info("auto backup written %s", path)
-                            except Exception:
+                            except Exception as backup_exc:
                                 log.exception("auto backup failed")
+                                self._queue_ops_alert(
+                                    f"ops:backup:{today}",
+                                    "自动备份失败",
+                                    f"{type(backup_exc).__name__}: {backup_exc}"[:180],
+                                    day=today,
+                                )
                         try:
                             await self._write_eod_onepager(today)
                         except Exception:
@@ -901,6 +911,10 @@ class DeskEngine:
                 payload["health"] = _build_health(now, errors, updated_at, payload)
                 payload["deltas"] = build_deltas(payload, prev)
                 payload["morning_brief"] = build_morning_brief(payload)
+                try:
+                    self._maybe_ops_health_alert(payload)
+                except Exception:
+                    log.exception("ops health alert failed")
                 self._emit_toasts(prev, payload)
                 try:
                     record_session_signals(payload)
@@ -1192,6 +1206,22 @@ class DeskEngine:
                     for r in day_rows
                     if str(r.get("kind") or "") != "etf"
                 ]
+                # Extra codes for three-standard compare (recent scored buys).
+                try:
+                    from market_desk.db import load_signals as _load_signals
+                    from market_desk.review import is_buy_signal as _is_buy
+
+                    recent_buys = [
+                        str(r.get("code") or "")
+                        for r in _load_signals(limit=160)
+                        if _is_buy(r.get("signal_type"))
+                        and (r.get("outcome_label") or int(r.get("traded") or 0))
+                    ]
+                    compare_codes = list(
+                        dict.fromkeys([c for c in (live_codes + recent_buys) if c])
+                    )[:72]
+                except Exception:
+                    compare_codes = list(dict.fromkeys([c for c in live_codes if c]))
 
                 async def _score_pending() -> None:
                     if not pending:
@@ -1237,9 +1267,11 @@ class DeskEngine:
                     return await fetch_holder_stats_many(client, stock_codes)
 
                 async def _overlay_klines() -> dict[str, Any]:
-                    if std == "classic" or not live_codes:
+                    # Always fetch when possible: outcome_compare needs all three standards.
+                    codes = compare_codes or live_codes
+                    if not codes:
                         return {}
-                    return await fetch_daily_klines_many(client, live_codes, limit=40)
+                    return await fetch_daily_klines_many(client, codes, limit=40)
 
                 # zt_ytd / daily-trend chips load async (see /api/review/zt-ytd, /trends).
                 _, _, quotes, holders, packed_overlay = await asyncio.gather(
@@ -1256,6 +1288,7 @@ class DeskEngine:
         if day == today and self.snapshot:
             phase = self.snapshot.get("phase")
         from market_desk.review import (
+            build_outcome_compare,
             overlay_outcomes_for_standard,
             review_trends_fingerprint,
             summarize_signals,
@@ -1277,6 +1310,26 @@ class DeskEngine:
             trends=None,
         )
         payload["outcome_standard"] = std
+        if packed_overlay:
+            try:
+                from market_desk.db import load_signals as _load_signals
+                from market_desk.review import filter_signals_for_viewer
+
+                wide = filter_signals_for_viewer(_load_signals(limit=160), user_id)
+                summary = dict(payload.get("summary") or {})
+                summary["outcome_compare"] = build_outcome_compare(wide, packed_overlay)
+                payload["summary"] = summary
+            except Exception:
+                log.exception("outcome_compare failed")
+                try:
+                    summary = dict(payload.get("summary") or {})
+                    summary["outcome_compare"] = build_outcome_compare(
+                        list(payload.get("signals") or []),
+                        packed_overlay,
+                    )
+                    payload["summary"] = summary
+                except Exception:
+                    pass
         if std != "classic" and packed_overlay:
             sigs = overlay_outcomes_for_standard(
                 list(payload.get("signals") or []),
@@ -1293,6 +1346,18 @@ class DeskEngine:
             summary["buy_scored"] = day_sum.get("buy_scored")
             summary["buy_scored_all"] = day_sum.get("buy_scored_all")
             payload["summary"] = summary
+        # Classic path: still compare using stored labels + klines for other stds.
+        elif not packed_overlay:
+            try:
+                summary = dict(payload.get("summary") or {})
+                if not summary.get("outcome_compare", {}).get("ok"):
+                    summary["outcome_compare"] = build_outcome_compare(
+                        list(payload.get("signals") or []),
+                        None,
+                    )
+                    payload["summary"] = summary
+            except Exception:
+                pass
         payload["trends_fp"] = review_trends_fingerprint(
             day, day_rows or load_signals_for_date(day), calendar_day=today
         )
@@ -1486,6 +1551,9 @@ class DeskEngine:
             "health": snap.get("health"),
             "enrich_pending": snap.get("enrich_pending"),
             "view": view_key,
+            # Always attach glossary: review/pos/backtest also have 「?」 tips;
+            # restoring last tab from localStorage must not leave GLOSSARY empty.
+            "glossary": snap.get("glossary") or GLOSSARY,
         }
         by_view: dict[str, tuple[str, ...]] = {
             "boards": (
@@ -1545,9 +1613,6 @@ class DeskEngine:
         for key in keys:
             if key in snap:
                 out[key] = snap.get(key)
-        # Glossary is large; send once when missing on client (desk/market first paint).
-        if view_key in ("desk", "market") and snap.get("glossary"):
-            out["glossary"] = snap.get("glossary")
         return out
 
     async def build_review_zt_ytd(
@@ -1638,6 +1703,39 @@ class DeskEngine:
                 out[c] = row
         return out
 
+    def _queue_ops_alert(
+        self,
+        key: str,
+        title: str,
+        body: str,
+        *,
+        day: str | None = None,
+    ) -> None:
+        """Queue a once-per-day ops toast (backup / health)."""
+        trade_day = str(day or datetime.now(CN_TZ).strftime("%Y-%m-%d"))
+        if trade_day != self._ops_latch_date:
+            self._ops_latch_date = trade_day
+            self._ops_latched.clear()
+        if key in self._ops_latched:
+            return
+        self._ops_latched.add(key)
+        self._pending_ops_alerts.append((key, title, body))
+
+    def _maybe_ops_health_alert(self, payload: dict[str, Any]) -> None:
+        """Fire once when health flips to degraded on a trading day."""
+        health = payload.get("health") if isinstance(payload.get("health"), dict) else {}
+        if not health.get("degraded"):
+            return
+        day = str(payload.get("trade_date") or datetime.now(CN_TZ).strftime("%Y-%m-%d"))
+        tips = list(health.get("tips") or [])
+        body = "；".join(str(t) for t in tips[:3]) if tips else "行情源失败率偏高或快照偏旧"
+        self._queue_ops_alert(
+            f"ops:health:{day}",
+            "数据降级",
+            body[:200],
+            day=day,
+        )
+
     def _emit_toasts(
         self,
         previous: dict[str, Any] | None,
@@ -1646,7 +1744,11 @@ class DeskEngine:
         """Fire page feed + optional Windows toasts for important transitions."""
         if not self._toast_armed:
             self._toast_armed = True
-            return
+            # Still drain ops alerts on first armed round so backup fail is not lost.
+            if self._pending_ops_alerts:
+                pass
+            else:
+                return
         now = datetime.now(CN_TZ)
         now_ts = now.timestamp()
         day = str(current.get("trade_date") or "")
@@ -1659,6 +1761,9 @@ class DeskEngine:
             alerts.extend(build_price_touch_alerts(current))
         except Exception:
             log.exception("price-touch alerts failed")
+        if self._pending_ops_alerts:
+            alerts.extend(self._pending_ops_alerts)
+            self._pending_ops_alerts = []
         alerts = filter_alerts_for_policy(
             alerts,
             decision_alerts=bool(setting("decision_alerts", True)),
@@ -1882,8 +1987,14 @@ class DeskEngine:
         verdict: dict[str, Any],
         trade_date: str,
     ) -> None:
-        """Keep independent-pop cards that hold the near-5-day low."""
+        """Soft-check independent-pop cards against the near-N-day low.
+
+        Prefer names holding the N-day low; when that fails but the pre-filter
+        already tagged a day-low, optionally keep them (observe-only) so the
+        panel is not wiped empty by stacked hard gates.
+        """
         from market_desk.config import (
+            INDEPENDENT_POP_KEEP_DAY_LOW_IF_5D_MISS,
             INDEPENDENT_POP_LOW_DAYS,
             INDEPENDENT_POP_NEAR_LOW_PCT,
         )
@@ -1903,7 +2014,9 @@ class DeskEngine:
         packed = await fetch_daily_klines_many(
             client, codes, limit=max(20, int(INDEPENDENT_POP_LOW_DAYS) + 5), concurrency=4
         )
-        kept: list[dict[str, Any]] = []
+        prefer: list[dict[str, Any]] = []
+        soft: list[dict[str, Any]] = []
+        keep_day = bool(INDEPENDENT_POP_KEEP_DAY_LOW_IF_5D_MISS)
         for item in items:
             code = normalize_code(item.get("code"))
             triple = packed.get(code) if packed else None
@@ -1912,17 +2025,26 @@ class DeskEngine:
             if triple and len(triple) >= 3:
                 ohlc = triple[2] or {}
                 lows = list(ohlc.get("low") or [])
+            last_f = float(last) if last is not None else None
             if within_n_day_low(
                 lows,
-                float(last) if last is not None else None,
+                last_f,
                 n=int(INDEPENDENT_POP_LOW_DAYS),
                 max_pct=float(INDEPENDENT_POP_NEAR_LOW_PCT),
             ):
                 item["near_5d_low"] = True
-                kept.append(item)
+                prefer.append(item)
             elif not lows:
                 # No bars yet — keep soft day-low candidates.
-                kept.append(item)
+                prefer.append(item)
+            elif keep_day:
+                item["near_5d_low"] = False
+                tip = "近低观察·未贴5日低"
+                reason = str(item.get("reason") or "")
+                if tip not in reason:
+                    item["reason"] = f"{reason}；{tip}" if reason else tip
+                soft.append(item)
+        kept = prefer + soft
         box["items"] = kept
         if not kept:
             verdict["independent_recommend"] = None

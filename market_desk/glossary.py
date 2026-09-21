@@ -42,6 +42,16 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "build_miss_attribution：never_touched=miss_pullback；touched_not_bought=in_band/near_wait；"
         "gate_blocked=有 confirm_fail/block 且现价已高于计划。复盘漏买区展示计数芯片+列表。",
     },
+    "近周归因": {
+        "mean": "近几个交易日漏买三类合计占比，以及半仓/试探窗口当天是否点了「已交易」（计划遵守率）。展示向，不进 adapt。",
+        "algo": "build_week_exec_board：按 dates 近5日累加 miss_attr；window=ready_relaxed/probe_ok/fly_warn 或近价带 ready；"
+        "follow_rate=followed/window。复盘「近周归因·计划遵守」块。",
+    },
+    "三标准对照": {
+        "mean": "同一批买入信号并排看三套命中率：现行·隔日 / 当日plan·隔日 / 实盘成交·隔日。样本 n<8 灰显，避免过度解读。",
+        "algo": "build_outcome_compare + score_signal_with_closes；engine 拉日线后写入 summary.outcome_compare。"
+        "low_n 阈值 MIN_HIT_N=8；命中率看板 chip 同步灰显。",
+    },
     "浅踩将飞": {
         "mean": "价带半仓或可试探已开、分时仍贴尖/抬高点时，提示「半仓窗口，再等可能飞」。不改闸门，只喊醒执行。",
         "algo": "tag_fly_window_items → fly_warn；build_fly_window_alerts 边沿 toast（fly:code），跟决策提醒开关；"
@@ -67,9 +77,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "position_summary.day_pnl_pct（缺省回退 pnl_pct）≤ daily_loss_cap_pct（默认 -3%）→ tips。",
     },
     "目标仓位": {
-        "mean": "总成本相对目标资金的偏差；作战台与仓位页常驻进度条一眼可见。",
+        "mean": "总成本相对目标资金的偏差；旁挂题材/单票集中度芯片，别重仓假主线。",
         "algo": "target_total_cost；equal_weight_target 时目标占比=100/n；偏差≥15%/12% 进 tips。\n"
-        "UI：#posTargetBar 实际成本/目标 · 填充宽度 min(100%, pct)。",
+        "UI：#posTargetBar 实际/目标 · 占账户% · 题材/单票芯片（over 红标）。",
     },
     "参数预设": {
         "mean": "防守/平衡/进攻三套个人风控快切；可导出/导入可移植 JSON（不含 SendKey）。",
@@ -92,8 +102,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "kept 且 gap&lt;need 时标「差 X 换防」；详情仍在「主线为什么是它」。",
     },
     "风控总览": {
-        "mean": "持仓结构一眼看清：占比、盈亏分布、是否触软上限，并含亏损帽/目标仓提示。",
-        "algo": "市值占比；盈/亏/平只数；软上限来自 config；tips 来自 settings 亏损帽/连亏/目标偏差。\n"
+        "mean": "仓位页：盈亏分布、单票占比、题材集中度、相对目标/单日亏损帽的软提示。不硬禁买卖。",
+        "algo": "build_risk_overview：单票≥POSITION_MAX_SINGLE_PCT；题材按 theme_key 合并，"
+        "≥POSITION_MAX_THEME_PCT 进 tips；目标偏差/亏损帽/连亏降温。UI 芯片+表。\n"
         "浮亏只数≥cool_after_losses 时除 tip 外，建议手数再 ×0.75（软缩仓，不关 ready）。",
     },
     "相位命中": {
@@ -423,6 +434,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "抽屉顶：当前日线趋势（上升/下降/震荡）与最新股东户数（季度，ETF无）；非信号当日冻结值。\n"
         "点日期→跳转该复盘日。登录用户叠加本人 traded/fill 注解。",
     },
+    "图叠关键位": {
+        "mean": "点名称打开分时/日线抽屉时，把建议价、回踩、不追、止损、持仓成本、建议卖叠成水平线，少在脑子里换算。",
+        "algo": "前端 resolveChartLevels：复盘信号/作战卡价带 + positions.cost/last_sell_price + sell_advice；"
+        "sparkSvg levels 画虚线；无上下文则只显示有仓/卖建议的线。",
+    },
     "次日红": {
         "mean": "买入后下一交易日收盘相对入场价涨幅≥1%。算命中。不是「红开」——开盘红收盘绿不算。",
         "algo": "score_signal_with_closes：day1_close/entry−1 ≥1%。若同日最低相对入场≤−2% 改标次日虚红。\n"
@@ -500,9 +516,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "卡片「为何是中军龙」写明成交/市值及相对次席。走回踩甜区才可 ready；暴起当日只观察。",
     },
     "独立人气回踩": {
-        "mean": "主线板内走独立行情、回踩不破近5日低的观察池；不升顶栏可买入。记仓后豁免昨买今弱轻减。",
-        "algo": "sticky 主线成分，排除双龙/卡位；相对板块涨跌发散；贴近日低；引擎再用近5日最低过滤。\n"
-        "须年内≥1涨停。落库 desk_source=independent_pop / buy_indep。容量约5。",
+        "mean": "主线板内近低观察池：优先走独立行情且贴近日低/近5日低；无独立发散时回退板内同步近低。不升顶栏可买入。记仓后豁免昨买今弱轻减。",
+        "algo": "sticky 主线成分，排除双龙/卡位；|pct|≤约5%；贴近日低约3.5%；优先相对板块发散，否则板内同步兜底。\n"
+        "引擎软检近5日低（约3.5%）：贴低优先，未贴低可保留并标注。须年内≥1涨停。desk_source=independent_pop / buy_indep。容量约5。",
     },
     "收盘一页纸": {
         "mean": "复盘页一张纸：优先今日盈亏/持仓、焦点动作、成交日记、尖峰vs回踩、压缩主线切换、宜复盘漏买、明日看点与调参一行；收盘后落库并可微信推送。",

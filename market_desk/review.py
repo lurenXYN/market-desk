@@ -598,6 +598,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "reason": str(item.get("reason") or "")[:240] or None,
                         "block_ready": bool(item.get("block_ready")),
                         "near_entry": bool(item.get("near_entry")),
+                        "ready_relaxed": bool(item.get("ready_relaxed")),
+                        "probe_ok": bool(item.get("probe_ok")),
+                        "fly_warn": bool(item.get("fly_warn")),
                         "size_cap_block": bool(item.get("size_cap_block")),
                         "link_board": bool(item.get("link_board")),
                         "watch_trial": bool(item.get("watch_trial")),
@@ -1563,6 +1566,220 @@ def classify_miss_kind(row: dict[str, Any]) -> str | None:
     if (fails or blocked) and not ready and last is not None and plan is not None and last > plan:
         return "gate_blocked"
     return None
+
+
+def build_week_exec_board(
+    rows: list[dict[str, Any]],
+    *,
+    dates: list[str],
+    days: int = 5,
+) -> dict[str, Any]:
+    """Aggregate miss attribution + half-window adherence over recent trade dates.
+
+    Display-only polish for weekly review. Does not feed adapt.
+    """
+    use_dates = [d for d in (dates or []) if d][: max(1, int(days or 5))]
+    counts = {"never_touched": 0, "touched_not_bought": 0, "gate_blocked": 0}
+    fly_n = 0
+    fly_hit_n = 0
+    window_n = 0
+    followed_n = 0
+    by_day: list[dict[str, Any]] = []
+    for day in use_dates:
+        day_rows = [r for r in rows if str(r.get("trade_date") or "") == day]
+        attr = build_miss_attribution(day_rows, trade_date=day)
+        for k, n in (attr.get("counts") or {}).items():
+            if k in counts:
+                counts[k] += int(n or 0)
+        # Sell-fly: reuse price_flags / outcome markers when present.
+        day_fly = 0
+        day_fly_hit = 0
+        for r in day_rows:
+            if not is_sell_signal(r.get("signal_type")):
+                continue
+            lab = str(r.get("outcome_label") or "")
+            if lab == "卖飞" or "卖飞" in lab:
+                day_fly += 1
+                fly_n += 1
+            if lab == "卖后回落":
+                day_fly_hit += 1
+                fly_hit_n += 1
+        day_win = 0
+        day_fol = 0
+        for r in day_rows:
+            if str(r.get("signal_type") or "") != "buy":
+                continue
+            payload = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+            half = bool(
+                payload.get("ready_relaxed")
+                or payload.get("probe_ok")
+                or payload.get("fly_warn")
+                or (
+                    int(r.get("ready") or 0)
+                    and (
+                        "价带" in str(payload.get("role_label") or "")
+                        or "半" in str(payload.get("role_label") or "")
+                    )
+                )
+            )
+            if not half and int(r.get("ready") or 0) and payload.get("near_entry"):
+                # Legacy rows: ready + near_entry treated as actionable window.
+                half = True
+            if not half:
+                continue
+            day_win += 1
+            window_n += 1
+            if int(r.get("traded") or 0):
+                day_fol += 1
+                followed_n += 1
+        by_day.append(
+            {
+                "date": day,
+                "miss_total": int(attr.get("total") or 0),
+                "counts": dict(attr.get("counts") or {}),
+                "window_n": day_win,
+                "followed_n": day_fol,
+                "follow_rate": round(100.0 * day_fol / day_win, 1) if day_win else None,
+            }
+        )
+    miss_total = sum(counts.values())
+    return {
+        "ok": True,
+        "days": use_dates,
+        "day_n": len(use_dates),
+        "miss_counts": counts,
+        "miss_total": miss_total,
+        "miss_share": {
+            k: (round(100.0 * v / miss_total, 1) if miss_total else 0.0)
+            for k, v in counts.items()
+        },
+        "window_n": window_n,
+        "followed_n": followed_n,
+        "follow_rate": round(100.0 * followed_n / window_n, 1) if window_n else None,
+        "sell_fly_n": fly_n,
+        "sell_fly_hit_n": fly_hit_n,
+        "by_day": by_day,
+        "note": "近几日漏买三类占比 + 半仓/试探窗口是否当天点了已交易；不进 adapt。",
+    }
+
+
+MIN_HIT_N = 8
+
+
+def build_outcome_compare(
+    rows: list[dict[str, Any]],
+    closes_map: dict[str, Any] | None = None,
+    *,
+    hit_mode: str | None = None,
+) -> dict[str, Any]:
+    """Compare classic / same_day_plan / filled hit-rates on the same buy set.
+
+    When ``closes_map`` is provided, non-classic standards are rescored in memory
+    (display-only). Classic prefers stored labels, falling back to rescoring.
+    Rows that cannot score under a standard are skipped. ``low_n`` marks n<8.
+    """
+    mode = str(hit_mode or setting("hit_rate_mode", "traded") or "traded").strip().lower()
+    if mode not in ("traded", "all"):
+        mode = "traded"
+    buys = [
+        r
+        for r in rows
+        if is_buy_signal(r.get("signal_type")) and not int(r.get("skipped") or 0)
+    ]
+    if mode == "traded":
+        buys = [r for r in buys if int(r.get("traded") or 0)]
+    standards = ("classic", "same_day_plan", "filled")
+    labels = {
+        "classic": "现行·隔日",
+        "same_day_plan": "当日plan·隔日",
+        "filled": "实盘成交·隔日",
+    }
+    skip_labs = {"无成交", "当日未触达", "未触达", "无日线", "样本不足", "待隔日"}
+    packed = closes_map or {}
+
+    def _score_one(raw: dict[str, Any], std: str) -> str | None:
+        if std == "classic" and raw.get("outcome_label"):
+            lab = str(raw.get("outcome_label") or "")
+            return lab if lab and lab not in skip_labs else None
+        code = normalize_code(raw.get("code"))
+        blob = packed.get(code) if code else None
+        if not blob:
+            if std == "classic" and raw.get("outcome_label"):
+                lab = str(raw.get("outcome_label") or "")
+                return lab if lab and lab not in skip_labs else None
+            return None
+        if len(blob) >= 3:
+            dates, closes, ohlc = blob[0], blob[1], blob[2] or {}
+        else:
+            dates, closes = blob[0], blob[1]
+            ohlc = {}
+        scored = score_signal_with_closes(
+            raw,
+            closes,
+            dates,
+            opens=list(ohlc.get("open") or []) or None,
+            lows=list(ohlc.get("low") or []) or None,
+            highs=list(ohlc.get("high") or []) or None,
+            standard=std,
+        )
+        if not scored:
+            return None
+        lab = str(scored.get("outcome_label") or "")
+        if not lab or lab in skip_labs:
+            return None
+        return lab
+
+    out_rows: list[dict[str, Any]] = []
+    for std in standards:
+        scored_n = 0
+        hit_n = 0
+        for raw in buys:
+            lab = _score_one(raw, std)
+            if not lab:
+                continue
+            scored_n += 1
+            if lab in BUY_HIT_LABELS:
+                hit_n += 1
+        rate = round(100.0 * hit_n / scored_n, 1) if scored_n else None
+        out_rows.append(
+            {
+                "standard": std,
+                "label": labels[std],
+                "scored_n": scored_n,
+                "hit_n": hit_n,
+                "hit_rate": rate,
+                "low_n": scored_n < MIN_HIT_N,
+            }
+        )
+    return {
+        "ok": True,
+        "hit_mode": mode,
+        "rows": out_rows,
+        "note": "同批信号三套评测并排；n<8 标低样本，宜灰显。",
+    }
+
+
+def attach_low_n_flags(items: list[dict[str, Any]] | None, *, n_key: str = "scored_n") -> list[dict[str, Any]]:
+    """Mark hit-rate rows with low sample size for UI gray-out."""
+    out: list[dict[str, Any]] = []
+    for raw in items or []:
+        row = dict(raw)
+        try:
+            n = int(row.get(n_key) or row.get("n") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0:
+            for alt in ("scored", "total", "count", "buy_n"):
+                try:
+                    n = int(row.get(alt) or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                if n > 0:
+                    break
+        row["low_n"] = n < MIN_HIT_N
+        row["n"] = n
+        out.append(row)
+    return out
 
 
 def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[dict[str, Any]]:
@@ -3081,11 +3298,11 @@ def build_review_payload(
             summary["sell_exec"] = build_sell_exec_score(sell_merged)
         except Exception:
             pass
-    summary["phase_hits"] = build_phase_hit_rates(global_rows)
-    summary["kind_hits"] = build_kind_hit_rates(global_rows)
-    summary["phase_kind_hits"] = build_phase_kind_hit_rates(global_rows)
-    summary["desk_hits"] = build_desk_source_hit_rates(global_rows)
-    summary["theme_hits"] = build_theme_hit_rates(global_rows)
+    summary["phase_hits"] = attach_low_n_flags(build_phase_hit_rates(global_rows))
+    summary["kind_hits"] = attach_low_n_flags(build_kind_hit_rates(global_rows))
+    summary["phase_kind_hits"] = attach_low_n_flags(build_phase_kind_hit_rates(global_rows))
+    summary["desk_hits"] = attach_low_n_flags(build_desk_source_hit_rates(global_rows))
+    summary["theme_hits"] = attach_low_n_flags(build_theme_hit_rates(global_rows))
     summary["missed_buys"] = build_missed_buys(day_rows, trade_date=day)
     try:
         summary["miss_attr"] = build_miss_attribution(day_rows, trade_date=day)
@@ -3096,6 +3313,21 @@ def build_review_payload(
             "labels": dict(MISS_KIND_LABELS),
             "items": [],
         }
+    try:
+        week_dates = [d for d in dates if d and d <= calendar_today][:5]
+        summary["week_exec"] = build_week_exec_board(
+            global_rows,
+            dates=week_dates,
+            days=5,
+        )
+    except Exception:
+        summary["week_exec"] = {"ok": False, "note": "近周归因暂不可用"}
+    # Outcome compare filled later in engine when klines are available.
+    summary["outcome_compare"] = {
+        "ok": False,
+        "rows": [],
+        "note": "三标准对照需日线，加载中或暂无样本",
+    }
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     try:

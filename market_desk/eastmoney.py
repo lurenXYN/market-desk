@@ -480,6 +480,7 @@ async def fetch_board_members(
                 "name": str(item.get("f14") or ""),
                 "pct": round(num(item.get("f3"), 0.0) or 0.0, 2),
                 "turnover": round(num(item.get("f8"), 0.0) or 0.0, 2),
+                "amount": float(num(item.get("f6"), 0.0) or 0.0),
                 "price": num(item.get("f2")),
                 "high": num(item.get("f15")),
                 "low": num(item.get("f16")),
