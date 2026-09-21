@@ -494,7 +494,7 @@
     .playbook .pb.dont { border-color: #8b3a3a; }
     .playbook .pb.size { border-color: #3b5a8b; }
     .morning-brief {
-      margin: 0 0 12px; padding: 10px 12px;
+      margin: 0 0 10px; padding: 10px 12px;
       border: 1px solid var(--line); border-radius: 8px; background: #0c1218;
     }
     .morning-brief .hd {
@@ -519,6 +519,132 @@
       color: var(--muted); font-size: 12px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
     }
     .morning-brief .copy-btn:hover { color: var(--text); border-color: #5a6a80; }
+    .desk-top-soft {
+      margin: 0 0 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .news-radar {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0c1218;
+      padding: 10px 12px;
+    }
+    .news-radar-hd {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .news-radar-hd .nr-title {
+      color: var(--text);
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+    }
+    .news-radar-hd .nr-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .news-radar-hd .nr-dot.on { background: #3ecf8e; }
+    .news-radar-hd .nr-dot.off { background: #f07178; }
+    .news-radar-hd .nr-dot.warn { background: #f5c542; }
+    .news-radar-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .news-radar-chips .nr-chip {
+      appearance: none;
+      cursor: pointer;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111820;
+      color: var(--text);
+      padding: 8px 10px;
+      min-height: 44px;
+      max-width: 100%;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .news-radar-chips .nr-chip:hover,
+    .news-radar-chips .nr-chip.open {
+      border-color: #5a6a80;
+      background: #151d28;
+    }
+    .news-radar-chips .nr-chip.clash {
+      border-color: #8b5a2b;
+      color: #f0a36b;
+    }
+    .news-radar-chips .nr-chip b { font-weight: 700; }
+    .news-radar-chips .nr-chip .sub {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .news-radar-chips .nr-chip.clash .sub { color: #d4a574; }
+    .news-radar-note {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .news-radar-panel {
+      display: none;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0a1016;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .news-radar-panel ul {
+      margin: 6px 0 0;
+      padding-left: 18px;
+    }
+    .news-radar-check {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--line);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .news-radar-check .nr-check-hd {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .news-radar-check .nr-check-item {
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(42, 54, 74, 0.55);
+      line-height: 1.4;
+    }
+    .news-radar-check .nr-check-item:last-child { border-bottom: 0; padding-bottom: 0; }
+    .news-radar-check .nr-check-item b { color: var(--text); }
+    @media (max-width: 768px) {
+      .desk-top-soft { margin-bottom: 10px; }
+      .morning-brief, .news-radar { padding: 10px; border-radius: 10px; }
+      .morning-brief .focus { font-size: 14px; }
+      .news-radar-chips .nr-chip {
+        flex: 1 1 calc(50% - 8px);
+        min-width: min(100%, 148px);
+      }
+      .news-radar-hd { gap: 6px 8px; }
+    }
+    @media (max-width: 420px) {
+      .news-radar-chips .nr-chip { flex: 1 1 100%; }
+    }
     .season-desk {
       margin: 8px 0 0;
       padding: 8px 10px;
@@ -3018,6 +3144,25 @@
     </div>
 
     <section class="tab-panel" id="panel-desk">
+    <div class="desk-top-soft" id="deskTopSoft">
+      <details class="morning-brief" id="morningBrief" open>
+        <summary>
+          早决策摘要 <button type="button" class="q" data-term="早决策摘要">?</button>
+          <span class="meta" id="morningSeg"></span>
+          <button type="button" class="copy-btn" id="morningCopy">复制</button>
+        </summary>
+        <p class="focus" id="morningFocus">等待数据</p>
+        <ul id="morningBullets"></ul>
+        <div class="chk" id="morningChk"></div>
+      </details>
+      <div class="news-radar" id="newsRadarBlock" hidden>
+        <div class="news-radar-hd" id="newsRadarHd"></div>
+        <div class="news-radar-chips" id="newsRadarStrip"></div>
+        <div class="news-radar-note" id="newsRadarNote" hidden></div>
+        <div class="news-radar-panel" id="newsRadarPanel"></div>
+        <div class="news-radar-check" id="newsRadarCheck" hidden></div>
+      </div>
+    </div>
     <div class="banner cash" id="banner">
       <div class="banner-top">
         <div class="verdict-hero">
@@ -3091,21 +3236,6 @@
               </div>
             </div>
           </details>
-          <details class="morning-brief" id="morningBrief">
-            <summary>
-              早决策摘要 <button type="button" class="q" data-term="早决策摘要">?</button>
-              <span class="meta" id="morningSeg"></span>
-              <button type="button" class="copy-btn" id="morningCopy">复制</button>
-            </summary>
-            <p class="focus" id="morningFocus">等待数据</p>
-            <ul id="morningBullets"></ul>
-            <div class="chk" id="morningChk"></div>
-          </details>
-          <div id="newsRadarBlock" hidden>
-            <div class="meta" id="newsRadarStrip" style="margin:6px 0 0;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;"></div>
-            <div id="newsRadarPanel" style="display:none;margin:0 0 10px;padding:10px 12px;border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;background:var(--card, transparent);"></div>
-            <div id="newsRadarCheck" class="meta" style="margin:6px 0 10px;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;" hidden></div>
-          </div>
           <details class="desk-more" id="deskMore">
             <summary>展开原因 / 算法细节</summary>
             <div class="body">
@@ -4633,7 +4763,9 @@
       ].filter(Boolean).join("");
       window.__morningMarkdown = brief.markdown || "";
       const nrBlock = document.getElementById("newsRadarBlock");
+      const nrHd = document.getElementById("newsRadarHd");
       const nrStrip = document.getElementById("newsRadarStrip");
+      const nrNote = document.getElementById("newsRadarNote");
       const nrPanel = document.getElementById("newsRadarPanel");
       const nrCheck = document.getElementById("newsRadarCheck");
       if (nrBlock && nrStrip) {
@@ -4642,34 +4774,45 @@
         const rows = (nr.sectors || []).slice(0, 5);
         if (!enabled) {
           nrBlock.hidden = true;
-          if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; }
+          if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; nrPanel.dataset.open = ""; }
           if (nrCheck) { nrCheck.hidden = true; nrCheck.innerHTML = ""; }
+          if (nrNote) { nrNote.hidden = true; nrNote.textContent = ""; }
+          if (nrHd) nrHd.innerHTML = "";
         } else {
           nrBlock.hidden = false;
           const st = nr.status_label || nr.status || "";
-          const stDot = nr.status === "online" ? "●"
-            : (nr.status === "offline" ? "○" : "◌");
+          const dotCls = nr.status === "online" ? "on"
+            : (nr.status === "offline" ? "off" : "warn");
+          if (nrHd) {
+            nrHd.innerHTML = `<span class="nr-dot ${dotCls}" title="新闻雷达状态"></span>`
+              + `<span class="nr-title">新闻雷达</span>`
+              + `<span>${st || "—"}</span>`
+              + (nr.updated_at ? `<span class="meta">${nr.updated_at}</span>` : "");
+          }
           if (rows.length) {
-            nrStrip.innerHTML = `<span id="nrHealthDot" title="新闻雷达状态" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:${nr.status==='online'?'#3ecf8e':(nr.status==='offline'?'#f07178':'#f5c542')}"></span>${stDot} ${st} · 新闻雷达 `
-              + rows.map((r, i) => {
-                const pct = r.board_pct == null ? "" : ` ${Number(r.board_pct) >= 0 ? "+" : ""}${Number(r.board_pct).toFixed(1)}%`;
-                const tone = r.tone_label && r.tone_label !== "中性" ? `·${r.tone_label}` : "";
-                const color = (r.mainline_match === false && nr.mainline_name) ? "#f0a36b" : "inherit";
-                return `<button type="button" class="nr-chip" data-nr-i="${i}" style="all:unset;cursor:pointer;color:${color};border-bottom:1px dashed var(--muted);margin:0 2px">`
-                  + `<b>${r.sector || ""}</b>${r.confirm_label ? "(" + r.confirm_label + ")" : ""}${tone}${pct}</button>`;
-              }).join(" · ")
-              + (nr.mainline_note ? ` <span class="meta">· ${nr.mainline_note}</span>` : "")
-              + (nr.updated_at ? ` <span class="meta">· ${nr.updated_at}</span>` : "");
+            nrStrip.innerHTML = rows.map((r, i) => {
+              const pct = r.board_pct == null ? ""
+                : `${Number(r.board_pct) >= 0 ? "+" : ""}${Number(r.board_pct).toFixed(1)}%`;
+              const bits = [r.confirm_label, r.tone_label && r.tone_label !== "中性" ? r.tone_label : "", pct]
+                .filter(Boolean).join(" · ");
+              const clash = (r.mainline_match === false && nr.mainline_name) ? " clash" : "";
+              return `<button type="button" class="nr-chip${clash}" data-nr-i="${i}">`
+                + `<b>${r.sector || ""}</b>`
+                + (bits ? `<span class="sub">${bits}</span>` : "")
+                + `</button>`;
+            }).join("");
             nrStrip.querySelectorAll("[data-nr-i]").forEach((btn) => {
               btn.onclick = () => {
                 const i = Number(btn.getAttribute("data-nr-i") || 0);
                 const r = rows[i];
                 if (!r || !nrPanel) return;
+                nrStrip.querySelectorAll(".nr-chip").forEach((el) => el.classList.remove("open"));
                 if (nrPanel.dataset.open === String(i) && nrPanel.style.display !== "none") {
                   nrPanel.style.display = "none";
                   nrPanel.dataset.open = "";
                   return;
                 }
+                btn.classList.add("open");
                 const arts = (r.articles || []).slice(0, 3).map((a) => {
                   const t = a.title || "";
                   return a.url
@@ -4684,7 +4827,7 @@
                   + (r.mainline_note ? `<div class="meta">${r.mainline_note}</div>` : "")
                   + (r.action_hint ? `<div style="margin:4px 0">${r.action_hint}</div>` : "")
                   + (etfs ? `<div class="meta">ETF：<code>${etfs}</code> <button type="button" class="copy-btn" id="nrCopyEtf">复制</button></div>` : "")
-                  + (arts ? `<ul style="margin:6px 0 0;padding-left:18px">${arts}</ul>` : "<div class='meta'>暂无新闻链接</div>");
+                  + (arts ? `<ul>${arts}</ul>` : "<div class='meta'>暂无新闻链接</div>");
                 nrPanel.style.display = "block";
                 nrPanel.dataset.open = String(i);
                 const cp = document.getElementById("nrCopyEtf");
@@ -4697,23 +4840,33 @@
               };
             });
           } else {
-            nrStrip.innerHTML = `${stDot} 新闻雷达 · ${st || "无数据"}`
-              + (nr.mainline_note ? ` · ${nr.mainline_note}` : "");
-            if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; }
+            nrStrip.innerHTML = `<div class="meta">暂无热板块 · ${st || "无数据"}</div>`;
+            if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; nrPanel.dataset.open = ""; }
+          }
+          if (nrNote) {
+            if (nr.mainline_note) {
+              nrNote.hidden = false;
+              nrNote.textContent = nr.mainline_note;
+            } else {
+              nrNote.hidden = true;
+              nrNote.textContent = "";
+            }
           }
           const chk = (nr.checklist || []).slice(0, 3);
           if (nrCheck) {
             if (chk.length) {
               nrCheck.hidden = false;
-              nrCheck.innerHTML = "<b>盘前清单（软）</b> <button type=\"button\" class=\"copy-btn\" id=\"nrCopyChk\">复制</button>"
+              nrCheck.innerHTML = `<div class="nr-check-hd">盘前清单（软）`
+                + ` <button type="button" class="copy-btn" id="nrCopyChk">复制</button></div>`
                 + chk.map((c) => {
-                  const pct = c.board_pct == null ? "" : ` ${Number(c.board_pct) >= 0 ? "+" : ""}${Number(c.board_pct).toFixed(1)}%`;
+                  const pct = c.board_pct == null ? ""
+                    : ` ${Number(c.board_pct) >= 0 ? "+" : ""}${Number(c.board_pct).toFixed(1)}%`;
                   const etf = (c.etfs || [])[0] || "";
-                  return `<div style="margin-top:4px">· <b>${c.sector || ""}</b>`
-                    + (c.confirm_label ? ` ${c.confirm_label}` : "")
+                  return `<div class="nr-check-item"><b>${c.sector || ""}</b>`
+                    + (c.confirm_label ? ` · ${c.confirm_label}` : "")
                     + pct
                     + (etf ? ` · ${etf}` : "")
-                    + (c.action_hint ? ` — ${c.action_hint}` : "")
+                    + (c.action_hint ? `<div class="meta">${c.action_hint}</div>` : "")
                     + `</div>`;
                 }).join("");
               const copyChk = document.getElementById("nrCopyChk");
