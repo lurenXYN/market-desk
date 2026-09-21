@@ -2971,6 +2971,9 @@
         <label style="grid-column:1/-1">新闻雷达 URL
           <input id="setNewsRadarUrl" type="text" placeholder="http://127.0.0.1:8770" title="独立 news-radar 服务地址" />
         </label>
+        <div class="meta" id="setNewsRadarHint" style="grid-column:1/-1">
+          默认关闭。勾选后需本机/服务器另跑 news-radar（默认端口 8770），作战台只显示催化软条与盘前清单，不改 ready/买卖闸门。
+        </div>
         <label class="settings-check">
           <input id="setScClear" type="checkbox" /> 清除已存 Key
         </label>
@@ -3096,7 +3099,11 @@
             <ul id="morningBullets"></ul>
             <div class="chk" id="morningChk"></div>
           </details>
-          <div class="meta" id="newsRadarStrip" style="margin:6px 0 10px;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;" hidden></div>
+          <div id="newsRadarBlock" hidden>
+            <div class="meta" id="newsRadarStrip" style="margin:6px 0 0;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;"></div>
+            <div id="newsRadarPanel" style="display:none;margin:0 0 10px;padding:10px 12px;border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;background:var(--card, transparent);"></div>
+            <div id="newsRadarCheck" class="meta" style="margin:6px 0 10px;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;" hidden></div>
+          </div>
           <details class="desk-more" id="deskMore">
             <summary>展开原因 / 算法细节</summary>
             <div class="body">
@@ -4623,21 +4630,94 @@
         chk.size ? `<span><b>仓位</b> ${chk.size}</span>` : "",
       ].filter(Boolean).join("");
       window.__morningMarkdown = brief.markdown || "";
+      const nrBlock = document.getElementById("newsRadarBlock");
       const nrStrip = document.getElementById("newsRadarStrip");
-      if (nrStrip) {
+      const nrPanel = document.getElementById("newsRadarPanel");
+      const nrCheck = document.getElementById("newsRadarCheck");
+      if (nrBlock && nrStrip) {
         const nr = d.news_radar || {};
+        const enabled = !!nr.enabled;
         const rows = (nr.sectors || []).slice(0, 5);
-        if (rows.length) {
-          nrStrip.hidden = false;
-          nrStrip.innerHTML = "新闻雷达 · "
-            + rows.map((r) => {
-              const pct = r.board_pct == null ? "" : ` ${Number(r.board_pct) >= 0 ? "+" : ""}${Number(r.board_pct).toFixed(1)}%`;
-              return `<b>${r.sector || ""}</b>${r.confirm_label ? "(" + r.confirm_label + ")" : ""}${pct}`;
-            }).join(" · ")
-            + (nr.updated_at ? ` <span class="meta">· ${nr.updated_at}</span>` : "");
+        if (!enabled) {
+          nrBlock.hidden = true;
+          if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; }
+          if (nrCheck) { nrCheck.hidden = true; nrCheck.innerHTML = ""; }
         } else {
-          nrStrip.hidden = true;
-          nrStrip.innerHTML = "";
+          nrBlock.hidden = false;
+          const st = nr.status_label || nr.status || "";
+          const stDot = nr.status === "online" ? "●"
+            : (nr.status === "offline" ? "○" : "◌");
+          if (rows.length) {
+            nrStrip.innerHTML = `<span title="新闻雷达状态">${stDot} ${st}</span> · 新闻雷达 `
+              + rows.map((r, i) => {
+                const pct = r.board_pct == null ? "" : ` ${Number(r.board_pct) >= 0 ? "+" : ""}${Number(r.board_pct).toFixed(1)}%`;
+                const tone = r.tone_label && r.tone_label !== "中性" ? `·${r.tone_label}` : "";
+                return `<button type="button" class="nr-chip" data-nr-i="${i}" style="all:unset;cursor:pointer;color:inherit;border-bottom:1px dashed var(--muted);margin:0 2px">`
+                  + `<b>${r.sector || ""}</b>${r.confirm_label ? "(" + r.confirm_label + ")" : ""}${tone}${pct}</button>`;
+              }).join(" · ")
+              + (nr.mainline_note ? ` <span class="meta">· ${nr.mainline_note}</span>` : "")
+              + (nr.updated_at ? ` <span class="meta">· ${nr.updated_at}</span>` : "");
+            nrStrip.querySelectorAll("[data-nr-i]").forEach((btn) => {
+              btn.onclick = () => {
+                const i = Number(btn.getAttribute("data-nr-i") || 0);
+                const r = rows[i];
+                if (!r || !nrPanel) return;
+                if (nrPanel.dataset.open === String(i) && nrPanel.style.display !== "none") {
+                  nrPanel.style.display = "none";
+                  nrPanel.dataset.open = "";
+                  return;
+                }
+                const arts = (r.articles || []).slice(0, 3).map((a) => {
+                  const t = a.title || "";
+                  return a.url
+                    ? `<li><a href="${a.url}" target="_blank" rel="noopener">${t}</a> <span class="meta">${a.source || ""}</span></li>`
+                    : `<li>${t}</li>`;
+                }).join("");
+                const etfs = (r.etfs || []).join(" ");
+                nrPanel.innerHTML = `<div><b>${r.sector || ""}</b>`
+                  + (r.confirm_label ? ` · ${r.confirm_label}` : "")
+                  + (r.tone_label ? ` · ${r.tone_label}` : "")
+                  + `</div>`
+                  + (r.mainline_note ? `<div class="meta">${r.mainline_note}</div>` : "")
+                  + (r.action_hint ? `<div style="margin:4px 0">${r.action_hint}</div>` : "")
+                  + (etfs ? `<div class="meta">ETF：<code>${etfs}</code> <button type="button" class="copy-btn" id="nrCopyEtf">复制</button></div>` : "")
+                  + (arts ? `<ul style="margin:6px 0 0;padding-left:18px">${arts}</ul>` : "<div class='meta'>暂无新闻链接</div>");
+                nrPanel.style.display = "block";
+                nrPanel.dataset.open = String(i);
+                const cp = document.getElementById("nrCopyEtf");
+                if (cp && etfs) {
+                  cp.onclick = async () => {
+                    try { await navigator.clipboard.writeText(etfs); cp.textContent = "已复制"; }
+                    catch (_) { cp.textContent = "复制失败"; }
+                  };
+                }
+              };
+            });
+          } else {
+            nrStrip.innerHTML = `${stDot} 新闻雷达 · ${st || "无数据"}`
+              + (nr.mainline_note ? ` · ${nr.mainline_note}` : "");
+            if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; }
+          }
+          const chk = (nr.checklist || []).slice(0, 3);
+          if (nrCheck) {
+            if (chk.length) {
+              nrCheck.hidden = false;
+              nrCheck.innerHTML = "<b>盘前清单（软）</b>"
+                + chk.map((c) => {
+                  const pct = c.board_pct == null ? "" : ` ${Number(c.board_pct) >= 0 ? "+" : ""}${Number(c.board_pct).toFixed(1)}%`;
+                  const etf = (c.etfs || [])[0] || "";
+                  return `<div style="margin-top:4px">· <b>${c.sector || ""}</b>`
+                    + (c.confirm_label ? ` ${c.confirm_label}` : "")
+                    + pct
+                    + (etf ? ` · ${etf}` : "")
+                    + (c.action_hint ? ` — ${c.action_hint}` : "")
+                    + `</div>`;
+                }).join("");
+            } else {
+              nrCheck.hidden = true;
+              nrCheck.innerHTML = "";
+            }
+          }
         }
       }
       document.getElementById("reason").textContent = v.reason || "";

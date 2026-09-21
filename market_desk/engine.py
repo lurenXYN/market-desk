@@ -908,22 +908,32 @@ class DeskEngine:
                 # Phase A: publish desk/verdict before slow favorite enrich.
                 payload["favorite_desk"] = fav_desk
                 payload["enrich_pending"] = True
-                payload["health"] = _build_health(now, errors, updated_at, payload)
-                payload["deltas"] = build_deltas(payload, prev)
                 # Soft news-radar attach (never blocks / never changes buy gates).
                 try:
-                    from market_desk.news_radar import fetch_news_radar_export
+                    from market_desk.news_radar import (
+                        enrich_news_radar,
+                        fetch_news_radar_export,
+                    )
                     from market_desk.settings import setting as _setting
 
-                    if bool(_setting("news_radar_enabled", False)):
-                        nr = await fetch_news_radar_export(
+                    nr_on = bool(_setting("news_radar_enabled", False))
+                    ml_name = str(((verdict.get("mainline") or {}).get("name")) or "")
+                    if nr_on:
+                        raw = await fetch_news_radar_export(
                             base_url=str(_setting("news_radar_url", "") or ""),
                             limit=8,
                         )
-                        if nr:
-                            payload["news_radar"] = nr
+                        payload["news_radar"] = enrich_news_radar(
+                            raw, mainline_name=ml_name, enabled=True
+                        )
+                    else:
+                        payload["news_radar"] = enrich_news_radar(
+                            None, mainline_name=ml_name, enabled=False
+                        )
                 except Exception:
                     log.exception("news_radar attach failed")
+                payload["health"] = _build_health(now, errors, updated_at, payload)
+                payload["deltas"] = build_deltas(payload, prev)
                 payload["morning_brief"] = build_morning_brief(payload)
                 try:
                     self._maybe_ops_health_alert(payload)
@@ -3243,6 +3253,16 @@ def _build_health(
             stale_sec = None
     if live and failed:
         degraded = True
+    nr = payload.get("news_radar") if isinstance(payload.get("news_radar"), dict) else {}
+    if nr.get("enabled"):
+        st = str(nr.get("status") or "")
+        if st == "offline":
+            tips.append("新闻雷达离线/超时")
+            score -= 3
+        elif st == "empty":
+            tips.append("新闻雷达空数据")
+        elif st in ("online", "stale") and nr.get("status_label"):
+            tips.append("新闻雷达·" + str(nr.get("status_label")))
     score = max(0, min(100, score))
     level = "ok" if score >= 80 else ("warn" if score >= 50 else "bad")
     if degraded and level == "ok":
@@ -3257,6 +3277,13 @@ def _build_health(
         "degraded": degraded,
         "stale_seconds": stale_sec,
         "tips": tips[:8],
+        "news_radar": {
+            "enabled": bool(nr.get("enabled")),
+            "status": nr.get("status"),
+            "status_label": nr.get("status_label"),
+        }
+        if nr
+        else None,
     }
 
 
