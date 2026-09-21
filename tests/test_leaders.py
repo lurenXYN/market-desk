@@ -51,6 +51,7 @@ class LeadersTests(unittest.TestCase):
 
     def test_independent_prefers_diverge_then_near_low_fallback(self) -> None:
         board = {
+            "name": "主线甲",
             "pct": 1.0,
             "leader_code": "600099",
             "pool": [
@@ -98,6 +99,94 @@ class LeadersTests(unittest.TestCase):
         self.assertTrue(by_code["600001"].get("indep_path"))
         self.assertFalse(by_code["600002"].get("indep_path"))
         self.assertIn("板内同步", by_code["600002"]["reason"])
+        self.assertEqual(by_code["600001"].get("indep_scope"), "main")
+
+    def test_independent_includes_side_and_link(self) -> None:
+        main = {
+            "name": "主线",
+            "pct": 2.0,
+            "pool": [
+                {
+                    "code": "600010",
+                    "name": "主冲",
+                    "pct": 4.0,
+                    "price": 12.0,
+                    "low": 10.0,
+                    "high": 12.2,
+                    "mv_yi": 200,
+                    "turnover": 4.0,
+                    "amount": 2e8,
+                }
+            ],
+        }
+        side = {
+            "name": "支线板",
+            "pct": 0.5,
+            "pool": [
+                {
+                    "code": "600021",
+                    "name": "支中军",
+                    "pct": 2.0,
+                    "price": 11.5,
+                    "low": 10.0,
+                    "high": 11.8,
+                    "mv_yi": 600,
+                    "turnover": 3.0,
+                    "amount": 20e8,
+                },
+                {
+                    "code": "600020",
+                    "name": "支近低",
+                    "pct": 1.5,
+                    "price": 10.1,
+                    "low": 10.0,
+                    "high": 10.5,
+                    "mv_yi": 220,
+                    "turnover": 3.5,
+                    "amount": 4e8,
+                },
+            ],
+        }
+        link = {
+            "name": "联动板",
+            "pct": 0.2,
+            "pool": [
+                {
+                    "code": "600031",
+                    "name": "联中军",
+                    "pct": 1.0,
+                    "price": 9.5,
+                    "low": 8.0,
+                    "high": 9.8,
+                    "mv_yi": 700,
+                    "turnover": 2.5,
+                    "amount": 18e8,
+                },
+                {
+                    "code": "600030",
+                    "name": "联近低",
+                    "pct": 0.4,
+                    "price": 8.05,
+                    "low": 8.0,
+                    "high": 8.3,
+                    "mv_yi": 180,
+                    "turnover": 3.2,
+                    "amount": 3e8,
+                },
+            ],
+        }
+        rows = build_independent_pullback_candidates(
+            main, side_board=side, link_board=link, max_items=5
+        )
+        codes = [r["code"] for r in rows]
+        self.assertIn("600020", codes)
+        self.assertIn("600030", codes)
+        self.assertNotIn("600010", codes)
+        by_code = {r["code"]: r for r in rows}
+        self.assertEqual(by_code["600020"].get("indep_scope"), "side")
+        self.assertEqual(by_code["600030"].get("indep_scope"), "link")
+        self.assertIn("支线·", by_code["600020"]["role_label"])
+        self.assertIn("联动·", by_code["600030"]["role_label"])
 
     def test_within_n_day_low(self) -> None:
         lows = [9.5, 9.8, 10.0, 9.7, 9.6]

@@ -667,16 +667,30 @@ def build_verdict(
             out["algo_notes"] = algo_notes
     except Exception:
         out["dragon_recommend"] = None
-    # Independent popular pullback: observe-only module on sticky mainline pool.
+    # Independent popular pullback: observe-only across sticky + side + link.
     try:
         skip_extra = {
             normalize_code(x.get("code"))
             for x in ((out.get("dragon_recommend") or {}).get("items") or [])
             if x.get("code")
         }
+        indep_side = None
+        indep_link = None
+        if side_info:
+            indep_side = _lookup_hot_board(
+                hot, name=side_info.get("name"), bk=side_info.get("bk")
+            )
+        if link_info:
+            indep_link = _lookup_hot_board(
+                hot, name=link_info.get("name"), bk=link_info.get("bk")
+            )
         indep = build_independent_pullback_recommend(
             main,
+            side_board=indep_side,
+            link_board=indep_link,
             recommend=out.get("recommend"),
+            side_recommend=out.get("side_recommend"),
+            link_recommend=out.get("link_recommend"),
             skip_codes=skip_extra,
             playbook=playbook,
             adapt=adapt_bundle,
@@ -2150,29 +2164,40 @@ def build_dragon_recommend(
 def build_independent_pullback_recommend(
     main: dict[str, Any] | None,
     *,
+    side_board: dict[str, Any] | None = None,
+    link_board: dict[str, Any] | None = None,
     recommend: dict[str, Any] | None = None,
+    side_recommend: dict[str, Any] | None = None,
+    link_recommend: dict[str, Any] | None = None,
     skip_codes: set[str] | None = None,
     playbook: dict[str, Any] | None = None,
     adapt: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Build observe-only cards for mainline independent popular pullbacks.
+    """Build observe-only cards for independent popular pullbacks.
 
-    Does not upgrade hero action / sticky. Sell path may exempt「昨买今弱」.
+    Scans sticky mainline plus observation side / link boards. Does not upgrade
+    hero action / sticky. Sell path may exempt「昨买今弱」.
     """
     from market_desk.config import INDEPENDENT_POP_MAX
     from market_desk.leaders import build_independent_pullback_candidates
 
-    skip = {
-        normalize_code(x.get("code"))
-        for x in ((recommend or {}).get("items") or [])
-        if x.get("kind") == "stock" and x.get("code")
-    }
+    skip: set[str] = set()
+    for box in (recommend, side_recommend, link_recommend):
+        for x in ((box or {}).get("items") or []):
+            if x.get("kind") == "stock" and x.get("code"):
+                cc = normalize_code(x.get("code"))
+                if cc:
+                    skip.add(cc)
     for c in skip_codes or set():
         cc = normalize_code(c)
         if cc:
             skip.add(cc)
     raw = build_independent_pullback_candidates(
-        main, skip_codes=skip, max_items=int(INDEPENDENT_POP_MAX)
+        main,
+        side_board=side_board,
+        link_board=link_board,
+        skip_codes=skip,
+        max_items=int(INDEPENDENT_POP_MAX),
     )
     items: list[dict[str, Any]] = []
     for row in raw:
@@ -2185,7 +2210,7 @@ def build_independent_pullback_recommend(
                 "kind": "stock",
                 "kind_label": "个股",
                 "role": "alt",
-                "role_label": "独立人气·回踩",
+                "role_label": str(row.get("role_label") or "独立人气·回踩"),
                 "code": code,
                 "name": row.get("name") or code,
                 "last": _px(last, 2),
@@ -2201,7 +2226,9 @@ def build_independent_pullback_recommend(
                 "ready": False,
                 "independent_pop": True,
                 "desk_source": "independent_pop",
-                "reason": str(row.get("reason") or "主线板内独立人气·近低回踩观察"),
+                "indep_scope": row.get("indep_scope") or "main",
+                "source_board": row.get("source_board"),
+                "reason": str(row.get("reason") or "板内独立人气·近低回踩观察"),
                 "qty": 100,
                 "high": row.get("high"),
                 "low": row.get("low"),
@@ -2217,7 +2244,7 @@ def build_independent_pullback_recommend(
         "independent_pop": True,
         "items": items,
         "size_note": (
-            "主线板内走独立行情、近低回踩观察；不升顶栏可买入。"
+            "主线/支线/联动板内近低观察（优先独立发散）；不升顶栏可买入。"
             "记仓后豁免「昨买今弱」轻减，破近5日低/止损仍提醒。"
         ),
     }

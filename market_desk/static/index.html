@@ -4790,11 +4790,11 @@
           indepBox.hidden = false;
           document.getElementById("indepline").textContent = "暂无独立人气回踩";
           document.getElementById("indepmeta").textContent =
-            "主线成分无「相对板发散 + 贴近日低 + 年内涨停」合格票";
+            "主线/支线/联动成分暂无「近低 + 年内涨停」合格票";
           const inn = document.getElementById("indepNote");
           if (inn) inn.textContent = "";
           document.getElementById("indepItems").innerHTML =
-            `<div class="meta">排除双龙/卡位后，近低独立路径才进此池</div>`;
+            `<div class="meta">排除双龙/卡位后，三线板内近低（优先独立发散）才进此池</div>`;
         } else {
           indepBox.hidden = true;
           document.getElementById("indepItems").innerHTML = "";

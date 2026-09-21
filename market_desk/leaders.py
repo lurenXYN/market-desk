@@ -487,111 +487,134 @@ def _independent_vs_board(member: dict[str, Any], board_pct: float | None) -> bo
 def build_independent_pullback_candidates(
     main: dict[str, Any] | None,
     *,
+    side_board: dict[str, Any] | None = None,
+    link_board: dict[str, Any] | None = None,
     skip_codes: set[str] | None = None,
     max_items: int = 5,
 ) -> list[dict[str, Any]]:
-    """List mainline constituents for independent popular pullback observe cards.
+    """List near-low observe cards across sticky + side + link boards.
 
-    Prefer board-divergent near-lows; if none, fall back to near-day-low names
-    still in the soft pct window (labeled 板内同步). Engine may soft-check 5-day
-    lows and zt_ytd afterward.
+    Prefer board-divergent near-lows; fall back to near-day-low sync names.
+    Priority when codes collide: main > side > link. Engine may soft-check
+    5-day lows and zt_ytd afterward.
     """
     from market_desk.config import (
         INDEPENDENT_POP_NEAR_DAY_LOW_PCT,
         INDEPENDENT_POP_PCT_MAX,
     )
 
-    card = main or {}
-    board_pct = card.get("pct")
     skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
-    # Always skip board emotion/mid dragons from this observe pool.
-    emo = pick_emotion_dragon(card, None)
-    if emo:
-        skip.add(emo["code"])
-    mid = pick_mid_army_dragon(card, skip_codes=skip)
-    if mid:
-        skip.add(mid["code"])
-    skip.add(normalize_code(card.get("leader_code")))
-    skip.add(normalize_code(card.get("slot_code")))
-
     pct_max = float(INDEPENDENT_POP_PCT_MAX)
     near_day = float(INDEPENDENT_POP_NEAR_DAY_LOW_PCT)
+    # Soft priority: main first, then side, then link.
+    scopes: list[tuple[str, dict[str, Any] | None, float]] = [
+        ("main", main, 1.0),
+        ("side", side_board, 0.35),
+        ("link", link_board, 0.15),
+    ]
     indep_scored: list[tuple[float, dict[str, Any]]] = []
     near_scored: list[tuple[float, dict[str, Any]]] = []
 
-    for member in card.get("pool") or card.get("members") or []:
-        code = normalize_code(member.get("code"))
-        name = str(member.get("name") or "")
-        if not code or code in skip or not is_main_board(code) or is_st(name):
+    for scope, card, scope_bonus in scopes:
+        if not card or not str(card.get("name") or "").strip():
             continue
-        try:
-            pct = float(member.get("pct"))
-        except (TypeError, ValueError):
-            continue
-        try:
-            mv = float(member.get("mv_yi")) if member.get("mv_yi") is not None else None
-        except (TypeError, ValueError):
-            mv = None
-        try:
-            turnover = float(member.get("turnover")) if member.get("turnover") is not None else None
-        except (TypeError, ValueError):
-            turnover = None
-        if not stock_liquidity_ok(mv, turnover, sealed=False):
-            continue
-        # Soft pullback window: not chasing highs, not collapsing.
-        if pct > pct_max or pct < -pct_max:
-            continue
-        if not _near_day_low(member, max_pct=near_day):
-            continue
-        try:
-            amount = float(member.get("amount") or 0)
-        except (TypeError, ValueError):
-            amount = 0.0
-        try:
-            high = float(member.get("high") or 0)
-            price = float(member.get("price") or 0)
-            pb = (high - price) / high * 100.0 if high > 0 else 0.0
-        except (TypeError, ValueError):
-            pb = 0.0
-        score = amount / 1e8 + pb * 0.4 - abs(pct) * 0.2
-        item = dict(member)
-        item["code"] = code
-        item["ready"] = False
-        item["desk_source"] = "independent_pop"
-        item["role_label"] = "独立人气·回踩"
-        indep = _independent_vs_board(
-            member, board_pct if board_pct is not None else None
-        )
-        if indep:
-            item["indep_path"] = True
-            item["reason"] = (
-                f"主线板内独立行情·近低回踩观察（vs板 {_fmt_board(board_pct)}，"
-                f"个股 {pct:+.1f}%）"
+        board_name = str(card.get("name") or "").strip()
+        board_pct = card.get("pct")
+        local_skip = set(skip)
+        emo = pick_emotion_dragon(card, None)
+        if emo:
+            local_skip.add(emo["code"])
+        mid = pick_mid_army_dragon(card, skip_codes=local_skip)
+        if mid:
+            local_skip.add(mid["code"])
+        local_skip.add(normalize_code(card.get("leader_code")))
+        local_skip.add(normalize_code(card.get("slot_code")))
+
+        scope_label = {"main": "主线", "side": "支线", "link": "联动"}.get(scope, "主线")
+        role_prefix = {"main": "", "side": "支线·", "link": "联动·"}.get(scope, "")
+
+        for member in card.get("pool") or card.get("members") or []:
+            code = normalize_code(member.get("code"))
+            name = str(member.get("name") or "")
+            if not code or code in local_skip or not is_main_board(code) or is_st(name):
+                continue
+            try:
+                pct = float(member.get("pct"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                mv = (
+                    float(member.get("mv_yi"))
+                    if member.get("mv_yi") is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                mv = None
+            try:
+                turnover = (
+                    float(member.get("turnover"))
+                    if member.get("turnover") is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                turnover = None
+            if not stock_liquidity_ok(mv, turnover, sealed=False):
+                continue
+            if pct > pct_max or pct < -pct_max:
+                continue
+            if not _near_day_low(member, max_pct=near_day):
+                continue
+            try:
+                amount = float(member.get("amount") or 0)
+            except (TypeError, ValueError):
+                amount = 0.0
+            try:
+                high = float(member.get("high") or 0)
+                price = float(member.get("price") or 0)
+                pb = (high - price) / high * 100.0 if high > 0 else 0.0
+            except (TypeError, ValueError):
+                pb = 0.0
+            score = amount / 1e8 + pb * 0.4 - abs(pct) * 0.2 + float(scope_bonus)
+            item = dict(member)
+            item["code"] = code
+            item["ready"] = False
+            item["desk_source"] = "independent_pop"
+            item["indep_scope"] = scope
+            item["source_board"] = board_name
+            item["role_label"] = f"{role_prefix}独立人气·回踩"
+            indep = _independent_vs_board(
+                member, board_pct if board_pct is not None else None
             )
-            indep_scored.append((score + 1.5, item))
-        else:
-            item["indep_path"] = False
-            item["reason"] = (
-                f"主线板内近低观察·板内同步（vs板 {_fmt_board(board_pct)}，"
-                f"个股 {pct:+.1f}%）"
-            )
-            near_scored.append((score, item))
+            if indep:
+                item["indep_path"] = True
+                item["reason"] = (
+                    f"{scope_label}「{board_name}」板内独立行情·近低回踩"
+                    f"（vs板 {_fmt_board(board_pct)}，个股 {pct:+.1f}%）"
+                )
+                indep_scored.append((score + 1.5, item))
+            else:
+                item["indep_path"] = False
+                item["reason"] = (
+                    f"{scope_label}「{board_name}」板内近低观察·板内同步"
+                    f"（vs板 {_fmt_board(board_pct)}，个股 {pct:+.1f}%）"
+                )
+                near_scored.append((score, item))
 
     indep_scored.sort(key=lambda row: row[0], reverse=True)
     near_scored.sort(key=lambda row: row[0], reverse=True)
     limit = max(1, int(max_items))
-    picked = [row[1] for row in indep_scored[:limit]]
-    if len(picked) < limit:
-        have = {normalize_code(x.get("code")) for x in picked}
-        for _, item in near_scored:
-            code = normalize_code(item.get("code"))
-            if not code or code in have:
-                continue
-            picked.append(item)
-            have.add(code)
-            if len(picked) >= limit:
-                break
+    picked: list[dict[str, Any]] = []
+    have: set[str] = set()
+    for _, item in indep_scored + near_scored:
+        code = normalize_code(item.get("code"))
+        if not code or code in have:
+            continue
+        picked.append(item)
+        have.add(code)
+        if len(picked) >= limit:
+            break
     return picked
+
 
 
 def _fmt_board(board_pct: Any) -> str:
