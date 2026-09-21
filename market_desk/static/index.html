@@ -2973,6 +2973,8 @@
         </label>
         <div class="meta" id="setNewsRadarHint" style="grid-column:1/-1">
           默认关闭。勾选后需本机/服务器另跑 news-radar（默认端口 8770），作战台只显示催化软条与盘前清单，不改 ready/买卖闸门。
+          <button type="button" id="btnNrProbe" class="copy-btn" style="margin-left:8px">检测雷达</button>
+          <span id="nrProbeMsg"></span>
         </div>
         <label class="settings-check">
           <input id="setScClear" type="checkbox" /> 清除已存 Key
@@ -4648,11 +4650,12 @@
           const stDot = nr.status === "online" ? "●"
             : (nr.status === "offline" ? "○" : "◌");
           if (rows.length) {
-            nrStrip.innerHTML = `<span title="新闻雷达状态">${stDot} ${st}</span> · 新闻雷达 `
+            nrStrip.innerHTML = `<span id="nrHealthDot" title="新闻雷达状态" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:${nr.status==='online'?'#3ecf8e':(nr.status==='offline'?'#f07178':'#f5c542')}"></span>${stDot} ${st} · 新闻雷达 `
               + rows.map((r, i) => {
                 const pct = r.board_pct == null ? "" : ` ${Number(r.board_pct) >= 0 ? "+" : ""}${Number(r.board_pct).toFixed(1)}%`;
                 const tone = r.tone_label && r.tone_label !== "中性" ? `·${r.tone_label}` : "";
-                return `<button type="button" class="nr-chip" data-nr-i="${i}" style="all:unset;cursor:pointer;color:inherit;border-bottom:1px dashed var(--muted);margin:0 2px">`
+                const color = (r.mainline_match === false && nr.mainline_name) ? "#f0a36b" : "inherit";
+                return `<button type="button" class="nr-chip" data-nr-i="${i}" style="all:unset;cursor:pointer;color:${color};border-bottom:1px dashed var(--muted);margin:0 2px">`
                   + `<b>${r.sector || ""}</b>${r.confirm_label ? "(" + r.confirm_label + ")" : ""}${tone}${pct}</button>`;
               }).join(" · ")
               + (nr.mainline_note ? ` <span class="meta">· ${nr.mainline_note}</span>` : "")
@@ -4702,7 +4705,7 @@
           if (nrCheck) {
             if (chk.length) {
               nrCheck.hidden = false;
-              nrCheck.innerHTML = "<b>盘前清单（软）</b>"
+              nrCheck.innerHTML = "<b>盘前清单（软）</b> <button type=\"button\" class=\"copy-btn\" id=\"nrCopyChk\">复制</button>"
                 + chk.map((c) => {
                   const pct = c.board_pct == null ? "" : ` ${Number(c.board_pct) >= 0 ? "+" : ""}${Number(c.board_pct).toFixed(1)}%`;
                   const etf = (c.etfs || [])[0] || "";
@@ -4713,6 +4716,17 @@
                     + (c.action_hint ? ` — ${c.action_hint}` : "")
                     + `</div>`;
                 }).join("");
+              const copyChk = document.getElementById("nrCopyChk");
+              if (copyChk) {
+                copyChk.onclick = async () => {
+                  const text = chk.map((c) => {
+                    const etf = (c.etfs || [])[0] || "";
+                    return `${c.sector || ""} ${c.confirm_label || ""} ${etf} ${c.action_hint || ""}`.trim();
+                  }).join("\n");
+                  try { await navigator.clipboard.writeText(text); copyChk.textContent = "已复制"; }
+                  catch (_) { copyChk.textContent = "复制失败"; }
+                };
+              }
             } else {
               nrCheck.hidden = true;
               nrCheck.innerHTML = "";
@@ -9590,6 +9604,24 @@
         if (nrOn) nrOn.checked = !!s.news_radar_enabled;
         const nrUrl = document.getElementById("setNewsRadarUrl");
         if (nrUrl) nrUrl.value = s.news_radar_url || "http://127.0.0.1:8770";
+        const nrProbe = document.getElementById("btnNrProbe");
+        if (nrProbe && !nrProbe.dataset.bound) {
+          nrProbe.dataset.bound = "1";
+          nrProbe.onclick = async () => {
+            const msg = document.getElementById("nrProbeMsg");
+            const url = (document.getElementById("setNewsRadarUrl")?.value || "http://127.0.0.1:8770").replace(/\/$/, "");
+            if (msg) msg.textContent = "检测中…";
+            try {
+              const resp = await fetch(url + "/api/health", { signal: AbortSignal.timeout(4000) });
+              const j = await resp.json();
+              if (msg) msg.textContent = resp.ok && j.ok
+                ? `在线 · ${j.updated_at || "ok"} · 板块${j.sectors ?? "—"}`
+                : "响应异常";
+            } catch (e) {
+              if (msg) msg.textContent = "离线/超时（确认 :8770 已启动）";
+            }
+          };
+        }
         window.__portableSettings = d.portable || null;
         window.__settingsPresets = d.presets || null;
       } catch (e) {}
