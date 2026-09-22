@@ -17,6 +17,23 @@ from market_desk.config import (
 from market_desk.filters import is_main_board, normalize_code
 from market_desk.numbers import num
 
+# Prefer push2 for clist; delay edge often returns 502 on quotes/boards.
+_CLIST_HOSTS: tuple[str, ...] = (
+    "push2.eastmoney.com",
+    "push2delay.eastmoney.com",
+    "push2his.eastmoney.com",
+)
+_CLIST_HOST_PREF: str | None = None
+_CLIST_SEM: asyncio.Semaphore | None = None
+
+
+def _clist_sem() -> asyncio.Semaphore:
+    """Limit concurrent clist calls to reduce edge 502 under pagination fan-out."""
+    global _CLIST_SEM
+    if _CLIST_SEM is None:
+        _CLIST_SEM = asyncio.Semaphore(3)
+    return _CLIST_SEM
+
 
 def _zt_url(path: str, trade_date: str, extra: str = "") -> str:
     return (
@@ -32,17 +49,28 @@ def _clist_url(
     extra_fields: str = "",
     po: int = 1,
     fid: str = "f3",
+    *,
+    host: str | None = None,
 ) -> str:
     fields = (
         "f12,f13,f14,f2,f3,f4,f5,f6,f8,f15,f16,f17,f18,f9,f20,"
         "f104,f105,f128,f140,f141,f136"
         + extra_fields
     )
+    h = host or _CLIST_HOST_PREF or _CLIST_HOSTS[0]
     return (
-        "https://push2delay.eastmoney.com/api/qt/clist/get"
+        f"https://{h}/api/qt/clist/get"
         f"?pn={pn}&pz={pz}&po={po}&np=1&fltt=2&invt=2&fid={fid}"
         f"&ut={EASTMONEY_UT}&fs={fs}&fields={fields}"
     )
+
+
+def _host_order() -> list[str]:
+    """Prefer last-good host, then the rest."""
+    pref = _CLIST_HOST_PREF
+    if pref and pref in _CLIST_HOSTS:
+        return [pref, *[h for h in _CLIST_HOSTS if h != pref]]
+    return list(_CLIST_HOSTS)
 
 
 async def _get_json(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
@@ -55,6 +83,60 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
         except Exception as exc:
             last_error = exc
             await asyncio.sleep(0.5 * (attempt + 1))
+    assert last_error is not None
+    raise last_error
+
+
+async def _get_clist_json(
+    client: httpx.AsyncClient,
+    fs: str,
+    *,
+    pz: int = 100,
+    pn: int = 1,
+    extra_fields: str = "",
+    po: int = 1,
+    fid: str = "f3",
+    host: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    """GET clist with multi-host failover. Return ``(payload, host_used)``."""
+    global _CLIST_HOST_PREF
+    hosts = [host] if host else _host_order()
+    last_error: Exception | None = None
+    for h in hosts:
+        url = _clist_url(
+            fs, pz=pz, pn=pn, extra_fields=extra_fields, po=po, fid=fid, host=h
+        )
+        for attempt in range(2):
+            try:
+                async with _clist_sem():
+                    resp = await client.get(url, headers=HTTP_HEADERS, timeout=20.0)
+                resp.raise_for_status()
+                data = resp.json()
+                if not isinstance(data, dict):
+                    raise RuntimeError("clist non-dict payload")
+                _CLIST_HOST_PREF = h
+                return data, h
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                # Edge 5xx: skip second attempt on the same host, try next edge.
+                if exc.response is not None and exc.response.status_code >= 500:
+                    break
+                await asyncio.sleep(0.25 * (attempt + 1))
+            except (
+                httpx.RemoteProtocolError,
+                httpx.ConnectError,
+                httpx.ReadError,
+            ) as exc:
+                last_error = exc
+                break
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(0.25 * (attempt + 1))
+    # Pref host may be a dead edge; forget it so the next tick reshuffles.
+    if _CLIST_HOST_PREF and (
+        host is None or host == _CLIST_HOST_PREF
+    ):
+        _CLIST_HOST_PREF = None
     assert last_error is not None
     raise last_error
 
@@ -205,8 +287,17 @@ async def _fetch_clist_pages(
     """Page through an East Money list endpoint until exhausted."""
     rows: list[dict[str, Any]] = []
     total = None
+    host: str | None = None
     for pn in range(1, max_pages + 1):
-        payload = await _get_json(client, _clist_url(fs, pz=pz, pn=pn))
+        try:
+            payload, host = await _get_clist_json(
+                client, fs, pz=pz, pn=pn, host=host
+            )
+        except Exception:
+            # Mid-pagination host died: retry this page across hosts once.
+            if host is None:
+                raise
+            payload, host = await _get_clist_json(client, fs, pz=pz, pn=pn)
         chunk = _diff_rows(payload)
         if not chunk:
             break
@@ -240,10 +331,14 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         pass
     if _MAIN_QUOTES_CACHE and now - _MAIN_QUOTES_CACHE[0] < ttl:
         return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
-    sh_rows, sz_rows = await asyncio.gather(
-        _fetch_clist_pages(client, "m:1+t:2", max_pages=18),
-        _fetch_clist_pages(client, "m:0+t:6", max_pages=18),
-    )
+    try:
+        # Serialize markets: parallel pagination was tripping push2delay 502 on VPS.
+        sh_rows = await _fetch_clist_pages(client, "m:1+t:2", max_pages=18)
+        sz_rows = await _fetch_clist_pages(client, "m:0+t:6", max_pages=18)
+    except Exception:
+        if _MAIN_QUOTES_CACHE:
+            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+        raise
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in [*sh_rows, *sz_rows]:
@@ -252,6 +347,8 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
             seen.add(mapped["code"])
             out.append(mapped)
     if not out:
+        if _MAIN_QUOTES_CACHE:
+            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
         raise RuntimeError("main-board quote lists were empty")
     _MAIN_QUOTES_CACHE = (now, out)
     return [dict(row) for row in out]
@@ -287,21 +384,52 @@ def _board_from_diff(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
     }
 
 
+def _hot_board_from_flow(row: dict[str, Any]) -> dict[str, Any]:
+    """Map a fund-flow board row into hot-board card shape (degraded fields)."""
+    return {
+        "bk": row["bk"],
+        "name": row["name"],
+        "kind": row.get("kind") or "concept",
+        "pct": row.get("pct") or 0.0,
+        "amount": 0.0,
+        "up_count": 0,
+        "down_count": 0,
+        "leader_name": str(row.get("leader_name") or ""),
+        "leader_code": normalize_code(row.get("leader_code")),
+        "leader_pct": round(num(row.get("leader_pct"), 0.0) or 0.0, 2),
+    }
+
+
 async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch concept gainers and the full industry universe."""
-    concept_payload, industry_rows = await asyncio.gather(
-        _get_json(client, _clist_url("m:90+t:3", pz=80)),
-        _fetch_clist_pages(client, "m:90+t:2", pz=100, max_pages=5),
-    )
     out: list[dict[str, Any]] = []
-    for item in _diff_rows(concept_payload):
-        mapped = _board_from_diff(item, "concept")
-        if mapped:
-            out.append(mapped)
-    for item in industry_rows:
-        mapped = _board_from_diff(item, "industry")
-        if mapped:
-            out.append(mapped)
+    try:
+        concept_payload, _host = await _get_clist_json(client, "m:90+t:3", pz=80)
+        for item in _diff_rows(concept_payload):
+            mapped = _board_from_diff(item, "concept")
+            if mapped:
+                out.append(mapped)
+    except Exception:
+        pass
+    try:
+        industry_rows = await _fetch_clist_pages(
+            client, "m:90+t:2", pz=100, max_pages=5
+        )
+        for item in industry_rows:
+            mapped = _board_from_diff(item, "industry")
+            if mapped:
+                out.append(mapped)
+    except Exception:
+        pass
+    if out:
+        return out
+    # Same clist edge as fund-flow (push2-first); keeps boards non-empty when gainers API blips.
+    flow_c, flow_i = await asyncio.gather(
+        fetch_board_fund_flow(client, "concept", limit=80),
+        fetch_board_fund_flow(client, "industry", limit=100),
+    )
+    for row in [*flow_c, *flow_i]:
+        out.append(_hot_board_from_flow(row))
     return out
 
 
@@ -367,35 +495,21 @@ async def fetch_board_fund_flow(
     fs = "m:90+t:2" if kind == "industry" else "m:90+t:3"
     fid = cfg["fid"]
     fields = cfg["fields"]
-    urls = [
-        (
-            "https://push2.eastmoney.com/api/qt/clist/get"
-            f"?pn=1&pz={limit}&po=1&np=1&fltt=2&invt=2&fid={fid}"
-            f"&ut={EASTMONEY_UT}&fs={fs}&fields={fields}"
-        ),
-        _clist_url(
-            fs,
-            pz=limit,
-            pn=1,
-            po=1,
-            fid=fid,
-            extra_fields="," + ",".join(
-                x for x in fields.split(",") if x and x not in (
-                    "f12", "f13", "f14", "f2", "f3", "f4", "f5", "f6", "f8",
-                    "f15", "f16", "f17", "f18", "f9", "f20",
-                    "f104", "f105", "f128", "f140", "f141", "f136",
-                )
-            ),
-        ),
-    ]
+    base_fields = {
+        "f12", "f13", "f14", "f2", "f3", "f4", "f5", "f6", "f8",
+        "f15", "f16", "f17", "f18", "f9", "f20",
+        "f104", "f105", "f128", "f140", "f141", "f136",
+    }
+    extra = "," + ",".join(
+        x for x in fields.split(",") if x and x not in base_fields
+    )
     payload: dict[str, Any] = {}
-    for url in urls:
-        try:
-            payload = await _get_json(client, url)
-            if _diff_rows(payload):
-                break
-        except Exception:
-            continue
+    try:
+        payload, _host = await _get_clist_json(
+            client, fs, pz=limit, pn=1, po=1, fid=fid, extra_fields=extra
+        )
+    except Exception:
+        payload = {}
     out: list[dict[str, Any]] = []
     for item in _diff_rows(payload):
         mapped = _board_flow_from_diff(item, kind, cfg=cfg, period=period)
@@ -459,16 +573,14 @@ async def fetch_board_members(
     hit = _BOARD_MEMBERS_CACHE.get(key)
     if hit and now - hit[0] < _BOARD_MEMBERS_TTL_SEC:
         return [dict(row) for row in hit[1]]
-    url = _clist_url(f"b:{bk}+f:!50", pz=30, po=0 if weakest else 1)
     try:
-        payload = await _get_json(client, url)
-    except httpx.HTTPError:
+        payload, _host = await _get_clist_json(
+            client, f"b:{bk}+f:!50", pz=30, po=0 if weakest else 1
+        )
+    except Exception:
         return []
-    diff = ((payload.get("data") or {}).get("diff")) or []
-    if isinstance(diff, dict):
-        diff = list(diff.values())
     members: list[dict[str, Any]] = []
-    for item in diff:
+    for item in _diff_rows(payload):
         code = normalize_code(item.get("f12"))
         if not is_main_board(code):
             continue

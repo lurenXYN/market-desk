@@ -2970,6 +2970,27 @@ def _board_etf_codes(boards: list[dict[str, Any]] | None) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _short_exc(exc: BaseException) -> str:
+    """Compact HTTP/source errors for health tips (drop query strings / docs links)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        req = getattr(exc, "request", None)
+        host = getattr(getattr(req, "url", None), "host", None) or "?"
+        code = getattr(getattr(exc, "response", None), "status_code", "?")
+        return f"{code} {host}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    text = str(exc)
+    # Strip long URLs / MDN footnotes from httpx messages.
+    if "For more information check:" in text:
+        text = text.split("For more information check:", 1)[0].strip()
+    if "url '" in text:
+        # Keep status phrase, drop full URL body.
+        head = text.split("url '", 1)[0].rstrip()
+        if head:
+            text = head.rstrip(" for").rstrip()
+    return text[:160] if len(text) > 160 else text
+
+
 async def _safe(fn, *args, errors: list[str], label: str):
     try:
         result = await fn(*args)
@@ -2979,8 +3000,9 @@ async def _safe(fn, *args, errors: list[str], label: str):
             pass
         return result
     except Exception as exc:
+        short = _short_exc(exc)
         log.warning("%s: %s", label, exc)
-        errors.append(f"{label}: {exc}")
+        errors.append(f"{label}: {short}")
         msg = str(exc).lower()
         is_to = "timeout" in msg or "timed out" in msg or "time out" in msg
         try:
