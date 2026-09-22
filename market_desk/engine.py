@@ -2629,8 +2629,10 @@ class DeskEngine:
         picked = ranked[:12]
         if not picked:
             return []
-        enriched = await asyncio.gather(
-            *[_enrich_board(client, board, ctx) for board in picked]
+        enriched = await _map_capped(
+            lambda board: _enrich_board(client, board, ctx),
+            picked,
+            limit=3,
         )
         enriched = [x for x in enriched if x]
         enriched.sort(
@@ -2659,14 +2661,13 @@ class DeskEngine:
         if not tasks:
             return []
 
-        async def _one(label: str, board: dict[str, Any]) -> dict[str, Any]:
+        async def _one(pair: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+            label, board = pair
             card = await _enrich_board(client, board, ctx)
             card["pin_label"] = label
             return card
 
-        return list(
-            await asyncio.gather(*[_one(label, board) for label, board in tasks])
-        )
+        return list(await _map_capped(_one, tasks, limit=3))
 
     async def _favorite_cards(
         self,
@@ -2716,7 +2717,7 @@ class DeskEngine:
                 )
             return card
 
-        enriched = await asyncio.gather(*[_one(row) for row in picked])
+        enriched = await _map_capped(_one, picked, limit=3)
         return [card for card in enriched if card]
 
     async def _ice_cards(
@@ -2729,8 +2730,10 @@ class DeskEngine:
         picked = _rank_ice_boards(boards, {x["name"] for x in hot})
         if not picked:
             return []
-        enriched = await asyncio.gather(
-            *[_enrich_board(client, board, ctx, weakest=True) for board in picked]
+        enriched = await _map_capped(
+            lambda board: _enrich_board(client, board, ctx, weakest=True),
+            picked,
+            limit=3,
         )
         cards = [x for x in enriched if x]
         cards.sort(
@@ -2970,6 +2973,19 @@ def _short_exc(exc: BaseException) -> str:
         if head:
             text = head.rstrip(" for").rstrip()
     return text[:160] if len(text) > 160 else text
+
+
+async def _map_capped(fn, items: list[Any], *, limit: int = 3) -> list[Any]:
+    """Run ``await fn(item)`` over items with a concurrency cap (default 3)."""
+    if not items:
+        return []
+    sem = asyncio.Semaphore(max(1, int(limit)))
+
+    async def _one(item: Any) -> Any:
+        async with sem:
+            return await fn(item)
+
+    return list(await asyncio.gather(*[_one(item) for item in items]))
 
 
 async def _safe(fn, *args, errors: list[str], label: str):

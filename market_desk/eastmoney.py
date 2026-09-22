@@ -25,6 +25,10 @@ _CLIST_HOSTS: tuple[str, ...] = (
 )
 _CLIST_HOST_PREF: str | None = None
 _CLIST_SEM: asyncio.Semaphore | None = None
+_CLIST_FAIL_STREAK = 0
+_CLIST_BACKOFF_UNTIL = 0.0
+_CLIST_BACKOFF_SEC = 45.0
+_CLIST_BACKOFF_AFTER = 2
 
 
 def _clist_sem() -> asyncio.Semaphore:
@@ -33,6 +37,36 @@ def _clist_sem() -> asyncio.Semaphore:
     if _CLIST_SEM is None:
         _CLIST_SEM = asyncio.Semaphore(3)
     return _CLIST_SEM
+
+
+def clist_in_backoff() -> bool:
+    """True while East Money clist edges are cooling down after repeated 5xx."""
+    import time
+
+    return time.time() < _CLIST_BACKOFF_UNTIL
+
+
+def clist_backoff_remaining() -> float:
+    """Seconds left in the clist cooldown window (0 when idle)."""
+    import time
+
+    return max(0.0, _CLIST_BACKOFF_UNTIL - time.time())
+
+
+def _note_clist_ok() -> None:
+    global _CLIST_FAIL_STREAK
+    _CLIST_FAIL_STREAK = 0
+
+
+def _note_clist_fail() -> None:
+    """Arm a short process-wide clist pause after consecutive total failures."""
+    import time
+
+    global _CLIST_FAIL_STREAK, _CLIST_BACKOFF_UNTIL
+    _CLIST_FAIL_STREAK += 1
+    if _CLIST_FAIL_STREAK >= _CLIST_BACKOFF_AFTER:
+        _CLIST_BACKOFF_UNTIL = time.time() + _CLIST_BACKOFF_SEC
+        _CLIST_FAIL_STREAK = 0
 
 
 def _zt_url(path: str, trade_date: str, extra: str = "") -> str:
@@ -100,6 +134,10 @@ async def _get_clist_json(
 ) -> tuple[dict[str, Any], str]:
     """GET clist with multi-host failover. Return ``(payload, host_used)``."""
     global _CLIST_HOST_PREF
+    if clist_in_backoff() and host is None:
+        raise RuntimeError(
+            f"clist backoff {clist_backoff_remaining():.0f}s"
+        )
     hosts = [host] if host else _host_order()
     last_error: Exception | None = None
     for h in hosts:
@@ -115,6 +153,7 @@ async def _get_clist_json(
                 if not isinstance(data, dict):
                     raise RuntimeError("clist non-dict payload")
                 _CLIST_HOST_PREF = h
+                _note_clist_ok()
                 return data, h
             except httpx.HTTPStatusError as exc:
                 last_error = exc
@@ -137,6 +176,8 @@ async def _get_clist_json(
         host is None or host == _CLIST_HOST_PREF
     ):
         _CLIST_HOST_PREF = None
+    if host is None:
+        _note_clist_fail()
     assert last_error is not None
     raise last_error
 
@@ -313,8 +354,9 @@ async def _fetch_clist_pages(
 async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch Shanghai and Shenzhen main-board quotes with pagination.
 
-    Results are cached briefly to cut the heaviest clist fan-out on the 20s tick.
-    During the 09:15–09:30 call-auction window the TTL collapses so open% stays fresh.
+    Results are cached to cut the heaviest clist fan-out on the 20s tick.
+    Auction (09:15–09:30) uses a short TTL; early continuous session is medium;
+    otherwise prefer a longer TTL so VPS egress stays quiet.
     """
     import time
     from datetime import datetime, timezone, timedelta
@@ -327,9 +369,13 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         mins = local.hour * 60 + local.minute
         if 9 * 60 + 15 <= mins < 9 * 60 + 30:
             ttl = _MAIN_QUOTES_AUCTION_TTL_SEC
+        elif 9 * 60 + 30 <= mins < 10 * 60:
+            ttl = _MAIN_QUOTES_OPEN_TTL_SEC
     except Exception:
         pass
     if _MAIN_QUOTES_CACHE and now - _MAIN_QUOTES_CACHE[0] < ttl:
+        return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+    if clist_in_backoff() and _MAIN_QUOTES_CACHE:
         return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
     try:
         # Serialize markets: parallel pagination was tripping push2delay 502 on VPS.
@@ -355,7 +401,8 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 
 
 _MAIN_QUOTES_CACHE: tuple[float, list[dict[str, Any]]] | None = None
-_MAIN_QUOTES_TTL_SEC = 120.0
+_MAIN_QUOTES_TTL_SEC = 240.0
+_MAIN_QUOTES_OPEN_TTL_SEC = 90.0
 _MAIN_QUOTES_AUCTION_TTL_SEC = 4.0
 
 
@@ -403,6 +450,15 @@ def _hot_board_from_flow(row: dict[str, Any]) -> dict[str, Any]:
 async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch concept gainers and the full industry universe."""
     out: list[dict[str, Any]] = []
+    if clist_in_backoff():
+        # Degrade immediately to fund-flow shape rather than waiting out edges.
+        flow_c, flow_i = await asyncio.gather(
+            fetch_board_fund_flow(client, "concept", limit=80),
+            fetch_board_fund_flow(client, "industry", limit=100),
+        )
+        for row in [*flow_c, *flow_i]:
+            out.append(_hot_board_from_flow(row))
+        return out
     try:
         concept_payload, _host = await _get_clist_json(client, "m:90+t:3", pz=80)
         for item in _diff_rows(concept_payload):

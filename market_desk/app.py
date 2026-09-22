@@ -505,6 +505,61 @@ def health() -> dict:
     }
 
 
+@app.get("/api/export/boards")
+def export_boards() -> dict:
+    """Public soft board list for news-radar (no auth; local/VPS loopback use)."""
+    snap = engine.snapshot or {}
+    seen: set[str] = set()
+    boards: list[dict] = []
+    for pool in ("hot_boards", "pin_boards", "ice_boards", "favorite_boards"):
+        for raw in snap.get(pool) or []:
+            if not isinstance(raw, dict):
+                continue
+            bk = str(raw.get("bk") or "").upper()
+            name = str(raw.get("name") or "")
+            if not bk or bk in seen:
+                continue
+            seen.add(bk)
+            boards.append(
+                {
+                    "bk": bk,
+                    "name": name,
+                    "pct": raw.get("pct"),
+                    "amount": raw.get("amount") or 0,
+                    "leader": str(raw.get("leader_name") or ""),
+                    "kind": raw.get("kind") or "",
+                }
+            )
+    # Fund-flow boards fill gaps when hot cards are thin.
+    ff = snap.get("fund_flow") if isinstance(snap.get("fund_flow"), dict) else {}
+    api_raw = ff.get("api_raw") if isinstance(ff, dict) else {}
+    day = (api_raw or {}).get("day") if isinstance(api_raw, dict) else {}
+    for kind in ("industry", "concept"):
+        for raw in (day or {}).get(kind) or []:
+            if not isinstance(raw, dict):
+                continue
+            bk = str(raw.get("bk") or "").upper()
+            if not bk or bk in seen:
+                continue
+            seen.add(bk)
+            boards.append(
+                {
+                    "bk": bk,
+                    "name": str(raw.get("name") or ""),
+                    "pct": raw.get("pct"),
+                    "amount": 0,
+                    "leader": str(raw.get("leader_name") or ""),
+                    "kind": kind,
+                }
+            )
+    return {
+        "ok": True,
+        "updated_at": snap.get("updated_at"),
+        "boards": boards,
+        "n": len(boards),
+    }
+
+
 
 @app.get("/api/review")
 async def review(
