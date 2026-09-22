@@ -126,6 +126,12 @@ if command -v curl >/dev/null 2>&1; then
   for i in $(seq 1 45); do
     if body="$(curl -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null)"; then
       echo "$body"
+      echo "==> apply daily_snapshot patches"
+      run_root bash -lc "
+        set -euo pipefail
+        cd '$INSTALL_DIR'
+        .venv/bin/python -c \"from market_desk.patches_apply import apply_pending_daily_patches; print(apply_pending_daily_patches(force=False))\"
+      " || true
       echo "Deploy OK"
       exit 0
     fi

@@ -263,14 +263,26 @@ async def lifespan(_app: FastAPI):
 
         applied = apply_pending_daily_patches()
         if applied:
-            log.info("daily patches applied: %s", ",".join(applied))
+            log.info("daily patches applied(pre): %s", ",".join(applied))
     except Exception:
-        log.exception("daily patch apply failed")
+        log.exception("daily patch apply failed (pre-start)")
     engine.start()
     for _ in range(120):
         if engine.snapshot.get("updated_at"):
             break
         await asyncio.sleep(0.25)
+    # Re-run after first tick so history in memory is rebuilt next refresh.
+    try:
+        from market_desk.db import load_daily
+        from market_desk.patches_apply import apply_pending_daily_patches
+
+        applied = apply_pending_daily_patches()
+        if applied:
+            log.info("daily patches applied(post): %s", ",".join(applied))
+        if isinstance(engine.snapshot, dict):
+            engine.snapshot["history"] = load_daily(14)
+    except Exception:
+        log.exception("daily patch apply failed (post-start)")
     yield
     await engine.stop()
 
@@ -1750,6 +1762,39 @@ def backup_auto_list(
         "ok": True,
         "items": list_auto_backups(limit=limit),
         "keep": int(get_settings().get("backup_keep") or 30),
+    }
+
+
+@app.post("/api/admin/daily-patches/apply")
+def admin_apply_daily_patches(
+    force: bool = Query(default=True),
+    admin: dict = Depends(current_admin_required),
+) -> dict:
+    """Force-apply shipped daily_snapshot patches and refresh in-memory history."""
+    del admin
+    from market_desk.db import load_daily
+    from market_desk.patches_apply import apply_pending_daily_patches
+
+    applied = apply_pending_daily_patches(force=bool(force))
+    hist = load_daily(14)
+    try:
+        if isinstance(engine.snapshot, dict):
+            engine.snapshot["history"] = hist
+    except Exception:
+        pass
+    row_21 = next((r for r in hist if str(r.get("trade_date")) == "2026-09-21"), None)
+    return {
+        "ok": True,
+        "applied": applied,
+        "history_n": len(hist),
+        "day_2026_09_21": {
+            "ups": (row_21 or {}).get("ups"),
+            "downs": (row_21 or {}).get("downs"),
+            "amount_yi": (row_21 or {}).get("amount_yi"),
+            "event": (row_21 or {}).get("event"),
+        }
+        if row_21
+        else None,
     }
 
 
