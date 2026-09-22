@@ -300,3 +300,144 @@ def test_filled_sell_no_fill_is_empty() -> None:
     )
     assert out is not None
     assert out.get("outcome_label") == "无成交"
+
+
+def test_minute_fidelity_chase_before_plan_skips() -> None:
+    """Intraday: touch chase first → skip day0 fill even if plan also touched."""
+    bars = {
+        "2026-09-17": {"open": 10.2, "high": 10.8, "low": 9.9, "close": 10.1},
+        "2026-09-18": {"open": 10.0, "high": 10.2, "low": 9.7, "close": 9.9},
+    }
+    minutes = [
+        {"price": 10.3},
+        {"price": 10.7},  # chase first
+        {"price": 10.0},  # then plan
+    ]
+    sim = simulate_buy_fill(
+        trade_date="2026-09-17",
+        bars_by_day=bars,
+        wait=10.0,
+        plan=10.0,
+        chase=10.6,
+        mode="plan",
+        look_ahead=2,
+        vol_min_ratio=0,
+        slip_pct=0,
+        gap_pct=0,
+        minutes=minutes,
+        fidelity="minute",
+    )
+    assert sim is not None
+    # Day0 skipped via minute path; day1 can still fill on daily.
+    assert sim["filled"] is True
+    assert sim["fill_date"] == "2026-09-18"
+    assert sim.get("fidelity") == "daily"
+
+
+def test_minute_fidelity_plan_before_chase_fills() -> None:
+    bars = {
+        "2026-09-17": {"open": 10.2, "high": 10.8, "low": 9.9, "close": 10.1},
+    }
+    minutes = [
+        {"price": 10.1},
+        {"price": 9.95},  # plan first
+        {"price": 10.7},
+    ]
+    sim = simulate_buy_fill(
+        trade_date="2026-09-17",
+        bars_by_day=bars,
+        wait=10.0,
+        plan=10.0,
+        chase=10.6,
+        mode="plan",
+        vol_min_ratio=0,
+        slip_pct=0,
+        gap_pct=0,
+        minutes=minutes,
+        fidelity="minute",
+    )
+    assert sim is not None
+    assert sim["filled"] is True
+    assert sim["fill_date"] == "2026-09-17"
+    assert sim.get("fidelity") == "minute"
+    assert "分时" in str(sim.get("note") or "")
+
+
+def test_minute_fidelity_ambiguous_day0_without_minutes() -> None:
+    """Without minutes, ambiguous day0 (high≥chase and low≤plan) is skipped."""
+    bars = {
+        "2026-09-17": {"open": 10.2, "high": 10.8, "low": 9.9, "close": 10.1},
+        "2026-09-18": {"open": 10.0, "high": 10.1, "low": 9.8, "close": 9.9},
+    }
+    sim = simulate_buy_fill(
+        trade_date="2026-09-17",
+        bars_by_day=bars,
+        wait=10.0,
+        plan=10.0,
+        chase=10.6,
+        mode="plan",
+        look_ahead=2,
+        vol_min_ratio=0,
+        slip_pct=0,
+        gap_pct=0,
+        minutes=None,
+        fidelity="minute",
+    )
+    assert sim is not None
+    assert sim["filled"] is True
+    assert sim["fill_date"] == "2026-09-18"
+
+
+def test_validate_backtest_async_span() -> None:
+    from market_desk.backtest import (
+        MAX_BACKTEST_ASYNC_SPAN_DAYS,
+        MAX_BACKTEST_SPAN_DAYS,
+        validate_backtest_range,
+    )
+
+    # ~121 calendar days > sync 90, still within async 180.
+    ok = validate_backtest_range("2026-01-01", "2026-05-01", max_span=MAX_BACKTEST_SPAN_DAYS)
+    assert isinstance(ok, dict) and ok.get("ok") is False
+    wide = validate_backtest_range(
+        "2026-01-01", "2026-05-01", max_span=MAX_BACKTEST_ASYNC_SPAN_DAYS
+    )
+    assert isinstance(wide, tuple)
+    assert wide[0] == "2026-01-01"
+
+
+def test_adapt_same_day_plan_remap_with_bars() -> None:
+    from market_desk.adapt import (
+        _remap_rows_for_adapt_standard,
+        set_adapt_bars,
+    )
+
+    dates = ["2026-09-17", "2026-09-18", "2026-09-19", "2026-09-20"]
+    closes = [10.5, 10.8, 11.0, 11.2]
+    ohlc = {
+        "open": [10.4, 10.6, 10.9, 11.1],
+        "low": [10.0, 10.5, 10.8, 11.0],  # day0 low touches plan 10.2
+        "high": [10.6, 10.9, 11.1, 11.3],
+    }
+    set_adapt_bars(
+        {
+            "600000": (dates, closes, ohlc),
+        }
+    )
+    rows = [
+        {
+            "code": "600000",
+            "name": "浦发",
+            "signal_type": "buy",
+            "trade_date": "2026-09-17",
+            "price": 10.2,
+            "plan_price": 10.2,
+            "wait_price": 10.0,
+            "outcome_label": "次日绿",  # classic placeholder
+            "outcome_day1_pct": -1.0,
+        }
+    ]
+    remapped, n_hit = _remap_rows_for_adapt_standard(rows, "same_day_plan")
+    assert n_hit >= 1
+    assert remapped[0].get("outcome_standard") == "same_day_plan"
+    assert remapped[0].get("outcome_label")
+    set_adapt_bars({})

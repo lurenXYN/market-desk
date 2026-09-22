@@ -1223,16 +1223,36 @@ def resolve_auto_tune(
     return tune
 
 
+# Module-level OHLC pack for adapt same_day_plan remapping (set by engine).
+_ADAPT_BARS: dict[str, Any] = {}
+
+
+def set_adapt_bars(bars: dict[str, Any] | None) -> None:
+    """Install code→(dates, closes, ohlc) pack used by adapt remapping."""
+    global _ADAPT_BARS
+    _ADAPT_BARS = dict(bars or {})
+
+
+def get_adapt_bars() -> dict[str, Any]:
+    """Return the current adapt OHLC pack (may be empty)."""
+    return dict(_ADAPT_BARS)
+
+
 def _remap_rows_for_adapt_standard(
     rows: list[dict[str, Any]] | None,
     standard: str,
+    *,
+    closes_map: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Soft-remap signal rows so adapt knobs can follow a non-classic standard.
 
     ``filled``: keep traded + labeled rows (实盘成交样本).
-    ``same_day_plan``: without closes re-score, returns (rows, 0) so callers
-    keep classic — full plan remapping remains a follow-up.
+    ``same_day_plan``: re-score buys with ``score_signal_with_closes`` when
+    OHLC pack is available (from ``closes_map`` or ``set_adapt_bars``).
     """
+    from market_desk.filters import normalize_code
+    from market_desk.review import is_buy_signal, score_signal_with_closes
+
     src = list(rows or [])
     std = str(standard or "classic").strip().lower()
     if std == "filled":
@@ -1242,7 +1262,40 @@ def _remap_rows_for_adapt_standard(
             if int(r.get("traded") or 0) and str(r.get("outcome_label") or "").strip()
         ]
         return kept, len(kept)
-    return src, 0
+    if std != "same_day_plan":
+        return src, 0
+    packed = closes_map if closes_map is not None else get_adapt_bars()
+    if not packed:
+        return src, 0
+    remapped: list[dict[str, Any]] = []
+    n_hit = 0
+    for raw in src:
+        row = dict(raw)
+        if not is_buy_signal(row.get("signal_type")):
+            remapped.append(row)
+            continue
+        code = normalize_code(row.get("code"))
+        triple = packed.get(code) if code else None
+        if not triple or len(triple) < 2:
+            remapped.append(row)
+            continue
+        dates = list(triple[0] or [])
+        closes = list(triple[1] or [])
+        ohlc = triple[2] if len(triple) >= 3 and isinstance(triple[2], dict) else {}
+        scored = score_signal_with_closes(
+            row,
+            closes,
+            dates,
+            opens=ohlc.get("open"),
+            lows=ohlc.get("low"),
+            highs=ohlc.get("high"),
+            standard="same_day_plan",
+        )
+        if scored and scored.get("outcome_label"):
+            row.update(scored)
+            n_hit += 1
+        remapped.append(row)
+    return remapped, n_hit
 
 
 def build_adapt_bundle(
@@ -1256,9 +1309,9 @@ def build_adapt_bundle(
     """Assemble day-scoped adaptive soft controls for the battle desk.
 
     Outcome-based soft knobs default to **persisted classic** labels on
-    ``signals``. When ``adapt_follow_outcome`` is on and the UI standard is
-    ``filled``, heat/sweet/exec use traded+labeled rows. ``same_day_plan``
-    still needs closes re-score (falls back to classic with a note).
+    ``signals``. When ``adapt_follow_outcome`` is on:
+      - ``filled`` → traded+labeled rows
+      - ``same_day_plan`` → re-score with OHLC pack from ``set_adapt_bars``
     """
     from market_desk.settings import setting
 
@@ -1278,13 +1331,17 @@ def build_adapt_bundle(
         if n_hit > 0:
             rows = remapped
             basis = ui_std
-            basis_note = (
-                f"调参跟随界面评测 {ui_std}（已用落库旁路标签重映 {n_hit} 笔；"
-                "无旁路字段的仍用 classic）"
-            )
+            if ui_std == "same_day_plan":
+                basis_note = (
+                    f"调参跟随当日plan·隔日（已用日线重算 {n_hit} 笔）"
+                )
+            else:
+                basis_note = (
+                    f"调参跟随实盘成交（已用已交易样本 {n_hit} 笔）"
+                )
         else:
             basis_note = (
-                f"跟随开关已开且界面为 {ui_std}，但样本缺旁路标签，仍用 classic"
+                f"跟随开关已开且界面为 {ui_std}，但暂无可用重算样本，仍用 classic"
             )
     elif follow and ui_std != "classic":
         basis_note = f"跟随开关已开；界面 {ui_std} 暂无重映路径，仍用 classic"

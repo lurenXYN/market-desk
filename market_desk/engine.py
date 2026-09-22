@@ -662,6 +662,38 @@ class DeskEngine:
                 except Exception:
                     log.exception("board affinity attach failed")
                     rep = {}
+                # Prefetch OHLC for adapt same_day_plan remapping (soft follow).
+                try:
+                    from market_desk.adapt import set_adapt_bars
+                    from market_desk.db import load_signals
+                    from market_desk.settings import setting as _set
+
+                    if bool(_set("adapt_follow_outcome", False)) and str(
+                        _set("outcome_standard", "classic") or ""
+                    ).strip().lower() == "same_day_plan":
+                        sig_codes = [
+                            normalize_code(r.get("code"))
+                            for r in load_signals(limit=240)
+                            if r.get("code")
+                        ]
+                        sig_codes = [c for c in dict.fromkeys(sig_codes) if c][:80]
+                        if sig_codes:
+                            packed = await fetch_daily_klines_many(
+                                client, sig_codes, limit=40, concurrency=4
+                            )
+                            set_adapt_bars(packed or {})
+                        else:
+                            set_adapt_bars({})
+                    else:
+                        set_adapt_bars({})
+                except Exception:
+                    log.exception("adapt bars prefetch failed")
+                    try:
+                        from market_desk.adapt import set_adapt_bars
+
+                        set_adapt_bars({})
+                    except Exception:
+                        pass
                 verdict = build_verdict(
                     now,
                     phase,

@@ -24,6 +24,8 @@ from market_desk.review import (
 
 # Hard cap for one sync run (calendar days inclusive span).
 MAX_BACKTEST_SPAN_DAYS = 90
+# Async jobs may run longer (still capped).
+MAX_BACKTEST_ASYNC_SPAN_DAYS = 180
 
 BACKTEST_DISCLAIMER = (
     "日线 OHLC 回测仍会高估可成交性；已加量能门槛与滑点粗校正，"
@@ -37,10 +39,13 @@ DEFAULT_GAP_PCT = 1.0
 VOL_LOOKBACK = 10
 
 
-def validate_backtest_range(date_from: str, date_to: str) -> tuple[str, str] | dict[str, Any]:
+def validate_backtest_range(
+    date_from: str, date_to: str, *, max_span: int | None = None
+) -> tuple[str, str] | dict[str, Any]:
     """Return ``(d0, d1)`` or an error payload dict with ``ok=False``."""
     d0 = str(date_from or "")[:10]
     d1 = str(date_to or "")[:10]
+    cap = int(max_span if max_span is not None else MAX_BACKTEST_SPAN_DAYS)
     if not d0 or not d1 or d0 > d1:
         return {
             "ok": False,
@@ -61,11 +66,11 @@ def validate_backtest_range(date_from: str, date_to: str) -> tuple[str, str] | d
             "disclaimer": BACKTEST_DISCLAIMER,
         }
     span = (b - a).days + 1
-    if span > int(MAX_BACKTEST_SPAN_DAYS):
+    if span > cap:
         return {
             "ok": False,
-            "detail": f"单次回测跨度最多 {MAX_BACKTEST_SPAN_DAYS} 天（当前 {span} 天）",
-            "max_span_days": MAX_BACKTEST_SPAN_DAYS,
+            "detail": f"单次回测跨度最多 {cap} 天（当前 {span} 天）",
+            "max_span_days": cap,
             "items": [],
             "summary": {},
             "disclaimer": BACKTEST_DISCLAIMER,
@@ -269,6 +274,8 @@ def simulate_buy_fill(
     vol_min_ratio: float = DEFAULT_VOL_MIN_RATIO,
     slip_pct: float = DEFAULT_SLIP_PCT,
     gap_pct: float = DEFAULT_GAP_PCT,
+    minutes: list[dict[str, Any]] | None = None,
+    fidelity: str = "daily",
 ) -> dict[str, Any] | None:
     """Simulate a buy fill on signal day or the next ``look_ahead`` sessions.
 
@@ -282,6 +289,8 @@ def simulate_buy_fill(
       - ``slip_pct``: worsen fill price by this percent.
       - ``gap_pct``: if open gaps down ≥ this % vs prior close and open ≤ target,
         fill at open (gap-open path).
+      - ``fidelity=minute``: when ``minutes`` provided for day0, resolve
+        chase-before-plan order on the signal day (high-fidelity path).
     """
     day0 = str(trade_date or "")[:10]
     if not day0 or not bars_by_day:
@@ -302,7 +311,24 @@ def simulate_buy_fill(
     if target is None or target <= 0:
         return None
 
-    days = sorted(d for d in bars_by_day if d >= day0)[: max(1, int(look_ahead) + 1)]
+    fid = str(fidelity or "daily").strip().lower()
+    if fid == "minute" and minutes:
+        minute_hit = _minute_buy_fill(
+            minutes,
+            target=float(target),
+            chase=float(chase) if chase is not None else None,
+            slip_pct=slip_pct,
+        )
+        if minute_hit is not None and minute_hit.get("filled"):
+            minute_hit["mode"] = mode_s
+            minute_hit["fill_date"] = day0
+            minute_hit["fidelity"] = "minute"
+            return minute_hit
+        # No minute fill (no touch or chase-first): skip day0, try later sessions.
+        days = sorted(d for d in bars_by_day if d > day0)[: max(1, int(look_ahead))]
+    else:
+        days = sorted(d for d in bars_by_day if d >= day0)[: max(1, int(look_ahead) + 1)]
+
     liq_skips = 0
     last_liq_note = ""
     for day in days:
@@ -311,6 +337,18 @@ def simulate_buy_fill(
         lo = num(bar.get("low"))
         hi = num(bar.get("high"))
         if lo is None or lo <= 0:
+            continue
+        # Ambiguous day0 (both chase and target in range): conservative skip when
+        # fidelity asks for minute but minutes missing.
+        if (
+            fid == "minute"
+            and day == day0
+            and not minutes
+            and chase is not None
+            and hi is not None
+            and float(hi) >= float(chase)
+            and float(lo) <= float(target)
+        ):
             continue
         # Gap through the chase ceiling → treat as unfilled that session.
         if chase is not None and o is not None and o >= chase and day == day0:
@@ -366,6 +404,7 @@ def simulate_buy_fill(
             "liq_skips": liq_skips,
             "gap_filled": gap_filled,
             "slip_pct": float(slip_pct or 0),
+            "fidelity": "daily",
         }
     if liq_skips and last_liq_note:
         return {
@@ -386,6 +425,55 @@ def simulate_buy_fill(
         "note": "未触达",
         "liq_skips": liq_skips,
     }
+
+
+def _minute_buy_fill(
+    minutes: list[dict[str, Any]],
+    *,
+    target: float,
+    chase: float | None,
+    slip_pct: float,
+) -> dict[str, Any] | None:
+    """Walk intraday minutes: fill at first touch of target unless chase hit first."""
+    seen_chase = False
+    for pt in minutes or []:
+        px = num(pt.get("price") or pt.get("close"))
+        if px is None or px <= 0:
+            continue
+        hi = num(pt.get("high"))
+        lo = num(pt.get("low"))
+        # trends2 points are usually close-only; treat price as both.
+        top = float(hi) if hi is not None and hi > 0 else float(px)
+        bot = float(lo) if lo is not None and lo > 0 else float(px)
+        if chase is not None and top >= float(chase):
+            seen_chase = True
+        if bot <= float(target):
+            if seen_chase and chase is not None and float(target) < float(chase):
+                return {
+                    "filled": False,
+                    "fill_price": None,
+                    "fill_date": None,
+                    "target": target,
+                    "note": "分时先触不追上限·当日跳过",
+                    "liq_skips": 0,
+                    "fidelity": "minute",
+                }
+            fill = _apply_buy_slip(float(target), slip_pct)
+            fill = _clamp_fill(fill, bot, top)
+            note = "分时触达价带"
+            if slip_pct and float(slip_pct) > 0:
+                note = f"{note}·滑点+{float(slip_pct):.2f}%"
+            return {
+                "filled": True,
+                "fill_price": round(fill, 4),
+                "target": target,
+                "note": note,
+                "liq_skips": 0,
+                "gap_filled": False,
+                "slip_pct": float(slip_pct or 0),
+                "fidelity": "minute",
+            }
+    return None
 
 
 def simulate_sell_fill(
@@ -628,21 +716,30 @@ async def run_signal_backtest(
     vol_min_ratio: float | None = None,
     slip_pct: float | None = None,
     gap_pct: float | None = None,
+    fidelity: str = "daily",
+    max_span: int | None = None,
     client: Any | None = None,
+    progress_cb: Any | None = None,
 ) -> dict[str, Any]:
     """Replay paper signals in ``[date_from, date_to]`` with OHLC simulated fills.
 
     Read-only: never mutates ``signals`` / user meta.
     When ``dry_run`` is True, only count matching signals (no kline fetch).
+    ``fidelity=minute`` uses today's minute series for day0 chase-order when available.
+    ``progress_cb(done, total)`` optional for async jobs.
     """
     import httpx
 
-    from market_desk.eastmoney import fetch_daily_klines_many
+    from market_desk.eastmoney import fetch_daily_klines_many, fetch_minute_trends_many
 
-    checked = validate_backtest_range(date_from, date_to)
+    span_cap = int(max_span if max_span is not None else MAX_BACKTEST_SPAN_DAYS)
+    checked = validate_backtest_range(date_from, date_to, max_span=span_cap)
     if isinstance(checked, dict):
         return checked
     d0, d1 = checked
+    fid = str(fidelity or "daily").strip().lower()
+    if fid not in ("daily", "minute"):
+        fid = "daily"
 
     vol_r = (
         DEFAULT_VOL_MIN_RATIO
@@ -668,6 +765,7 @@ async def run_signal_backtest(
         "vol_min_ratio": vol_r,
         "slip_pct": slip,
         "gap_pct": gap,
+        "fidelity": fid,
     }
 
     if dry_run:
@@ -691,7 +789,7 @@ async def run_signal_backtest(
             "mode": str(mode or "wait"),
             "ready_only": bool(ready_only),
             "include_sells": bool(include_sells),
-            "max_span_days": MAX_BACKTEST_SPAN_DAYS,
+            "max_span_days": span_cap,
             "matched_n": len(picked),
             "buy_n": buy_n,
             "sell_n": sell_n,
@@ -713,12 +811,35 @@ async def run_signal_backtest(
         client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
     try:
         klines = await fetch_daily_klines_many(client, codes, limit=80, concurrency=6)
+        minutes_by_code: dict[str, list[dict[str, Any]]] = {}
+        if fid == "minute":
+            today = datetime.now().strftime("%Y-%m-%d")
+            today_codes = [
+                normalize_code(r.get("code"))
+                for r in picked
+                if is_buy_signal(r.get("signal_type"))
+                and str(r.get("trade_date") or "")[:10] == today
+            ]
+            today_codes = [c for c in dict.fromkeys(today_codes) if c]
+            if today_codes:
+                try:
+                    minutes_by_code = await fetch_minute_trends_many(
+                        client, today_codes, concurrency=4
+                    )
+                except Exception:
+                    minutes_by_code = {}
     finally:
         if own_client:
             await client.aclose()
 
     items: list[dict[str, Any]] = []
-    for row in picked:
+    total = max(1, len(picked))
+    for idx, row in enumerate(picked):
+        if progress_cb:
+            try:
+                progress_cb(idx, total)
+            except Exception:
+                pass
         code = normalize_code(row.get("code"))
         triple = klines.get(code)
         if not triple:
@@ -740,6 +861,7 @@ async def run_signal_backtest(
         day = str(row.get("trade_date") or "")[:10]
         if is_buy_signal(row.get("signal_type")):
             band = _plan_buy_prices(row)
+            mins = minutes_by_code.get(code) if fid == "minute" else None
             sim = simulate_buy_fill(
                 trade_date=day,
                 bars_by_day=bars,
@@ -750,6 +872,8 @@ async def run_signal_backtest(
                 vol_min_ratio=vol_r,
                 slip_pct=slip,
                 gap_pct=gap,
+                minutes=mins,
+                fidelity=fid,
             ) or {"filled": False, "note": "无结果"}
             item: dict[str, Any] = {
                 "id": row.get("id"),
@@ -770,6 +894,7 @@ async def run_signal_backtest(
                 "note": sim.get("note"),
                 "liq_skips": int(sim.get("liq_skips") or 0),
                 "gap_filled": bool(sim.get("gap_filled")),
+                "fidelity": sim.get("fidelity") or fid,
             }
             if sim.get("filled") and sim.get("fill_price") is not None:
                 item["sim_exec"] = _sim_exec_kind(
@@ -830,7 +955,13 @@ async def run_signal_backtest(
                     item.update(outcome)
             items.append(item)
 
+    if progress_cb:
+        try:
+            progress_cb(total, total)
+        except Exception:
+            pass
     summary = _summarize_backtest(items)
+    fid_note = " · 分时保真(当日)" if fid == "minute" else ""
     return {
         "ok": True,
         "dry_run": False,
@@ -839,7 +970,7 @@ async def run_signal_backtest(
         "mode": str(mode or "wait"),
         "ready_only": bool(ready_only),
         "include_sells": bool(include_sells),
-        "max_span_days": MAX_BACKTEST_SPAN_DAYS,
+        "max_span_days": span_cap,
         "realism": realism,
         "n": len(items),
         "summary": summary,
@@ -848,5 +979,6 @@ async def run_signal_backtest(
         "note": (
             BACKTEST_DISCLAIMER
             + f" 量能≥{vol_r:.0%}中位 · 滑点 {slip:.2f}% · 跳空阈值 {gap:.1f}%。"
+            + fid_note
         ),
     }

@@ -1885,6 +1885,10 @@ class BacktestIn(BaseModel):
     # Persist into signal_backtest_run / fill (never signals.payload).
     persist: bool = False
     label: str = ""
+    # daily | minute (minute uses today's trends for day0 chase order).
+    fidelity: str = "daily"
+    # When True (or span>90), run as background job.
+    async_job: bool = False
 
 
 @app.post("/api/backtest/run")
@@ -1893,12 +1897,68 @@ async def backtest_run(
     user: dict = Depends(current_admin_required),
 ) -> dict:
     """Replay paper signals with daily OHLC simulated fills (admin only)."""
-    from market_desk.backtest import run_signal_backtest
+    from datetime import datetime as _dt
+
+    from market_desk.backtest import (
+        MAX_BACKTEST_ASYNC_SPAN_DAYS,
+        MAX_BACKTEST_SPAN_DAYS,
+        run_signal_backtest,
+    )
+    from market_desk.backtest_jobs import start_backtest_job
     from market_desk.db import save_backtest_run
 
     mode = str(body.mode or "wait").strip().lower()
     if mode not in ("wait", "plan", "mid"):
         raise HTTPException(400, "mode must be wait|plan|mid")
+    fid = str(body.fidelity or "daily").strip().lower()
+    if fid not in ("daily", "minute"):
+        fid = "daily"
+
+    span_days = 0
+    try:
+        a = _dt.strptime(str(body.date_from)[:10], "%Y-%m-%d")
+        b = _dt.strptime(str(body.date_to)[:10], "%Y-%m-%d")
+        span_days = (b - a).days + 1
+    except ValueError:
+        span_days = 0
+    use_async = bool(body.async_job) or (
+        not body.dry_run and span_days > int(MAX_BACKTEST_SPAN_DAYS)
+    )
+    if use_async and body.dry_run:
+        raise HTTPException(400, "dry_run cannot be async")
+    if use_async:
+        if span_days > int(MAX_BACKTEST_ASYNC_SPAN_DAYS):
+            raise HTTPException(
+                400,
+                f"异步回测跨度最多 {MAX_BACKTEST_ASYNC_SPAN_DAYS} 天",
+            )
+        job_id = await start_backtest_job(
+            {
+                "date_from": str(body.date_from)[:10],
+                "date_to": str(body.date_to)[:10],
+                "mode": mode,
+                "include_sells": bool(body.include_sells),
+                "ready_only": bool(body.ready_only),
+                "limit": int(body.limit),
+                "vol_min_ratio": body.vol_min_ratio,
+                "slip_pct": body.slip_pct,
+                "gap_pct": body.gap_pct,
+                "fidelity": fid,
+                "persist": bool(body.persist),
+                "label": str(body.label or "").strip(),
+                "user_id": int(user.get("id") or 0),
+            },
+            user_id=int(user.get("id") or 0),
+        )
+        return {
+            "ok": True,
+            "async": True,
+            "job_id": job_id,
+            "status": "queued",
+            "max_span_days": MAX_BACKTEST_ASYNC_SPAN_DAYS,
+            "note": "已提交异步回测，请轮询 /api/backtest/jobs/{id}",
+        }
+
     out = await run_signal_backtest(
         date_from=str(body.date_from)[:10],
         date_to=str(body.date_to)[:10],
@@ -1910,6 +1970,8 @@ async def backtest_run(
         vol_min_ratio=body.vol_min_ratio,
         slip_pct=body.slip_pct,
         gap_pct=body.gap_pct,
+        fidelity=fid,
+        max_span=int(MAX_BACKTEST_SPAN_DAYS),
     )
     if not out.get("ok"):
         raise HTTPException(400, str(out.get("detail") or "backtest failed"))
@@ -1926,6 +1988,21 @@ async def backtest_run(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
     return out
+
+
+@app.get("/api/backtest/jobs/{job_id}")
+def backtest_job_get(
+    job_id: str,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Poll an async backtest job."""
+    del user
+    from market_desk.backtest_jobs import get_backtest_job
+
+    job = get_backtest_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    return {"ok": True, "job": job}
 
 
 @app.get("/api/backtest/runs")

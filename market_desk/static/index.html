@@ -3083,7 +3083,7 @@
           </select>
         </label>
         <label class="settings-check" title="调参反哺固定用落库 classic；开关仅标注意图">
-          <input id="setAdaptFollowOc" type="checkbox" /> 调参跟随评测标准（预留）
+          <input id="setAdaptFollowOc" type="checkbox" /> 调参跟随评测标准<button type="button" class="q" data-term="调参口径">?</button>
           <button type="button" class="q" data-term="调参口径">?</button>
         </label>
         <label>Ready 风格 <button type="button" class="q" data-term="Ready风格">?</button>
@@ -3778,9 +3778,10 @@
         <details class="bt-help" style="margin:8px 0;font-size:13px;line-height:1.55;color:var(--muted)">
           <summary style="cursor:pointer;color:var(--ice)">怎么用（点开）</summary>
           <ol style="margin:8px 0 0;padding-left:1.2em">
-            <li>选起止日期（默认近 14 天；单次最多 90 天）。区间内要有系统落库的信号，否则预览为 0。</li>
+            <li>选起止日期（默认近 14 天；同步最多 90 天，勾「异步」可到 180 天）。区间内要有系统落库的信号，否则预览为 0。</li>
             <li>先点「预览匹配数」确认有多少条信号；再点「跑回测」拉日线做假想成交。</li>
             <li>「买撮合」选用哪档计划价：建议价常用；理想回踩更严、未触达更多；中位折中。</li>
+            <li>「保真」默认日线；选分时可识别当日先触不追上限再回踩的时序（仅信号日=今天有分时）。</li>
             <li>量能门槛过滤瞬时穿刺无量触达；滑点略抬买/压卖；跳空低开可按开盘成交。</li>
             <li>表里「计划」=当时锁定的建议/回踩价；「模拟成交」=假想成交价与日期；「触达」=有没有碰到计划价。</li>
             <li>「标签 / 次日% / 三日%」与复盘同口径；命中看次日红、三日红。结果只供粗筛，不可当实盘收益。</li>
@@ -3792,6 +3793,8 @@
             · 模拟成交<button type="button" class="q" data-term="模拟成交">?</button>
             · 触达<button type="button" class="q" data-term="触达">?</button>
             · 买撮合<button type="button" class="q" data-term="买撮合">?</button>
+            · 回测保真<button type="button" class="q" data-term="回测保真">?</button>
+            · 回测异步<button type="button" class="q" data-term="回测异步">?</button>
             · 回测量能<button type="button" class="q" data-term="回测量能">?</button>
             · 回测滑点<button type="button" class="q" data-term="回测滑点">?</button>
             · 回测跳空<button type="button" class="q" data-term="回测跳空">?</button>
@@ -3800,7 +3803,7 @@
             · 次日红<button type="button" class="q" data-term="次日红">?</button>
           </p>
         </details>
-        <p class="data-banner warn" id="btDisclaimer" style="display:block;margin:8px 0">⚠ 日线 OHLC 会高估可成交性（事后高低点/瞬时穿刺）；结果仅供策略粗筛，不可等价实盘收益。单次跨度最多 90 天。</p>
+        <p class="data-banner warn" id="btDisclaimer" style="display:block;margin:8px 0">⚠ 日线 OHLC 会高估可成交性（事后高低点/瞬时穿刺）；结果仅供策略粗筛，不可等价实盘收益。同步最多 90 天，异步最多 180 天。</p>
         <form class="pos-form" id="btForm" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));align-items:end">
           <label>起<input type="date" name="date_from" id="btFrom" required /></label>
           <label>止<input type="date" name="date_to" id="btTo" required /></label>
@@ -3811,8 +3814,15 @@
               <option value="mid">中位 mid</option>
             </select>
           </label>
+          <label>保真 <button type="button" class="q" data-term="回测保真">?</button>
+            <select id="btFidelity">
+              <option value="daily" selected>日线</option>
+              <option value="minute">分时（当日）</option>
+            </select>
+          </label>
           <label class="settings-check"><input type="checkbox" id="btReady" /> 仅 ready <button type="button" class="q" data-term="仅ready">?</button></label>
           <label class="settings-check"><input type="checkbox" id="btSells" checked /> 含卖信号</label>
+          <label class="settings-check"><input type="checkbox" id="btAsync" /> 异步 <button type="button" class="q" data-term="回测异步">?</button></label>
           <label>条数上限<input type="number" id="btLimit" min="20" max="400" value="120" /></label>
           <label>量能门槛 <button type="button" class="q" data-term="回测量能">?</button>
             <input type="number" id="btVolRatio" min="0" max="2" step="0.05" value="0.4" title="触达日成交量≥该比例×近10日中位；0=关闭" />
@@ -7983,9 +7993,42 @@
         vol_min_ratio: Number(document.getElementById("btVolRatio")?.value ?? 0.4),
         slip_pct: Number(document.getElementById("btSlip")?.value ?? 0.15),
         gap_pct: Number(document.getElementById("btGap")?.value ?? 1),
+        fidelity: document.getElementById("btFidelity")?.value || "daily",
+        async_job: !!document.getElementById("btAsync")?.checked,
         persist: !!document.getElementById("btPersist")?.checked,
         label: (document.getElementById("btLabel")?.value || "").trim(),
       }, extra || {});
+    }
+    async function pollBacktestJob(jobId, bodyEl) {
+      const maxTries = 120;
+      for (let i = 0; i < maxTries; i++) {
+        await new Promise((r) => setTimeout(r, i < 3 ? 800 : 1500));
+        const r = await fetch("/api/backtest/jobs/" + encodeURIComponent(jobId), {
+          credentials: "same-origin",
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "任务查询失败"}</td></tr>`;
+          return null;
+        }
+        const job = d.job || {};
+        const prog = job.progress || {};
+        if (bodyEl) {
+          const pct = prog.pct != null ? prog.pct : "…";
+          bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步回测 ${job.status || "…"} · ${pct}%`
+            + (prog.done != null ? `（${prog.done}/${prog.total || "?"}）` : "")
+            + ` · #${jobId}</td></tr>`;
+        }
+        if (job.status === "done" && job.result) return job.result;
+        if (job.status === "error") {
+          if (bodyEl) {
+            bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步失败：${job.error || "unknown"}</td></tr>`;
+          }
+          return null;
+        }
+      }
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步超时，可稍后刷新存档或重试</td></tr>`;
+      return null;
     }
     async function loadBacktestArchives() {
       const box = document.getElementById("btArchiveList");
@@ -8209,6 +8252,16 @@
           if (bodyEl) {
             bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "回测失败"}</td></tr>`;
           }
+          return;
+        }
+        if (d.async && d.job_id) {
+          if (bodyEl) {
+            bodyEl.innerHTML = `<tr><td colspan="10" class="meta">已提交异步 #${d.job_id}，轮询中…</td></tr>`;
+          }
+          const result = await pollBacktestJob(d.job_id, bodyEl);
+          if (!result) return;
+          paintBacktest(result);
+          if (result.persisted) await loadBacktestArchives();
           return;
         }
         paintBacktest(d);

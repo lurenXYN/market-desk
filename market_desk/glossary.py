@@ -365,14 +365,12 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "把历史上系统发出的纸面信号，用日线高低价「假装成交」，再按复盘同一套标签看事后表现。"
         "用来粗筛规则靠不靠谱，不是算实盘盈亏，也不改真实已交易。"
         "用法：先选日期→可点「预览匹配数」看有没有信号→再「跑回测」；买撮合先试建议价，理想回踩更严。"
-        "可调量能门槛、滑点%、跳空%以降低日线高估。勾选「存档本次」写入独立结果表，便于参数组对比。"
+        "可调量能门槛、滑点%、跳空%、保真(日线/分时)、异步任务。勾选「存档本次」写入独立结果表。"
         "「参数组网格」一次跑多组并存档对比。",
-        "algo": "POST /api/backtest/run（dry_run=预览；persist=存档）。跨度≤90天。只读 signals，不写 traded/fill。\n"
+        "algo": "POST /api/backtest/run（dry_run=预览；persist=存档；fidelity；async_job）。同步≤90天，异步≤180天。\n"
         "买：按买撮合模式用 wait/plan/mid 对日线 low 判触达；信号日开盘≥chase 当日跳过并顺延最多约2个交易日。\n"
-        "量能：触达日 volume≥vol_min_ratio×近10日中位，否则跳过该日。滑点：买抬价/卖压价。\n"
-        "跳空：相对昨收低开≥gap_pct% 且开盘≤目标→按开盘成交。卖同理缺口穿止损。\n"
-        "卖：同日先止损后卖价。成交后 score_signal_with_closes；命中=次日红/三日红。强制 disclaimer。\n"
-        "存档：signal_backtest_run + signal_backtest_fill；禁 payload.sim_* 多轮堆叠。",
+        "fidelity=minute：当日买信号拉分时，先触 chase 则跳过当日。异步：backtest_jobs + GET /api/backtest/jobs/{id}。\n"
+        "量能/滑点/跳空同前。卖：同日先止损后卖价。存档：signal_backtest_*；禁 payload.sim_*。",
     },
     "回测存档": {
         "mean": "把一次回测的参数与逐笔模拟成交存进独立表，方便换量能/滑点等参数组后对比；不写真实 signals，也不改仓位。",
@@ -459,8 +457,20 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "开盘卖出缓冲见「开盘卖出缓冲」词条（must/watch）。",
     },
     "调参口径": {
-        "mean": "仓位热度、执行分、卖点 MFE 等 soft 调参默认读库里 classic 结果标签。打开「调参跟随评测」且界面为实盘成交时，改用已交易样本反哺。",
-        "algo": "build_adapt_bundle。adapt_follow_outcome+filled → 仅 traded+有标签行；same_day_plan 仍需 closes 重算（暂回退 classic 并注明）。",
+        "mean": "仓位热度、执行分、卖点 MFE 等 soft 调参默认读库里 classic 结果标签。"
+        "打开「调参跟随评测」后：界面实盘成交→已交易样本；界面当日plan·隔日→用预取日线按 same_day_plan 重算标签再反哺。",
+        "algo": "build_adapt_bundle。adapt_follow_outcome+filled → 仅 traded+有标签行；\n"
+        "same_day_plan → engine 预取 set_adapt_bars → _remap_rows_for_adapt_standard 调 score_signal_with_closes；\n"
+        "无 OHLC 包或重算 0 笔时回退 classic 并在 basis_note 说明。",
+    },
+    "回测保真": {
+        "mean": "回测撮合精度：日线用高低点判触达（偏乐观）；分时模式在信号日=今天时用分钟序列，识别「先冲不追上限再回踩」的假触达。",
+        "algo": "fidelity=daily|minute。minute：fetch_minute_trends_many 仅当日买信号；_minute_buy_fill 先见 chase 则当日跳过。\n"
+        "无分时且高低同时覆盖 chase+目标时，minute 模式跳过信号日日线歧义。",
+    },
+    "回测异步": {
+        "mean": "长区间回测进后台任务，前端轮询进度；同步仍≤90天，勾异步或超90天自动异步（最多180天）。",
+        "algo": "async_job 或 span>90 → start_backtest_job；GET /api/backtest/jobs/{id} 轮询；内存队列约保留20条。",
     },
     "浅破开盘缓冲": {
         "mean": "开盘缓冲窗内，止损/清仓若只是相对开盘浅破（默认约 0.45% 内）且未深砸止损价，先观察至缓冲结束，减少假破卖飞。",
