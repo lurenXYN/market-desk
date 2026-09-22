@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,8 @@ from market_desk.review import is_buy_signal, is_sell_signal
 from market_desk.lhb import build_positions_lhb
 from market_desk.settings import get_settings, update_settings
 from market_desk.trend import classify_daily_trend
+
+log = logging.getLogger("market_desk.app")
 
 
 class PositionIn(BaseModel):
@@ -255,6 +258,14 @@ class BackupIn(BaseModel):
 async def lifespan(_app: FastAPI):
     """Start the refresh loop and wait for the first snapshot."""
     ensure_bootstrap_admin()
+    try:
+        from market_desk.patches_apply import apply_pending_daily_patches
+
+        applied = apply_pending_daily_patches()
+        if applied:
+            log.info("daily patches applied: %s", ",".join(applied))
+    except Exception:
+        log.exception("daily patch apply failed")
     engine.start()
     for _ in range(120):
         if engine.snapshot.get("updated_at"):
