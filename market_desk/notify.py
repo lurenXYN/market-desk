@@ -342,11 +342,32 @@ def is_serverchan_alert(key: str) -> bool:
     return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:"))
 
 
+def is_serverchan_must_sell(key: str) -> bool:
+    """Return True for stop/must-sell style WeChat alerts (quiet sell-only mode)."""
+    k = str(key or "")
+    if k.startswith(("lhb:", "eod:", "ops:")):
+        return True
+    if k.startswith(("band:stop:", "wl:stop:")):
+        return True
+    # sell:stop:CODE — keep; trim/take muted in sell-only mode.
+    if k.startswith("sell:stop:"):
+        return True
+    return False
+
+
 def filter_serverchan_alerts(
     alerts: list[tuple[str, str, str]],
+    *,
+    sell_only: bool = False,
 ) -> list[tuple[str, str, str]]:
-    """Keep buy / sell / lhb / eod advice for WeChat push."""
-    return [(k, t, b) for k, t, b in alerts if is_serverchan_alert(k)]
+    """Keep buy / sell / lhb / eod advice for WeChat push.
+
+    When ``sell_only`` is True, drop buy/fly/trim/take and keep stop + eod/lhb/ops.
+    """
+    out = [(k, t, b) for k, t, b in alerts if is_serverchan_alert(k)]
+    if sell_only:
+        out = [(k, t, b) for k, t, b in out if is_serverchan_must_sell(k)]
+    return out
 
 
 def format_serverchan_desp(
@@ -461,12 +482,10 @@ def push_serverchan_alerts(
     """Fan-out buy/sell alerts to every user with ServerChan enabled.
 
     No SendKey / not allowed / off → skip. Returns number of successful POSTs.
+    Per-user ``serverchan_sell_only`` mutes buy/fly/soft-sell pushes.
     """
-    sc = filter_serverchan_alerts(alerts)
-    if not sc:
-        return 0
     try:
-        from market_desk.db import list_serverchan_recipients
+        from market_desk.db import list_serverchan_recipients, load_user_setting
 
         recipients = list_serverchan_recipients()
     except Exception:
@@ -478,6 +497,17 @@ def push_serverchan_alerts(
     for user in recipients:
         key = str(user.get("serverchan_sendkey") or "").strip()
         if not key:
+            continue
+        sell_only = False
+        try:
+            uid = int(user.get("id") or 0)
+            raw = load_user_setting(uid, "runtime") if uid else None
+            if isinstance(raw, dict):
+                sell_only = bool(raw.get("serverchan_sell_only"))
+        except Exception:
+            sell_only = False
+        sc = filter_serverchan_alerts(alerts, sell_only=sell_only)
+        if not sc:
             continue
         for alert_key, title, body in sc:
             desp = format_serverchan_desp(alert_key, title, body, current)

@@ -730,7 +730,11 @@ async def run_signal_backtest(
     """
     import httpx
 
-    from market_desk.eastmoney import fetch_daily_klines_many, fetch_minute_trends_many
+    from market_desk.eastmoney import (
+        fetch_daily_klines_many,
+        fetch_minute_bars_many_days,
+        fetch_minute_trends_many,
+    )
 
     span_cap = int(max_span if max_span is not None else MAX_BACKTEST_SPAN_DAYS)
     checked = validate_backtest_range(date_from, date_to, max_span=span_cap)
@@ -811,23 +815,38 @@ async def run_signal_backtest(
         client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
     try:
         klines = await fetch_daily_klines_many(client, codes, limit=80, concurrency=6)
-        minutes_by_code: dict[str, list[dict[str, Any]]] = {}
+        minutes_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
         if fid == "minute":
-            today = datetime.now().strftime("%Y-%m-%d")
-            today_codes = [
-                normalize_code(r.get("code"))
+            pairs = [
+                (normalize_code(r.get("code")), str(r.get("trade_date") or "")[:10])
                 for r in picked
                 if is_buy_signal(r.get("signal_type"))
-                and str(r.get("trade_date") or "")[:10] == today
             ]
-            today_codes = [c for c in dict.fromkeys(today_codes) if c]
-            if today_codes:
+            pairs = [(c, d) for c, d in pairs if c and len(d) >= 10]
+            # Cap minute pulls to avoid stampeding East Money (unique pairs).
+            pairs = list(dict.fromkeys(pairs))[:60]
+            if pairs:
                 try:
-                    minutes_by_code = await fetch_minute_trends_many(
-                        client, today_codes, concurrency=4
+                    minutes_by_key = await fetch_minute_bars_many_days(
+                        client, pairs, concurrency=3
                     )
                 except Exception:
-                    minutes_by_code = {}
+                    minutes_by_key = {}
+                # Soft fallback: today's trends2 when 1-min kline empty.
+                today = datetime.now().strftime("%Y-%m-%d")
+                need_today = [
+                    c for c, d in pairs if d == today and not minutes_by_key.get((c, d))
+                ]
+                if need_today:
+                    try:
+                        today_mins = await fetch_minute_trends_many(
+                            client, need_today, concurrency=3
+                        )
+                        for c, rows in (today_mins or {}).items():
+                            if rows:
+                                minutes_by_key[(c, today)] = rows
+                    except Exception:
+                        pass
     finally:
         if own_client:
             await client.aclose()
@@ -861,7 +880,7 @@ async def run_signal_backtest(
         day = str(row.get("trade_date") or "")[:10]
         if is_buy_signal(row.get("signal_type")):
             band = _plan_buy_prices(row)
-            mins = minutes_by_code.get(code) if fid == "minute" else None
+            mins = minutes_by_key.get((code, day)) if fid == "minute" else None
             sim = simulate_buy_fill(
                 trade_date=day,
                 bars_by_day=bars,
@@ -961,7 +980,10 @@ async def run_signal_backtest(
         except Exception:
             pass
     summary = _summarize_backtest(items)
-    fid_note = " · 分时保真(当日)" if fid == "minute" else ""
+    min_n = sum(1 for x in items if x.get("fidelity") == "minute")
+    fid_note = ""
+    if fid == "minute":
+        fid_note = f" · 分时保真（分钟命中 {min_n} 笔）"
     return {
         "ok": True,
         "dry_run": False,
@@ -981,4 +1003,114 @@ async def run_signal_backtest(
             + f" 量能≥{vol_r:.0%}中位 · 滑点 {slip:.2f}% · 跳空阈值 {gap:.1f}%。"
             + fid_note
         ),
+    }
+
+
+def compare_sim_vs_filled(
+    items: list[dict[str, Any]] | None,
+    *,
+    date_from: str = "",
+    date_to: str = "",
+) -> dict[str, Any]:
+    """Side-by-side paper sim fills vs user traded+fill_price outcomes.
+
+    Matches buy rows by ``code`` + ``trade_date``. Does not mutate signals.
+    """
+    from market_desk.db import load_signals_for_date
+    from market_desk.review import BUY_HIT_LABELS, is_buy_signal
+
+    src = [dict(x) for x in (items or []) if str(x.get("side") or "") == "buy"]
+    if not src:
+        return {
+            "ok": True,
+            "paired_n": 0,
+            "pairs": [],
+            "summary": {"paired_n": 0},
+            "note": "无买侧模拟行可对照",
+        }
+    d0 = str(date_from or "")[:10]
+    d1 = str(date_to or "")[:10]
+    days = sorted(
+        {
+            str(x.get("trade_date") or "")[:10]
+            for x in src
+            if len(str(x.get("trade_date") or "")) >= 10
+        }
+    )
+    if d0 and d1:
+        days = [d for d in days if d0 <= d <= d1]
+    traded_map: dict[tuple[str, str], dict[str, Any]] = {}
+    for day in days:
+        for row in load_signals_for_date(day):
+            if not is_buy_signal(row.get("signal_type")):
+                continue
+            if not int(row.get("traded") or 0):
+                continue
+            code = normalize_code(row.get("code"))
+            if not code:
+                continue
+            traded_map[(code, day)] = row
+
+    pairs: list[dict[str, Any]] = []
+    both_hit = both_miss = sim_only_hit = fill_only_hit = 0
+    price_gaps: list[float] = []
+    for it in src:
+        code = normalize_code(it.get("code"))
+        day = str(it.get("trade_date") or "")[:10]
+        real = traded_map.get((code, day)) if code else None
+        if not real:
+            continue
+        sim_label = str(it.get("outcome_label") or "")
+        real_label = str(real.get("outcome_label") or "")
+        sim_hit = sim_label in BUY_HIT_LABELS
+        real_hit = real_label in BUY_HIT_LABELS
+        if sim_hit and real_hit:
+            both_hit += 1
+        elif (not sim_hit) and (not real_hit) and sim_label and real_label:
+            both_miss += 1
+        elif sim_hit and not real_hit:
+            sim_only_hit += 1
+        elif real_hit and not sim_hit:
+            fill_only_hit += 1
+        sim_px = it.get("sim_fill_price")
+        fill_px = real.get("fill_price")
+        gap_pct = None
+        try:
+            if sim_px is not None and fill_px is not None and float(fill_px) > 0:
+                gap_pct = round(
+                    (float(sim_px) - float(fill_px)) / float(fill_px) * 100.0, 2
+                )
+                price_gaps.append(gap_pct)
+        except (TypeError, ValueError):
+            gap_pct = None
+        pairs.append(
+            {
+                "code": code,
+                "name": it.get("name") or real.get("name"),
+                "trade_date": day,
+                "sim_filled": bool(it.get("sim_filled")),
+                "sim_fill_price": sim_px,
+                "sim_label": sim_label or None,
+                "sim_day1": it.get("outcome_day1_pct"),
+                "fill_price": fill_px,
+                "fill_label": real_label or None,
+                "fill_day1": real.get("outcome_day1_pct"),
+                "price_gap_pct": gap_pct,
+                "agree_hit": bool(sim_hit == real_hit and (sim_label or real_label)),
+            }
+        )
+    avg_gap = round(sum(price_gaps) / len(price_gaps), 2) if price_gaps else None
+    return {
+        "ok": True,
+        "paired_n": len(pairs),
+        "pairs": pairs[:120],
+        "summary": {
+            "paired_n": len(pairs),
+            "both_hit": both_hit,
+            "both_miss": both_miss,
+            "sim_only_hit": sim_only_hit,
+            "fill_only_hit": fill_only_hit,
+            "avg_price_gap_pct": avg_gap,
+        },
+        "note": "同码同日：模拟成交 vs 已交易成交价；命中=次日红/三日红",
     }

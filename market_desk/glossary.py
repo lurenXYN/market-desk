@@ -464,9 +464,21 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "无 OHLC 包或重算 0 笔时回退 classic 并在 basis_note 说明。",
     },
     "回测保真": {
-        "mean": "回测撮合精度：日线用高低点判触达（偏乐观）；分时模式在信号日=今天时用分钟序列，识别「先冲不追上限再回踩」的假触达。",
-        "algo": "fidelity=daily|minute。minute：fetch_minute_trends_many 仅当日买信号；_minute_buy_fill 先见 chase 则当日跳过。\n"
-        "无分时且高低同时覆盖 chase+目标时，minute 模式跳过信号日日线歧义。",
+        "mean": "回测撮合精度：日线用高低点判触达（偏乐观）；分时模式按信号日拉 1 分钟 K，识别「先冲不追上限再回踩」的假触达（历史日亦可）。",
+        "algo": "fidelity=daily|minute。minute：fetch_minute_bars_for_day(klt=1)；当日空则回退 trends2。\n"
+        "_minute_buy_fill 先见 chase 则跳过当日并顺延。无分时且高低同时覆盖 chase+目标时跳过信号日歧义。",
+    },
+    "回测对照实盘": {
+        "mean": "把回测模拟成交与同码同日已交易成交价并排，看命中是否一致、成交价差多少。",
+        "algo": "POST /api/backtest/vs-filled → compare_sim_vs_filled；命中=次日红/三日红。",
+    },
+    "微信只推止损": {
+        "mean": "Server酱静音档：只推止损/必卖（sell:stop）以及 LHB/EOD/运维，不推可买、将飞、止盈减仓。",
+        "algo": "settings.serverchan_sell_only；push_serverchan_alerts 按用户过滤 is_serverchan_must_sell。",
+    },
+    "运维自检": {
+        "mean": "管理员账号面板一页看：库完整性、desk.db、快照新鲜度、clist 冷却、自动备份年龄、新闻雷达。",
+        "algo": "GET /api/ops/check；账号管理 → 运维自检。",
     },
     "回测异步": {
         "mean": "长区间回测进后台任务，前端轮询进度；同步仍≤90天，勾异步或超90天自动异步（最多180天）。",

@@ -441,3 +441,44 @@ def test_adapt_same_day_plan_remap_with_bars() -> None:
     assert remapped[0].get("outcome_standard") == "same_day_plan"
     assert remapped[0].get("outcome_label")
     set_adapt_bars({})
+
+
+def test_compare_sim_vs_filled_pairs() -> None:
+    from market_desk.backtest import compare_sim_vs_filled
+
+    items = [
+        {
+            "side": "buy",
+            "code": "600000",
+            "name": "浦发",
+            "trade_date": "2099-01-01",
+            "sim_filled": True,
+            "sim_fill_price": 10.0,
+            "outcome_label": "次日红",
+            "outcome_day1_pct": 2.0,
+        }
+    ]
+    out = compare_sim_vs_filled(items, date_from="2099-01-01", date_to="2099-01-01")
+    assert out["ok"] is True
+    # No traded rows for far-future date → empty pairs, still ok.
+    assert out["paired_n"] == 0
+
+
+def test_serverchan_sell_only_filter() -> None:
+    from market_desk.notify import filter_serverchan_alerts
+
+    alerts = [
+        ("buy:600000", "可买", "x"),
+        ("fly:600000", "将飞", "x"),
+        ("sell:stop:600000", "止损", "x"),
+        ("sell:trim:600000", "减仓", "x"),
+        ("eod:2099-01-01", "收盘", "x"),
+    ]
+    all_sc = filter_serverchan_alerts(alerts, sell_only=False)
+    assert len(all_sc) == 5
+    quiet = filter_serverchan_alerts(alerts, sell_only=True)
+    keys = [k for k, _, _ in quiet]
+    assert "sell:stop:600000" in keys
+    assert "eod:2099-01-01" in keys
+    assert "buy:600000" not in keys
+    assert "sell:trim:600000" not in keys

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import asyncio
@@ -996,6 +997,122 @@ async def fetch_minute_trends_many(
 
     pairs = await asyncio.gather(*[_one(c) for c in uniq])
     return {code: rows for code, rows in pairs}
+
+
+def _parse_minute_klines(rows: list[Any]) -> list[dict[str, Any]]:
+    """Parse East Money 1-minute kline CSV rows into minute points."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        parts = str(row).split(",")
+        if len(parts) < 5:
+            continue
+        # kline: time,open,close,high,low,volume,amount,...
+        px = num(parts[2])
+        if px is None or px <= 0:
+            continue
+        hi = num(parts[3])
+        lo = num(parts[4])
+        vol = num(parts[5]) if len(parts) > 5 else None
+        point: dict[str, Any] = {
+            "time": str(parts[0]),
+            "price": float(px),
+        }
+        if hi is not None and hi > 0:
+            point["high"] = float(hi)
+        if lo is not None and lo > 0:
+            point["low"] = float(lo)
+        if vol is not None and vol >= 0:
+            point["volume"] = float(vol)
+        out.append(point)
+    return out
+
+
+async def fetch_minute_bars_for_day(
+    client: httpx.AsyncClient,
+    code: str,
+    trade_date: str,
+) -> list[dict[str, Any]]:
+    """Fetch one session's 1-minute bars for ``trade_date`` (YYYY-MM-DD).
+
+    Uses East Money history kline ``klt=1``. Today's session falls back to
+    ``trends2`` when kline is empty.
+    """
+    c = normalize_code(code)
+    day = str(trade_date or "")[:10]
+    if not c or len(day) < 10:
+        return []
+    day_compact = day.replace("-", "")
+    today = datetime.now().strftime("%Y-%m-%d")
+    async with _minute_sem():
+        path = (
+            "/api/qt/stock/kline/get"
+            f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
+            "&fields1=f1,f2,f3,f4,f5,f6"
+            "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+            f"&klt=1&fqt=1&beg={day_compact}&end={day_compact}&lmt=1000"
+        )
+        hosts = (
+            "push2his.eastmoney.com",
+            "push2delay.eastmoney.com",
+        )
+        for host in hosts:
+            url = f"https://{host}{path}"
+            try:
+                resp = await client.get(url, headers=HTTP_HEADERS, timeout=8.0)
+                resp.raise_for_status()
+                payload = resp.json()
+            except Exception:
+                continue
+            rows = ((payload.get("data") or {}).get("klines")) or []
+            out = _parse_minute_klines(rows)
+            if out:
+                # Keep only bars whose timestamp falls on the requested day.
+                filtered = [
+                    p
+                    for p in out
+                    if str(p.get("time") or "").replace("/", "-")[:10] == day
+                    or day_compact in str(p.get("time") or "").replace("-", "")
+                ]
+                return filtered or out
+        if day == today:
+            return await _fetch_minute_trends_unlocked(client, c)
+    return []
+
+
+async def fetch_minute_bars_many_days(
+    client: httpx.AsyncClient,
+    pairs: list[tuple[str, str]],
+    *,
+    concurrency: int | None = None,
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Fetch 1-minute bars for many ``(code, trade_date)`` pairs."""
+    uniq: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_code, raw_day in pairs:
+        c = normalize_code(raw_code)
+        d = str(raw_day or "")[:10]
+        if not c or len(d) < 10:
+            continue
+        key = (c, d)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(key)
+    if not uniq:
+        return {}
+    limit = max(1, min(int(concurrency or _MINUTE_CONCURRENCY), _MINUTE_CONCURRENCY))
+    local = asyncio.Semaphore(limit)
+
+    async def _one(code: str, day: str) -> tuple[tuple[str, str], list[dict[str, Any]]]:
+        async with local:
+            try:
+                rows = await fetch_minute_bars_for_day(client, code, day)
+            except Exception:
+                rows = []
+            return (code, day), rows
+
+    results = await asyncio.gather(*[_one(c, d) for c, d in uniq])
+    return {key: rows for key, rows in results}
 
 
 async def _fetch_minute_trends_unlocked(

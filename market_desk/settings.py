@@ -34,6 +34,7 @@ USER_PRIVATE_KEYS = frozenset(
         "open_mute_minutes",
         "tail_mute_minutes",
         "morning_push",
+        "serverchan_sell_only",
     }
 )
 
@@ -59,6 +60,7 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "ready_style",
         "sell_open_watch_minutes",
         "morning_push",
+        "serverchan_sell_only",
         "sticky_margin",
         "switch_min_seconds",
         "min_stock_mv_yi",
@@ -157,6 +159,8 @@ DEFAULTS: dict[str, Any] = {
     "sell_open_watch_minutes": int(cfg.SELL_OPEN_WATCH_MINUTES),
     # Per-user: push morning brief via Server酱 once near open (needs Key).
     "morning_push": False,
+    # Per-user: Server酱 only stop/must-sell (+eod/lhb/ops); mute buy/fly/trim.
+    "serverchan_sell_only": False,
     # Soft link to standalone news-radar (http://host:8770); empty = off.
     "news_radar_enabled": False,
     "news_radar_url": "http://127.0.0.1:8770",
@@ -320,6 +324,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     sow = max(0, min(30, int(out.get("sell_open_watch_minutes") or cfg.SELL_OPEN_WATCH_MINUTES)))
     out["sell_open_watch_minutes"] = sow
     out["morning_push"] = bool(out.get("morning_push"))
+    out["serverchan_sell_only"] = bool(out.get("serverchan_sell_only"))
     out["news_radar_enabled"] = bool(out.get("news_radar_enabled"))
     out["news_radar_url"] = str(out.get("news_radar_url") or "").strip().rstrip("/")
     panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))

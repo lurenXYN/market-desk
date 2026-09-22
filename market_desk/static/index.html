@@ -3109,6 +3109,9 @@
           <input id="setScOn" type="checkbox" /> 微信推送（买卖点）
         </label>
         <label class="settings-check">
+          <input id="setScSellOnly" type="checkbox" /> 微信只推止损/必卖 <button type="button" class="q" data-term="微信只推止损">?</button>
+        </label>
+        <label class="settings-check">
           <input id="setMorningPush" type="checkbox" /> 早决策微信推送（约 9:25–9:50 一次）
         </label>
         <label class="settings-check">
@@ -3781,7 +3784,7 @@
             <li>选起止日期（默认近 14 天；同步最多 90 天，勾「异步」可到 180 天）。区间内要有系统落库的信号，否则预览为 0。</li>
             <li>先点「预览匹配数」确认有多少条信号；再点「跑回测」拉日线做假想成交。</li>
             <li>「买撮合」选用哪档计划价：建议价常用；理想回踩更严、未触达更多；中位折中。</li>
-            <li>「保真」默认日线；选分时可识别当日先触不追上限再回踩的时序（仅信号日=今天有分时）。</li>
+            <li>「保真」默认日线；选分时按信号日拉 1 分钟 K（历史日也可），识别先触不追上限再回踩。</li>
             <li>量能门槛过滤瞬时穿刺无量触达；滑点略抬买/压卖；跳空低开可按开盘成交。</li>
             <li>表里「计划」=当时锁定的建议/回踩价；「模拟成交」=假想成交价与日期；「触达」=有没有碰到计划价。</li>
             <li>「标签 / 次日% / 三日%」与复盘同口径；命中看次日红、三日红。结果只供粗筛，不可当实盘收益。</li>
@@ -3837,10 +3840,12 @@
           <label>存档标签<input type="text" id="btLabel" maxlength="80" placeholder="可选，如 plan·量能0.4" /></label>
           <button type="button" class="rev-col-btn" id="btPreview" title="只数信号、不拉日线">预览匹配数</button>
           <button type="button" class="rev-col-btn" id="btGrid" title="默认3组参数各跑一遍并存档">参数组网格</button>
+          <button type="button" class="rev-col-btn" id="btVsFilled" title="模拟成交对照实盘已交易">对照实盘</button>
           <button type="submit">跑回测</button>
         </form>
         <div class="pos-sum" id="btSum" style="margin-top:10px"></div>
         <p class="meta" id="btNote"></p>
+        <div id="btVsFilledBox" class="meta" style="margin-top:8px"></div>
         <details class="bt-help" id="btArchiveBox" style="margin:10px 0;font-size:13px" open>
           <summary style="cursor:pointer;color:var(--ice)">存档对比 <button type="button" class="q" data-term="回测存档">?</button>
             <span class="meta" id="btArchiveHint">独立表，不写 signals</span></summary>
@@ -7886,6 +7891,7 @@
       if (typeof loadBacktestArchives === "function") loadBacktestArchives();
     }
     function paintBacktest(payload) {
+      window.__lastBacktest = payload || null;
       const sum = (payload && payload.summary) || {};
       const note = document.getElementById("btNote");
       const sumEl = document.getElementById("btSum");
@@ -8235,6 +8241,48 @@
         }
       } catch (e) {
         if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">网格请求失败</td></tr>`;
+      }
+    });
+    document.getElementById("btVsFilled")?.addEventListener("click", async () => {
+      const box = document.getElementById("btVsFilledBox");
+      const last = window.__lastBacktest;
+      if (!last || last.dry_run || !(last.items || []).length) {
+        if (box) box.textContent = "请先跑一遍回测（非预览）再对照实盘";
+        return;
+      }
+      if (box) box.textContent = "对照实盘中…";
+      try {
+        const r = await fetch("/api/backtest/vs-filled", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            items: last.items,
+            date_from: last.date_from,
+            date_to: last.date_to,
+            run_id: last.run_id || null,
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          if (box) box.textContent = d.detail || "对照失败";
+          return;
+        }
+        const s = d.summary || {};
+        const head = `对照 ${s.paired_n ?? 0} 笔 · 双命中 ${s.both_hit ?? 0} · 双未中 ${s.both_miss ?? 0}`
+          + ` · 仅模拟命中 ${s.sim_only_hit ?? 0} · 仅实盘命中 ${s.fill_only_hit ?? 0}`
+          + (s.avg_price_gap_pct != null ? ` · 均价差 ${s.avg_price_gap_pct}%` : "");
+        const rows = (d.pairs || []).slice(0, 40).map((p) => {
+          const gap = p.price_gap_pct != null ? `差${p.price_gap_pct}%` : "";
+          return `<div>${(p.trade_date || "").slice(5)} ${p.name || ""} ${p.code || ""}`
+            + ` · 模拟 ${p.sim_fill_price ?? "—"}/${p.sim_label || "—"}`
+            + ` · 实盘 ${p.fill_price ?? "—"}/${p.fill_label || "—"}`
+            + (gap ? ` · ${gap}` : "")
+            + `</div>`;
+        }).join("");
+        if (box) box.innerHTML = `<div><b>${head}</b></div>${rows || "<div class='meta'>区间内无已交易对照</div>"}`;
+      } catch (e) {
+        if (box) box.textContent = "对照请求失败";
       }
     });
     document.getElementById("btForm")?.addEventListener("submit", async (ev) => {
@@ -8918,6 +8966,31 @@
         if (el) el.value = "";
       });
     }
+    async function loadOpsCheck() {
+      const meta = document.getElementById("adminOpsMeta");
+      const list = document.getElementById("adminOpsList");
+      if (!list) return;
+      if (meta) meta.textContent = "自检中…";
+      try {
+        const r = await fetch("/api/ops/check", { credentials: "same-origin" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          if (meta) meta.textContent = d.detail || "自检失败";
+          return;
+        }
+        if (meta) {
+          meta.textContent = `总体 ${d.overall || "—"} · pid ${d.pid || "—"} · ${d.host || ""}`;
+        }
+        const lvlColor = { ok: "#4ade80", warn: "#fbbf24", bad: "#f87171" };
+        list.innerHTML = (d.checks || []).map((c) => {
+          const color = lvlColor[c.level] || "var(--muted)";
+          return `<div class="row"><span style="color:${color}">[${c.level}] ${c.title}</span>`
+            + `<span class="meta">${c.detail || ""}</span></div>`;
+        }).join("") || `<div class="meta">无检查项</div>`;
+      } catch (e) {
+        if (meta) meta.textContent = "自检请求失败";
+      }
+    }
     async function refreshAdminUsers() {
       const box = document.getElementById("adminUsers");
       if (!box || !authUser || authUser.role !== "admin") return;
@@ -8956,9 +9029,15 @@
         + `<button type="button" id="adminPatchApply">再打一次</button></div>`;
       html += `<div class="patch-meta" id="adminPatchMeta">加载中…</div>`;
       html += `<div id="adminPatchList"></div>`;
+      html += `<div class="patch-hd"><b>运维自检</b>`
+        + `<button type="button" id="adminOpsCheck">刷新自检</button></div>`;
+      html += `<div class="patch-meta" id="adminOpsMeta">点刷新查看 VPS/库/clist/备份</div>`;
+      html += `<div id="adminOpsList"></div>`;
       box.innerHTML = html;
 
       document.getElementById("adminUsersClose")?.addEventListener("click", () => hideAuthMask());
+      document.getElementById("adminOpsCheck")?.addEventListener("click", () => loadOpsCheck());
+      loadOpsCheck();
 
       box.querySelectorAll("[data-approve]").forEach((btn) => {
         btn.onclick = async () => {
@@ -10199,7 +10278,19 @@
           morningEl.checked = !!s.morning_push;
           morningEl.disabled = !sc.allowed;
         }
+        const sellOnlyEl = document.getElementById("setScSellOnly");
+        if (sellOnlyEl) {
+          sellOnlyEl.checked = !!s.serverchan_sell_only;
+          sellOnlyEl.disabled = !sc.allowed;
+        }
         if (scEl) scEl.disabled = false;
+        if (scHint && sc.allowed) {
+          scHint.textContent = sc.configured
+            ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · `
+              + (s.serverchan_sell_only ? "仅止损/必卖(+EOD/LHB)" : "买卖/LHB/收盘/早决策")
+              + "；无 Key 不推"
+            : "未配置 Key · 填 SCT… 后勾选开启；可勾「只推止损」静音可买";
+        }
       } catch (e) {
         const scHint = document.getElementById("setScHint");
         if (scHint) scHint.textContent = "微信推送配置加载失败";
@@ -10296,6 +10387,7 @@
         auto_backup: !!document.getElementById("setAutoBackup").checked,
         backup_keep: Number(document.getElementById("setBackupKeep")?.value || 30),
         morning_push: !!document.getElementById("setMorningPush")?.checked,
+        serverchan_sell_only: !!document.getElementById("setScSellOnly")?.checked,
         news_radar_enabled: !!document.getElementById("setNewsRadarOn")?.checked,
         news_radar_url: (document.getElementById("setNewsRadarUrl")?.value || "").trim(),
       };

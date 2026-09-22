@@ -1794,6 +1794,146 @@ def ops_db_integrity(user: dict = Depends(current_admin_required)) -> dict:
     return {"ok": True, **check_db_integrity()}
 
 
+@app.get("/api/ops/check")
+def ops_check(user: dict = Depends(current_admin_required)) -> dict:
+    """One-shot VPS / deploy health checklist for admins."""
+    del user
+    import os
+    from pathlib import Path
+
+    from market_desk.backup_store import check_db_integrity, list_auto_backups
+    from market_desk.db import DB_PATH
+    from market_desk.eastmoney import clist_runtime_status
+
+    checks: list[dict] = []
+    integ = check_db_integrity()
+    checks.append(
+        {
+            "id": "db_integrity",
+            "title": "SQLite 完整性",
+            "level": "ok" if integ.get("ok") else "bad",
+            "detail": integ.get("detail") or integ.get("path") or "",
+        }
+    )
+    db_ok = Path(DB_PATH).exists()
+    size_mb = round(Path(DB_PATH).stat().st_size / (1024 * 1024), 2) if db_ok else 0
+    checks.append(
+        {
+            "id": "db_file",
+            "title": "desk.db 文件",
+            "level": "ok" if db_ok else "bad",
+            "detail": f"{DB_PATH} · {size_mb} MB" if db_ok else "缺失",
+        }
+    )
+    snap = engine.snapshot or {}
+    updated = str(snap.get("updated_at") or "")
+    health = snap.get("health") if isinstance(snap.get("health"), dict) else {}
+    stale = health.get("stale_seconds")
+    snap_level = "warn"
+    if updated and snap.get("ok"):
+        snap_level = "ok"
+        if stale is not None and int(stale) > 180:
+            snap_level = "warn"
+    elif not snap:
+        snap_level = "bad"
+    checks.append(
+        {
+            "id": "snapshot",
+            "title": "引擎快照",
+            "level": snap_level,
+            "detail": f"updated={updated or '—'} · score={health.get('score')} · degraded={bool(health.get('degraded'))}",
+        }
+    )
+    try:
+        clist = clist_runtime_status()
+        checks.append(
+            {
+                "id": "clist",
+                "title": "东财 clist",
+                "level": "warn" if clist.get("backoff") else "ok",
+                "detail": (
+                    f"host={clist.get('host') or '—'} · backoff={clist.get('backoff')} "
+                    f"剩{clist.get('backoff_sec') or 0}s"
+                ),
+            }
+        )
+    except Exception as exc:
+        checks.append(
+            {
+                "id": "clist",
+                "title": "东财 clist",
+                "level": "warn",
+                "detail": f"{type(exc).__name__}: {exc}"[:120],
+            }
+        )
+    backups = list_auto_backups(limit=3)
+    if backups:
+        age_h = None
+        try:
+            from datetime import datetime as _dt
+
+            mtime = backups[0].get("mtime") or backups[0].get("modified")
+            if isinstance(mtime, (int, float)):
+                age_h = round(( _dt.now().timestamp() - float(mtime)) / 3600.0, 1)
+            elif isinstance(mtime, str) and len(mtime) >= 16:
+                ts = _dt.strptime(mtime[:19], "%Y-%m-%d %H:%M:%S")
+                age_h = round((_dt.now() - ts).total_seconds() / 3600.0, 1)
+        except Exception:
+            age_h = None
+        lvl = "ok"
+        if age_h is not None and age_h > 48:
+            lvl = "warn"
+        if age_h is not None and age_h > 120:
+            lvl = "bad"
+        checks.append(
+            {
+                "id": "backup",
+                "title": "自动备份",
+                "level": lvl,
+                "detail": f"最近 {backups[0].get('name')} · 约 {age_h if age_h is not None else '—'}h 前 · 共{len(backups)}+",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "id": "backup",
+                "title": "自动备份",
+                "level": "warn",
+                "detail": "尚无自动备份文件",
+            }
+        )
+    nr = snap.get("news_radar") if isinstance(snap.get("news_radar"), dict) else {}
+    if nr.get("enabled"):
+        st = str(nr.get("status") or "")
+        checks.append(
+            {
+                "id": "news_radar",
+                "title": "新闻雷达",
+                "level": "ok" if st in ("online", "stale") else "warn",
+                "detail": nr.get("status_label") or st or "enabled",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "id": "news_radar",
+                "title": "新闻雷达",
+                "level": "ok",
+                "detail": "未启用（软关）",
+            }
+        )
+    bad_n = sum(1 for c in checks if c.get("level") == "bad")
+    warn_n = sum(1 for c in checks if c.get("level") == "warn")
+    overall = "ok" if bad_n == 0 and warn_n == 0 else ("bad" if bad_n else "warn")
+    return {
+        "ok": True,
+        "overall": overall,
+        "checks": checks,
+        "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
+        "pid": os.getpid(),
+    }
+
+
 def _apply_daily_patches_payload(*, force: bool = True) -> dict:
     """Shared patch apply + in-memory history refresh for admin/internal routes."""
     from market_desk.db import load_daily
@@ -2095,6 +2235,40 @@ def backtest_compare(
 
     raw = [x.strip() for x in str(ids or "").split(",") if x.strip()]
     return compare_backtest_runs(raw)
+
+
+class BacktestVsFilledIn(BaseModel):
+    """Compare simulated fills against real traded outcomes."""
+
+    items: list[dict[str, Any]] | None = None
+    run_id: int | None = None
+    date_from: str = ""
+    date_to: str = ""
+
+
+@app.post("/api/backtest/vs-filled")
+def backtest_vs_filled(
+    body: BacktestVsFilledIn,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Side-by-side paper sim vs filled trades for the same code/day."""
+    del user
+    from market_desk.backtest import compare_sim_vs_filled
+    from market_desk.db import get_backtest_run
+
+    items = list(body.items or [])
+    date_from = str(body.date_from or "")[:10]
+    date_to = str(body.date_to or "")[:10]
+    if body.run_id and not items:
+        run = get_backtest_run(int(body.run_id))
+        if not run:
+            raise HTTPException(404, "run not found")
+        items = list(run.get("items") or [])
+        date_from = date_from or str(run.get("date_from") or "")[:10]
+        date_to = date_to or str(run.get("date_to") or "")[:10]
+    if not items:
+        raise HTTPException(400, "需要 items 或 run_id")
+    return compare_sim_vs_filled(items, date_from=date_from, date_to=date_to)
 
 
 class BacktestGridIn(BaseModel):

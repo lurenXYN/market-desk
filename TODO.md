@@ -26,6 +26,7 @@ must 立即 / watch 观察到 09:45；浅破开盘可缓冲；有分时则破开
 
 ## Done recently (context)
 
+- [x] **对照实盘 + 历史分时保真 + 微信只推止损 + 运维自检** — vs-filled；klt=1 历史分钟；serverchan_sell_only；/api/ops/check。*(2026-09-22)*
 - [x] **回测异步 + 分时保真 + adapt plan 重算** — 同步≤90/异步≤180+轮询；fidelity=minute 当日 chase 时序；engine 预取 set_adapt_bars 供 same_day_plan 调参跟随。*(2026-09-22)*
 - [x] **1–6 批次落地** — 浅破开盘缓冲；单ETF禁买旁注；库 integrity+备份下载+拉库脚本；adapt 跟随 filled；回测网格/存档；通勤再瘦。*(2026-09-22)*
 - [x] **回测独立结果表** — `signal_backtest_run`/`fill`；persist 存档、对比、清理；禁 payload.sim_*；旧库 CREATE IF NOT EXISTS。*(2026-09-22)*
