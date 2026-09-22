@@ -1,0 +1,29 @@
+{
+  "trade_date": "2026-09-21",
+  "note": "v3: force replace + verify after deploy curl (v1/v2 never stuck in live DB).",
+  "payload": {
+    "phase": "高潮",
+    "temperature": 81,
+    "ups": 2631,
+    "downs": 446,
+    "zt": 90,
+    "dt": 2,
+    "zb_rate": 21.1,
+    "height": 17,
+    "promotion": 26.4,
+    "promo_1_2": 18.0,
+    "promo_2_3": 71.4,
+    "premium": 2.0,
+    "ladder_fill": 87.5,
+    "ladder_gap": false,
+    "ge2": 29,
+    "amount_yi": 11615.7,
+    "amount_pctile": 69.2,
+    "big_drop": 7,
+    "hs300_pct": 0.71,
+    "cyb_pct": 0.8,
+    "event": "高潮 · 最高17板 · 热点医药生物 · 国芳集团",
+    "mainline": "医药生物",
+    "breadth_degraded": false
+  }
+}

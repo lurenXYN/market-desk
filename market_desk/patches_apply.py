@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from market_desk.db import init_db, load_setting, save_daily, save_setting
+from market_desk.db import init_db, load_daily, load_setting, save_daily, save_setting
 
 log = logging.getLogger("market_desk.patches")
 
@@ -25,7 +25,9 @@ def apply_pending_daily_patches(*, force: bool = False) -> list[str]:
     if not _PATCH_DIR.is_dir():
         log.warning("patch dir missing: %s", _PATCH_DIR)
         return []
-    applied_raw = load_setting(_APPLIED_KEY) or []
+    applied_raw = load_setting(_APPLIED_KEY)
+    if applied_raw is None:
+        applied_raw = []
     applied: set[str] = set()
     if isinstance(applied_raw, list):
         applied = {str(x) for x in applied_raw}
@@ -38,6 +40,7 @@ def apply_pending_daily_patches(*, force: bool = False) -> list[str]:
     for path in paths:
         patch_id = path.stem
         if not force and patch_id in applied:
+            log.info("skip already-applied %s", patch_id)
             continue
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -48,22 +51,59 @@ def apply_pending_daily_patches(*, force: bool = False) -> list[str]:
         if not day or not payload:
             log.warning("skip patch %s: missing trade_date/payload", path.name)
             continue
-        # Full replace: do not merge with the corrupted online stub.
         save_daily(day, payload, merge=False)
+        # Verify round-trip so silent failures cannot mark applied.
+        rows = {str(r.get("trade_date")): r for r in load_daily(30)}
+        got = rows.get(day) or {}
+        if _has_nonzero_breadth(payload) and not _has_nonzero_breadth(got):
+            raise RuntimeError(
+                f"patch {patch_id} write verify failed for {day}: "
+                f"ups={got.get('ups')} downs={got.get('downs')} amt={got.get('amount_yi')}"
+            )
         applied.add(patch_id)
         done.append(patch_id)
         log.info(
             "applied daily patch %s -> %s ups=%s downs=%s amt=%s",
             patch_id,
             day,
-            payload.get("ups"),
-            payload.get("downs"),
-            payload.get("amount_yi"),
+            got.get("ups"),
+            got.get("downs"),
+            got.get("amount_yi"),
         )
 
     if done:
         save_setting(_APPLIED_KEY, sorted(applied))
     return done
+
+
+def verify_day_breadth(trade_date: str) -> dict[str, Any]:
+    """Return the stored daily row fields used to confirm a patch landed."""
+    day = str(trade_date or "")[:10]
+    for row in load_daily(40):
+        if str(row.get("trade_date") or "")[:10] == day:
+            return {
+                "trade_date": day,
+                "ups": row.get("ups"),
+                "downs": row.get("downs"),
+                "amount_yi": row.get("amount_yi"),
+                "phase": row.get("phase"),
+                "event": row.get("event"),
+                "breadth_degraded": row.get("breadth_degraded"),
+            }
+    return {"trade_date": day, "missing": True}
+
+
+def _has_nonzero_breadth(payload: dict[str, Any] | None) -> bool:
+    """True when ups/downs/amount look populated."""
+    data = payload or {}
+    try:
+        if int(data.get("ups") or 0) > 0 or int(data.get("downs") or 0) > 0:
+            return True
+        if float(data.get("amount_yi") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        return False
+    return False
 
 
 def _normalize_patch(raw: Any) -> tuple[str, dict[str, Any]]:
@@ -74,7 +114,6 @@ def _normalize_patch(raw: Any) -> tuple[str, dict[str, Any]]:
     payload = raw.get("payload")
     if isinstance(payload, dict) and day:
         return day, dict(payload)
-    # Allow flat files that are themselves the daily payload.
     if day and raw.get("ups") is not None:
         body = {k: v for k, v in raw.items() if k not in ("trade_date", "note")}
         return day, body

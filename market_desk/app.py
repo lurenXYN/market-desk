@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1765,15 +1765,10 @@ def backup_auto_list(
     }
 
 
-@app.post("/api/admin/daily-patches/apply")
-def admin_apply_daily_patches(
-    force: bool = Query(default=True),
-    admin: dict = Depends(current_admin_required),
-) -> dict:
-    """Force-apply shipped daily_snapshot patches and refresh in-memory history."""
-    del admin
+def _apply_daily_patches_payload(*, force: bool = True) -> dict:
+    """Shared patch apply + in-memory history refresh for admin/internal routes."""
     from market_desk.db import load_daily
-    from market_desk.patches_apply import apply_pending_daily_patches
+    from market_desk.patches_apply import apply_pending_daily_patches, verify_day_breadth
 
     applied = apply_pending_daily_patches(force=bool(force))
     hist = load_daily(14)
@@ -1782,20 +1777,34 @@ def admin_apply_daily_patches(
             engine.snapshot["history"] = hist
     except Exception:
         pass
-    row_21 = next((r for r in hist if str(r.get("trade_date")) == "2026-09-21"), None)
     return {
         "ok": True,
         "applied": applied,
         "history_n": len(hist),
-        "day_2026_09_21": {
-            "ups": (row_21 or {}).get("ups"),
-            "downs": (row_21 or {}).get("downs"),
-            "amount_yi": (row_21 or {}).get("amount_yi"),
-            "event": (row_21 or {}).get("event"),
-        }
-        if row_21
-        else None,
+        "day_2026_09_21": verify_day_breadth("2026-09-21"),
     }
+
+
+@app.post("/api/admin/daily-patches/apply")
+def admin_apply_daily_patches(
+    force: bool = Query(default=True),
+    admin: dict = Depends(current_admin_required),
+) -> dict:
+    """Force-apply shipped daily_snapshot patches and refresh in-memory history."""
+    del admin
+    return _apply_daily_patches_payload(force=bool(force))
+
+
+@app.post("/api/internal/daily-patches/apply")
+def internal_apply_daily_patches(
+    request: Request,
+    force: bool = Query(default=True),
+) -> dict:
+    """Localhost-only force apply used by deploy scripts (no login cookie)."""
+    host = (request.client.host if request.client else "") or ""
+    if host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "localhost only")
+    return _apply_daily_patches_payload(force=bool(force))
 
 
 @app.post("/api/backup/import")
