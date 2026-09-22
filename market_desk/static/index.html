@@ -2878,7 +2878,7 @@
       pointer-events: none;
     }
     .auth-card {
-      width: min(420px, 100%);
+      width: min(480px, 100%);
       background: #121820;
       border: 1px solid var(--line);
       border-radius: 12px;
@@ -2910,6 +2910,8 @@
       .hdr .auth-user #authSwitchBtn { display: inline-block; }
     }
     .admin-users { margin-top: 10px; max-height: 420px; overflow: auto; font-size: 12px; }
+    .admin-users[hidden] { display: none !important; }
+    .auth-card { width: min(480px, 100%); }
     .admin-users .row {
       display: flex; justify-content: space-between; gap: 8px; align-items: center;
       padding: 6px 0; border-bottom: 1px solid #1e293b;
@@ -8610,6 +8612,33 @@
       const pwd = document.getElementById("pwdPanel");
       if (pwd) pwd.hidden = true;
     }
+    function hideAuthMask() {
+      /** Dismiss the auth overlay when the session already allows browsing. */
+      if (authUser && authUser.must_change_password && !isGuestUser(authUser)) {
+        const m = document.getElementById("authMsg");
+        if (m) m.textContent = "请先修改默认密码后再继续使用";
+        return false;
+      }
+      if (!authUser) return false;
+      const mask = document.getElementById("authMask");
+      if (mask) mask.hidden = true;
+      const box = document.getElementById("adminUsers");
+      if (box) box.hidden = true;
+      const pwd = document.getElementById("pwdPanel");
+      if (pwd) pwd.hidden = true;
+      return true;
+    }
+    function showAdminPanel() {
+      /** Open or toggle-close the admin users / patches panel. */
+      const mask = document.getElementById("authMask");
+      const box = document.getElementById("adminUsers");
+      if (mask && !mask.hidden && box && !box.hidden) {
+        hideAuthMask();
+        return;
+      }
+      showAuth("账号管理 · 同意 / 拒绝 / 删除 · 日级补丁");
+      refreshAdminUsers();
+    }
     function showPasswordPanel(msg) {
       const mask = document.getElementById("authMask");
       if (!mask) return;
@@ -8635,7 +8664,10 @@
         return;
       }
       const selfId = authUser && authUser.id;
-      let html = (d.users || []).map((u) => {
+      let html = `<div class="patch-hd" style="margin-top:0;border-top:0;padding-top:0">`
+        + `<b>账号管理</b>`
+        + `<button type="button" id="adminUsersClose">关闭</button></div>`;
+      html += (d.users || []).map((u) => {
         const pending = u.status === "pending";
         const guest = u.is_guest || u.role === "guest";
         const isSelf = selfId != null && Number(u.id) === Number(selfId);
@@ -8660,6 +8692,8 @@
       html += `<div class="patch-meta" id="adminPatchMeta">加载中…</div>`;
       html += `<div id="adminPatchList"></div>`;
       box.innerHTML = html;
+
+      document.getElementById("adminUsersClose")?.addEventListener("click", () => hideAuthMask());
 
       box.querySelectorAll("[data-approve]").forEach((btn) => {
         btn.onclick = async () => {
@@ -8817,13 +8851,13 @@
     document.getElementById("pwdCancelBtn")?.addEventListener("click", () => {
       const pwd = document.getElementById("pwdPanel");
       if (pwd) pwd.hidden = true;
-      if (authUser && !authUser.must_change_password) {
-        document.getElementById("authMask").hidden = true;
-      } else if (authUser && authUser.must_change_password) {
-        const m = document.getElementById("authMsg");
-        if (m) m.textContent = "请先修改默认密码后再继续使用";
-      } else {
-        showAuth("请登录或游客进入");
+      if (!hideAuthMask()) {
+        if (authUser && authUser.must_change_password) {
+          const m = document.getElementById("authMsg");
+          if (m) m.textContent = "请先修改默认密码后再继续使用";
+        } else {
+          showAuth("请登录或游客进入");
+        }
       }
     });
     document.getElementById("pwdSubmitBtn")?.addEventListener("click", async () => {
@@ -8883,8 +8917,16 @@
       paintAuthUser(null);
     });
     document.getElementById("authAdminBtn")?.addEventListener("click", () => {
-      showAuth("账号管理 · 同意 / 拒绝 / 删除");
-      refreshAdminUsers();
+      showAdminPanel();
+    });
+    document.getElementById("authMask")?.addEventListener("click", (ev) => {
+      // Click dimmed backdrop to dismiss when already logged in (admin / switch / pwd).
+      if (ev.target === ev.currentTarget) hideAuthMask();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      const mask = document.getElementById("authMask");
+      if (mask && !mask.hidden) hideAuthMask();
     });
     // Soft-gate: 仓位 / 个人写入对游客拦截。
     const _posTab = document.querySelector('#navTabs [data-main="pos"]');
