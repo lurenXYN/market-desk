@@ -79,7 +79,7 @@ from market_desk.eastmoney import (
     fetch_holder_stats_many,
     fetch_hot_boards,
     fetch_main_quotes,
-    fetch_minute_trends,
+    fetch_minute_trends_many,
     fetch_yesterday_zt,
     fetch_zb_pool,
     fetch_zt_pool,
@@ -2290,15 +2290,9 @@ class DeskEngine:
             else:
                 need.append(code)
         if need:
-            fetched = await asyncio.gather(
-                *[fetch_minute_trends(client, c) for c in need],
-                return_exceptions=True,
-            )
-            for code, rows in zip(need, fetched):
-                if isinstance(rows, Exception):
-                    minutes_by_code[code] = []
-                    continue
-                series = list(rows or [])
+            packed = await fetch_minute_trends_many(client, need)
+            for code in need:
+                series = list(packed.get(code) or [])
                 if series:
                     self._minute_cache[code] = (now_ts, series)
                 minutes_by_code[code] = series
@@ -2354,16 +2348,9 @@ class DeskEngine:
             else:
                 need.append(code)
         if need:
-            fetched = await asyncio.gather(
-                *[fetch_minute_trends(client, c) for c in need],
-                return_exceptions=True,
-            )
-            for code, rows in zip(need, fetched):
-                if isinstance(rows, Exception):
-                    log.debug("minute fetch %s failed: %s", code, rows)
-                    minutes_by_code[code] = []
-                    continue
-                series = list(rows or [])
+            packed = await fetch_minute_trends_many(client, need)
+            for code in need:
+                series = list(packed.get(code) or [])
                 if series:
                     self._minute_cache[code] = (now_ts, series)
                 minutes_by_code[code] = series
@@ -2400,15 +2387,9 @@ class DeskEngine:
             need.append(code)
         if not need:
             return
-        fetched = await asyncio.gather(
-            *[fetch_minute_trends(client, c) for c in need],
-            return_exceptions=True,
-        )
-        for code, rows in zip(need, fetched):
-            if isinstance(rows, Exception):
-                log.debug("position minute fetch %s failed: %s", code, rows)
-                continue
-            series = list(rows or [])
+        packed = await fetch_minute_trends_many(client, need)
+        for code in need:
+            series = list(packed.get(code) or [])
             if series:
                 self._minute_cache[code] = (now_ts, series)
 

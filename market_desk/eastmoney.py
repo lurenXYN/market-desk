@@ -884,7 +884,50 @@ async def fetch_minute_trends(
 
     ``push2.eastmoney.com`` often disconnects on ETFs; try delay/his hosts with a
     short single-shot timeout so fallbacks are not delayed by ``_get_json`` retries.
+    Concurrent calls are capped so recommend/position/favorite minutes do not stampede.
     """
+    async with _minute_sem():
+        return await _fetch_minute_trends_unlocked(client, code)
+
+
+async def fetch_minute_trends_many(
+    client: httpx.AsyncClient,
+    codes: list[str],
+    *,
+    concurrency: int | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch minute trends for several codes with a shared concurrency cap."""
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in codes:
+        c = normalize_code(raw)
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        uniq.append(c)
+    if not uniq:
+        return {}
+    # Cap batch fan-out; also respect the process-wide minute semaphore.
+    limit = max(1, min(int(concurrency or _MINUTE_CONCURRENCY), _MINUTE_CONCURRENCY))
+    local = asyncio.Semaphore(limit)
+
+    async def _one(code: str) -> tuple[str, list[dict[str, Any]]]:
+        async with local:
+            async with _minute_sem():
+                try:
+                    return code, await _fetch_minute_trends_unlocked(client, code)
+                except Exception:
+                    return code, []
+
+    pairs = await asyncio.gather(*[_one(c) for c in uniq])
+    return {code: rows for code, rows in pairs}
+
+
+async def _fetch_minute_trends_unlocked(
+    client: httpx.AsyncClient,
+    code: str,
+) -> list[dict[str, Any]]:
+    """Single-code minute fetch without taking the concurrency semaphore."""
     c = normalize_code(code)
     if not c:
         return []
@@ -914,6 +957,18 @@ async def fetch_minute_trends(
         if out:
             return out
     return []
+
+
+_MINUTE_CONCURRENCY = 3
+_MINUTE_SEM: asyncio.Semaphore | None = None
+
+
+def _minute_sem() -> asyncio.Semaphore:
+    """Limit concurrent East Money minute-trend pulls across the process."""
+    global _MINUTE_SEM
+    if _MINUTE_SEM is None:
+        _MINUTE_SEM = asyncio.Semaphore(_MINUTE_CONCURRENCY)
+    return _MINUTE_SEM
 
 
 async def fetch_daily_closes(
