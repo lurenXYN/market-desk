@@ -1040,6 +1040,8 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
 
     When ``merge`` is True (default), patch onto any existing payload for the
     day so later writes (e.g. mainline) do not wipe metrics already saved.
+    Quote-derived breadth fields are not overwritten by all-zero stubs when the
+    live quote list failed (e.g. East Money clist 502).
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     day = str(trade_date or "")[:10]
@@ -1055,7 +1057,18 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
                     old = json.loads(row["payload"])
                     if isinstance(old, dict):
                         merged = dict(old)
-                        merged.update({k: v for k, v in data.items() if v is not None})
+                        degraded = _breadth_fields_degraded(data)
+                        for k, v in data.items():
+                            if v is None:
+                                continue
+                            if (
+                                degraded
+                                and k in _BREADTH_FIELDS
+                                and _has_nonzero_breadth(old)
+                            ):
+                                # Keep prior real ups/downs/amount when quotes blanked out.
+                                continue
+                            merged[k] = v
                         # Preserve prior mainline when new payload omits it.
                         if not str(merged.get("mainline") or "").strip():
                             prev_ml = str(old.get("mainline") or "").strip()
@@ -1064,6 +1077,12 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
                         data = merged
                 except (TypeError, ValueError, json.JSONDecodeError):
                     pass
+        # Never persist an all-zero breadth stub when limit-up pool was alive.
+        if _breadth_fields_degraded(data):
+            for k in _BREADTH_FIELDS:
+                if k in data and (data.get(k) == 0 or data.get(k) == 0.0):
+                    data[k] = None
+            data["breadth_degraded"] = True
         conn.execute(
             """
             INSERT INTO daily_snapshot(trade_date, payload, updated_at)
@@ -1077,6 +1096,52 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
         conn.commit()
 
 
+_BREADTH_FIELDS = ("ups", "downs", "amount_yi", "amount_pctile", "big_drop")
+
+
+def _breadth_fields_degraded(payload: dict[str, Any] | None) -> bool:
+    """True when ups/downs/amount look like a failed quote list, not a real flat day."""
+    data = payload or {}
+    ups = int(data.get("ups") or 0)
+    downs = int(data.get("downs") or 0)
+    amt = float(data.get("amount_yi") or 0)
+    zt = int(data.get("zt") or 0)
+    return ups == 0 and downs == 0 and amt <= 0 and zt >= 5
+
+
+def _has_nonzero_breadth(payload: dict[str, Any] | None) -> bool:
+    """True when a prior daily row already stored real quote breadth."""
+    data = payload or {}
+    try:
+        if int(data.get("ups") or 0) > 0 or int(data.get("downs") or 0) > 0:
+            return True
+        if float(data.get("amount_yi") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        return False
+    return False
+
+
+def sanitize_daily_row(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize a loaded daily row so failed-quote zeros render as blanks."""
+    item = dict(row or {})
+    if not _breadth_fields_degraded(item):
+        return item
+    for k in _BREADTH_FIELDS:
+        if item.get(k) == 0 or item.get(k) == 0.0:
+            item[k] = None
+    item["breadth_degraded"] = True
+    ev = str(item.get("event") or "")
+    ml = str(item.get("mainline") or "").strip()
+    if ml:
+        import re
+
+        ev2 = re.sub(r"热点\s*[—\-–−]+", f"热点{ml}", ev)
+        if ev2 != ev:
+            item["event"] = ev2
+    return item
+
+
 def load_daily(limit: int = 14) -> list[dict[str, Any]]:
     """Return recent daily snapshots, newest first."""
     with _connect() as conn:
@@ -1085,12 +1150,32 @@ def load_daily(limit: int = 14) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
     out: list[dict[str, Any]] = []
+    dirty: list[tuple[str, dict[str, Any]]] = []
     for row in rows:
         item = json.loads(row["payload"])
         item["trade_date"] = row["trade_date"]
-        out.append(item)
+        cleaned = sanitize_daily_row(item)
+        if cleaned.get("breadth_degraded") and not (item.get("breadth_degraded")):
+            dirty.append((str(row["trade_date"]), cleaned))
+        out.append(cleaned)
+    # One-shot heal of already-written zero stubs (e.g. 2026-09-21 after clist 502 day).
+    if dirty:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with _connect() as conn:
+                for day, payload in dirty:
+                    conn.execute(
+                        """
+                        UPDATE daily_snapshot
+                        SET payload = ?, updated_at = ?
+                        WHERE trade_date = ?
+                        """,
+                        (json.dumps(payload, ensure_ascii=False), now, day),
+                    )
+                conn.commit()
+        except Exception:
+            pass
     return out
-
 
 def save_auction(trade_date: str, payload: dict[str, Any]) -> None:
     """Lock the 09:25 auction summary for a trading day."""

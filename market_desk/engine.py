@@ -556,32 +556,40 @@ class DeskEngine:
                 climax_temp=int(setting("phase_climax_temp", 72)),
             )
             auction = self._auction(trade_date, now, quotes)
-            save_daily(
-                trade_date_dash,
-                {
-                    "phase": phase,
-                    "temperature": temperature,
-                    "ups": metrics["ups"],
-                    "downs": metrics["downs"],
-                    "zt": metrics["zt"],
-                    "dt": metrics["dt"],
-                    "zb_rate": metrics["zb_rate"],
-                    "height": metrics["height"],
-                    "promotion": metrics["promotion"],
-                    "promo_1_2": metrics.get("promo_1_2"),
-                    "promo_2_3": metrics.get("promo_2_3"),
-                    "premium": metrics["premium"],
-                    "ladder_fill": metrics.get("ladder_fill"),
-                    "ladder_gap": metrics.get("ladder_gap"),
-                    "ge2": metrics.get("ge2"),
-                    "amount_yi": metrics["amount_yi"],
-                    "amount_pctile": metrics.get("amount_pctile"),
-                    "big_drop": metrics.get("big_drop"),
-                    "hs300_pct": metrics.get("hs300_pct"),
-                    "cyb_pct": metrics.get("cyb_pct"),
-                    "event": _event_line(phase, metrics, hot_cards),
-                },
-            )
+            quotes_ok = len(quotes) >= 200 and int(metrics.get("sample") or 0) >= 200
+            daily_payload: dict[str, Any] = {
+                "phase": phase,
+                "temperature": temperature,
+                "zt": metrics["zt"],
+                "dt": metrics["dt"],
+                "zb_rate": metrics["zb_rate"],
+                "height": metrics["height"],
+                "promotion": metrics["promotion"],
+                "promo_1_2": metrics.get("promo_1_2"),
+                "promo_2_3": metrics.get("promo_2_3"),
+                "premium": metrics["premium"],
+                "ladder_fill": metrics.get("ladder_fill"),
+                "ladder_gap": metrics.get("ladder_gap"),
+                "ge2": metrics.get("ge2"),
+                "hs300_pct": metrics.get("hs300_pct"),
+                "cyb_pct": metrics.get("cyb_pct"),
+                "event": _event_line(phase, metrics, hot_cards),
+            }
+            # Quote-derived breadth: skip zeros when clist failed so merge keeps prior values.
+            if quotes_ok:
+                daily_payload.update(
+                    {
+                        "ups": metrics["ups"],
+                        "downs": metrics["downs"],
+                        "amount_yi": metrics["amount_yi"],
+                        "amount_pctile": metrics.get("amount_pctile"),
+                        "big_drop": metrics.get("big_drop"),
+                        "breadth_degraded": False,
+                    }
+                )
+            else:
+                daily_payload["breadth_degraded"] = True
+            save_daily(trade_date_dash, daily_payload)
             history = load_daily(14)
             cycle = _cycle_view(history, trade_date_dash)
             similar = build_similar_days(
@@ -3307,7 +3315,9 @@ def _build_health(
 
 
 def _event_line(phase: str, metrics: dict[str, Any], hot: list[dict[str, Any]]) -> str:
-    top = hot[0]["name"] if hot else "—"
+    top = hot[0]["name"] if hot else ""
+    if not top:
+        top = str(metrics.get("mainline_hint") or "").strip() or "—"
     leader = metrics.get("leader") or {}
     return f"{phase} · 最高{metrics['height']}板 · 热点{top} · {leader.get('name') or '—'}"
 

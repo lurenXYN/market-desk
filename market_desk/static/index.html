@@ -5436,18 +5436,18 @@
       cgEl.className = "contagion " + (cg.on ? "on" : "off");
       cgEl.textContent = cg.text || "暂无板块级跌停传染";
       document.getElementById("hist").innerHTML = (d.history || []).map(r => `
-        <tr>
+        <tr${r.breadth_degraded ? ' class="degraded-day"' : ""}>
           <td>${r.trade_date || ""}</td>
           <td>${r.event || ""}</td>
           <td><span class="phase-pill p-${r.phase || ""}">${termHtml(r.phase || "")}</span></td>
-          <td>${r.ups ?? ""} / ${r.downs ?? ""}</td>
+          <td>${r.ups != null ? r.ups : "—"} / ${r.downs != null ? r.downs : "—"}</td>
           <td class="up">${r.zt ?? ""}</td>
           <td class="down">${r.dt ?? ""}</td>
           <td>${r.zb_rate ?? ""}</td>
           <td>${r.height ?? ""}</td>
           <td>${r.promotion ?? ""}</td>
           <td>${r.premium ?? ""}</td>
-          <td>${r.amount_yi ?? ""}</td>
+          <td>${r.amount_yi != null ? r.amount_yi : "—"}</td>
         </tr>`).join("");
       const cardHtml = (b, pin) => {
         const ice = !!b.ice;
