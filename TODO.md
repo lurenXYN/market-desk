@@ -10,7 +10,6 @@ Agents: **at the start of each session involving this app, read this file before
 
 ### 有空再加
 
-- [ ] **回测独立结果表** — `signal_backtest_run` + `signal_backtest_fill`；禁 payload.sim_* 多轮堆叠；支持多参数组对比与清理。
 - [ ] **回测异步任务** — 超长区间后台跑 + 前端轮询（当前靠 ≤90 天同步护栏）。
 - [ ] **分钟 K 高保真模式** — 可选高级撮合（识别 chase 突破前后时序）。
 - [ ] **adapt 真正跟随评测标准** — `adapt_follow_outcome` 预留；需带 closes 重算后再反哺。
@@ -29,6 +28,7 @@ must 立即 / watch 观察到 09:45；有分时则破开盘·均价·放量判�
 
 ## Done recently (context)
 
+- [x] **回测独立结果表** — `signal_backtest_run`/`fill`；persist 存档、对比、清理；禁 payload.sim_*；旧库 CREATE IF NOT EXISTS。*(2026-09-22)*
 - [x] **1–6 + 回测 admin** — 收盘 breadth 守卫；健康条 clist host/backoff；Deploy 补丁校验失败即红；Push 标题统一【可买/将飞/止损】；ready 跨日作废提示；admin 补丁管理；回测 tab/API 仅 admin。*(2026-09-22)*
 - [x] **Push 分级再打磨** — 将飞/可买半/止损 微信标题统一为【标签】名称 代码。*(2026-09-22)*
 - [x] **ready 跨日/过期提示** — 早盘摘要 +「现在」条提示昨 ready 须今日重确认。*(2026-09-22)*

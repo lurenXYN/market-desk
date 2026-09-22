@@ -2911,7 +2911,6 @@
     }
     .admin-users { margin-top: 10px; max-height: 420px; overflow: auto; font-size: 12px; }
     .admin-users[hidden] { display: none !important; }
-    .auth-card { width: min(480px, 100%); }
     .admin-users .row {
       display: flex; justify-content: space-between; gap: 8px; align-items: center;
       padding: 6px 0; border-bottom: 1px solid #1e293b;
@@ -3815,11 +3814,24 @@
           <label>跳空% <button type="button" class="q" data-term="回测跳空">?</button>
             <input type="number" id="btGap" min="0" max="10" step="0.5" value="1" title="相对昨收低开≥该%且开盘≤目标则按开盘成交；0=关闭" />
           </label>
+          <label class="settings-check"><input type="checkbox" id="btPersist" checked /> 存档本次 <button type="button" class="q" data-term="回测存档">?</button></label>
+          <label>存档标签<input type="text" id="btLabel" maxlength="80" placeholder="可选，如 plan·量能0.4" /></label>
           <button type="button" class="rev-col-btn" id="btPreview" title="只数信号、不拉日线">预览匹配数</button>
           <button type="submit">跑回测</button>
         </form>
         <div class="pos-sum" id="btSum" style="margin-top:10px"></div>
         <p class="meta" id="btNote"></p>
+        <details class="bt-help" id="btArchiveBox" style="margin:10px 0;font-size:13px" open>
+          <summary style="cursor:pointer;color:var(--ice)">存档对比 <button type="button" class="q" data-term="回测存档">?</button>
+            <span class="meta" id="btArchiveHint">独立表，不写 signals</span></summary>
+          <div class="pos-form" style="margin-top:8px;grid-template-columns:auto 1fr auto auto;align-items:center;gap:8px">
+            <button type="button" class="rev-col-btn" id="btArchiveRefresh">刷新列表</button>
+            <button type="button" class="rev-col-btn" id="btArchiveCompare">对比勾选</button>
+            <button type="button" class="pos-del" id="btArchiveClear" title="清空全部存档">清空存档</button>
+          </div>
+          <div id="btArchiveList" class="meta" style="margin-top:8px">加载中…</div>
+          <div id="btCompare" style="margin-top:8px"></div>
+        </details>
         <div class="rev-table-wrap" style="margin-top:8px">
           <table class="rev-table m-cards" id="btTable">
             <thead>
@@ -7851,6 +7863,7 @@
       if (modeEl && !modeEl.dataset.userSet) {
         modeEl.value = "plan";
       }
+      if (typeof loadBacktestArchives === "function") loadBacktestArchives();
     }
     function paintBacktest(payload) {
       const sum = (payload && payload.summary) || {};
@@ -7960,8 +7973,155 @@
         vol_min_ratio: Number(document.getElementById("btVolRatio")?.value ?? 0.4),
         slip_pct: Number(document.getElementById("btSlip")?.value ?? 0.15),
         gap_pct: Number(document.getElementById("btGap")?.value ?? 1),
+        persist: !!document.getElementById("btPersist")?.checked,
+        label: (document.getElementById("btLabel")?.value || "").trim(),
       }, extra || {});
     }
+    async function loadBacktestArchives() {
+      const box = document.getElementById("btArchiveList");
+      if (!box) return;
+      try {
+        const r = await fetch("/api/backtest/runs?limit=40", { credentials: "same-origin" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          box.textContent = "存档列表不可用（需 admin）";
+          return;
+        }
+        const runs = d.runs || [];
+        if (!runs.length) {
+          box.innerHTML = `<span class="meta">暂无存档。勾选「存档本次」再跑回测即可。</span>`;
+          return;
+        }
+        box.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px">${
+          runs.map((run) => {
+            const hit = run.buy_hit_rate != null ? `买命中 ${run.buy_hit_rate}%` : "买命中 —";
+            const fill = run.buy_fill_rate != null ? `触达 ${run.buy_fill_rate}%` : "";
+            const exec = run.sim_exec_score != null ? `执行分 ${run.sim_exec_score}` : "";
+            return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px dashed var(--line);padding:4px 0">
+              <label class="settings-check" style="margin:0"><input type="checkbox" class="bt-run-pick" value="${run.id}" /> #${run.id}</label>
+              <button type="button" class="rev-col-btn bt-run-load" data-id="${run.id}">加载</button>
+              <button type="button" class="pos-del bt-run-del" data-id="${run.id}">删</button>
+              <span><b>${run.label || "未命名"}</b></span>
+              <span class="meta">${run.date_from}~${run.date_to} · ${run.mode}
+                · 量${run.vol_min_ratio ?? "—"}/滑${run.slip_pct ?? "—"}/跳${run.gap_pct ?? "—"}</span>
+              <span class="meta">${hit}${fill ? " · " + fill : ""}${exec ? " · " + exec : ""}</span>
+              <span class="meta">${(run.created_at || "").slice(5, 16)}</span>
+            </div>`;
+          }).join("")
+        }</div>`;
+      } catch (e) {
+        box.textContent = "存档列表加载失败";
+      }
+    }
+    function paintBacktestCompare(payload) {
+      const el = document.getElementById("btCompare");
+      if (!el) return;
+      const runs = (payload && payload.runs) || [];
+      const metrics = (payload && payload.metrics) || [];
+      if (!runs.length) {
+        el.innerHTML = `<span class="meta">请至少勾选 1～6 条存档</span>`;
+        return;
+      }
+      const head = `<tr><th>指标</th>${runs.map((r) => `<th>#${r.id}<div class="meta">${r.label || ""}</div></th>`).join("")}</tr>`;
+      const body = metrics.map((m) => {
+        const cells = runs.map((r) => {
+          let v = r[m.key];
+          if (v == null && r.summary && r.summary[m.key] != null) v = r.summary[m.key];
+          if (typeof v === "number") v = Number.isInteger(v) ? v : Math.round(v * 100) / 100;
+          return `<td>${v == null || v === "" ? "—" : v}</td>`;
+        }).join("");
+        return `<tr><td>${m.title || m.key}</td>${cells}</tr>`;
+      }).join("");
+      el.innerHTML = `<div class="rev-table-wrap"><table class="rev-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+    }
+    document.getElementById("btArchiveRefresh")?.addEventListener("click", () => loadBacktestArchives());
+    document.getElementById("btArchiveCompare")?.addEventListener("click", async () => {
+      const ids = [...document.querySelectorAll(".bt-run-pick:checked")].map((el) => el.value);
+      if (!ids.length) {
+        paintBacktestCompare({ runs: [], metrics: [] });
+        return;
+      }
+      try {
+        const r = await fetch("/api/backtest/compare?ids=" + encodeURIComponent(ids.join(",")), {
+          credentials: "same-origin",
+        });
+        const d = await r.json().catch(() => ({}));
+        paintBacktestCompare(d);
+      } catch (e) {
+        paintBacktestCompare({ runs: [], metrics: [] });
+      }
+    });
+    document.getElementById("btArchiveClear")?.addEventListener("click", async () => {
+      if (!confirm("清空全部回测存档？不可恢复。")) return;
+      try {
+        const r = await fetch("/api/backtest/runs/clear?keep=0", {
+          method: "POST",
+          credentials: "same-origin",
+        });
+        if (r.ok) {
+          document.getElementById("btCompare").innerHTML = "";
+          await loadBacktestArchives();
+        } else {
+          alert("清空失败");
+        }
+      } catch (e) {
+        alert("清空请求失败");
+      }
+    });
+    document.getElementById("btArchiveList")?.addEventListener("click", async (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      const loadBtn = t.closest(".bt-run-load");
+      const delBtn = t.closest(".bt-run-del");
+      if (loadBtn) {
+        const id = loadBtn.getAttribute("data-id");
+        const bodyEl = document.getElementById("btBody");
+        if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">加载存档 #${id}…</td></tr>`;
+        try {
+          const r = await fetch("/api/backtest/runs/" + id, { credentials: "same-origin" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "加载失败"}</td></tr>`;
+            return;
+          }
+          if (d.date_from) document.getElementById("btFrom").value = d.date_from;
+          if (d.date_to) document.getElementById("btTo").value = d.date_to;
+          if (d.mode) document.getElementById("btMode").value = d.mode;
+          const ready = document.getElementById("btReady");
+          if (ready) ready.checked = !!d.ready_only;
+          const sells = document.getElementById("btSells");
+          if (sells) sells.checked = d.include_sells !== false;
+          const realism = d.realism || {};
+          if (document.getElementById("btVolRatio") && realism.vol_min_ratio != null) {
+            document.getElementById("btVolRatio").value = realism.vol_min_ratio;
+          }
+          if (document.getElementById("btSlip") && realism.slip_pct != null) {
+            document.getElementById("btSlip").value = realism.slip_pct;
+          }
+          if (document.getElementById("btGap") && realism.gap_pct != null) {
+            document.getElementById("btGap").value = realism.gap_pct;
+          }
+          paintBacktest(d);
+        } catch (e) {
+          if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">加载请求失败</td></tr>`;
+        }
+        return;
+      }
+      if (delBtn) {
+        const id = delBtn.getAttribute("data-id");
+        if (!confirm("删除存档 #" + id + "？")) return;
+        try {
+          const r = await fetch("/api/backtest/runs/" + id, {
+            method: "DELETE",
+            credentials: "same-origin",
+          });
+          if (r.ok) await loadBacktestArchives();
+          else alert("删除失败");
+        } catch (e) {
+          alert("删除请求失败");
+        }
+      }
+    });
     document.getElementById("btPreview")?.addEventListener("click", async () => {
       const bodyEl = document.getElementById("btBody");
       if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">预览匹配中…</td></tr>`;
@@ -7969,7 +8129,7 @@
         const r = await fetch("/api/backtest/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(btPayload({ dry_run: true })),
+          body: JSON.stringify(btPayload({ dry_run: true, persist: false })),
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || d.ok === false) {
@@ -8001,6 +8161,7 @@
           return;
         }
         paintBacktest(d);
+        if (d.persisted) await loadBacktestArchives();
       } catch (e) {
         if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">回测请求失败</td></tr>`;
       }

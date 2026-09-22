@@ -365,12 +365,18 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "把历史上系统发出的纸面信号，用日线高低价「假装成交」，再按复盘同一套标签看事后表现。"
         "用来粗筛规则靠不靠谱，不是算实盘盈亏，也不改真实已交易。"
         "用法：先选日期→可点「预览匹配数」看有没有信号→再「跑回测」；买撮合先试建议价，理想回踩更严。"
-        "可调量能门槛、滑点%、跳空%以降低日线高估。",
-        "algo": "POST /api/backtest/run（dry_run=预览）。跨度≤90天。只读 signals，不写 traded/fill。\n"
+        "可调量能门槛、滑点%、跳空%以降低日线高估。勾选「存档本次」写入独立结果表，便于参数组对比。",
+        "algo": "POST /api/backtest/run（dry_run=预览；persist=存档）。跨度≤90天。只读 signals，不写 traded/fill。\n"
         "买：按买撮合模式用 wait/plan/mid 对日线 low 判触达；信号日开盘≥chase 当日跳过并顺延最多约2个交易日。\n"
         "量能：触达日 volume≥vol_min_ratio×近10日中位，否则跳过该日。滑点：买抬价/卖压价。\n"
         "跳空：相对昨收低开≥gap_pct% 且开盘≤目标→按开盘成交。卖同理缺口穿止损。\n"
-        "卖：同日先止损后卖价。成交后 score_signal_with_closes；命中=次日红/三日红。强制 disclaimer。",
+        "卖：同日先止损后卖价。成交后 score_signal_with_closes；命中=次日红/三日红。强制 disclaimer。\n"
+        "存档：signal_backtest_run + signal_backtest_fill；禁 payload.sim_* 多轮堆叠。",
+    },
+    "回测存档": {
+        "mean": "把一次回测的参数与逐笔模拟成交存进独立表，方便换量能/滑点等参数组后对比；不写真实 signals，也不改仓位。",
+        "algo": "persist=true → save_backtest_run。列表 GET /api/backtest/runs；加载 GET …/runs/{id}；删除 DELETE；清空 POST …/runs/clear。\n"
+        "对比 GET /api/backtest/compare?ids=。默认保留约40份，超出剪最旧。旧库启动自动 CREATE TABLE。",
     },
     "模拟成交": {
         "mean": "假设你当时按计划价带挂单，用当日（或随后几天）的最低/最高价判断「能不能成交、按什么价成交」。"
@@ -457,7 +463,7 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "模拟执行分": {
         "mean": "回测里模拟成交相对 wait/chase 价带的执行分类（贴计划/追高/更低），与真人执行分算法相同，但字段独立、不写 signals。",
-        "algo": "backtest._sim_exec_kind → classify_fill_execution；summary.sim_exec=build_exec_score(伪行)。禁 payload.sim_* 持久化。",
+        "algo": "backtest._sim_exec_kind → classify_fill_execution；summary.sim_exec=build_exec_score(伪行)。结果可入 signal_backtest_*；禁 payload.sim_* 持久化。",
     },
     "开盘卖出缓冲": {
         "mean": "开盘后软卖先观察一段时间（默认 09:30–09:45），止损/清仓「必卖」立即提示；缓冲结束用分时（破开盘/均价/放量）判定仍卖或持有，无分时则回退现价。",

@@ -1853,6 +1853,9 @@ class BacktestIn(BaseModel):
     vol_min_ratio: float | None = Field(default=None, ge=0, le=2)
     slip_pct: float | None = Field(default=None, ge=0, le=3)
     gap_pct: float | None = Field(default=None, ge=0, le=10)
+    # Persist into signal_backtest_run / fill (never signals.payload).
+    persist: bool = False
+    label: str = ""
 
 
 @app.post("/api/backtest/run")
@@ -1861,8 +1864,8 @@ async def backtest_run(
     user: dict = Depends(current_admin_required),
 ) -> dict:
     """Replay paper signals with daily OHLC simulated fills (admin only)."""
-    del user
     from market_desk.backtest import run_signal_backtest
+    from market_desk.db import save_backtest_run
 
     mode = str(body.mode or "wait").strip().lower()
     if mode not in ("wait", "plan", "mid"):
@@ -1881,4 +1884,108 @@ async def backtest_run(
     )
     if not out.get("ok"):
         raise HTTPException(400, str(out.get("detail") or "backtest failed"))
+    if body.persist and not body.dry_run:
+        try:
+            run = save_backtest_run(
+                result=out,
+                created_by=int(user.get("id") or 0),
+                label=str(body.label or "").strip(),
+            )
+            out["run_id"] = run.get("id")
+            out["run"] = run
+            out["persisted"] = True
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     return out
+
+
+@app.get("/api/backtest/runs")
+def backtest_runs_list(
+    limit: int = Query(default=30, ge=1, le=100),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """List saved backtest runs (headers only)."""
+    del user
+    from market_desk.db import list_backtest_runs
+
+    return {"ok": True, "runs": list_backtest_runs(limit=limit)}
+
+
+@app.get("/api/backtest/runs/{run_id}")
+def backtest_run_get(
+    run_id: int,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Load one saved run with fill rows for the backtest table."""
+    del user
+    from market_desk.db import get_backtest_run
+
+    run = get_backtest_run(int(run_id), with_fills=True)
+    if not run:
+        raise HTTPException(404, "run not found")
+    summary = run.get("summary") or {}
+    return {
+        "ok": True,
+        "dry_run": False,
+        "persisted": True,
+        "run_id": run.get("id"),
+        "run": run,
+        "date_from": run.get("date_from"),
+        "date_to": run.get("date_to"),
+        "mode": run.get("mode"),
+        "ready_only": run.get("ready_only"),
+        "include_sells": run.get("include_sells"),
+        "realism": {
+            "vol_min_ratio": run.get("vol_min_ratio"),
+            "slip_pct": run.get("slip_pct"),
+            "gap_pct": run.get("gap_pct"),
+        },
+        "n": run.get("item_n"),
+        "summary": summary,
+        "items": run.get("items") or [],
+        "note": run.get("note") or "",
+        "disclaimer": (
+            "已存档回测结果（独立表 signal_backtest_*，未写入 signals.payload）。"
+        ),
+    }
+
+
+@app.delete("/api/backtest/runs/{run_id}")
+def backtest_run_delete(
+    run_id: int,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Delete one saved backtest run and its fills."""
+    del user
+    from market_desk.db import delete_backtest_run
+
+    ok = delete_backtest_run(int(run_id))
+    if not ok:
+        raise HTTPException(404, "run not found")
+    return {"ok": True, "deleted": run_id}
+
+
+@app.post("/api/backtest/runs/clear")
+def backtest_runs_clear(
+    keep: int = Query(default=0, ge=0, le=100),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Wipe saved runs, optionally keeping the newest ``keep``."""
+    del user
+    from market_desk.db import clear_backtest_runs
+
+    deleted = clear_backtest_runs(keep=int(keep))
+    return {"ok": True, "deleted": deleted, "keep": int(keep)}
+
+
+@app.get("/api/backtest/compare")
+def backtest_compare(
+    ids: str = Query(default="", description="Comma-separated run ids"),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Compare summary metrics across saved parameter groups."""
+    del user
+    from market_desk.db import compare_backtest_runs
+
+    raw = [x.strip() for x in str(ids or "").split(",") if x.strip()]
+    return compare_backtest_runs(raw)

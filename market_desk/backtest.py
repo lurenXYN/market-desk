@@ -1,7 +1,8 @@
 """Lightweight signal-replay backtest with daily OHLC simulated fills.
 
-Does not write traded/fill onto live signals — results are ephemeral for the
-review-style 「回测」 tab. Outcomes reuse ``score_signal_with_closes``.
+Does not write traded/fill onto live signals. Ephemeral results can be
+persisted into ``signal_backtest_run`` / ``signal_backtest_fill`` (never via
+``signals.payload.sim_*``). Outcomes reuse ``score_signal_with_closes``.
 """
 
 from __future__ import annotations
