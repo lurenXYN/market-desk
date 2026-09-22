@@ -1223,6 +1223,28 @@ def resolve_auto_tune(
     return tune
 
 
+def _remap_rows_for_adapt_standard(
+    rows: list[dict[str, Any]] | None,
+    standard: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Soft-remap signal rows so adapt knobs can follow a non-classic standard.
+
+    ``filled``: keep traded + labeled rows (实盘成交样本).
+    ``same_day_plan``: without closes re-score, returns (rows, 0) so callers
+    keep classic — full plan remapping remains a follow-up.
+    """
+    src = list(rows or [])
+    std = str(standard or "classic").strip().lower()
+    if std == "filled":
+        kept = [
+            dict(r)
+            for r in src
+            if int(r.get("traded") or 0) and str(r.get("outcome_label") or "").strip()
+        ]
+        return kept, len(kept)
+    return src, 0
+
+
 def build_adapt_bundle(
     *,
     phase: str = "",
@@ -1233,10 +1255,10 @@ def build_adapt_bundle(
 ) -> dict[str, Any]:
     """Assemble day-scoped adaptive soft controls for the battle desk.
 
-    Outcome-based soft knobs always read **persisted classic** labels on
-    ``signals``. UI standards (same_day_plan / filled) are display overlays.
-    ``adapt_follow_outcome`` is reserved; when True the bundle only annotates
-    intent — scoring still uses classic until a dedicated re-score path lands.
+    Outcome-based soft knobs default to **persisted classic** labels on
+    ``signals``. When ``adapt_follow_outcome`` is on and the UI standard is
+    ``filled``, heat/sweet/exec use traded+labeled rows. ``same_day_plan``
+    still needs closes re-score (falls back to classic with a note).
     """
     from market_desk.settings import setting
 
@@ -1249,6 +1271,23 @@ def build_adapt_bundle(
             rows = load_signals(limit=240)
     except Exception:
         rows = []
+    basis = "classic"
+    basis_note = "调参反哺固定用落库 classic 标签"
+    if follow and ui_std in ("same_day_plan", "filled"):
+        remapped, n_hit = _remap_rows_for_adapt_standard(rows, ui_std)
+        if n_hit > 0:
+            rows = remapped
+            basis = ui_std
+            basis_note = (
+                f"调参跟随界面评测 {ui_std}（已用落库旁路标签重映 {n_hit} 笔；"
+                "无旁路字段的仍用 classic）"
+            )
+        else:
+            basis_note = (
+                f"跟随开关已开且界面为 {ui_std}，但样本缺旁路标签，仍用 classic"
+            )
+    elif follow and ui_std != "classic":
+        basis_note = f"跟随开关已开；界面 {ui_std} 暂无重映路径，仍用 classic"
     heat = build_size_heat(rows)
     sweet = build_pullback_sweet(rows)
     sell_mfe = build_sell_mfe_bias(rows, use_cache=False)
@@ -1350,17 +1389,10 @@ def build_adapt_bundle(
     ]
     return {
         "ok": True,
-        "outcome_basis": "classic",
+        "outcome_basis": basis,
         "adapt_follow_outcome": follow,
         "ui_outcome_standard": ui_std,
-        "outcome_basis_note": (
-            "调参反哺固定用落库 classic 标签"
-            + (
-                f"；界面评测为 {ui_std}（跟随开关已开，重算路径待接）"
-                if follow and ui_std != "classic"
-                else ""
-            )
-        ),
+        "outcome_basis_note": basis_note,
         "size_heat": heat,
         "size_mult": float(composed.get("size_mult") or 1.0),
         "size_compose": composed,

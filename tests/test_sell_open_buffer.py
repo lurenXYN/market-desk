@@ -78,6 +78,7 @@ def test_must_stays_ready_in_buffer() -> None:
                 "sell_pct": 100,
                 "sell_qty": 200,
                 "last": 9.0,
+                "open": 10.0,
                 "stop_price": 9.1,
                 "reason": "止损",
             }
@@ -89,6 +90,34 @@ def test_must_stays_ready_in_buffer() -> None:
     item = out["all_items"][0]
     assert item["open_buffer_track"] == "must"
     assert item["ready"] is True
+
+
+def test_shallow_open_break_defers_must() -> None:
+    now = datetime(2026, 9, 18, 9, 32, 0)
+    advice = {
+        "all_items": [
+            {
+                "code": "600000",
+                "kind": "stock",
+                "ready": True,
+                "urgency": "stop",
+                "exit_mode": "clear",
+                "role_label": "止损清仓",
+                "last": 9.97,
+                "open": 10.0,
+                "stop_price": 9.5,
+                "sell_price": 9.9,
+                "sell_pct": 100,
+                "sell_qty": 100,
+            }
+        ],
+        "items": [],
+    }
+    out = apply_sell_open_buffer(advice, now=now, watch_minutes=15)
+    item = out["all_items"][0]
+    assert item.get("open_buffer_shallow") is True
+    assert item["open_buffer_track"] == "watch"
+    assert item["ready"] is False
 
 
 def test_after_watch_recover_to_hold() -> None:

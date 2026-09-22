@@ -207,6 +207,20 @@ class DeskEngine:
         """Create tables and start the polling task."""
         init_db()
         try:
+            from market_desk.backup_store import check_db_integrity
+
+            integrity = check_db_integrity()
+            self.snapshot["db_integrity"] = integrity
+            if not integrity.get("ok") and not integrity.get("skipped"):
+                log.error("desk.db integrity failed: %s", integrity.get("detail"))
+                self._queue_ops_alert(
+                    f"ops:db:{datetime.now().strftime('%Y-%m-%d')}",
+                    "数据库损坏",
+                    str(integrity.get("detail") or "integrity_check failed")[:180],
+                )
+        except Exception:
+            log.exception("db integrity check failed")
+        try:
             from market_desk.theme_memory import rebuild_all_theme_reputation
 
             mig = rebuild_all_theme_reputation()
@@ -3422,6 +3436,13 @@ def _build_health(
             tips.append("新闻雷达空数据")
         elif st in ("online", "stale") and nr.get("status_label"):
             tips.append("新闻雷达·" + str(nr.get("status_label")))
+    integrity = payload.get("db_integrity")
+    if not isinstance(integrity, dict):
+        integrity = (getattr(engine, "snapshot", {}) or {}).get("db_integrity")
+    if isinstance(integrity, dict) and not integrity.get("ok") and not integrity.get("skipped"):
+        tips.append("SQLite 库损坏·请停服重拷 desk.db（勿留旧 wal）")
+        score -= 40
+        degraded = True
     score = max(0, min(100, score))
     level = "ok" if score >= 80 else ("warn" if score >= 50 else "bad")
     if degraded and level == "ok":

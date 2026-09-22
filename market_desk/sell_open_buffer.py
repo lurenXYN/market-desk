@@ -356,25 +356,65 @@ def apply_sell_open_buffer(
         series = minutes_by_code.get(code) if code else None
 
         if track == "must":
-            must_n += 1
-            item["open_buffer_phase"] = (
-                "auction_preview" if clock["auction"] else "immediate"
-            )
-            tip = (
-                "竞价预告·开盘必卖（止损/清仓不等待）"
-                if clock["auction"]
-                else "开盘必卖（止损/清仓，不等待缓冲）"
-            )
-            item["role_label"] = _prefix_role(str(item.get("role_label") or ""), tip)
-            item["reason"] = _join_reason(str(item.get("reason") or ""), tip)
-            item = _enrich_sell_next_action(
-                item,
-                hold_peak=float(item.get("hold_peak") or 0),
-                last_sell_price=item.get("half_anchor_price"),
-                digits=digits,
-            )
-            new_all.append(item)
-            continue
+            # Soft shallow-break buffer: stop/clear that barely lost open can wait
+            # inside the watch window (false open break); deep stop stays immediate.
+            shallow_ok = False
+            if clock["in_watch"]:
+                from market_desk.config import SELL_OPEN_SHALLOW_BREAK_PCT
+
+                open_px = num(item.get("open") or item.get("day_open"))
+                last_px = num(item.get("last") or item.get("price"))
+                stop_px = num(item.get("stop_price") or item.get("stop"))
+                thr = float(SELL_OPEN_SHALLOW_BREAK_PCT)
+                if open_px and open_px > 0 and last_px is not None:
+                    from_open = (float(last_px) - float(open_px)) / float(open_px) * 100.0
+                    deep_stop = (
+                        stop_px is not None
+                        and float(last_px) <= float(stop_px) * 1.001
+                    )
+                    if (not deep_stop) and (-thr <= from_open < 0):
+                        shallow_ok = True
+                        item["open_buffer_track"] = "watch"
+                        item["open_buffer_shallow"] = True
+                        item["open_buffer_pending"] = True
+                        item["ready"] = False
+                        deferred_n += 1
+                        tip = (
+                            f"浅破开盘缓冲（相对开盘 {from_open:.2f}%≥-{thr:g}%）"
+                            f"·观察至 {deadline}"
+                        )
+                        item["role_label"] = _prefix_role(
+                            str(item.get("role_label") or ""), tip
+                        )
+                        item["reason"] = _join_reason(str(item.get("reason") or ""), tip)
+                        item = _enrich_sell_next_action(
+                            item,
+                            hold_peak=float(item.get("hold_peak") or 0),
+                            last_sell_price=item.get("half_anchor_price"),
+                            digits=digits,
+                        )
+                        new_all.append(item)
+                        continue
+            if not shallow_ok:
+                must_n += 1
+                item["open_buffer_phase"] = (
+                    "auction_preview" if clock["auction"] else "immediate"
+                )
+                tip = (
+                    "竞价预告·开盘必卖（止损/清仓不等待）"
+                    if clock["auction"]
+                    else "开盘必卖（止损/清仓，不等待缓冲）"
+                )
+                item["role_label"] = _prefix_role(str(item.get("role_label") or ""), tip)
+                item["reason"] = _join_reason(str(item.get("reason") or ""), tip)
+                item = _enrich_sell_next_action(
+                    item,
+                    hold_peak=float(item.get("hold_peak") or 0),
+                    last_sell_price=item.get("half_anchor_price"),
+                    digits=digits,
+                )
+                new_all.append(item)
+                continue
 
         if clock["auction"]:
             tip = f"软卖·开盘后观察至 {deadline} 再定"

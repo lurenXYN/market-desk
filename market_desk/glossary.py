@@ -365,7 +365,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "把历史上系统发出的纸面信号，用日线高低价「假装成交」，再按复盘同一套标签看事后表现。"
         "用来粗筛规则靠不靠谱，不是算实盘盈亏，也不改真实已交易。"
         "用法：先选日期→可点「预览匹配数」看有没有信号→再「跑回测」；买撮合先试建议价，理想回踩更严。"
-        "可调量能门槛、滑点%、跳空%以降低日线高估。勾选「存档本次」写入独立结果表，便于参数组对比。",
+        "可调量能门槛、滑点%、跳空%以降低日线高估。勾选「存档本次」写入独立结果表，便于参数组对比。"
+        "「参数组网格」一次跑多组并存档对比。",
         "algo": "POST /api/backtest/run（dry_run=预览；persist=存档）。跨度≤90天。只读 signals，不写 traded/fill。\n"
         "买：按买撮合模式用 wait/plan/mid 对日线 low 判触达；信号日开盘≥chase 当日跳过并顺延最多约2个交易日。\n"
         "量能：触达日 volume≥vol_min_ratio×近10日中位，否则跳过该日。滑点：买抬价/卖压价。\n"
@@ -458,8 +459,16 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "开盘卖出缓冲见「开盘卖出缓冲」词条（must/watch）。",
     },
     "调参口径": {
-        "mean": "仓位热度、执行分、卖点 MFE 等 soft 调参，一律读库里 classic 结果标签，不跟界面上的「当日建议价/实盘成交」走。",
-        "algo": "build_adapt_bundle.outcome_basis=classic。settings.adapt_follow_outcome 预留；开启仅标注意图，暂不重算。",
+        "mean": "仓位热度、执行分、卖点 MFE 等 soft 调参默认读库里 classic 结果标签。打开「调参跟随评测」且界面为实盘成交时，改用已交易样本反哺。",
+        "algo": "build_adapt_bundle。adapt_follow_outcome+filled → 仅 traded+有标签行；same_day_plan 仍需 closes 重算（暂回退 classic 并注明）。",
+    },
+    "浅破开盘缓冲": {
+        "mean": "开盘缓冲窗内，止损/清仓若只是相对开盘浅破（默认约 0.45% 内）且未深砸止损价，先观察至缓冲结束，减少假破卖飞。",
+        "algo": "SELL_OPEN_SHALLOW_BREAK_PCT；apply_sell_open_buffer 将 must→watch pending。深破止损仍立即 must。",
+    },
+    "拉库覆盖": {
+        "mean": "从线上把 desk.db 拷到本地调试时，必须先停本地、删掉 db+shm+wal，再拷完整文件，否则易 malformed。",
+        "algo": "deploy/PULL_DESK_DB.md；scripts/pull-desk-db.ps1|.sh；admin 可下载 data/backup/desk-*.db。",
     },
     "模拟执行分": {
         "mean": "回测里模拟成交相对 wait/chase 价带的执行分类（贴计划/追高/更低），与真人执行分算法相同，但字段独立、不写 signals。",

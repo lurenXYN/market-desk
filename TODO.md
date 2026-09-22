@@ -12,22 +12,23 @@ Agents: **at the start of each session involving this app, read this file before
 
 - [ ] **回测异步任务** — 超长区间后台跑 + 前端轮询（当前靠 ≤90 天同步护栏）。
 - [ ] **分钟 K 高保真模式** — 可选高级撮合（识别 chase 突破前后时序）。
-- [ ] **adapt 真正跟随评测标准** — `adapt_follow_outcome` 预留；需带 closes 重算后再反哺。
+- [ ] **adapt same_day_plan 带 closes 重算** — filled 已可跟随；plan 标准仍需日线重算路径。
 
 ### 卖出开盘决策算法（已接线 · 分时深化）
 
-must 立即 / watch 观察到 09:45；有分时则破开盘·均价·放量判定，否则现价回退。复盘 watch 轨按 09:45 决策价（或开盘代理）计卖飞。参数 `sell_open_watch_minutes`。
+must 立即 / watch 观察到 09:45；浅破开盘可缓冲；有分时则破开盘·均价·放量判定。参数 `sell_open_watch_minutes` / `SELL_OPEN_SHALLOW_BREAK_PCT`。
 
-### 以后可做（刻意缓做）
+### 以后可做（刻意缓做 · 仅软提示）
 
-- [ ] **再叠硬清仓 / 波浪硬关买卖** — 短期别堆细则；若做先「强提示+一键」勿全硬关。
-- [ ] **自动下单 / 券商对接**
-- [ ] **大改主线打分** — 近期已够复杂；宜先有回测对照再动权重。
-- [ ] **AI 荐股层** — 仅旁路叙事，不进 ready。
-- [ ] **全市场选股引擎 / 分时量当选股主轴** — 与「主线→价带→确认」哲学冲突；量能只保留确认层。
+- [ ] **硬清仓 / 波浪硬关买卖** — 不做全硬关；最多强提示+一键。
+- [ ] **自动下单 / 券商对接** — 不做。
+- [ ] **大改主线打分** — 宜先回测对照。
+- [ ] **AI 荐股进 ready** — 仅旁路叙事。
+- [ ] **全市场选股引擎** — 与主线哲学冲突。
 
 ## Done recently (context)
 
+- [x] **1–6 批次落地** — 浅破开盘缓冲；单ETF禁买旁注；库 integrity+备份下载+拉库脚本；adapt 跟随 filled；回测网格/存档；通勤再瘦。*(2026-09-22)*
 - [x] **回测独立结果表** — `signal_backtest_run`/`fill`；persist 存档、对比、清理；禁 payload.sim_*；旧库 CREATE IF NOT EXISTS。*(2026-09-22)*
 - [x] **1–6 + 回测 admin** — 收盘 breadth 守卫；健康条 clist host/backoff；Deploy 补丁校验失败即红；Push 标题统一【可买/将飞/止损】；ready 跨日作废提示；admin 补丁管理；回测 tab/API 仅 admin。*(2026-09-22)*
 - [x] **Push 分级再打磨** — 将飞/可买半/止损 微信标题统一为【标签】名称 代码。*(2026-09-22)*

@@ -1765,6 +1765,35 @@ def backup_auto_list(
     }
 
 
+@app.get("/api/backup/auto/download")
+def backup_auto_download(
+    name: str = Query(..., min_length=3, max_length=120),
+    user: dict = Depends(current_admin_required),
+):
+    """Download one auto backup file (admin). Path traversal rejected."""
+    del user
+    from market_desk.backup_store import resolve_backup_file
+
+    path = resolve_backup_file(name)
+    if path is None:
+        raise HTTPException(404, "backup not found")
+    media = "application/json" if path.suffix == ".json" else "application/octet-stream"
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=path.name,
+    )
+
+
+@app.get("/api/ops/db-integrity")
+def ops_db_integrity(user: dict = Depends(current_admin_required)) -> dict:
+    """Admin probe for live desk.db integrity."""
+    del user
+    from market_desk.backup_store import check_db_integrity
+
+    return {"ok": True, **check_db_integrity()}
+
+
 def _apply_daily_patches_payload(*, force: bool = True) -> dict:
     """Shared patch apply + in-memory history refresh for admin/internal routes."""
     from market_desk.db import load_daily
@@ -1989,3 +2018,90 @@ def backtest_compare(
 
     raw = [x.strip() for x in str(ids or "").split(",") if x.strip()]
     return compare_backtest_runs(raw)
+
+
+class BacktestGridIn(BaseModel):
+    """Run several parameter variants and persist each (admin)."""
+
+    date_from: str
+    date_to: str
+    include_sells: bool = True
+    ready_only: bool = False
+    limit: int = Field(default=120, ge=20, le=400)
+    variants: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/api/backtest/grid")
+async def backtest_grid(
+    body: BacktestGridIn,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Run up to 6 mode/vol/slip/gap variants and archive each run."""
+    from market_desk.backtest import run_signal_backtest
+    from market_desk.db import save_backtest_run
+
+    variants = list(body.variants or [])[:6]
+    if not variants:
+        variants = [
+            {"mode": "plan", "vol_min_ratio": 0.4, "slip_pct": 0.15, "gap_pct": 1.0},
+            {"mode": "wait", "vol_min_ratio": 0.4, "slip_pct": 0.15, "gap_pct": 1.0},
+            {"mode": "plan", "vol_min_ratio": 0.6, "slip_pct": 0.25, "gap_pct": 1.0},
+        ]
+    runs: list[dict[str, Any]] = []
+    for i, var in enumerate(variants):
+        mode = str(var.get("mode") or "plan").strip().lower()
+        if mode not in ("wait", "plan", "mid"):
+            mode = "plan"
+        out = await run_signal_backtest(
+            date_from=str(body.date_from)[:10],
+            date_to=str(body.date_to)[:10],
+            mode=mode,
+            include_sells=bool(body.include_sells),
+            ready_only=bool(body.ready_only),
+            limit=int(body.limit),
+            dry_run=False,
+            vol_min_ratio=var.get("vol_min_ratio"),
+            slip_pct=var.get("slip_pct"),
+            gap_pct=var.get("gap_pct"),
+        )
+        if not out.get("ok"):
+            runs.append({"ok": False, "detail": out.get("detail"), "variant": var})
+            continue
+        label = str(var.get("label") or "").strip() or (
+            f"grid{i+1}·{mode}·v{var.get('vol_min_ratio', '—')}"
+        )
+        run = save_backtest_run(
+            result=out,
+            created_by=int(user.get("id") or 0),
+            label=label,
+        )
+        runs.append({"ok": True, "run_id": run.get("id"), "run": run, "variant": var})
+    return {"ok": True, "n": len(runs), "runs": runs}
+
+
+@app.post("/api/backtest/runs/{run_id}/apply-form")
+def backtest_apply_form(
+    run_id: int,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Return form fields from a saved run so the UI can refill controls."""
+    del user
+    from market_desk.db import get_backtest_run
+
+    run = get_backtest_run(int(run_id), with_fills=False)
+    if not run:
+        raise HTTPException(404, "run not found")
+    return {
+        "ok": True,
+        "form": {
+            "date_from": run.get("date_from"),
+            "date_to": run.get("date_to"),
+            "mode": run.get("mode") or "plan",
+            "ready_only": bool(run.get("ready_only")),
+            "include_sells": bool(run.get("include_sells")),
+            "vol_min_ratio": run.get("vol_min_ratio"),
+            "slip_pct": run.get("slip_pct"),
+            "gap_pct": run.get("gap_pct"),
+            "label": run.get("label") or "",
+        },
+    }

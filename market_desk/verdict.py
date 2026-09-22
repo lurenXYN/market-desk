@@ -3353,7 +3353,30 @@ def finalize_recommend_buy_ux(
     else:
         for raw in rec.get("items") or []:
             raw["probe_ok"] = False
-    return attach_buy_progress(rec)
+    rec = attach_buy_progress(rec)
+    return _annotate_sole_etf_chase(rec)
+
+
+def _annotate_sole_etf_chase(recommend: dict[str, Any] | None) -> dict[str, Any]:
+    """Soft tip when the only priced vehicle is a blocked ETF (cannot arm buy)."""
+    rec = dict(recommend or {})
+    items = list(rec.get("items") or [])
+    if not items:
+        return rec
+    stocks = [x for x in items if x.get("kind") == "stock"]
+    etfs = [x for x in items if x.get("kind") == "etf"]
+    if stocks or len(etfs) != 1:
+        return rec
+    etf = etfs[0]
+    if not (etf.get("block_ready") or not etf.get("ready")):
+        return rec
+    tip = "主线仅 ETF 且禁现买·可盯回踩/分时，勿死等可买满"
+    rec["sole_etf_blocked"] = True
+    rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), tip)
+    etf = dict(etf)
+    etf["reason"] = _join_hint(str(etf.get("reason") or ""), tip)
+    rec["items"] = [etf]
+    return rec
 
 
 def _apply_ready_confirmations(

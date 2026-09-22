@@ -215,6 +215,8 @@ OUTCOME_FORMULA_VERSION = 5
 OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
 SELL_OPEN_WATCH_MINUTES = 15
+# Soft: during open watch, "must" stop that only barely lost open may wait (false break).
+SELL_OPEN_SHALLOW_BREAK_PCT = 0.45
 
 # Wait price as a fraction of last (shallower wait → nearer entry tags).
 ETF_WAIT_GAP = 0.9955   # ~0.45% below last

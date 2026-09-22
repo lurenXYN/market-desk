@@ -79,3 +79,43 @@ def list_auto_backups(limit: int = 10) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def resolve_backup_file(name: str) -> Path | None:
+    """Resolve a safe backup filename under ``data/backup`` (no path traversal)."""
+    raw = str(name or "").strip().replace("\\", "/")
+    if not raw or "/" in raw or ".." in raw:
+        return None
+    if not (raw.startswith("auto-") or raw.startswith("desk-")):
+        return None
+    if not (raw.endswith(".json") or raw.endswith(".db")):
+        return None
+    path = (BACKUP_DIR / raw).resolve()
+    try:
+        path.relative_to(BACKUP_DIR.resolve())
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def check_db_integrity() -> dict[str, Any]:
+    """Run SQLite ``PRAGMA integrity_check`` on the live desk database."""
+    import sqlite3
+
+    if not DB_PATH.exists():
+        return {"ok": True, "skipped": True, "detail": "no desk.db yet"}
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=15.0)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"[:200]}
+    msg = str(row[0]) if row else "unknown"
+    ok = msg.strip().lower() == "ok"
+    return {
+        "ok": ok,
+        "detail": msg if ok else msg[:500],
+        "path": str(DB_PATH),
+    }

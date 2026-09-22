@@ -730,7 +730,16 @@
     body.commute-mode .today-trio,
     body.commute-mode #noEtfBanner,
     body.commute-mode .verdict-one,
-    body.commute-mode .mainline-title { display: none !important; }
+    body.commute-mode .mainline-title,
+    body.commute-mode #indepbox,
+    body.commute-mode #dragonbox,
+    body.commute-mode #sidebox,
+    body.commute-mode #linkbox,
+    body.commute-mode #trialBox,
+    body.commute-mode #favDesk,
+    body.commute-mode .bt-help,
+    body.commute-mode #panel-market,
+    body.commute-mode #panel-boards { display: none !important; }
     body.commute-mode .nav-tabs .nav-sec { display: none !important; }
     body.commute-mode #commuteBtn.on {
       color: #0b1220; background: #fbbf24; border-color: #fbbf24;
@@ -3817,6 +3826,7 @@
           <label class="settings-check"><input type="checkbox" id="btPersist" checked /> 存档本次 <button type="button" class="q" data-term="回测存档">?</button></label>
           <label>存档标签<input type="text" id="btLabel" maxlength="80" placeholder="可选，如 plan·量能0.4" /></label>
           <button type="button" class="rev-col-btn" id="btPreview" title="只数信号、不拉日线">预览匹配数</button>
+          <button type="button" class="rev-col-btn" id="btGrid" title="默认3组参数各跑一遍并存档">参数组网格</button>
           <button type="submit">跑回测</button>
         </form>
         <div class="pos-sum" id="btSum" style="margin-top:10px"></div>
@@ -8143,6 +8153,47 @@
         if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">预览请求失败</td></tr>`;
       }
     });
+    document.getElementById("btGrid")?.addEventListener("click", async () => {
+      const bodyEl = document.getElementById("btBody");
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">参数组网格跑测中…</td></tr>`;
+      try {
+        const base = btPayload({});
+        const r = await fetch("/api/backtest/grid", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date_from: base.date_from,
+            date_to: base.date_to,
+            include_sells: base.include_sells,
+            ready_only: base.ready_only,
+            limit: base.limit,
+            variants: [
+              { mode: base.mode || "plan", vol_min_ratio: base.vol_min_ratio, slip_pct: base.slip_pct, gap_pct: base.gap_pct, label: "当前表单" },
+              { mode: "wait", vol_min_ratio: base.vol_min_ratio, slip_pct: base.slip_pct, gap_pct: base.gap_pct, label: "wait·同量能" },
+              { mode: "plan", vol_min_ratio: Math.min(1, (base.vol_min_ratio || 0.4) + 0.2), slip_pct: (base.slip_pct || 0.15) + 0.1, gap_pct: base.gap_pct, label: "plan·更严量能/滑点" },
+            ],
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "网格失败"}</td></tr>`;
+          return;
+        }
+        if (bodyEl) {
+          bodyEl.innerHTML = `<tr><td colspan="10" class="meta">已存档 ${(d.runs || []).length} 组，见下方对比</td></tr>`;
+        }
+        await loadBacktestArchives();
+        const ids = (d.runs || []).map((x) => x.run_id).filter(Boolean);
+        if (ids.length) {
+          const cr = await fetch("/api/backtest/compare?ids=" + encodeURIComponent(ids.join(",")), {
+            credentials: "same-origin",
+          });
+          paintBacktestCompare(await cr.json().catch(() => ({})));
+        }
+      } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">网格请求失败</td></tr>`;
+      }
+    });
     document.getElementById("btForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const bodyEl = document.getElementById("btBody");
@@ -10107,9 +10158,25 @@
         if (hint) {
           if (br.ok && bd.ok) {
             const items = bd.items || [];
-            hint.textContent = items.length
-              ? `最近备份：${items.slice(0, 3).map((x) => x.name).join(" · ")}（保留 ${bd.keep ?? "—"} 份）`
-              : `尚无自动备份（收盘后写入；保留 ${bd.keep ?? 30} 份）`;
+            if (!items.length) {
+              hint.innerHTML = `尚无自动备份（收盘后写入；保留 ${bd.keep ?? 30} 份）`;
+            } else {
+              hint.innerHTML = `最近备份（点名下载）：${items.slice(0, 4).map((x) =>
+                `<a href="/api/backup/auto/download?name=${encodeURIComponent(x.name)}" download>${x.name}</a>`
+              ).join(" · ")}（保留 ${bd.keep ?? "—"} 份）`
+                + ` · <button type="button" class="rev-col-btn" id="btnDbIntegrity">库完整性</button>`;
+              document.getElementById("btnDbIntegrity")?.addEventListener("click", async () => {
+                try {
+                  const ir = await fetch("/api/ops/db-integrity", { credentials: "same-origin" });
+                  const id = await ir.json().catch(() => ({}));
+                  alert(id.ok === false || id.detail === undefined
+                    ? "探测失败"
+                    : (id.ok ? "integrity: ok" : ("损坏: " + (id.detail || "").slice(0, 200))));
+                } catch (e) {
+                  alert("探测请求失败");
+                }
+              });
+            }
           } else {
             hint.textContent = "备份列表仅管理员可见；收盘仍会按全局开关备份。";
           }
