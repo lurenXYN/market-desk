@@ -5,6 +5,63 @@ from __future__ import annotations
 from typing import Any
 
 
+def ready_cross_day_tip(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Flag yesterday's ready buy signals that must be re-confirmed today.
+
+    Ready does not carry across trade dates; this tip surfaces names that were
+    ready yesterday so the morning brief / 「现在」 strip stay aligned.
+    """
+    snap = snapshot or {}
+    today = str(snap.get("trade_date") or "")[:10]
+    hist = snap.get("history") or []
+    yday = ""
+    for row in hist:
+        d = str((row or {}).get("trade_date") or "")[:10]
+        if d and d != today:
+            yday = d
+            break
+    if not yday:
+        return None
+    try:
+        from market_desk.db import load_signals_for_date
+    except Exception:
+        return None
+    stale: list[dict[str, Any]] = []
+    for row in load_signals_for_date(yday):
+        if str(row.get("signal_type") or "").lower() != "buy":
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        was_ready = bool(row.get("ready")) or bool(payload.get("ever_ready"))
+        if not was_ready:
+            continue
+        code = str(row.get("code") or "").zfill(6)
+        name = str(row.get("name") or code)
+        if code and code.isdigit():
+            stale.append({"code": code, "name": name})
+    if not stale:
+        return None
+    # Deduplicate by code, keep first few for the strip.
+    seen: set[str] = set()
+    uniq: list[dict[str, Any]] = []
+    for item in stale:
+        c = item["code"]
+        if c in seen:
+            continue
+        seen.add(c)
+        uniq.append(item)
+        if len(uniq) >= 6:
+            break
+    labels = [f"{x['name']}" for x in uniq]
+    more = len(seen) - len(uniq)
+    tail = f" 等{more}只" if more > 0 else ""
+    return {
+        "yday": yday,
+        "count": len(seen),
+        "items": uniq,
+        "line": f"昨 ready 跨日作废（须今日重确认）：{' · '.join(labels)}{tail}",
+    }
+
+
 def build_morning_brief(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Build a rule-based morning decision brief (no LLM, no push).
 
@@ -41,6 +98,9 @@ def build_morning_brief(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             f"{yday.get('temperature') if yday.get('temperature') is not None else '—'} · "
             f"涨停 {yday.get('zt') if yday.get('zt') is not None else '—'}"
         )
+    tip = ready_cross_day_tip(snap)
+    if tip and tip.get("line"):
+        bullets.append(str(tip["line"]))
     if auc.get("tone") or auc.get("median_open") is not None:
         med = auc.get("median_open")
         med_s = "—" if med is None else f"{med}%"

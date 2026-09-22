@@ -93,6 +93,41 @@ def verify_day_breadth(trade_date: str) -> dict[str, Any]:
     return {"trade_date": day, "missing": True}
 
 
+def list_daily_patches() -> list[dict[str, Any]]:
+    """List shipped patch files with applied flag for the admin panel."""
+    init_db()
+    applied_raw = load_setting(_APPLIED_KEY)
+    applied: set[str] = set()
+    if isinstance(applied_raw, list):
+        applied = {str(x) for x in applied_raw}
+    elif isinstance(applied_raw, dict):
+        applied = {str(k) for k, v in applied_raw.items() if v}
+    items: list[dict[str, Any]] = []
+    if not _PATCH_DIR.is_dir():
+        return items
+    for path in sorted(_PATCH_DIR.glob("daily-*.json")):
+        day = ""
+        note = ""
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                day = str(raw.get("trade_date") or "")[:10]
+                note = str(raw.get("note") or "")[:120]
+        except (OSError, ValueError, json.JSONDecodeError):
+            note = "unreadable"
+        pid = path.stem
+        items.append(
+            {
+                "id": pid,
+                "file": path.name,
+                "trade_date": day,
+                "note": note,
+                "applied": pid in applied,
+            }
+        )
+    return items
+
+
 def _has_nonzero_breadth(payload: dict[str, Any] | None) -> bool:
     """True when ups/downs/amount look populated."""
     data = payload or {}

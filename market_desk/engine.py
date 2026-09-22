@@ -158,6 +158,8 @@ class DeskEngine:
         self._eod_date: str | None = None
         self._morning_push_date: str | None = None
         self._theme_settle_date: str | None = None
+        # Last successful quote-derived breadth for EOD refill when clist blanked.
+        self._last_good_breadth: dict[str, Any] | None = None
         self._toast_armed = False
         self._toast_sent: dict[str, float] = {}
         # Level toasts (band/wl) stay latched until the condition clears.
@@ -384,6 +386,10 @@ class DeskEngine:
                     await self.refresh()
                     if after_close:
                         self._eod_date = today
+                        try:
+                            self._ensure_eod_breadth(today)
+                        except Exception:
+                            log.exception("eod breadth guard failed")
                         if bool(setting("auto_backup", True)):
                             try:
                                 keep = int(setting("backup_keep", 30) or 30)
@@ -587,6 +593,15 @@ class DeskEngine:
                         "breadth_degraded": False,
                     }
                 )
+                self._last_good_breadth = {
+                    "trade_date": trade_date_dash,
+                    "ups": metrics["ups"],
+                    "downs": metrics["downs"],
+                    "amount_yi": metrics["amount_yi"],
+                    "amount_pctile": metrics.get("amount_pctile"),
+                    "big_drop": metrics.get("big_drop"),
+                    "sample": metrics.get("sample"),
+                }
             else:
                 daily_payload["breadth_degraded"] = True
             save_daily(trade_date_dash, daily_payload)
@@ -944,6 +959,13 @@ class DeskEngine:
                 payload["deltas"] = build_deltas(payload, prev)
                 payload["morning_brief"] = build_morning_brief(payload)
                 try:
+                    from market_desk.report import ready_cross_day_tip
+
+                    payload["ready_cross_day"] = ready_cross_day_tip(payload)
+                except Exception:
+                    log.exception("ready cross-day tip failed")
+                    payload["ready_cross_day"] = None
+                try:
                     self._maybe_ops_health_alert(payload)
                 except Exception:
                     log.exception("ops health alert failed")
@@ -1032,6 +1054,82 @@ class DeskEngine:
                 },
                 min_seconds=int(setting("switch_min_seconds", 300)),
             )
+
+    def _ensure_eod_breadth(self, day: str) -> None:
+        """Refill today's ups/downs/amount from last-good quotes when still empty.
+
+        Runs once at the after-close tick so a full-day East Money 502 cannot leave
+        a zeroed daily_snapshot row (the 2026-09-21 failure mode).
+        """
+        day_s = str(day or "").strip()[:10]
+        if not day_s:
+            return
+        rows = {str(r.get("trade_date") or "")[:10]: r for r in load_daily(8)}
+        cur = rows.get(day_s) or {}
+        ups = int(cur.get("ups") or 0)
+        downs = int(cur.get("downs") or 0)
+        amt = float(cur.get("amount_yi") or 0)
+        degraded = bool(cur.get("breadth_degraded")) or (
+            ups == 0 and downs == 0 and amt <= 0
+        )
+        if not degraded:
+            return
+
+        patch: dict[str, Any] | None = None
+        cached = self._last_good_breadth or {}
+        if str(cached.get("trade_date") or "")[:10] == day_s and int(
+            cached.get("ups") or 0
+        ) + int(cached.get("downs") or 0) > 0:
+            patch = {
+                "ups": cached.get("ups"),
+                "downs": cached.get("downs"),
+                "amount_yi": cached.get("amount_yi"),
+                "amount_pctile": cached.get("amount_pctile"),
+                "big_drop": cached.get("big_drop"),
+                "breadth_degraded": False,
+                "breadth_eod_refill": True,
+            }
+        else:
+            try:
+                from market_desk.eastmoney import cached_main_quotes
+            except Exception:
+                cached_main_quotes = None  # type: ignore[assignment]
+            quotes = cached_main_quotes() if cached_main_quotes else []
+            valid = [q for q in quotes if q.get("pct") is not None]
+            if len(valid) >= 200:
+                u = sum(1 for q in valid if (q.get("pct") or 0) > 0)
+                d = sum(1 for q in valid if (q.get("pct") or 0) < 0)
+                amount = sum(float(q.get("amount") or 0) for q in quotes)
+                big = sum(1 for q in valid if (q.get("pct") or 0) <= -5.0)
+                patch = {
+                    "ups": u,
+                    "downs": d,
+                    "amount_yi": round(amount / 1e8, 1),
+                    "big_drop": big,
+                    "breadth_degraded": False,
+                    "breadth_eod_refill": True,
+                }
+        if not patch:
+            log.warning("eod breadth guard: no refill source for %s", day_s)
+            return
+        save_daily(day_s, patch)
+        log.info(
+            "eod breadth guard refilled %s ups=%s downs=%s amt=%s",
+            day_s,
+            patch.get("ups"),
+            patch.get("downs"),
+            patch.get("amount_yi"),
+        )
+        try:
+            if isinstance(self.snapshot, dict):
+                self.snapshot["history"] = load_daily(14)
+                m = self.snapshot.get("metrics")
+                if isinstance(m, dict):
+                    m["ups"] = patch.get("ups")
+                    m["downs"] = patch.get("downs")
+                    m["amount_yi"] = patch.get("amount_yi")
+        except Exception:
+            pass
 
     async def _write_eod_onepager(self, day: str) -> None:
         """Persist the end-of-day one-pager and push ServerChan once per day.
@@ -1612,6 +1710,8 @@ class DeskEngine:
                 "recent_toasts",
                 "filter",
                 "theme_memory",
+                "ready_cross_day",
+                "health",
             ),
             "market": (
                 "metrics",
@@ -3280,6 +3380,38 @@ def _build_health(
             stale_sec = None
     if live and failed:
         degraded = True
+    # Breadth: warn when zt alive but ups/downs still empty (failed clist day).
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    hist0 = (payload.get("history") or [None])[0] if isinstance(payload.get("history"), list) else None
+    day_row = hist0 if isinstance(hist0, dict) and str(hist0.get("trade_date") or "")[:10] == str(
+        payload.get("trade_date") or ""
+    )[:10] else {}
+    ups = int(metrics.get("ups") or day_row.get("ups") or 0)
+    downs = int(metrics.get("downs") or day_row.get("downs") or 0)
+    zt_n = int(metrics.get("zt") or day_row.get("zt") or 0)
+    if live and trading and zt_n >= 5 and ups + downs == 0:
+        tips.append("今日广度未采到（涨停池有数但涨跌家数为 0）")
+        score -= 15
+        degraded = True
+    elif bool(day_row.get("breadth_degraded")):
+        tips.append("今日广度曾降级（clist 失败，已尽量保留前值）")
+        score -= 8
+        degraded = True
+    clist: dict[str, Any] = {}
+    try:
+        from market_desk.eastmoney import clist_runtime_status
+
+        clist = clist_runtime_status()
+        host = str(clist.get("host") or "")
+        short = host.split(".", 1)[0] if host else "—"
+        if clist.get("backoff"):
+            tips.append(f"clist 冷却中 · {short} · 剩 {clist.get('backoff_sec')}s")
+            score -= 5
+            degraded = True
+        else:
+            tips.append(f"clist · {short}")
+    except Exception:
+        clist = {}
     nr = payload.get("news_radar") if isinstance(payload.get("news_radar"), dict) else {}
     if nr.get("enabled"):
         st = str(nr.get("status") or "")
@@ -3303,7 +3435,8 @@ def _build_health(
         "sources": sources,
         "degraded": degraded,
         "stale_seconds": stale_sec,
-        "tips": tips[:8],
+        "tips": tips[:10],
+        "clist": clist or None,
         "news_radar": {
             "enabled": bool(nr.get("enabled")),
             "status": nr.get("status"),

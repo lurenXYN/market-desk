@@ -2909,13 +2909,23 @@
       .hdr .auth-user button { display: none; }
       .hdr .auth-user #authSwitchBtn { display: inline-block; }
     }
-    .admin-users { margin-top: 10px; max-height: 280px; overflow: auto; font-size: 12px; }
+    .admin-users { margin-top: 10px; max-height: 420px; overflow: auto; font-size: 12px; }
     .admin-users .row {
       display: flex; justify-content: space-between; gap: 8px; align-items: center;
       padding: 6px 0; border-bottom: 1px solid #1e293b;
     }
     .admin-users .row button.danger {
       color: #fecaca; border-color: #7f1d1d;
+    }
+    .admin-users .patch-hd {
+      margin-top: 12px; padding-top: 10px; border-top: 1px solid #243247;
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      color: var(--muted);
+    }
+    .admin-users .patch-hd b { color: #e2e8f0; font-weight: 600; }
+    .admin-users .patch-meta { color: #94a3b8; font-size: 11px; margin: 4px 0 8px; }
+    .op-strip .op-tag.stale {
+      background: #422006; color: #fdba74; border: 1px solid #9a3412;
     }
     .pwd-panel {
       margin-top: 12px; padding-top: 12px; border-top: 1px solid #243247;
@@ -4525,6 +4535,12 @@
         else if (hasHalf) bits.push(`<span class="op-tag half">可买·半</span>`);
         if (hasProbe && !hasHalf && !hasFull) bits.push(`<span class="op-tag probe">可试探</span>`);
         else if (hasProbe && (hasHalf || hasFull)) bits.push(`<span class="op-tag probe">另有试探</span>`);
+        const stale = d.ready_cross_day || {};
+        if (stale.line) {
+          bits.push(
+            `<span class="op-tag stale" title="${String(stale.line).replace(/"/g, "&quot;")}">昨ready作废·${stale.count || ""}</span>`
+          );
+        }
         strip.hidden = !bits.length;
         tags.innerHTML = bits.join("");
       })();
@@ -8384,6 +8400,10 @@
         showAuth("仓位需要正式账号（可先游客看盘，再注册）");
         next = currentMain && currentMain !== "pos" ? currentMain : "desk";
       }
+      if (next === "backtest" && !(authUser && authUser.role === "admin")) {
+        alert("回测仅管理员可用");
+        next = currentMain && currentMain !== "backtest" ? currentMain : "desk";
+      }
       currentMain = next;
       const moreTabs = new Set(["market", "boards", "funds", "watch", "auction", "backtest"]);
       const moreLabels = {
@@ -8572,6 +8592,13 @@
       });
       // Hide personal write affordances on review when guest.
       document.body.classList.toggle("guest-mode", locked);
+      const isAdmin = !!(authUser && authUser.role === "admin");
+      document.querySelectorAll('[data-main="backtest"]').forEach((el) => {
+        el.hidden = !isAdmin;
+      });
+      if (!isAdmin && currentMain === "backtest") {
+        applyMain("desk");
+      }
     }
     function showAuth(msg) {
       const mask = document.getElementById("authMask");
@@ -8608,7 +8635,7 @@
         return;
       }
       const selfId = authUser && authUser.id;
-      box.innerHTML = (d.users || []).map((u) => {
+      let html = (d.users || []).map((u) => {
         const pending = u.status === "pending";
         const guest = u.is_guest || u.role === "guest";
         const isSelf = selfId != null && Number(u.id) === Number(selfId);
@@ -8627,6 +8654,13 @@
             : "")
           + `</span></div>`;
       }).join("") || `<div class="meta">暂无用户</div>`;
+
+      html += `<div class="patch-hd"><b>日级补丁</b>`
+        + `<button type="button" id="adminPatchApply">再打一次</button></div>`;
+      html += `<div class="patch-meta" id="adminPatchMeta">加载中…</div>`;
+      html += `<div id="adminPatchList"></div>`;
+      box.innerHTML = html;
+
       box.querySelectorAll("[data-approve]").forEach((btn) => {
         btn.onclick = async () => {
           await fetch("/api/admin/users/" + btn.dataset.approve + "/approve", {
@@ -8672,6 +8706,55 @@
           refreshAdminUsers();
         };
       });
+      const applyBtn = document.getElementById("adminPatchApply");
+      if (applyBtn) {
+        applyBtn.onclick = async () => {
+          applyBtn.disabled = true;
+          try {
+            const resp = await fetch("/api/admin/daily-patches/apply?force=true", {
+              method: "POST", credentials: "same-origin",
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok || body.ok === false) {
+              alert(body.detail || "补丁应用失败");
+            } else {
+              const day = body.day_2026_09_21 || {};
+              alert(`已应用 ${((body.applied) || []).join(", ") || "（无新文件）"}\n09-21 ups=${day.ups}`);
+            }
+          } finally {
+            applyBtn.disabled = false;
+            refreshAdminPatches();
+          }
+        };
+      }
+      refreshAdminPatches();
+    }
+    async function refreshAdminPatches() {
+      const listEl = document.getElementById("adminPatchList");
+      const metaEl = document.getElementById("adminPatchMeta");
+      if (!listEl) return;
+      try {
+        const r = await fetch("/api/admin/daily-patches", { credentials: "same-origin" });
+        const d = await r.json();
+        if (!d.ok) {
+          if (metaEl) metaEl.textContent = d.detail || "补丁列表失败";
+          return;
+        }
+        const day = d.day_2026_09_21 || {};
+        if (metaEl) {
+          metaEl.textContent = day.missing
+            ? "库中尚无 2026-09-21 行"
+            : `校验 2026-09-21 · ups=${day.ups} downs=${day.downs} amt=${day.amount_yi} · ${day.phase || ""}`;
+        }
+        listEl.innerHTML = (d.items || []).map((p) => {
+          const st = p.applied ? "已应用" : "待应用";
+          return `<div class="row"><span>${p.id} · ${p.trade_date || "—"} · ${st}`
+            + (p.note ? ` · ${String(p.note).slice(0, 40)}` : "")
+            + `</span></div>`;
+        }).join("") || `<div class="meta">无补丁文件</div>`;
+      } catch (e) {
+        if (metaEl) metaEl.textContent = "补丁列表加载失败";
+      }
     }
     async function authRequest(path) {
       const username = (document.getElementById("authUser").value || "").trim();

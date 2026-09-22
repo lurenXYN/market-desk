@@ -134,9 +134,10 @@ if command -v curl >/dev/null 2>&1; then
         exit 1
       }
       echo "$patch_body"
-      echo "$patch_body" | grep -q '"ups": 2631' || echo "$patch_body" | grep -q '"ups":2631' || {
-        echo "WARN: 2026-09-21 ups not 2631 after patch; see body above"
-      }
+      if ! echo "$patch_body" | grep -q '"ups": 2631' && ! echo "$patch_body" | grep -q '"ups":2631'; then
+        echo "ERROR: 2026-09-21 ups not 2631 after patch; deploy aborted"
+        exit 1
+      fi
       echo "Deploy OK"
       exit 0
     fi

@@ -1785,6 +1785,21 @@ def _apply_daily_patches_payload(*, force: bool = True) -> dict:
     }
 
 
+@app.get("/api/admin/daily-patches")
+def admin_list_daily_patches(
+    admin: dict = Depends(current_admin_required),
+) -> dict:
+    """List shipped daily_snapshot patches and whether each id was applied."""
+    del admin
+    from market_desk.patches_apply import list_daily_patches, verify_day_breadth
+
+    return {
+        "ok": True,
+        "items": list_daily_patches(),
+        "day_2026_09_21": verify_day_breadth("2026-09-21"),
+    }
+
+
 @app.post("/api/admin/daily-patches/apply")
 def admin_apply_daily_patches(
     force: bool = Query(default=True),
@@ -1843,9 +1858,9 @@ class BacktestIn(BaseModel):
 @app.post("/api/backtest/run")
 async def backtest_run(
     body: BacktestIn,
-    user: dict = Depends(current_user_required),
+    user: dict = Depends(current_admin_required),
 ) -> dict:
-    """Replay paper signals with daily OHLC simulated fills (read-only)."""
+    """Replay paper signals with daily OHLC simulated fills (admin only)."""
     del user
     from market_desk.backtest import run_signal_backtest
 

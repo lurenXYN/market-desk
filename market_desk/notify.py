@@ -61,6 +61,8 @@ def build_toast_alerts(
             str(life), str(life) or "—"
         )
         size = (cur_v.get("playbook") or {}).get("size_note") or rec.get("size_note") or ""
+        half = bool(primary.get("ready_relaxed") or rec.get("ready_relaxed"))
+        title = _push_title("buy_half" if half else "buy", name, code)
         body = (
             f"主线 {cur_ml or '—'} · 相位 {cur_phase or '—'} · 阶段 {life_zh}\n"
             f"{name} {code} 建议买 {px}"
@@ -70,7 +72,7 @@ def build_toast_alerts(
         alerts.append(
             (
                 f"buy:{code or cur_ml}",
-                "可买入",
+                title,
                 body,
             )
         )
@@ -119,18 +121,38 @@ def build_toast_alerts(
         key = f"{urgency}:{code}"
         if key in prev_ready:
             continue
-        label = item.get("role_label") or "建议卖出"
+        urg_map = {"stop": "止损", "take": "止盈", "trim": "减仓"}
+        kind = urg_map.get(urgency, "卖出")
+        name = item.get("name") or ""
         alerts.append(
             (
                 f"sell:{key}",
-                label,
+                _push_title(kind, name, code),
                 (
-                    f"{item.get('name') or ''} {code} 建议卖 {item.get('sell_price')} "
+                    f"{name} {code} 建议卖 {item.get('sell_price')} "
                     f"浮盈 {item.get('pnl_pct')}%"
                 ).strip(),
             )
         )
     return alerts
+
+
+def _push_title(kind: str, name: Any = "", code: Any = "") -> str:
+    """Build a unified WeChat / toast title for buy · fly · sell alerts."""
+    nm = str(name or "").strip()
+    cd = str(code or "").strip()
+    who = f"{nm} {cd}".strip() or "—"
+    labels = {
+        "buy": "可买·满",
+        "buy_half": "可买·半",
+        "fly": "将飞·半仓",
+        "止损": "止损",
+        "止盈": "止盈",
+        "减仓": "减仓",
+        "卖出": "卖出",
+    }
+    tag = labels.get(str(kind), str(kind) or "提醒")
+    return f"【{tag}】{who}"
 
 
 def _recommend_fly_codes(snap: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -164,7 +186,7 @@ def build_fly_window_alerts(
         kind = "价带半仓" if item.get("ready_relaxed") else "可试探半仓"
         note = item.get("fly_note") or "半仓试探窗口，再等可能飞"
         body = f"{name} {code} · {kind} · 建议 {px}\n{note}".strip()
-        alerts.append((f"fly:{code}", "浅踩将飞·半仓", body))
+        alerts.append((f"fly:{code}", _push_title("fly", name, code), body))
     return alerts
 
 
@@ -333,10 +355,10 @@ def format_serverchan_desp(
     body: str,
     current: dict[str, Any] | None = None,
 ) -> str:
-    """Build markdown body for ServerChan (buy includes desk context).
+    """Build markdown body for ServerChan (buy/fly/sell share one footer template).
 
-    EOD pushes already embed phase / mainline / action in the body, so the
-    footer stays a short trade-date line to avoid repeating the same facts.
+    EOD / morning pushes already embed phase / mainline / action in the body, so
+    the footer stays a short trade-date line to avoid repeating the same facts.
     """
     cur = current or {}
     key_s = str(key or "")
@@ -360,8 +382,19 @@ def format_serverchan_desp(
         str(life), str(life) or "—"
     )
     action = v.get("action") or "—"
+    # Unified action tag for buy / fly / sell so WeChat cards scan the same way.
+    if key_s.startswith("fly:"):
+        kind_zh = "将飞·半仓"
+    elif key_s.startswith("buy:"):
+        kind_zh = "可买"
+    elif key_s.startswith("sell:"):
+        kind_zh = "建议卖出"
+    else:
+        kind_zh = "提醒"
     lines = [
         f"**{title}**",
+        "",
+        f"> {kind_zh}",
         "",
         body_md,
         "",
@@ -372,7 +405,7 @@ def format_serverchan_desp(
         f"- 阶段：{life_zh}",
         f"- 交易日：{cur.get('trade_date') or '—'}",
     ]
-    if key_s.startswith("buy:"):
+    if key_s.startswith("buy:") or key_s.startswith("fly:"):
         rec = v.get("recommend") or {}
         primary = rec.get("primary") or {}
         why = primary.get("reason") or rec.get("text") or ""

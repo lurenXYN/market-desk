@@ -53,6 +53,25 @@ def clist_backoff_remaining() -> float:
     return max(0.0, _CLIST_BACKOFF_UNTIL - time.time())
 
 
+def clist_runtime_status() -> dict[str, Any]:
+    """Expose preferred clist host and backoff for the health strip."""
+    rem = clist_backoff_remaining()
+    return {
+        "host": _CLIST_HOST_PREF or _CLIST_HOSTS[0],
+        "pref": _CLIST_HOST_PREF,
+        "backoff": rem > 0,
+        "backoff_sec": round(rem, 1),
+        "fail_streak": int(_CLIST_FAIL_STREAK),
+    }
+
+
+def cached_main_quotes() -> list[dict[str, Any]]:
+    """Return a copy of the last successful main-board quote list, or []."""
+    if not _MAIN_QUOTES_CACHE:
+        return []
+    return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+
+
 def _note_clist_ok() -> None:
     global _CLIST_FAIL_STREAK
     _CLIST_FAIL_STREAK = 0
