@@ -93,7 +93,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "行情源是否齐全、快照是否过旧、今日是否交易日；偏弱时标数据降级。",
         "algo": "100 分起扣：失败源、ETF/板块/指数空、盘中超时、热点偏少。\n"
         "滚动统计各源 ok/fail/timeout；样本≥4 且失败率≥30% → degraded + tip。\n"
-        "level=ok/warn/bad；degraded 时至少 warn。",
+        "level=ok/warn/bad；degraded 时至少 warn。页面横幅 / 站内 toast 仍提示；"
+        "ops:health 不推微信（Server酱）。",
     },
     "主线质量": {
         "mean": "顶栏旁一行仪表：主题、分差/换防门槛、持有时长、粘滞或已换防、短因。",
@@ -476,7 +477,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "微信只推止损": {
         "mean": "Server酱静音档：只推止损/必卖（sell:stop）以及 LHB/EOD/运维，不推可买、将飞、止盈减仓。",
-        "algo": "settings.serverchan_sell_only；push_serverchan_alerts 按用户过滤 is_serverchan_must_sell。",
+        "algo": "settings.serverchan_sell_only；push_serverchan_alerts 按用户过滤 is_serverchan_must_sell。\n"
+        "ops:health（数据降级）一律不进微信，与是否 sell_only 无关。",
     },
     "运维自检": {
         "mean": "管理员账号面板一页看：库完整性、desk.db、快照新鲜度、clist 冷却、自动备份年龄、新闻雷达。",

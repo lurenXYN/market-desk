@@ -92,7 +92,10 @@ class WeekPolishTests(unittest.TestCase):
 
     def test_ops_toast_policy(self) -> None:
         self.assertTrue(is_risk_toast("ops:backup:2026-09-20"))
-        self.assertTrue(is_serverchan_alert("ops:health:2026-09-20"))
+        self.assertTrue(is_risk_toast("ops:health:2026-09-20"))
+        # Health stays on-page; do not WeChat-push 数据降级.
+        self.assertFalse(is_serverchan_alert("ops:health:2026-09-20"))
+        self.assertTrue(is_serverchan_alert("ops:backup:2026-09-20"))
 
 
 if __name__ == "__main__":

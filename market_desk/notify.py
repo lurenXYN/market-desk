@@ -337,8 +337,13 @@ def select_toasts_for_round(
 
 
 def is_serverchan_alert(key: str) -> bool:
-    """Return True for buy/sell/lhb/eod/morning/ops alerts that may go to ServerChan."""
+    """Return True for buy/sell/lhb/eod/morning/ops alerts that may go to ServerChan.
+
+    Health/degraded banners stay on-page only — ``ops:health:`` is never WeChat-pushed.
+    """
     k = str(key or "")
+    if k.startswith("ops:health:"):
+        return False
     return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:"))
 
 
