@@ -207,6 +207,89 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(watch.get("outcome_exit_basis"), "watch_945_open_proxy")
         self.assertNotEqual(watch.get("outcome_label"), "卖飞")
 
+    def test_score_rounds_before_label_boundary(self) -> None:
+        """Raw -1.498 must round to -1.5 and label 次日绿, not 三日绿."""
+        sig = {
+            "signal_type": "buy",
+            "trade_date": "2026-09-10",
+            "price": 3.471,
+        }
+        # day1 close 3.419 → raw ≈ -1.498; day3 close 3.382 → ≈ -2.56
+        closes = [3.473, 3.419, 3.40, 3.382]
+        dates = ["2026-09-10", "2026-09-11", "2026-09-12", "2026-09-15"]
+        opens = [3.496, 3.473, 3.41, 3.404]
+        lows = [3.47, 3.409, 3.39, 3.379]
+        highs = [3.502, 3.48, 3.42, 3.409]
+        out = score_signal_with_closes(
+            sig, closes, dates, opens=opens, lows=lows, highs=highs
+        )
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out.get("outcome_label"), "次日绿")
+        self.assertAlmostEqual(float(out["outcome_day1_pct"]), -1.5, places=2)
+
+    def test_deep_green_beats_open_fade(self) -> None:
+        """Gap-up open must not override a ≤−1.5% close into 冲高回落."""
+        sig = {
+            "signal_type": "buy",
+            "trade_date": "2026-09-10",
+            "price": 10.0,
+        }
+        closes = [10.0, 9.7, 9.8]
+        dates = ["2026-09-10", "2026-09-11", "2026-09-12"]
+        opens = [10.0, 10.2, 9.75]  # day1 open +2%
+        lows = [9.9, 9.65, 9.7]
+        highs = [10.1, 10.25, 9.9]
+        out = score_signal_with_closes(
+            sig, closes, dates, opens=opens, lows=lows, highs=highs
+        )
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out.get("outcome_label"), "次日绿")
+
+    def test_forward_session_not_ready_intraday(self) -> None:
+        from market_desk.review import forward_session_ready
+        from datetime import datetime, timezone, timedelta
+
+        cn = timezone(timedelta(hours=8))
+        self.assertFalse(
+            forward_session_ready("2026-09-23", now=datetime(2026, 9, 23, 9, 34, tzinfo=cn))
+        )
+        self.assertTrue(
+            forward_session_ready("2026-09-23", now=datetime(2026, 9, 23, 15, 5, tzinfo=cn))
+        )
+        self.assertTrue(
+            forward_session_ready("2026-09-22", now=datetime(2026, 9, 23, 9, 34, tzinfo=cn))
+        )
+
+    def test_score_waits_for_day1_close(self) -> None:
+        """Intraday day1 bar must not lock 次日红 (returns pending clear)."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        sig = {
+            "signal_type": "buy",
+            "trade_date": "2026-09-22",
+            "price": 37.35,
+        }
+        closes = [39.7, 39.7]
+        dates = ["2026-09-22", "2026-09-23"]
+        opens = [36.8, 39.7]
+        lows = [36.45, 38.1]
+        highs = [39.7, 39.99]
+        cn = timezone(timedelta(hours=8))
+        with patch(
+            "market_desk.review._cn_now",
+            return_value=datetime(2026, 9, 23, 9, 34, tzinfo=cn),
+        ):
+            out = score_signal_with_closes(
+                sig, closes, dates, opens=opens, lows=lows, highs=highs
+            )
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertTrue(out.get("outcome_pending"))
+        self.assertIsNone(out.get("outcome_label"))
+
 
 if __name__ == "__main__":
     unittest.main()

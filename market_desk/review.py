@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+try:
+    from zoneinfo import ZoneInfo
+
+    _CN_TZ = ZoneInfo("Asia/Shanghai")
+except Exception:  # pragma: no cover
+    _CN_TZ = timezone(timedelta(hours=8))
 
 from market_desk.db import (
     list_signal_trade_dates,
@@ -781,6 +788,48 @@ def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
         v.pop(key, None)
     slim["verdict"] = v
     return record_session_signals(slim)
+
+
+def _cn_now() -> datetime:
+    """Return timezone-aware China local time."""
+    return datetime.now(_CN_TZ)
+
+
+def forward_session_ready(day1: str, *, now: datetime | None = None) -> bool:
+    """Return True when ``day1`` daily close is settled enough to score outcomes.
+
+    Intraday feeds expose today's bar with ``close`` = last trade. Scoring at
+    09:34 used to lock 「次日红」 on the open print; wait until the session is
+    finished (or a later calendar day).
+    """
+    d1 = str(day1 or "")[:10]
+    if not d1:
+        return False
+    clock = now or _cn_now()
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=_CN_TZ)
+    today = clock.strftime("%Y-%m-%d")
+    if d1 < today:
+        return True
+    if d1 > today:
+        return False
+    # Same calendar day as day1: only after the cash auction close.
+    return (clock.hour, clock.minute) >= (15, 5)
+
+
+def _pending_outcome_clear() -> dict[str, Any]:
+    """Payload that clears a premature outcome lock (UI shows 待隔日)."""
+    return {
+        "outcome_day1_pct": None,
+        "outcome_day3_pct": None,
+        "outcome_mfe_pct": None,
+        "outcome_mae_pct": None,
+        "outcome_label": None,
+        "outcome_pending": True,
+        "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 def score_signal_with_closes(
     signal: dict[str, Any],
     closes: list[float],
@@ -803,6 +852,9 @@ def score_signal_with_closes(
     contributes only via close so a noisy open spike is less likely to mark 卖飞.
     Watch-track sells (open buffer) use day0 open as a 09:45 decision-price proxy
     when fill/plan looks like an early-open print, so 卖飞 is not judged on 09:31 noise.
+
+    Never finalize against an in-progress day1 bar; returns ``outcome_pending`` so
+    callers can clear premature locks until 15:05 CN on day1.
     """
     from market_desk.config import (
         OUTCOME_FAKE_RED_CLOSE_MAX,
@@ -871,6 +923,9 @@ def score_signal_with_closes(
     after_dates = sorted(d for d in bar_by_day if d > trade_date)
     if not after_dates and std != "same_day_plan":
         return None
+    # Refuse to lock labels on today's unfinished bar (close == last print).
+    if after_dates and not forward_session_ready(after_dates[0]):
+        return _pending_outcome_clear()
 
     day0 = bar_by_day.get(trade_date) or {}
     day0_close = num(day0.get("close"))
@@ -924,6 +979,11 @@ def score_signal_with_closes(
         d3 = (price / day3 - 1.0) * 100.0
         mfe = (price / trough - 1.0) * 100.0
         mae = (price / peak - 1.0) * 100.0
+        # Round before thresholds so stored pct and label never disagree at edges.
+        d1 = round(d1, 2)
+        d3 = round(d3, 2)
+        mfe = round(mfe, 2)
+        mae = round(mae, 2)
         from market_desk.config import SELL_FLY_DAY1_PCT, SELL_FLY_MAE_PCT
 
         left = abs(mae) if mae <= 0 else 0.0
@@ -936,10 +996,10 @@ def score_signal_with_closes(
         else:
             label = "平淡"
         return {
-            "outcome_day1_pct": round(d1, 2),
-            "outcome_day3_pct": round(d3, 2),
-            "outcome_mfe_pct": round(mfe, 2),
-            "outcome_mae_pct": round(mae, 2),
+            "outcome_day1_pct": d1,
+            "outcome_day3_pct": d3,
+            "outcome_mfe_pct": mfe,
+            "outcome_mae_pct": mae,
             "outcome_label": label,
             "outcome_standard": std,
             "outcome_exit_basis": exit_basis,
@@ -993,43 +1053,38 @@ def score_signal_with_closes(
             mae = min(mae, day_mae)
         except (TypeError, ValueError, ZeroDivisionError):
             pass
+    # Round before label thresholds so UI pct and label stay consistent
+    # (e.g. raw -1.498 used to miss 次日绿 then store as -1.5 + 三日绿).
+    d1 = round(d1, 2)
+    d3 = round(d3, 2)
+    mfe = round(mfe, 2)
+    mae = round(mae, 2)
+    open_pct = None
+    if day1_open is not None and float(day1_open) > 0:
+        try:
+            open_pct = round((float(day1_open) / price - 1.0) * 100.0, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            open_pct = None
+    low_pct = None
+    if day1_low is not None and float(day1_low) > 0:
+        try:
+            low_pct = round((float(day1_low) / price - 1.0) * 100.0, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            low_pct = None
+
     if d1 >= 1.0:
         label = "次日红"
-        if day1_low is not None and float(day1_low) > 0:
-            try:
-                low_pct = (float(day1_low) / price - 1.0) * 100.0
-                if low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
-                    label = "次日虚红"
-            except (TypeError, ValueError, ZeroDivisionError):
-                pass
+        if low_pct is not None and low_pct <= float(OUTCOME_FAKE_RED_LOW_PCT):
+            label = "次日虚红"
+    elif d1 <= -1.5:
+        # Deep green wins over open-fade taxonomy.
+        label = "次日绿"
     elif (
-        day1_open is not None
-        and float(day1_open) > 0
+        open_pct is not None
+        and open_pct >= float(OUTCOME_FAKE_RED_OPEN_PCT)
         and d1 < float(OUTCOME_FAKE_RED_CLOSE_MAX)
     ):
-        try:
-            open_pct = (float(day1_open) / price - 1.0) * 100.0
-            if open_pct >= float(OUTCOME_FAKE_RED_OPEN_PCT):
-                label = "次日冲高回落"
-            elif d1 <= -1.5:
-                label = "次日绿"
-            elif d3 >= 2.0:
-                label = "三日红"
-            elif d3 <= -2.0:
-                label = "三日绿"
-            else:
-                label = "平淡"
-        except (TypeError, ValueError, ZeroDivisionError):
-            if d1 <= -1.5:
-                label = "次日绿"
-            elif d3 >= 2.0:
-                label = "三日红"
-            elif d3 <= -2.0:
-                label = "三日绿"
-            else:
-                label = "平淡"
-    elif d1 <= -1.5:
-        label = "次日绿"
+        label = "次日冲高回落"
     elif d3 >= 2.0:
         label = "三日红"
     elif d3 <= -2.0:
@@ -1038,10 +1093,10 @@ def score_signal_with_closes(
         label = "平淡"
 
     return {
-        "outcome_day1_pct": round(d1, 2),
-        "outcome_day3_pct": round(d3, 2),
-        "outcome_mfe_pct": round(mfe, 2),
-        "outcome_mae_pct": round(mae, 2),
+        "outcome_day1_pct": d1,
+        "outcome_day3_pct": d3,
+        "outcome_mfe_pct": mfe,
+        "outcome_mae_pct": mae,
         "outcome_label": label,
         "outcome_standard": std,
         "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -3422,12 +3477,13 @@ def apply_outcomes(
 
     When ``overwrite`` is True, re-score rows that already have a label (used by
     formula-version migrations such as OHLC fake-red labels).
+
+    If day1 is still the in-progress session, clear any premature label so the
+    review UI shows 待隔日 until 15:05.
     """
     n = 0
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _cn_now().strftime("%Y-%m-%d")
     for row in rows:
-        if row.get("outcome_label") and not overwrite:
-            continue
         if str(row.get("trade_date") or "") >= today:
             continue
         code = normalize_code(row.get("code"))
@@ -3447,6 +3503,14 @@ def apply_outcomes(
             lows=list(ohlc.get("low") or []) or None,
             highs=list(ohlc.get("high") or []) or None,
         )
+        if outcome and outcome.get("outcome_pending"):
+            # Drop open-print locks written before the day1 session settled.
+            if row.get("outcome_label"):
+                if mark_signal_outcome(int(row["id"]), outcome):
+                    n += 1
+            continue
+        if row.get("outcome_label") and not overwrite:
+            continue
         if not outcome:
             continue
         if mark_signal_outcome(int(row["id"]), outcome):
