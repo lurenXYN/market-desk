@@ -471,8 +471,14 @@ class DeskEngine:
                 etfs = etfs or []
                 indices = indices or []
                 yesterday_zt = yesterday_zt or []
-                prev_flow = (self.snapshot or {}).get("fund_flow") or {}
+                prev_snap = self.snapshot or {}
+                prev_flow = prev_snap.get("fund_flow") or {}
                 prev_periods = (prev_flow.get("api_raw") or {}) if isinstance(prev_flow, dict) else {}
+                # Sticky day flow: do not blank funds tab when clist cooldown returns [].
+                if not (flow_ind_d or flow_con_d):
+                    prev_day = (prev_periods.get("day") or {}) if isinstance(prev_periods, dict) else {}
+                    flow_ind_d = list(prev_day.get("industry") or []) or flow_ind_d
+                    flow_con_d = list(prev_day.get("concept") or []) or flow_con_d
                 fund_flow = build_fund_flow_board(
                     {
                         "day": {
@@ -516,8 +522,17 @@ class DeskEngine:
                 hot_cards = await self._hot_cards(client, boards, ctx)
                 pin_cards = await self._pin_cards(client, boards, hot_cards, ctx)
                 ice_cards = await self._ice_cards(client, boards, hot_cards, ctx)
+                # Sticky board cards: empty fetch (cooldown / edge blip) must not wipe tabs.
+                if not boards and not hot_cards:
+                    hot_cards = list(prev_snap.get("hot_boards") or [])
+                    pin_cards = list(prev_snap.get("pin_boards") or []) or pin_cards
+                    ice_cards = list(prev_snap.get("ice_boards") or []) or ice_cards
+                    if hot_cards and "boards:sticky" not in errors:
+                        errors.append("boards:sticky")
                 fav_rows = load_favorite_boards()
                 fav_cards = await self._favorite_cards(client, boards, fav_rows, ctx)
+                if not fav_cards and fav_rows and not boards:
+                    fav_cards = list(prev_snap.get("favorite_boards") or [])
                 _mark_favorite_flags(hot_cards + pin_cards + ice_cards + fav_cards, fav_rows)
                 purge_stale_closed_positions(trade_date_dash)
                 # Multi-user: fetch marks for every book's codes; never load rows here.

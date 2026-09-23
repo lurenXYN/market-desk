@@ -151,10 +151,16 @@ async def _get_clist_json(
     po: int = 1,
     fid: str = "f3",
     host: str | None = None,
+    bypass_backoff: bool = False,
 ) -> tuple[dict[str, Any], str]:
-    """GET clist with multi-host failover. Return ``(payload, host_used)``."""
+    """GET clist with multi-host failover. Return ``(payload, host_used)``.
+
+    Heavy quote pagination arms a process-wide backoff. Light board / fund-flow
+    calls pass ``bypass_backoff=True`` so a quotes edge blip does not blank the
+    boards and funds tabs for the whole cooldown window.
+    """
     global _CLIST_HOST_PREF
-    if clist_in_backoff() and host is None:
+    if clist_in_backoff() and host is None and not bypass_backoff:
         raise RuntimeError(
             f"clist backoff {clist_backoff_remaining():.0f}s"
         )
@@ -351,12 +357,14 @@ async def _fetch_clist_pages(
     hosts: list[str] | None = None,
     page_sleep: float = 0.0,
     allow_partial: bool = False,
+    bypass_backoff: bool = False,
 ) -> list[dict[str, Any]]:
     """Page through an East Money list endpoint until exhausted.
 
     ``hosts`` overrides the default clist host order (used by heavy quote pulls).
     When ``allow_partial`` is True, a mid-list disconnect returns rows already
     collected instead of raising (breadth prefers partial over empty).
+    ``bypass_backoff`` lets light board pulls continue during quote cooldowns.
     """
     rows: list[dict[str, Any]] = []
     total = None
@@ -379,7 +387,12 @@ async def _fetch_clist_pages(
             tried.append(cand)  # type: ignore[arg-type]
             try:
                 payload, host = await _get_clist_json(
-                    client, fs, pz=pz, pn=pn, host=cand
+                    client,
+                    fs,
+                    pz=pz,
+                    pn=pn,
+                    host=cand,
+                    bypass_backoff=bypass_backoff,
                 )
                 last_exc = None
                 break
@@ -552,19 +565,15 @@ def _hot_board_from_flow(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
-    """Fetch concept gainers and the full industry universe."""
+    """Fetch concept gainers and the full industry universe.
+
+    Uses ``bypass_backoff`` so quote-edge cooldowns do not wipe board cards.
+    """
     out: list[dict[str, Any]] = []
-    if clist_in_backoff():
-        # Degrade immediately to fund-flow shape rather than waiting out edges.
-        flow_c, flow_i = await asyncio.gather(
-            fetch_board_fund_flow(client, "concept", limit=80),
-            fetch_board_fund_flow(client, "industry", limit=100),
-        )
-        for row in [*flow_c, *flow_i]:
-            out.append(_hot_board_from_flow(row))
-        return out
     try:
-        concept_payload, _host = await _get_clist_json(client, "m:90+t:3", pz=80)
+        concept_payload, _host = await _get_clist_json(
+            client, "m:90+t:3", pz=80, bypass_backoff=True
+        )
         for item in _diff_rows(concept_payload):
             mapped = _board_from_diff(item, "concept")
             if mapped:
@@ -572,8 +581,16 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     except Exception:
         pass
     try:
+        # Prefer delay edge for multi-page industry (same as quotes resilience).
         industry_rows = await _fetch_clist_pages(
-            client, "m:90+t:2", pz=100, max_pages=5
+            client,
+            "m:90+t:2",
+            pz=100,
+            max_pages=5,
+            hosts=list(_QUOTES_CLIST_HOSTS),
+            page_sleep=0.15,
+            allow_partial=True,
+            bypass_backoff=True,
         )
         for item in industry_rows:
             mapped = _board_from_diff(item, "industry")
@@ -583,7 +600,7 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         pass
     if out:
         return out
-    # Same clist edge as fund-flow (push2-first); keeps boards non-empty when gainers API blips.
+    # Same clist edge as fund-flow; keeps boards non-empty when gainers API blips.
     flow_c, flow_i = await asyncio.gather(
         fetch_board_fund_flow(client, "concept", limit=80),
         fetch_board_fund_flow(client, "industry", limit=100),
@@ -666,7 +683,14 @@ async def fetch_board_fund_flow(
     payload: dict[str, Any] = {}
     try:
         payload, _host = await _get_clist_json(
-            client, fs, pz=limit, pn=1, po=1, fid=fid, extra_fields=extra
+            client,
+            fs,
+            pz=limit,
+            pn=1,
+            po=1,
+            fid=fid,
+            extra_fields=extra,
+            bypass_backoff=True,
         )
     except Exception:
         payload = {}
@@ -735,7 +759,11 @@ async def fetch_board_members(
         return [dict(row) for row in hit[1]]
     try:
         payload, _host = await _get_clist_json(
-            client, f"b:{bk}+f:!50", pz=30, po=0 if weakest else 1
+            client,
+            f"b:{bk}+f:!50",
+            pz=30,
+            po=0 if weakest else 1,
+            bypass_backoff=True,
         )
     except Exception:
         return []
