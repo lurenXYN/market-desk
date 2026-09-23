@@ -137,6 +137,11 @@ DEFAULTS: dict[str, Any] = {
     "auto_backup": True,
     # How many auto-*.json / desk-*.db copies to keep under data/backup.
     "backup_keep": 30,
+    # Nightly MA stickiness→fan scan (observation only).
+    "ma_fan_limit": 400,
+    "ma_fan_top": 40,
+    "ma_fan_min_amount_yi": 1.2,
+    "ma_fan_boards": "all",
     "account_equity": 50000.0,
     "risk_pct_per_trade": 1.0,
     # Total market-cap floor (亿元) for stock recommend cards; 0 = off.

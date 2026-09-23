@@ -80,6 +80,10 @@
     } else if (r.daily_trend) {
       chips.push(`<span class="rev-chip" title="${escAttr(r.daily_trend)}">震荡</span>`);
     }
+    if (r.ma_fan) {
+      const tip = r.ma_fan_note || "均线粘连后向上发散（观察层）";
+      chips.push(`<span class="rev-chip up" title="${escAttr(tip)}">均线发散</span>`);
+    }
     return chips.length ? ` <span class="rev-chips">${chips.join("")}</span>` : "";
   }
 

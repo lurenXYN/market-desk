@@ -3010,6 +3010,7 @@
       <button type="button" class="nav-sec" data-main="auction">竞价<span class="hint">策略</span></button>
       <button type="button" class="nav-core" data-main="pos">仓位</button>
       <button type="button" class="nav-core" data-main="review">复盘<span class="hint">信号</span></button>
+      <button type="button" class="nav-sec" data-main="mafan">发散<span class="hint">均线</span></button>
       <button type="button" class="nav-sec" data-main="backtest">回测<span class="hint">撮合</span></button>
       <button type="button" class="nav-more-btn" id="navMoreBtn" aria-expanded="false" aria-controls="navMoreSheet">更多</button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
@@ -3029,6 +3030,7 @@
         <button type="button" data-main="boards">板块</button>
         <button type="button" data-main="funds">资金</button>
         <button type="button" data-main="watch">观察</button>
+        <button type="button" data-main="mafan">发散</button>
         <button type="button" data-main="backtest">回测</button>
       </div>
     </div>
@@ -3769,6 +3771,47 @@
               <tr id="revHead"></tr>
             </thead>
             <tbody id="revBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="panel-mafan" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">均线发散<button type="button" class="q" data-term="均线发散">?</button>
+          <span class="mod-stamp" id="maFanStamp" title="扫描落盘时间"></span>
+        </h2>
+        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散、量能温和放大。每晚约 18:00 扫一次历史日线，当日不重复刷新。观察层，不进 ready。与复盘买信号同码时打「复盘交集」标签。</p>
+        <div class="rev-daybar" id="maFanDayBar">
+          <div class="rev-day-nav">
+            <button type="button" class="rev-col-btn" id="maFanDayPrev" title="更早一日">←</button>
+            <input type="date" id="maFanDayInput" />
+            <button type="button" class="rev-col-btn" id="maFanDayNext" title="更新一日">→</button>
+            <button type="button" class="rev-col-btn" id="maFanDayLatest">最近</button>
+            <button type="button" class="rev-col-btn" id="maFanForceRun" hidden title="管理员：强制重扫今日">重扫</button>
+          </div>
+          <div class="rev-day-chips" id="maFanDayChips"></div>
+        </div>
+        <div class="rev-today" id="maFanSummary"></div>
+        <div class="rev-table-wrap">
+          <table class="rev-table">
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>分</th>
+                <th>收盘</th>
+                <th>涨跌%</th>
+                <th>粘连%</th>
+                <th>发散%</th>
+                <th>量比</th>
+                <th>标签</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="maFanBody">
+              <tr><td colspan="10" class="meta">打开页签后加载…</td></tr>
+            </tbody>
           </table>
         </div>
       </section>
@@ -8319,6 +8362,108 @@
       }
     });
 
+    let maFanViewDate = "";
+    let maFanLoadedAt = 0;
+    let lastMaFan = { dates: [], scan: null };
+
+    async function loadMaFan(force, date) {
+      const now = Date.now();
+      const want = (date !== undefined && date !== null)
+        ? String(date).trim()
+        : (maFanViewDate || "").trim();
+      if (!force && date === undefined && now - maFanLoadedAt < 60000) return;
+      try {
+        const params = new URLSearchParams();
+        if (want) params.set("date", want);
+        const q = params.toString() ? ("?" + params.toString()) : "";
+        setModStamp("maFanStamp", null, { loading: true, label: "发散" });
+        const r = await fetch("/api/ma-fan" + q, { credentials: "same-origin" });
+        const d = await r.json();
+        maFanLoadedAt = Date.now();
+        maFanViewDate = d.view_date || want || "";
+        lastMaFan = d;
+        paintMaFan(d);
+        setModStamp("maFanStamp", (d.scan && d.scan.saved_at) || null, {
+          label: "发散",
+          title: d.note || "夜间日线扫描",
+        });
+      } catch (e) {
+        document.getElementById("maFanBody").innerHTML =
+          `<tr><td colspan="10" class="meta">均线发散加载失败</td></tr>`;
+        setModStamp("maFanStamp", null, { stale: true, label: "发散" });
+      }
+    }
+
+    function paintMaFan(d) {
+      const scan = (d && d.scan) || {};
+      const dates = (d && d.dates) || [];
+      const day = d.view_date || scan.trade_date || "";
+      const input = document.getElementById("maFanDayInput");
+      if (input && day) input.value = day;
+      const chips = document.getElementById("maFanDayChips");
+      if (chips) {
+        chips.innerHTML = dates.slice(0, 12).map((x) =>
+          `<button type="button" class="rev-col-btn${x === day ? " on" : ""}" data-mafan-day="${x}">${String(x).slice(5)}</button>`
+        ).join("") || `<span class="meta">尚无扫描日（今晚 18:00 后自动跑，或管理员点重扫）</span>`;
+      }
+      const sum = document.getElementById("maFanSummary");
+      if (sum) {
+        if (!scan || !scan.trade_date) {
+          sum.innerHTML = `<span class="meta">暂无落盘结果</span>`;
+        } else {
+          const overlap = scan.review_overlap_n != null
+            ? scan.review_overlap_n
+            : ((scan.items || []).filter((x) => x.in_review).length);
+          sum.innerHTML = [
+            `<b>${scan.trade_date}</b>`,
+            `扫描 ${scan.scanned ?? "—"}`,
+            `命中 ${scan.hit_n ?? ((scan.items || []).length)}`,
+            `复盘交集 ${overlap}`,
+            scan.saved_at ? `落盘 ${scan.saved_at}` : "",
+          ].filter(Boolean).map((t, i) => (i ? `<span class="meta"> · ${t}</span>` : t)).join("");
+        }
+      }
+      const forceBtn = document.getElementById("maFanForceRun");
+      if (forceBtn) forceBtn.hidden = !(authUser && authUser.role === "admin");
+      const items = (scan.items || []);
+      const body = document.getElementById("maFanBody");
+      if (!body) return;
+      if (!items.length) {
+        body.innerHTML = `<tr><td colspan="10" class="meta">该日无命中（或尚未扫描）</td></tr>`;
+        return;
+      }
+      body.innerHTML = items.map((it) => {
+        const code = it.code || "";
+        const name = (it.name || "").replace(/"/g, "&quot;");
+        const pct = it.pct == null ? "—" : (Number(it.pct) >= 0 ? "+" : "") + Number(it.pct).toFixed(1);
+        const tags = [];
+        if (it.in_review) tags.push(`<span class="rev-chip up" title="当日复盘有买信号">复盘交集</span>`);
+        if (it.note && String(it.note).includes("量能温和")) tags.push(`<span class="rev-chip">温和放量</span>`);
+        return `<tr>
+          <td><a class="ticker js-chart" href="#" data-code="${code}" data-name="${name}">${code}</a></td>
+          <td>${it.name || "—"}</td>
+          <td>${it.score != null ? it.score : "—"}</td>
+          <td>${it.close != null ? it.close : "—"}</td>
+          <td class="${Number(it.pct) > 0 ? "up" : (Number(it.pct) < 0 ? "down" : "")}">${pct}</td>
+          <td>${it.sticky_spread != null ? it.sticky_spread : "—"}</td>
+          <td>${it.fan_spread != null ? it.fan_spread : "—"}</td>
+          <td>${it.vol_ratio != null ? it.vol_ratio : "—"}</td>
+          <td>${tags.join(" ") || "—"}</td>
+          <td class="meta">${it.note || ""}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    function shiftMaFanDay(delta) {
+      const dates = lastMaFan.dates || [];
+      if (!dates.length) return;
+      const cur = maFanViewDate || dates[0];
+      let idx = dates.indexOf(cur);
+      if (idx < 0) idx = 0;
+      const next = dates[idx + delta];
+      if (next) loadMaFan(true, next);
+    }
+
     async function loadReview(force, date) {
       const now = Date.now();
       const want = (date !== undefined && date !== null)
@@ -8720,10 +8865,10 @@
         next = currentMain && currentMain !== "backtest" ? currentMain : "desk";
       }
       currentMain = next;
-      const moreTabs = new Set(["market", "boards", "funds", "watch", "auction", "backtest"]);
+      const moreTabs = new Set(["market", "boards", "funds", "watch", "auction", "mafan", "backtest"]);
       const moreLabels = {
         market: "大盘", boards: "板块", funds: "资金",
-        watch: "观察", auction: "竞价", backtest: "回测",
+        watch: "观察", auction: "竞价", mafan: "发散", backtest: "回测",
       };
       document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
         el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
@@ -8738,11 +8883,12 @@
         moreBtn.textContent = inMore ? (moreLabels[currentMain] || "更多") : "更多";
       }
       closeNavMore();
-      ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "backtest"].forEach((name) => {
+      ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "mafan", "backtest"].forEach((name) => {
         const el = document.getElementById("panel-" + name);
         if (el) el.hidden = name !== currentMain;
       });
       if (currentMain === "review") loadReview(false);
+      if (currentMain === "mafan") loadMaFan(false);
       if (currentMain === "backtest" && typeof ensureBacktestDefaults === "function") ensureBacktestDefaults();
       if (currentMain === "funds") ensureFundFlowFull();
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
@@ -10186,6 +10332,42 @@
       if (!btn) return;
       const d = btn.getAttribute("data-rev-day");
       if (d) loadReview(true, d);
+    });
+    document.getElementById("maFanDayPrev")?.addEventListener("click", () => shiftMaFanDay(1));
+    document.getElementById("maFanDayNext")?.addEventListener("click", () => shiftMaFanDay(-1));
+    document.getElementById("maFanDayLatest")?.addEventListener("click", () => {
+      maFanViewDate = "";
+      loadMaFan(true, "");
+    });
+    document.getElementById("maFanDayInput")?.addEventListener("change", () => {
+      const v = document.getElementById("maFanDayInput").value;
+      if (v) loadMaFan(true, v);
+    });
+    document.getElementById("panel-mafan")?.addEventListener("click", (ev) => {
+      const dayBtn = ev.target.closest("[data-mafan-day]");
+      if (dayBtn) {
+        const d = dayBtn.getAttribute("data-mafan-day");
+        if (d) loadMaFan(true, d);
+      }
+    });
+    document.getElementById("maFanForceRun")?.addEventListener("click", async () => {
+      if (!(authUser && authUser.role === "admin")) return;
+      const btn = document.getElementById("maFanForceRun");
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch("/api/ma-fan/run?force=true", {
+          method: "POST", credentials: "same-origin",
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          alert(d.detail || "重扫失败");
+          return;
+        }
+        maFanViewDate = d.view_date || "";
+        await loadMaFan(true, maFanViewDate);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     });
     document.getElementById("revColsBtn").addEventListener("click", (ev) => {
       ev.stopPropagation();

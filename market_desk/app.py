@@ -2008,6 +2008,58 @@ def backup_import(
     return {"ok": True, "counts": counts}
 
 
+@app.get("/api/ma-fan")
+def api_ma_fan(
+    date: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return one night's MA-fan scan (review-style day list)."""
+    del user
+    from market_desk.db import list_ma_fan_dates, load_ma_fan_day
+    from market_desk.ma_fan import attach_review_flags_to_ma_fan
+
+    dates = list_ma_fan_dates(limit=40)
+    want = str(date or "").strip()[:10]
+    if not want:
+        want = dates[0] if dates else ""
+    body = load_ma_fan_day(want) if want else None
+    if body:
+        body = attach_review_flags_to_ma_fan(body, want)
+    return {
+        "ok": True,
+        "view_date": want or None,
+        "dates": dates,
+        "scan": body,
+        "note": "每晚约 18:00 扫日线；当日不重复刷新。观察层，不进 ready。",
+    }
+
+
+@app.post("/api/ma-fan/run")
+async def api_ma_fan_run(
+    force: bool = Query(default=False),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Admin-only: force a MA-fan scan for today's trade date."""
+    del user
+    from datetime import datetime as _dt
+
+    from market_desk.db import load_ma_fan_day
+    from market_desk.ma_fan import attach_review_flags_to_ma_fan
+
+    day = _dt.now().strftime("%Y-%m-%d")
+    if not force and load_ma_fan_day(day):
+        body = attach_review_flags_to_ma_fan(load_ma_fan_day(day), day)
+        return {"ok": True, "skipped": True, "scan": body, "view_date": day}
+    out = await engine._run_ma_fan_scan(day)
+    engine._ma_fan_date = day
+    return {
+        "ok": True,
+        "skipped": False,
+        "scan": attach_review_flags_to_ma_fan(out, day),
+        "view_date": day,
+    }
+
+
 class BacktestIn(BaseModel):
     """Parameters for a lightweight signal-replay backtest run."""
 

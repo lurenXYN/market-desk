@@ -3307,6 +3307,12 @@ def build_review_payload(
         day_rows = enrich_signals_with_holders(day_rows, holders)
     if zt_ytd:
         day_rows = enrich_signals_with_zt_ytd(day_rows, zt_ytd)
+    try:
+        from market_desk.ma_fan import enrich_signals_with_ma_fan
+
+        day_rows = enrich_signals_with_ma_fan(day_rows, day)
+    except Exception:
+        pass
     day_phase = phase
     if not day_phase and day_rows:
         day_phase = str(day_rows[0].get("phase") or "") or None
