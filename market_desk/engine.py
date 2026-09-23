@@ -591,7 +591,12 @@ class DeskEngine:
                 climax_temp=int(setting("phase_climax_temp", 72)),
             )
             auction = self._auction(trade_date, now, quotes)
-            quotes_ok = len(quotes) >= 200 and int(metrics.get("sample") or 0) >= 200
+            # Full main-board breadth needs ~800+ names; 200-row emergency samples
+            # must not write ups/downs (looks like 200/0 on the history table).
+            from market_desk.eastmoney import MAIN_QUOTES_BREADTH_MIN
+
+            sample_n = int(metrics.get("sample") or len(quotes) or 0)
+            quotes_ok = sample_n >= int(MAIN_QUOTES_BREADTH_MIN)
             daily_payload: dict[str, Any] = {
                 "phase": phase,
                 "temperature": temperature,
@@ -610,7 +615,7 @@ class DeskEngine:
                 "cyb_pct": metrics.get("cyb_pct"),
                 "event": _event_line(phase, metrics, hot_cards),
             }
-            # Quote-derived breadth: skip zeros when clist failed so merge keeps prior values.
+            # Quote-derived breadth: skip thin/failed samples so merge keeps prior values.
             if quotes_ok:
                 daily_payload.update(
                     {
@@ -620,6 +625,7 @@ class DeskEngine:
                         "amount_pctile": metrics.get("amount_pctile"),
                         "big_drop": metrics.get("big_drop"),
                         "breadth_degraded": False,
+                        "breadth_sample": sample_n,
                     }
                 )
                 self._last_good_breadth = {
@@ -629,10 +635,26 @@ class DeskEngine:
                     "amount_yi": metrics["amount_yi"],
                     "amount_pctile": metrics.get("amount_pctile"),
                     "big_drop": metrics.get("big_drop"),
-                    "sample": metrics.get("sample"),
+                    "sample": sample_n,
                 }
             else:
                 daily_payload["breadth_degraded"] = True
+                daily_payload["breadth_sample"] = sample_n
+                # Soft UI: reuse same-day last-good breadth so the strip is not 200/0.
+                cached_b = self._last_good_breadth or {}
+                if (
+                    str(cached_b.get("trade_date") or "")[:10] == trade_date_dash
+                    and int(cached_b.get("ups") or 0) + int(cached_b.get("downs") or 0)
+                    >= int(MAIN_QUOTES_BREADTH_MIN)
+                ):
+                    metrics = dict(metrics)
+                    metrics["ups"] = cached_b.get("ups")
+                    metrics["downs"] = cached_b.get("downs")
+                    if cached_b.get("amount_yi") is not None:
+                        metrics["amount_yi"] = cached_b.get("amount_yi")
+                    if cached_b.get("big_drop") is not None:
+                        metrics["big_drop"] = cached_b.get("big_drop")
+                    metrics["breadth_soft"] = True
             save_daily(trade_date_dash, daily_payload)
             history = load_daily(14)
             cycle = _cycle_view(history, trade_date_dash)
@@ -1130,17 +1152,20 @@ class DeskEngine:
         ups = int(cur.get("ups") or 0)
         downs = int(cur.get("downs") or 0)
         amt = float(cur.get("amount_yi") or 0)
+        span = ups + downs
         degraded = bool(cur.get("breadth_degraded")) or (
             ups == 0 and downs == 0 and amt <= 0
-        )
+        ) or (0 < span < 800)
         if not degraded:
             return
 
         patch: dict[str, Any] | None = None
         cached = self._last_good_breadth or {}
-        if str(cached.get("trade_date") or "")[:10] == day_s and int(
-            cached.get("ups") or 0
-        ) + int(cached.get("downs") or 0) > 0:
+        cached_span = int(cached.get("ups") or 0) + int(cached.get("downs") or 0)
+        if (
+            str(cached.get("trade_date") or "")[:10] == day_s
+            and cached_span >= 800
+        ):
             patch = {
                 "ups": cached.get("ups"),
                 "downs": cached.get("downs"),
@@ -1152,12 +1177,13 @@ class DeskEngine:
             }
         else:
             try:
-                from market_desk.eastmoney import cached_main_quotes
+                from market_desk.eastmoney import MAIN_QUOTES_BREADTH_MIN, cached_main_quotes
             except Exception:
                 cached_main_quotes = None  # type: ignore[assignment]
+                MAIN_QUOTES_BREADTH_MIN = 800  # type: ignore[misc]
             quotes = cached_main_quotes() if cached_main_quotes else []
             valid = [q for q in quotes if q.get("pct") is not None]
-            if len(valid) >= 200:
+            if len(valid) >= int(MAIN_QUOTES_BREADTH_MIN):
                 u = sum(1 for q in valid if (q.get("pct") or 0) > 0)
                 d = sum(1 for q in valid if (q.get("pct") or 0) < 0)
                 amount = sum(float(q.get("amount") or 0) for q in quotes)
@@ -3385,9 +3411,12 @@ def _build_health(
         quotes_n = len(cached_main_quotes() or [])
     except Exception:
         quotes_n = 0
-    if live and quotes_n and quotes_n < 800:
-        tips.append(f"主板行情为部分样本（{quotes_n}只），广度可能偏差")
-        score -= 5
+    # Thin cache is informational only when soft breadth already recovered;
+    # do not alone mark the banner as 「数据降级」.
+    thin_quotes = bool(live and quotes_n and quotes_n < 800)
+    if thin_quotes:
+        tips.append(f"主板行情缓存偏薄（{quotes_n}只），未用作涨跌家数")
+        score -= 3
     if live and not (payload.get("hot_boards") or []):
         score -= 15
         tips.append("热点板块为空")
@@ -3460,11 +3489,16 @@ def _build_health(
     ups = int(metrics.get("ups") or day_row.get("ups") or 0)
     downs = int(metrics.get("downs") or day_row.get("downs") or 0)
     zt_n = int(metrics.get("zt") or day_row.get("zt") or 0)
-    if live and trading and zt_n >= 5 and ups + downs == 0:
+    span = ups + downs
+    if live and trading and zt_n >= 5 and span == 0:
         tips.append("今日广度未采到（涨停池有数但涨跌家数为 0）")
         score -= 15
         degraded = True
-    elif bool(day_row.get("breadth_degraded")):
+    elif live and trading and 0 < span < 800:
+        tips.append(f"今日广度样本过薄（{span}），已忽略勿当真")
+        score -= 10
+        degraded = True
+    elif bool(day_row.get("breadth_degraded")) and span < 800:
         tips.append("今日广度曾降级（clist 失败，已尽量保留前值）")
         score -= 8
         degraded = True
@@ -3476,9 +3510,9 @@ def _build_health(
         host = str(clist.get("host") or "")
         short = host.split(".", 1)[0] if host else "—"
         if clist.get("backoff"):
+            # Brief host cooldown is normal after disconnects; tip only.
             tips.append(f"clist 冷却中 · {short} · 剩 {clist.get('backoff_sec')}s")
-            score -= 5
-            degraded = True
+            score -= 2
         else:
             tips.append(f"clist · {short}")
     except Exception:

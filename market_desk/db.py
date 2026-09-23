@@ -1129,15 +1129,30 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
                     if isinstance(old, dict):
                         merged = dict(old)
                         degraded = _breadth_fields_degraded(data)
+                        old_span = _breadth_span(old)
+                        new_span = _breadth_span(data)
+                        # Prefer a full-market prior over a thinner emergency sample.
+                        thin_worse = (
+                            0 < new_span < 800
+                            and old_span >= 800
+                        ) or (
+                            0 < new_span < 800
+                            and old_span > new_span
+                        )
                         for k, v in data.items():
                             if v is None:
                                 continue
                             if (
-                                degraded
-                                and k in _BREADTH_FIELDS
-                                and _has_nonzero_breadth(old)
+                                k in _BREADTH_FIELDS
+                                and (
+                                    (
+                                        degraded
+                                        and _has_good_breadth(old)
+                                    )
+                                    or thin_worse
+                                )
                             ):
-                                # Keep prior real ups/downs/amount when quotes blanked out.
+                                # Keep prior real ups/downs/amount when quotes blanked/thin.
                                 continue
                             merged[k] = v
                         # Preserve prior mainline when new payload omits it.
@@ -1148,10 +1163,14 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
                         data = merged
                 except (TypeError, ValueError, json.JSONDecodeError):
                     pass
-        # Never persist an all-zero breadth stub when limit-up pool was alive.
+        # Never persist zero stubs or thin (~200-row) emergency breadth as truth.
         if _breadth_fields_degraded(data):
+            span = _breadth_span(data)
             for k in _BREADTH_FIELDS:
-                if k in data and (data.get(k) == 0 or data.get(k) == 0.0):
+                if k not in data:
+                    continue
+                val = data.get(k)
+                if val == 0 or val == 0.0 or (0 < span < 800):
                     data[k] = None
             data["breadth_degraded"] = True
         conn.execute(
@@ -1170,18 +1189,37 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
 _BREADTH_FIELDS = ("ups", "downs", "amount_yi", "amount_pctile", "big_drop")
 
 
+def _breadth_span(payload: dict[str, Any] | None) -> int:
+    """Return ups+downs count for a daily payload (0 when missing)."""
+    data = payload or {}
+    try:
+        return int(data.get("ups") or 0) + int(data.get("downs") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _breadth_fields_degraded(payload: dict[str, Any] | None) -> bool:
-    """True when ups/downs/amount look like a failed quote list, not a real flat day."""
+    """True when ups/downs/amount look like a failed or partial quote list.
+
+    Full main-board breadth is thousands of names; a ~200-row emergency sample
+    (often ups≈200, downs≈0) must not be treated as a real flat/strong day.
+    """
     data = payload or {}
     ups = int(data.get("ups") or 0)
     downs = int(data.get("downs") or 0)
     amt = float(data.get("amount_yi") or 0)
     zt = int(data.get("zt") or 0)
-    return ups == 0 and downs == 0 and amt <= 0 and zt >= 5
+    span = ups + downs
+    if ups == 0 and downs == 0 and amt <= 0 and zt >= 5:
+        return True
+    # Thin partial sample (emergency clist pages).
+    if 0 < span < 800:
+        return True
+    return False
 
 
 def _has_nonzero_breadth(payload: dict[str, Any] | None) -> bool:
-    """True when a prior daily row already stored real quote breadth."""
+    """True when a prior daily row already stored any non-zero breadth fields."""
     data = payload or {}
     try:
         if int(data.get("ups") or 0) > 0 or int(data.get("downs") or 0) > 0:
@@ -1193,13 +1231,20 @@ def _has_nonzero_breadth(payload: dict[str, Any] | None) -> bool:
     return False
 
 
+def _has_good_breadth(payload: dict[str, Any] | None) -> bool:
+    """True when prior ups+downs look like a full main-board sample (>=800)."""
+    return _breadth_span(payload) >= 800
+
+
 def sanitize_daily_row(row: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalize a loaded daily row so failed-quote zeros render as blanks."""
+    """Normalize a loaded daily row so failed/thin quote breadth render as blanks."""
     item = dict(row or {})
     if not _breadth_fields_degraded(item):
         return item
+    span = _breadth_span(item)
     for k in _BREADTH_FIELDS:
-        if item.get(k) == 0 or item.get(k) == 0.0:
+        val = item.get(k)
+        if val == 0 or val == 0.0 or (0 < span < 800):
             item[k] = None
     item["breadth_degraded"] = True
     ev = str(item.get("event") or "")

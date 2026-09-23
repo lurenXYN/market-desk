@@ -512,6 +512,14 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
             return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
         if not out:
             raise RuntimeError("main-board quote lists were empty")
+    # Never let an emergency ~200-row sample replace a full-market cache —
+    # that poisons ups/downs (e.g. 200/0) for the whole TTL window.
+    if _MAIN_QUOTES_CACHE:
+        cached_n = len(_MAIN_QUOTES_CACHE[1])
+        if len(out) < MAIN_QUOTES_BREADTH_MIN and cached_n >= MAIN_QUOTES_BREADTH_MIN:
+            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+        if len(out) < cached_n and len(out) < MAIN_QUOTES_BREADTH_MIN:
+            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
     _MAIN_QUOTES_CACHE = (now, out)
     return [dict(row) for row in out]
 
@@ -521,6 +529,8 @@ _MAIN_QUOTES_TTL_SEC = 240.0
 _MAIN_QUOTES_OPEN_TTL_SEC = 90.0
 # Auction used to be 4s and re-pulled ~36 clist pages every tick → disconnect storm.
 _MAIN_QUOTES_AUCTION_TTL_SEC = 60.0
+# Full SH+SZ main board is ~3000+ names; below this, breadth must not be trusted.
+MAIN_QUOTES_BREADTH_MIN = 800
 
 
 def _is_junk_board(name: str) -> bool:
