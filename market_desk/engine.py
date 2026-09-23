@@ -3363,6 +3363,16 @@ def _build_health(
     if live and not (payload.get("etfs") or []):
         score -= 15
         tips.append("ETF 报价为空")
+    quotes_n = 0
+    try:
+        from market_desk.eastmoney import cached_main_quotes
+
+        quotes_n = len(cached_main_quotes() or [])
+    except Exception:
+        quotes_n = 0
+    if live and quotes_n and quotes_n < 800:
+        tips.append(f"主板行情为部分样本（{quotes_n}只），广度可能偏差")
+        score -= 5
     if live and not (payload.get("hot_boards") or []):
         score -= 15
         tips.append("热点板块为空")

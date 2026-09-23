@@ -343,22 +343,56 @@ def _diff_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 async def _fetch_clist_pages(
-    client: httpx.AsyncClient, fs: str, pz: int = 100, max_pages: int = 25
+    client: httpx.AsyncClient,
+    fs: str,
+    pz: int = 100,
+    max_pages: int = 25,
+    *,
+    hosts: list[str] | None = None,
+    page_sleep: float = 0.0,
+    allow_partial: bool = False,
 ) -> list[dict[str, Any]]:
-    """Page through an East Money list endpoint until exhausted."""
+    """Page through an East Money list endpoint until exhausted.
+
+    ``hosts`` overrides the default clist host order (used by heavy quote pulls).
+    When ``allow_partial`` is True, a mid-list disconnect returns rows already
+    collected instead of raising (breadth prefers partial over empty).
+    """
     rows: list[dict[str, Any]] = []
     total = None
-    host: str | None = None
+    order = list(hosts) if hosts else None
+    host: str | None = order[0] if order else None
     for pn in range(1, max_pages + 1):
-        try:
-            payload, host = await _get_clist_json(
-                client, fs, pz=pz, pn=pn, host=host
-            )
-        except Exception:
-            # Mid-pagination host died: retry this page across hosts once.
-            if host is None:
-                raise
-            payload, host = await _get_clist_json(client, fs, pz=pz, pn=pn)
+        payload: dict[str, Any] | None = None
+        tried: list[str] = []
+        # Prefer sticky host, then the rest of the order / default failover.
+        candidates: list[str | None]
+        if order:
+            sticky = host if host in order else order[0]
+            candidates = [sticky, *[h for h in order if h != sticky]]
+        else:
+            candidates = [host, None] if host else [None]
+        last_exc: Exception | None = None
+        for cand in candidates:
+            if cand in tried:
+                continue
+            tried.append(cand)  # type: ignore[arg-type]
+            try:
+                payload, host = await _get_clist_json(
+                    client, fs, pz=pz, pn=pn, host=cand
+                )
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                host = None
+                continue
+        if payload is None:
+            if allow_partial and rows:
+                break
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError(f"clist page {pn} empty failure")
         chunk = _diff_rows(payload)
         if not chunk:
             break
@@ -368,15 +402,26 @@ async def _fetch_clist_pages(
             break
         if len(chunk) < pz:
             break
+        if page_sleep and page_sleep > 0:
+            await asyncio.sleep(float(page_sleep))
     return rows
+
+
+# Heavy main-board pagination: prefer delay edge (push2 drops mid-list often).
+_QUOTES_CLIST_HOSTS: tuple[str, ...] = (
+    "push2delay.eastmoney.com",
+    "push2.eastmoney.com",
+    "push2his.eastmoney.com",
+)
 
 
 async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch Shanghai and Shenzhen main-board quotes with pagination.
 
     Results are cached to cut the heaviest clist fan-out on the 20s tick.
-    Auction (09:15–09:30) uses a short TTL; early continuous session is medium;
-    otherwise prefer a longer TTL so VPS egress stays quiet.
+    Auction uses a medium TTL (not sub-5s): full-market paging cannot keep up
+    with call-auction poll cadence and trips edge disconnects.
+    Partial pages are accepted when the edge dies mid-list (≥200 rows).
     """
     import time
     from datetime import datetime, timezone, timedelta
@@ -397,14 +442,51 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
     if clist_in_backoff() and _MAIN_QUOTES_CACHE:
         return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+
+    hosts = list(_QUOTES_CLIST_HOSTS)
+    sh_rows: list[dict[str, Any]] = []
+    sz_rows: list[dict[str, Any]] = []
+    # Fetch markets independently so one edge death does not discard the other.
     try:
-        # Serialize markets: parallel pagination was tripping push2delay 502 on VPS.
-        sh_rows = await _fetch_clist_pages(client, "m:1+t:2", max_pages=18)
-        sz_rows = await _fetch_clist_pages(client, "m:0+t:6", max_pages=18)
+        sh_rows = await _fetch_clist_pages(
+            client,
+            "m:1+t:2",
+            max_pages=18,
+            hosts=hosts,
+            page_sleep=0.2,
+            allow_partial=True,
+        )
     except Exception:
-        if _MAIN_QUOTES_CACHE:
-            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
-        raise
+        sh_rows = []
+    try:
+        sz_rows = await _fetch_clist_pages(
+            client,
+            "m:0+t:6",
+            max_pages=18,
+            hosts=hosts,
+            page_sleep=0.2,
+            allow_partial=True,
+        )
+    except Exception:
+        sz_rows = []
+    # Emergency sample: a few pages beat a hard empty (breadth / auction still usable).
+    if len(sh_rows) + len(sz_rows) < 100:
+        for fs, bucket in (("m:1+t:2", "sh"), ("m:0+t:6", "sz")):
+            try:
+                sample = await _fetch_clist_pages(
+                    client,
+                    fs,
+                    max_pages=4,
+                    hosts=hosts,
+                    page_sleep=0.35,
+                    allow_partial=True,
+                )
+            except Exception:
+                sample = []
+            if bucket == "sh" and sample:
+                sh_rows = sample
+            elif bucket == "sz" and sample:
+                sz_rows = sample
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in [*sh_rows, *sz_rows]:
@@ -412,10 +494,11 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         if mapped and mapped["code"] not in seen:
             seen.add(mapped["code"])
             out.append(mapped)
-    if not out:
+    if len(out) < 50:
         if _MAIN_QUOTES_CACHE:
             return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
-        raise RuntimeError("main-board quote lists were empty")
+        if not out:
+            raise RuntimeError("main-board quote lists were empty")
     _MAIN_QUOTES_CACHE = (now, out)
     return [dict(row) for row in out]
 
@@ -423,7 +506,8 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 _MAIN_QUOTES_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 _MAIN_QUOTES_TTL_SEC = 240.0
 _MAIN_QUOTES_OPEN_TTL_SEC = 90.0
-_MAIN_QUOTES_AUCTION_TTL_SEC = 4.0
+# Auction used to be 4s and re-pulled ~36 clist pages every tick → disconnect storm.
+_MAIN_QUOTES_AUCTION_TTL_SEC = 60.0
 
 
 def _is_junk_board(name: str) -> bool:
