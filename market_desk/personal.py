@@ -213,6 +213,13 @@ def attach_personal_layer(
         except Exception:
             pass
 
+        try:
+            from market_desk.sell_open_buffer import hold_sells_before_match
+
+            out["sell_advice"] = hold_sells_before_match(out.get("sell_advice"))
+        except Exception:
+            pass
+
         advice = out.get("sell_advice") or {}
         all_items = list(advice.get("all_items") or advice.get("items") or [])
         advice["items"] = all_items[:4]

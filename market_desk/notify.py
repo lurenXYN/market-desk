@@ -280,15 +280,29 @@ def is_buy_quiet_window(
     return True
 
 
+def is_pre_match_window(now: datetime) -> bool:
+    """True before the 09:25 call-auction match (nothing can be filled yet)."""
+    return now.hour * 60 + now.minute < 9 * 60 + 25
+
+
+def is_trade_toast(key: str) -> bool:
+    """Return True for buy / sell / price-zone toasts that imply an order now."""
+    k = str(key or "")
+    return k.startswith(("buy:", "fly:", "sell:", "band:", "wl:", "exit:"))
+
+
 def filter_alerts_for_policy(
     alerts: list[tuple[str, str, str]],
     *,
     decision_alerts: bool = True,
     quiet_buy: bool = False,
+    pre_match: bool = False,
 ) -> list[tuple[str, str, str]]:
-    """Apply decision-toggle and auction/off-session mute rules."""
+    """Apply decision-toggle, pre-09:25 and auction/off-session mute rules."""
     out: list[tuple[str, str, str]] = []
     for key, title, body in alerts:
+        if pre_match and is_trade_toast(key):
+            continue
         if not decision_alerts and is_decision_toast(key):
             continue
         if quiet_buy and not is_risk_toast(key):

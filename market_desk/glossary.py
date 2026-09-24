@@ -507,6 +507,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "开盘缓冲窗内，止损/清仓若只是相对开盘浅破（默认约 0.45% 内）且未深砸止损价，先观察至缓冲结束，减少假破卖飞。",
         "algo": "SELL_OPEN_SHALLOW_BREAK_PCT；apply_sell_open_buffer 将 must→watch pending。深破止损仍立即 must。",
     },
+    "9:25前不出信号": {
+        "mean": "集合竞价 09:25 撮合前什么都成交不了：不记录买卖信号进复盘，不弹/不推买卖与价位提醒，持仓卖点只显示「预告·9:25 后定」。",
+        "algo": "review.is_pre_match_stamp（signaled_at < 09:25 不入 signals）；notify.filter_alerts_for_policy(pre_match) 丢 buy/fly/sell/band/wl/exit；"
+        "sell_open_buffer.hold_sells_before_match 把 ready 卖点降为预告。运维/龙虎/盘后等非交易类提醒不受影响。",
+    },
     "拉库覆盖": {
         "mean": "从线上把 desk.db 拷到本地调试时，必须先停本地、删掉 db+shm+wal，再拷完整文件，否则易 malformed。",
         "algo": "deploy/PULL_DESK_DB.md；scripts/pull-desk-db.ps1|.sh；admin 可下载 data/backup/desk-*.db。",

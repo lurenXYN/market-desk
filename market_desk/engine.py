@@ -93,6 +93,7 @@ from market_desk.notify import (
     build_toast_alerts,
     filter_alerts_for_policy,
     is_buy_quiet_window,
+    is_pre_match_window,
     notify_windows,
     push_serverchan_alerts,
     select_toasts_for_round,
@@ -2070,6 +2071,7 @@ class DeskEngine:
             self._pending_ops_alerts = []
         alerts = filter_alerts_for_policy(
             alerts,
+            pre_match=is_pre_match_window(now),
             decision_alerts=bool(setting("decision_alerts", True)),
             quiet_buy=is_buy_quiet_window(
                 now,

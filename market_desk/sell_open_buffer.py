@@ -14,6 +14,41 @@ from market_desk.config import SELL_OPEN_WATCH_MINUTES
 from market_desk.numbers import num
 
 
+PRE_MATCH_END_MINUTES = 9 * 60 + 25
+
+
+def hold_sells_before_match(
+    advice: dict[str, Any] | None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Before the 09:25 auction match, demote ready sells to a preview.
+
+    Nothing fills before the match, so sells are shown as「9:25 后定」and never
+    recorded / pushed as executable signals until the match price exists.
+    """
+    adv = dict(advice or {})
+    clock = now or datetime.now()
+    if clock.hour * 60 + clock.minute >= PRE_MATCH_END_MINUTES:
+        return adv
+    for key in ("all_items", "items"):
+        rows = adv.get(key)
+        if not isinstance(rows, list):
+            continue
+        out: list[dict[str, Any]] = []
+        for raw in rows:
+            item = dict(raw or {})
+            if item.get("ready"):
+                item["ready"] = False
+                item["pre_match_hold"] = True
+                item["next_action"] = "wait_match"
+                item["next_action_zh"] = "9:25 后定"
+                item["next_action_note"] = "集合竞价撮合前不出卖点"
+                item["role_label"] = _prefix_role(str(item.get("role_label") or ""), "预告·9:25 后定")
+            out.append(item)
+        adv[key] = out
+    return adv
+
+
 def classify_sell_open_track(item: dict[str, Any] | None) -> str | None:
     """Return ``must``, ``watch``, or None when no open-buffer applies.
 

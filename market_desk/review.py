@@ -479,6 +479,21 @@ def enrich_signals_with_boards(
     return out
 
 
+PRE_MATCH_END_HHMM = "09:25"
+
+
+def is_pre_match_stamp(stamp: str | None) -> bool:
+    """True when ``YYYY-MM-DD HH:MM[:SS]`` falls before the 09:25 auction match.
+
+    Nothing can be filled before the call auction matches, so buy/sell signals
+    stamped earlier are not recorded.
+    """
+    s = str(stamp or "")
+    if len(s) < 16:
+        return False
+    return s[11:16] < PRE_MATCH_END_HHMM
+
+
 def record_session_signals(snapshot: dict[str, Any]) -> int:
     """Persist buy/sell recommendations for the current session. Return insert/update count.
 
@@ -497,6 +512,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     if not trade_date:
         return 0
     signaled_at = snapshot.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if is_pre_match_stamp(signaled_at):
+        return 0
     phase = snapshot.get("phase") or ""
     verdict = snapshot.get("verdict") or {}
     action = verdict.get("action") or ""
