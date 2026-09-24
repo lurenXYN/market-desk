@@ -52,8 +52,13 @@ def count_limit_ups_ytd_from_bars(
     *,
     name: str | None = None,
     year: int | None = None,
+    code: str | None = None,
 ) -> int | None:
-    """Count YTD limit-ups from OHLCV rows that may already carry ``pct``."""
+    """Count YTD limit-ups from OHLCV rows that may already carry ``pct``.
+
+    Pass ``code`` so ChiNext / STAR (20%) and BSE (30%) use their own limits;
+    without it every board is judged against the 10% main-board threshold.
+    """
     rows = list(bars or [])
     if len(rows) < 2:
         return None
@@ -77,7 +82,7 @@ def count_limit_ups_ytd_from_bars(
         prev_close = close
         if not d.startswith(prefix) or pct_f is None:
             continue
-        if is_limit_up(name, pct_f):
+        if is_limit_up(name, pct_f, code):
             n += 1
     return n
 

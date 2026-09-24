@@ -20,10 +20,13 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(mf, "MA_FAN_PAGE_DELAY_S", 0.0)
     mf._PROGRESS.clear()
     mf._PROGRESS["running"] = False
+    mf._SCORE_CACHE.clear()
     monkeypatch.setattr(mf, "_LAST_FORCE_END", 0.0)
+    monkeypatch.setattr(mf, "MA_FAN_CACHE_FROM", (24, 0))
     yield
     mf._PROGRESS.clear()
     mf._PROGRESS["running"] = False
+    mf._SCORE_CACHE.clear()
 
 
 def _universe(n: int) -> list[dict]:
@@ -134,6 +137,67 @@ def test_busy_slot_returns_busy_without_scanning(monkeypatch) -> None:
     assert mf.try_claim_scan("slice", "2026-09-24")
     out = asyncio.run(_run_force())
     assert out["ok"] is False and out["busy"] is True
+
+
+def test_post_close_rescan_reuses_cached_scores(monkeypatch) -> None:
+    fetched: list[str] = []
+
+    async def fake_universe(client, **kw):
+        return _universe(1000)
+
+    async def fake_bars(client, code, limit=120):
+        fetched.append(code)
+        return _flat_bars()
+
+    monkeypatch.setattr(mf, "MA_FAN_CACHE_FROM", (0, 0))
+    monkeypatch.setattr(mf, "load_universe", fake_universe)
+    monkeypatch.setattr(mf, "fetch_daily_bars", fake_bars)
+    asyncio.run(_run_force())
+    assert len(fetched) == 1000
+    mf.release_scan()
+    monkeypatch.setattr(mf, "_LAST_FORCE_END", 0.0)
+    asyncio.run(_run_force())
+    assert len(fetched) == 1000
+    assert mf.scan_progress()["done"] == 1000
+
+
+def test_intraday_scan_does_not_cache() -> None:
+    mf._score_cache_put("600000", None, None)
+    assert mf._SCORE_CACHE == {}
+    assert mf._score_cache_get("600000") is None
+
+
+def test_enrich_hits_meta_fills_missing_rows_only(monkeypatch) -> None:
+    asked: list[list[str]] = []
+
+    async def fake_meta(client, codes):
+        asked.append(list(codes))
+        return {c: {"industry": "半导体", "mv_yi": 321.5} for c in codes}
+
+    async def fake_holders(client, codes):
+        return {c: {"holder_num": 45678, "holder_chg_pct": -3.2, "holder_end": "2026-06-30"} for c in codes}
+
+    monkeypatch.setattr(mf, "fetch_stock_meta_many", fake_meta)
+    monkeypatch.setattr(mf, "fetch_holder_stats_many", fake_holders)
+    items = [
+        {"code": "600000", "industry": "银行Ⅱ", "mv_yi": 3000.0},
+        {"code": "300308", "mv_yi": 10.0},
+    ]
+    out = asyncio.run(mf.enrich_hits_meta(None, items))
+    assert asked == [["300308"]]
+    assert out[0]["industry"] == "银行Ⅱ" and "holder_num" not in out[0]
+    assert out[1]["industry"] == "半导体" and out[1]["mv_yi"] == 321.5
+    assert out[1]["holder_num"] == 45678 and out[1]["holder_chg_pct"] == -3.2
+
+
+def test_ytd_limit_up_uses_board_threshold() -> None:
+    from market_desk.zt_stats import count_limit_ups_ytd_from_bars
+
+    bars = [{"date": "2025-12-31", "close": 10.0}]
+    for i, c in enumerate((11.0, 12.1, 14.52), start=2):
+        bars.append({"date": f"2026-01-0{i}", "close": c})
+    assert count_limit_ups_ytd_from_bars(bars, name="X", code="600000", year=2026) == 3
+    assert count_limit_ups_ytd_from_bars(bars, name="X", code="300308", year=2026) == 1
 
 
 def test_tail_log_filters_level_and_query(monkeypatch, tmp_path) -> None:

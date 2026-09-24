@@ -15,13 +15,18 @@ from typing import Any
 
 import httpx
 
-from market_desk.eastmoney import fetch_daily_bars
+from market_desk.eastmoney import (
+    fetch_daily_bars,
+    fetch_holder_stats_many,
+    fetch_stock_meta_many,
+)
 from market_desk.filters import (
     is_chinext_or_star,
     is_main_board,
     is_st,
     normalize_code,
 )
+from market_desk.zt_stats import count_limit_ups_ytd_from_bars
 
 log = logging.getLogger("market_desk.ma_fan")
 
@@ -44,9 +49,44 @@ MA_FAN_MIN_INTERVAL_S = 0.2
 MA_FAN_PAGE_DELAY_S = 0.5
 MA_FAN_MAX_CONSECUTIVE_FAIL = 30
 MA_FAN_FORCE_COOLDOWN_S = 600
+# Fetch enough bars to cover the calendar year for 年内涨停; scoring keeps the
+# original 120-bar window so pattern results do not shift.
+MA_FAN_BARS_LIMIT = 260
+MA_FAN_SCORE_BARS = 120
+# Daily bars are final after the close, so evening rescans reuse per-code
+# results instead of re-downloading ~1000 series.
+MA_FAN_CACHE_FROM = (15, 5)
 
 _PROGRESS: dict[str, Any] = {"running": False}
 _LAST_FORCE_END = 0.0
+_SCORE_CACHE: dict[str, tuple[str, dict[str, Any] | None, int | None]] = {}
+
+
+def _score_cache_day(now: datetime | None = None) -> str | None:
+    """Return today's cache key when bars are final (after the close), else None."""
+    t = now or datetime.now()
+    if (t.hour, t.minute) < MA_FAN_CACHE_FROM:
+        return None
+    return t.strftime("%Y-%m-%d")
+
+
+def _score_cache_get(code: str) -> tuple[dict[str, Any] | None, int | None] | None:
+    """Return a cached ``(pattern, zt_ytd)`` for today's post-close bars."""
+    day = _score_cache_day()
+    hit = _SCORE_CACHE.get(code) if day else None
+    if not hit or hit[0] != day:
+        return None
+    return hit[1], hit[2]
+
+
+def _score_cache_put(code: str, got: dict[str, Any] | None, zt_ytd: int | None) -> None:
+    """Cache one code's pattern result; drops entries from earlier days."""
+    day = _score_cache_day()
+    if not day:
+        return
+    if _SCORE_CACHE and next(iter(_SCORE_CACHE.values()))[0] != day:
+        _SCORE_CACHE.clear()
+    _SCORE_CACHE[code] = (day, got, zt_ytd)
 
 
 class _Pacer:
@@ -722,6 +762,7 @@ async def load_universe(
                         "amount": amt,
                         "pct": pct,
                         "last": item.get("trade"),
+                        "mktcap_wan": item.get("mktcap"),
                     }
                 )
             await asyncio.sleep(MA_FAN_PAGE_DELAY_S)
@@ -749,21 +790,34 @@ async def _score_one(
     name = str(row.get("name") or "")
     if not code or not _board_ok(code, boards) or is_st(name):
         return None
-    async with sem:
-        if stats is not None and stats.aborted:
-            return None
-        if pacer is not None:
-            await pacer.wait()
-        try:
-            bars = await fetch_daily_bars(client, code, limit=120)
-        except Exception as exc:
-            log.debug("ma_fan bars failed code=%s: %r", code, exc)
-            bars = []
-        if pacer is None:
-            await asyncio.sleep(0.04)
-    if stats is not None:
-        stats.record_fetch(bool(bars))
-    got = score_pattern(bars or [])
+    cached = _score_cache_get(code)
+    if cached is not None:
+        got, zt_ytd = cached
+        if stats is not None:
+            stats.record_fetch(True)
+    else:
+        async with sem:
+            if stats is not None and stats.aborted:
+                return None
+            if pacer is not None:
+                await pacer.wait()
+            try:
+                bars = await fetch_daily_bars(client, code, limit=MA_FAN_BARS_LIMIT)
+            except Exception as exc:
+                log.debug("ma_fan bars failed code=%s: %r", code, exc)
+                bars = []
+            if pacer is None:
+                await asyncio.sleep(0.04)
+        if stats is not None:
+            stats.record_fetch(bool(bars))
+        got = score_pattern((bars or [])[-MA_FAN_SCORE_BARS:])
+        zt_ytd = (
+            count_limit_ups_ytd_from_bars(bars, name=name, code=code, year=datetime.now().year)
+            if got
+            else None
+        )
+        if bars:
+            _score_cache_put(code, got, zt_ytd)
     if not got:
         return None
     close = float(got["close"])
@@ -812,7 +866,60 @@ async def _score_one(
         "slopes": got.get("slopes"),
         "progressive": bool(got.get("progressive")),
         "ma60_ok": bool(got.get("ma60_ok", True)),
+        "zt_ytd": zt_ytd,
+        "mv_yi": _wan_to_yi(row.get("mktcap_wan")),
     }
+
+
+def _wan_to_yi(v: Any) -> float | None:
+    """Convert a 万元 amount (Sina ``mktcap``) into 亿元, or None."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(f / 1e4, 1) if f > 0 else None
+
+
+async def enrich_hits_meta(
+    client: httpx.AsyncClient, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Attach industry, total market cap and shareholder counts onto hits.
+
+    Only rows without ``industry`` are fetched, so merging later slices does not
+    re-request earlier ones. Costs one quote batch plus 1–2 holder batches.
+    """
+    need = [
+        normalize_code(h.get("code")) or ""
+        for h in items
+        if "industry" not in h and normalize_code(h.get("code"))
+    ]
+    if not need:
+        return items
+    meta: dict[str, dict[str, Any]] = {}
+    holders: dict[str, dict[str, Any]] = {}
+    try:
+        meta = await fetch_stock_meta_many(client, need)
+    except Exception:
+        log.exception("ma_fan stock meta failed n=%s", len(need))
+    try:
+        holders = await fetch_holder_stats_many(client, need)
+    except Exception:
+        log.exception("ma_fan holder stats failed n=%s", len(need))
+    wanted = set(need)
+    for h in items:
+        code = normalize_code(h.get("code")) or ""
+        if code not in wanted:
+            continue
+        m = meta.get(code) or {}
+        h["industry"] = str(m.get("industry") or "")
+        if m.get("mv_yi") is not None:
+            h["mv_yi"] = m["mv_yi"]
+        hd = holders.get(code) or {}
+        h["holder_num"] = hd.get("holder_num")
+        h["holder_chg_pct"] = hd.get("holder_chg_pct")
+        h["holder_avg_wan"] = hd.get("holder_avg_wan")
+        h["holder_end"] = hd.get("holder_end")
+    return items
 
 
 def _merge_hits(
@@ -961,6 +1068,9 @@ async def run_ma_fan_scan(
     )
     # Re-trim after theme / review score nudges.
     merged = merged[:keep]
+    st.phase("meta")
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), trust_env=False) as client:
+        merged = await enrich_hits_meta(client, merged)
 
     done = set() if replace else {str(x) for x in (prev.get("slices_done") or [])}
     done.add(key)

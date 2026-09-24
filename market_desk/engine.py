@@ -2008,7 +2008,7 @@ class DeskEngine:
             bar_lists = await asyncio.gather(*[_one(c) for c in need])
             for c, bars in zip(need, bar_lists):
                 cnt = count_limit_ups_ytd_from_bars(
-                    bars, name=names.get(c) or "", year=year
+                    bars, name=names.get(c) or "", year=year, code=c
                 )
                 row = {
                     "day": day,

@@ -1341,6 +1341,57 @@ async def fetch_daily_klines_many(
     return {code: triple for code, triple in zip(uniq, results)}
 
 
+async def fetch_stock_meta_many(
+    client: httpx.AsyncClient,
+    codes: list[str],
+    *,
+    chunk_size: int = 80,
+) -> dict[str, dict[str, Any]]:
+    """Fetch industry (``f100``) and total market cap (``f20``) keyed by code.
+
+    One ``ulist.np`` request per ``chunk_size`` codes; tries the delay host when
+    the primary push2 host fails. Missing codes are simply absent.
+
+    Returns:
+        ``{code: {"industry": str, "mv_yi": float | None}}``.
+    """
+    uniq = list(dict.fromkeys(c for c in (normalize_code(x) for x in codes) if c))
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(uniq), max(1, chunk_size)):
+        chunk = uniq[i : i + chunk_size]
+        params = {
+            "fltt": "2",
+            "invt": "2",
+            "fields": "f12,f14,f20,f100",
+            "secids": ",".join(_secid(c) for c in chunk),
+        }
+        rows: list[dict[str, Any]] = []
+        for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+            try:
+                resp = await client.get(
+                    f"https://{host}/api/qt/ulist.np/get",
+                    params=params,
+                    headers=HTTP_HEADERS,
+                    timeout=15.0,
+                )
+                resp.raise_for_status()
+                rows = list(((resp.json() or {}).get("data") or {}).get("diff") or [])
+                break
+            except Exception:
+                await asyncio.sleep(0.3)
+        for row in rows:
+            code = normalize_code(row.get("f12"))
+            if not code:
+                continue
+            mv = num(row.get("f20"))
+            industry = str(row.get("f100") or "").strip()
+            out[code] = {
+                "industry": "" if industry in ("-", "--") else industry,
+                "mv_yi": None if mv is None or mv <= 0 else round(float(mv) / 1e8, 1),
+            }
+    return out
+
+
 # Shareholder counts move quarterly; cache aggressively to keep review snappy.
 _HOLDER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _HOLDER_CACHE_TTL_SEC = 6 * 3600

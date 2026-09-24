@@ -192,6 +192,16 @@
       background: #38bdf8;
       transition: width 0.4s;
     }
+    #maFanTable td.col-wrap {
+      white-space: normal;
+      word-break: break-word;
+      line-height: 1.45;
+    }
+    #maFanTable td.col-tags { min-width: 14em; max-width: 26em; }
+    #maFanTable td.col-tags .rev-chip { margin: 1px 2px 1px 0; }
+    #maFanTable td.col-note { min-width: 12em; max-width: 22em; }
+    #maFanTable td.col-sector { min-width: 5em; max-width: 9em; }
+    #maFanTable td.col-sector .meta { display: block; font-size: 11px; }
     .mafan-prog.err .mafan-prog-bar i { background: #f87171; }
     .mafan-prog.err { color: #fca5a5; }
     .mafan-err a { color: #93c5fd; }
@@ -3876,7 +3886,7 @@
               <tr id="maFanHead"></tr>
             </thead>
             <tbody id="maFanBody">
-              <tr><td colspan="11" class="meta">打开页签后加载…</td></tr>
+              <tr><td colspan="14" class="meta">打开页签后加载…</td></tr>
             </tbody>
           </table>
         </div>
@@ -8548,6 +8558,10 @@
       if (id === "fan") return Number(it.fan_spread);
       if (id === "vol") return Number(it.vol_ratio);
       if (id === "rank") return Number(it.amount_rank);
+      if (id === "sector") return String(it.industry || "");
+      if (id === "mv") return it.mv_yi == null ? NaN : Number(it.mv_yi);
+      if (id === "zt") return it.zt_ytd == null ? NaN : Number(it.zt_ytd);
+      if (id === "holder") return it.holder_num == null ? NaN : Number(it.holder_num);
       return 0;
     }
 
@@ -8578,12 +8592,15 @@
       const head = document.getElementById("maFanHead");
       if (!head) return;
       const cols = [
-        ["code", "代码"],
-        ["name", "名称"],
+        ["code", "股票"],
+        ["sector", "板块"],
         ["stage", "阶段"],
         ["score", "分"],
         ["close", "收盘"],
         ["pct", "涨跌%"],
+        ["mv", "市值"],
+        ["zt", "年内涨停"],
+        ["holder", "股东户数"],
         ["sticky", "粘连%"],
         ["fan", "发散%"],
         ["vol", "量比"],
@@ -8643,7 +8660,7 @@
         const where = `${stage}${status != null ? " · HTTP " + status : ""}`;
         const isAdmin = !!(authUser && authUser.role === "admin");
         document.getElementById("maFanBody").innerHTML =
-          `<tr><td colspan="11" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
+          `<tr><td colspan="14" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
           + (isAdmin
             ? ` · <a href="/api/ops/logs?level=warning&lines=300" target="_blank" rel="noopener">看错误日志</a>`
             : "")
@@ -8808,21 +8825,20 @@
       const body = document.getElementById("maFanBody");
       if (!body) return;
       if (!all.length) {
-        body.innerHTML = `<tr><td colspan="11" class="meta">该日无命中（或尚未扫描）</td></tr>`;
+        body.innerHTML = `<tr><td colspan="14" class="meta">该日无命中（或尚未扫描）</td></tr>`;
         return;
       }
       if (!items.length) {
-        body.innerHTML = `<tr><td colspan="11" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
+        body.innerHTML = `<tr><td colspan="14" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
         return;
       }
       body.innerHTML = items.map((it) => {
         const code = it.code || "";
-        const name = (it.name || "").replace(/"/g, "&quot;");
         const pct = it.pct == null ? "—" : (Number(it.pct) >= 0 ? "+" : "") + Number(it.pct).toFixed(1);
         const stage = it.stage || "—";
         const tags = [];
         if (it.in_review) tags.push(`<span class="rev-chip up" title="当日复盘有买信号">复盘交集</span>`);
-        const rawTags = maFanRawTags(it);
+        const rawTags = maFanRawTags(it).filter((t) => t !== it.stage);
         const chipClass = (t) => {
           if (t === "初期" || t === "刚发散" || t === "量能温和" || t === "粘连很紧" || t === "多头排列" || t === "坡度强") return "rev-chip up";
           if (t === "渐进发散" || t === "振幅小" || t === "MA60稳升" || t === "MA60稳" || t === "主板") return "rev-chip up";
@@ -8838,19 +8854,71 @@
           tags.push(`<span class="${chipClass(t)}">${t}</span>`);
         }
         return `<tr>
-          <td><a class="ticker js-chart" href="#" data-code="${code}" data-name="${name}">${code}</a></td>
-          <td>${it.name || "—"}</td>
+          <td>${tickerHtml(it.name || code, code)}</td>
+          <td class="col-wrap col-sector">${maFanSectorHtml(it)}</td>
           <td>${stage}</td>
           <td>${it.score != null ? it.score : "—"}</td>
           <td>${it.close != null ? it.close : "—"}</td>
           <td class="${Number(it.pct) > 0 ? "up" : (Number(it.pct) < 0 ? "down" : "")}">${pct}</td>
+          <td>${it.mv_yi != null ? fmtMaFanMv(it.mv_yi) : "—"}</td>
+          <td>${it.zt_ytd != null ? it.zt_ytd : "—"}</td>
+          <td>${maFanHolderHtml(it)}</td>
           <td>${it.sticky_spread != null ? it.sticky_spread : "—"}</td>
           <td>${it.fan_spread != null ? it.fan_spread : "—"}</td>
           <td>${it.vol_ratio != null ? it.vol_ratio : "—"}</td>
-          <td>${tags.join(" ") || "—"}</td>
-          <td class="meta">${it.note || ""}</td>
+          <td class="col-wrap col-tags">${tags.join("") || "—"}</td>
+          <td class="col-wrap col-note meta">${maFanRemark(it, rawTags)}</td>
         </tr>`;
       }).join("");
+    }
+
+    function fmtMaFanMv(v) {
+      const n = Number(v);
+      if (Number.isNaN(n)) return "—";
+      return n >= 100 ? n.toFixed(0) + "亿" : n.toFixed(1) + "亿";
+    }
+
+    /** Industry on top; desk board pools (热点/钉住) below when known. */
+    function maFanSectorHtml(it) {
+      const ind = String(it.industry || "").trim();
+      const pools = (Array.isArray(it.boards) ? it.boards : [])
+        .map(String).filter((b) => b && b !== ind).slice(0, 2);
+      if (!ind && !pools.length) return "—";
+      return (ind ? escAttr(ind) : "")
+        + (pools.length ? `<span class="meta" title="作战台板块池">${pools.map(escAttr).join(" · ")}</span>` : "");
+    }
+
+    /** Holder count with quarter-over-quarter change (fewer holders = concentrating). */
+    function maFanHolderHtml(it) {
+      if (it.holder_num == null) return "—";
+      const chg = it.holder_chg_pct == null ? null : Number(it.holder_chg_pct);
+      const title = [
+        it.holder_end ? `截至 ${it.holder_end}` : "",
+        it.holder_avg_wan != null ? `户均 ${fmtHolderAvgWan(it.holder_avg_wan)}` : "",
+      ].filter(Boolean).join(" · ");
+      const chgHtml = chg == null || Number.isNaN(chg)
+        ? ""
+        : ` <span class="${chg < 0 ? "up" : (chg > 0 ? "down" : "")}">${chg > 0 ? "+" : ""}${chg.toFixed(1)}%</span>`;
+      return `<span title="${escAttr(title)}">${fmtHolderNum(it.holder_num)}</span>${chgHtml}`;
+    }
+
+    /** Facts not already shown as columns or chips: sticky window, fan ratio, distance, turnover. */
+    function maFanRemark(it, rawTags) {
+      const parts = [];
+      const end = String(it.sticky_end || "").slice(5, 10);
+      if (end) {
+        parts.push(`粘连止于 ${end}` + (it.sticky_amp != null ? `（振幅 ${Number(it.sticky_amp).toFixed(0)}%）` : ""));
+      }
+      if (it.fan_ratio != null) parts.push(`价差放大 ×${Number(it.fan_ratio).toFixed(1)}`);
+      const hasExtTag = (rawTags || []).some((t) => /^(已拉|离开)/.test(String(t)));
+      if (it.ext_pct != null && !hasExtTag) parts.push(`离粘连 ${Number(it.ext_pct).toFixed(0)}%`);
+      if (it.amount_yi != null) {
+        parts.push(`额 ${Number(it.amount_yi).toFixed(1)}亿` + (it.amount_rank ? `（第 ${it.amount_rank}）` : ""));
+      }
+      const text = parts.join("；") || "—";
+      return it.ma_order
+        ? `<span title="MA5>10>20>30>60：${escAttr(it.ma_order)}">${escAttr(text)}</span>`
+        : escAttr(text);
     }
 
     function shiftMaFanDay(delta) {
