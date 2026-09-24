@@ -3781,7 +3781,7 @@
         <h2 style="text-transform:none">均线发散<button type="button" class="q" data-term="均线发散">?</button>
           <span class="mod-stamp" id="maFanStamp" title="扫描落盘时间"></span>
         </h2>
-        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散、量能温和放大。交易日 <b>18:00</b> 扫成交额 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000，同日合并落盘。观察层，不进 ready。与复盘买信号同码时打「复盘交集」。阶段：初期 / 中期 / 后期。</p>
+        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫成交额 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000，同日合并落盘。v3 门槛偏松、靠标签分层：初期/中期/后期、刚发散/续发散、粘连紧松、量能、坡度、多头。观察层，不进 ready。与复盘买信号同码打「复盘交集」。</p>
         <div class="rev-daybar" id="maFanDayBar">
           <div class="rev-day-nav">
             <button type="button" class="rev-col-btn" id="maFanDayPrev" title="更早一日">←</button>
@@ -8449,10 +8449,18 @@
         const stage = it.stage || "—";
         const tags = [];
         if (it.in_review) tags.push(`<span class="rev-chip up" title="当日复盘有买信号">复盘交集</span>`);
-        if (stage === "初期") tags.push(`<span class="rev-chip up">初期</span>`);
-        else if (stage === "中期") tags.push(`<span class="rev-chip">中期</span>`);
-        else if (stage === "后期") tags.push(`<span class="rev-chip gate soft">后期</span>`);
-        if (it.note && String(it.note).includes("量能温和")) tags.push(`<span class="rev-chip">温和放量</span>`);
+        const rawTags = Array.isArray(it.tags) && it.tags.length
+          ? it.tags
+          : [stage, it.freshness].filter(Boolean);
+        const chipClass = (t) => {
+          if (t === "初期" || t === "刚发散" || t === "量能温和" || t === "粘连很紧" || t === "多头排列" || t === "坡度强") return "rev-chip up";
+          if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || String(t).startsWith("已拉")) return "rev-chip gate soft";
+          return "rev-chip";
+        };
+        for (const t of rawTags) {
+          if (!t) continue;
+          tags.push(`<span class="${chipClass(t)}">${t}</span>`);
+        }
         return `<tr>
           <td><a class="ticker js-chart" href="#" data-code="${code}" data-name="${name}">${code}</a></td>
           <td>${it.name || "—"}</td>

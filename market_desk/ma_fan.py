@@ -25,7 +25,7 @@ from market_desk.filters import (
 log = logging.getLogger("market_desk.ma_fan")
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 2
+MA_FAN_FORMULA_VERSION = 3
 
 # Nightly staggered slices: (earliest minute-of-day, amount-rank offset, count, key).
 # 18:00 → 0–400；20:00 → 400–800；22:00 → 800–1000（末段流动性更薄，只扫 200）.
@@ -75,19 +75,25 @@ def _slope_up(closes: list[float], i: int, n: int, look: int = 5) -> bool:
 
 
 def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Score one name; return diagnostics or None when pattern fails hard gates."""
+    """Score one name; return diagnostics or None when pattern fails hard gates.
+
+    Observation layer: hard gates stay permissive; quality is expressed via
+    ``score``, ``stage``, and structured ``tags`` rather than exclusion.
+    """
     if len(bars) < 80:
         return None
     closes = [float(b["close"]) for b in bars]
     vols = [float(b.get("volume") or 0) for b in bars]
     i = len(bars) - 1
 
-    sticky_max = 5.2
+    # v3: slightly looser stickiness so more names reach the tag layer.
+    sticky_max = 6.2
+    sticky_len = 10  # was 12; shorter window still counts as stickiness
     best: tuple[float, int, int] | None = None
-    lo = max(60, i - 50)
-    hi = i - 5
-    for end in range(lo + 11, hi + 1):
-        start = end - 11
+    lo = max(60, i - 55)
+    hi = i - 4
+    for end in range(lo + (sticky_len - 1), hi + 1):
+        start = end - (sticky_len - 1)
         spreads: list[float] = []
         ok = True
         for j in range(start, end + 1):
@@ -110,22 +116,34 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     sticky_avg, sticky_s, sticky_e = best
 
     fan_pick: dict[str, Any] | None = None
-    for k in range(max(i - 4, sticky_e + 2), i + 1):
+    for k in range(max(i - 6, sticky_e + 1), i + 1):
         mas = _ma_bundle(closes, k)
         if not mas:
             continue
-        ordered = all(mas[t] > mas[t + 1] for t in range(len(mas) - 1))
-        if not ordered:
+        # Allow one adjacent inversion (near-bull stack) instead of strict order.
+        inversions = sum(
+            1 for t in range(len(mas) - 1) if mas[t] < mas[t + 1] * 0.998
+        )
+        if inversions > 1:
             continue
+        ordered = inversions == 0
         slopes = sum(1 for n in (5, 10, 20, 30) if _slope_up(closes, k, n, 5))
-        if slopes < 3:
+        if slopes < 2:
             continue
         fan_sp = _spread_pct(mas)
-        if fan_sp < sticky_avg * 1.35 and fan_sp < 4.8:
+        # Milder fan expansion gate than v2.
+        if fan_sp < sticky_avg * 1.18 and fan_sp < 3.6:
             continue
-        if closes[k] < mas[0] * 0.995:
+        if closes[k] < mas[0] * 0.985:
             continue
-        fan_pick = {"i": k, "mas": mas, "spread": fan_sp, "slopes": slopes}
+        fan_pick = {
+            "i": k,
+            "mas": mas,
+            "spread": fan_sp,
+            "slopes": slopes,
+            "ordered": ordered,
+            "inversions": inversions,
+        }
     if not fan_pick:
         return None
 
@@ -133,9 +151,11 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     fan_sp = float(fan_pick["spread"])
     mas = list(fan_pick["mas"])
     fan_ratio = fan_sp / max(sticky_avg, 0.15)
+    slopes = int(fan_pick["slopes"])
+    ordered = bool(fan_pick["ordered"])
 
     sticky_vols = [vols[j] for j in range(sticky_s, sticky_e + 1) if vols[j] > 0]
-    if len(sticky_vols) < 5:
+    if len(sticky_vols) < 4:
         return None
     sticky_vol = sorted(sticky_vols)[len(sticky_vols) // 2]
     recent = [vols[j] for j in range(k - 4, k + 1) if j >= 0 and vols[j] > 0]
@@ -143,58 +163,91 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         return None
     recent_vol = sum(recent) / len(recent)
     vol_ratio = recent_vol / sticky_vol
-    if vol_ratio < 1.08 or vol_ratio > 4.5:
+    # Soft volume band; only extreme outliers hard-fail.
+    if vol_ratio < 0.95 or vol_ratio > 5.5:
         return None
-    if vols[k] / max(recent_vol, 1.0) > 3.2:
-        return None
+    day_spike = vols[k] / max(recent_vol, 1.0)
 
     sticky_mid = sum(closes[sticky_s : sticky_e + 1]) / (sticky_e - sticky_s + 1)
     ext = (closes[k] / sticky_mid - 1.0) * 100.0 if sticky_mid > 0 else 0.0
-    if ext > 120:
+    if ext > 150:
         return None
 
-    # Stage by extension from sticky mid (观察分层，不改硬门槛).
-    if ext <= 25:
+    # Stage by extension from sticky mid (观察分层).
+    if ext <= 28:
         stage = "初期"
-    elif ext <= 50:
+    elif ext <= 55:
         stage = "中期"
     else:
         stage = "后期"
 
+    days_since_sticky = max(0, k - sticky_e)
+    freshness = "刚发散" if days_since_sticky <= 2 else (
+        "续发散" if days_since_sticky <= 5 else "远端发散"
+    )
+
     score = 0.0
-    score += max(0.0, (sticky_max - sticky_avg) * 8)
-    score += min(35.0, (fan_ratio - 1.5) * 12)
-    # Volume sweet spot tightened: prefer mild expansion 1.3–2.8×.
-    if 1.3 <= vol_ratio <= 2.8:
+    score += max(0.0, (sticky_max - sticky_avg) * 7)
+    score += min(32.0, (fan_ratio - 1.3) * 11)
+    if 1.25 <= vol_ratio <= 2.9:
         score += 12
-    elif 1.08 <= vol_ratio < 1.3:
-        score += 4
-    elif 2.8 < vol_ratio <= 3.5:
-        score += 2
+    elif 0.95 <= vol_ratio < 1.25:
+        score += 5
+    elif 2.9 < vol_ratio <= 3.8:
+        score += 3
     else:
-        score -= 6
-    score += float(fan_pick["slopes"]) * 2
+        score -= 5
+    if day_spike > 3.5:
+        score -= 4
+    score += slopes * 2.5
+    if ordered:
+        score += 4
+    else:
+        score -= 2
     if stage == "初期":
         score += 12
     elif stage == "中期":
         score += 5
     else:
-        score -= (ext - 50) * 0.4
+        score -= (ext - 55) * 0.35
+    if freshness == "刚发散":
+        score += 4
+    elif freshness == "远端发散":
+        score -= 3
 
-    note_bits: list[str] = [f"阶段·{stage}"]
-    if sticky_avg <= 2.5:
-        note_bits.append("粘连很紧")
-    if 1.3 <= vol_ratio <= 2.8:
-        note_bits.append("量能温和")
-    elif vol_ratio > 2.8:
-        note_bits.append("量略猛")
-    if stage == "后期":
-        note_bits.append(f"已拉{ext:.0f}%")
-    elif stage == "中期":
-        note_bits.append(f"离开粘连区{ext:.0f}%")
+    tags: list[str] = [stage, freshness]
+    if sticky_avg <= 2.8:
+        tags.append("粘连很紧")
+    elif sticky_avg <= 4.5:
+        tags.append("粘连够")
     else:
-        note_bits.append("发散初期")
+        tags.append("粘连偏松")
+    if 1.25 <= vol_ratio <= 2.9:
+        tags.append("量能温和")
+    elif vol_ratio < 1.25:
+        tags.append("量起步")
+    elif vol_ratio <= 3.8:
+        tags.append("量偏猛")
+    else:
+        tags.append("放量过猛")
+    if day_spike > 3.2:
+        tags.append("单日放量")
+    if slopes >= 4:
+        tags.append("坡度强")
+    elif slopes >= 3:
+        tags.append("坡度够")
+    else:
+        tags.append("坡度弱")
+    if ordered:
+        tags.append("多头排列")
+    else:
+        tags.append("近多头")
+    if ext >= 70:
+        tags.append(f"已拉{ext:.0f}%")
+    elif stage == "中期":
+        tags.append(f"离开{ext:.0f}%")
 
+    note_bits = list(tags)
     return {
         "score": round(score, 1),
         "close": round(closes[k], 2),
@@ -208,6 +261,9 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         "note": " · ".join(note_bits) or "命中",
         "ext_pct": round(ext, 1),
         "stage": stage,
+        "tags": tags,
+        "freshness": freshness,
+        "slopes": slopes,
     }
 
 
@@ -333,6 +389,9 @@ async def _score_one(
         "note": str(got["note"]),
         "ext_pct": got.get("ext_pct"),
         "stage": got.get("stage") or "",
+        "tags": list(got.get("tags") or []),
+        "freshness": got.get("freshness") or "",
+        "slopes": got.get("slopes"),
     }
 
 
@@ -387,7 +446,7 @@ async def run_ma_fan_scan(
     offset: int = 0,
     limit: int = 400,
     slice_key: str = "0-400",
-    top: int = 60,
+    top: int = 80,
     min_amount_yi: float = 1.2,
     boards: str = "all",
     persist: bool = True,
@@ -422,7 +481,7 @@ async def run_ma_fan_scan(
 
     prev = {} if replace else (load_ma_fan_day(day) or {})
     prev_items = [] if replace else list(prev.get("items") or [])
-    keep = max(20, min(int(top or 60), 120))
+    keep = max(20, min(int(top or 80), 150))
     merged = _merge_hits(prev_items, chunk, keep=keep)
 
     signal_codes = _buy_signal_codes_for_day(day)
@@ -473,7 +532,7 @@ async def run_ma_fan_all_due_slices(
     *,
     trade_date: str,
     minutes: int,
-    top: int = 60,
+    top: int = 80,
     min_amount_yi: float = 1.2,
     boards: str = "all",
     force_all: bool = False,
@@ -586,6 +645,8 @@ def enrich_signals_with_ma_fan(
             item["ma_fan_note"] = hit.get("note") or "均线粘连后向上发散"
             item["ma_fan_score"] = hit.get("score")
             item["ma_fan_stage"] = hit.get("stage") or ""
+            item["ma_fan_tags"] = list(hit.get("tags") or [])
+            item["ma_fan_freshness"] = hit.get("freshness") or ""
         out.append(item)
     return out
 

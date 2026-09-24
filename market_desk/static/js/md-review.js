@@ -84,6 +84,11 @@
       const tip = r.ma_fan_note || "均线粘连后向上发散（观察层）";
       const stage = r.ma_fan_stage ? `·${r.ma_fan_stage}` : "";
       chips.push(`<span class="rev-chip up" title="${escAttr(tip)}">均线发散${stage}</span>`);
+      const extra = Array.isArray(r.ma_fan_tags) ? r.ma_fan_tags : [];
+      for (const t of extra.slice(0, 4)) {
+        if (!t || t === r.ma_fan_stage) continue;
+        chips.push(`<span class="rev-chip" title="${escAttr(tip)}">${escAttr(String(t))}</span>`);
+      }
     }
     return chips.length ? ` <span class="rev-chips">${chips.join("")}</span>` : "";
   }
