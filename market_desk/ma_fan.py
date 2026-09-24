@@ -25,7 +25,7 @@ from market_desk.filters import (
 log = logging.getLogger("market_desk.ma_fan")
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 5
+MA_FAN_FORMULA_VERSION = 6
 
 # Nightly staggered slices: (earliest minute-of-day, amount-rank offset, count, key).
 # 18:00 → 0–400；20:00 → 400–800；22:00 → 800–1000（末段流动性更薄，只扫 200）.
@@ -88,10 +88,11 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     vols = [float(b.get("volume") or 0) for b in bars]
     i = len(bars) - 1
 
-    # Stickiness: MA spread + price amplitude (P1 — filter noisy squeezes).
+    # Stickiness: MA spread required; price amplitude is soft quality (P1 softened).
     sticky_max = 6.2
     sticky_len = 10
-    sticky_amp_max = 20.0
+    sticky_amp_soft = 20.0   # quieter is better; not a hard cutoff
+    sticky_amp_hard = 28.0   # only extreme chop drops the window
     best: tuple[float, float, int, int] | None = None  # avg, amp, s, e
     lo = max(60, i - 55)
     hi = i - 4
@@ -115,7 +116,7 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         lo_w = min(lows[start : end + 1])
         mid_w = (hi_w + lo_w) / 2.0
         amp = ((hi_w - lo_w) / mid_w * 100.0) if mid_w > 0 else 999.0
-        if amp > sticky_amp_max:
+        if amp > sticky_amp_hard:
             continue
         avg = sum(spreads) / len(spreads)
         # Prefer tighter MA + quieter price; amp is a soft tie-break.
@@ -182,15 +183,13 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         and rising_steps <= 1
     )
 
-    # P1: MA60 not in clear downtrend (exclude down-leg squeezes).
+    # P1 soft: MA60 slope — tag/score only; do not hard-drop (avoid over-filtering).
     ma60_now = _sma(closes, k, 60)
     ma60_prev = _sma(closes, k - 10, 60) if k >= 70 else None
     ma60_ok = True
     ma60_strong = False
     if ma60_now is not None and ma60_prev is not None and ma60_prev > 0:
-        if ma60_now < ma60_prev * 0.985:
-            return None  # clear MA60 downtrend
-        ma60_ok = ma60_now >= ma60_prev * 0.998
+        ma60_ok = ma60_now >= ma60_prev * 0.995
         ma60_strong = ma60_now >= ma60_prev * 1.002
 
     sticky_vols = [vols[j] for j in range(sticky_s, sticky_e + 1) if vols[j] > 0]
@@ -225,7 +224,7 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     score = 0.0
     score += max(0.0, (sticky_max - sticky_avg) * 7)
-    score += max(0.0, (sticky_amp_max - sticky_amp) * 0.35)
+    score += max(0.0, (sticky_amp_soft - sticky_amp) * 0.35)
     score += min(32.0, (fan_ratio - 1.3) * 11)
     if 1.25 <= vol_ratio <= 2.9:
         score += 12
@@ -253,13 +252,13 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     elif freshness == "远端发散":
         score -= 3
     if progressive:
-        score += 7
+        score += 6
     elif one_day_pop:
-        score -= 8
-    if ma60_strong:
-        score += 4
-    elif not ma60_ok:
         score -= 5
+    if ma60_strong:
+        score += 3
+    elif not ma60_ok:
+        score -= 4
 
     tags: list[str] = [stage, freshness]
     if sticky_avg <= 2.8:
@@ -411,7 +410,6 @@ def annotate_hits_with_desk_context(
         "贴主线", "近主线", "主线同主题",
         "贴支线", "近支线", "支线同主题",
         "贴联动", "近联动", "联动同主题",
-        "复盘加权",
     }
     out: list[dict[str, Any]] = []
     for raw in items or []:
@@ -481,14 +479,8 @@ def annotate_hits_with_desk_context(
 
         item["theme_tag"] = theme_hit
         item["theme_nudge"] = score_nudge
-        # P2: same-day review buy-signal soft boost (idempotent via score_base).
-        review_nudge = 0.0
-        if item.get("in_review"):
-            review_nudge = 8.0
-            if "复盘加权" not in tags:
-                tags.append("复盘加权")
-        item["review_nudge"] = review_nudge
-        item["score"] = round(score_base + score_nudge + review_nudge, 1)
+        item["review_nudge"] = 0.0
+        item["score"] = round(score_base + score_nudge, 1)
         item["tags"] = tags
         item["note"] = " · ".join(tags) if tags else (item.get("note") or "命中")
         item.pop("_theme_nudged", None)
@@ -801,7 +793,7 @@ async def run_ma_fan_scan(
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "note": (
             "观察层：粘连→渐进发散；18/20/22 分档扫成交额榜；"
-            "标签含额档/主线/复盘加权；不进 ready。"
+            "标签含额档/主线同主题旁注；复盘仅打交集标不加分；不进 ready。"
         ),
     }
     if persist:
