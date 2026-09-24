@@ -507,6 +507,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "mean": "开盘缓冲窗内，止损/清仓若只是相对开盘浅破（默认约 0.45% 内）且未深砸止损价，先观察至缓冲结束，减少假破卖飞。",
         "algo": "SELL_OPEN_SHALLOW_BREAK_PCT；apply_sell_open_buffer 将 must→watch pending。深破止损仍立即 must。",
     },
+    "卖出微信推送": {
+        "mean": "持仓出现可执行的止损/止盈/减仓时，只推给持仓本人；同代码同类型每天一次；仅 09:25–11:30、13:00–15:00 推，开盘缓冲观察中的软卖不推。",
+        "algo": "engine._push_personal_sells：每轮刷新对 Server酱 用户逐个 snapshot_for_user，"
+        "notify.push_user_sell_alerts 按 sc_sell_once:{日}:{uid} 去重；「只推必卖」设置下只留止损。",
+    },
     "9:25前不出信号": {
         "mean": "集合竞价 09:25 撮合前什么都成交不了：不记录买卖信号进复盘，不弹/不推买卖与价位提醒，持仓卖点只显示「预告·9:25 后定」。",
         "algo": "review.is_pre_match_stamp（signaled_at < 09:25 不入 signals）；notify.filter_alerts_for_policy(pre_match) 丢 buy/fly/sell/band/wl/exit；"
