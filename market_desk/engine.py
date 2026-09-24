@@ -1250,7 +1250,7 @@ class DeskEngine:
         top_n = max(20, min(top, 120))
         min_yi = max(0.5, min_amt)
         min_price = float(_setting("ma_fan_min_price", 0) or 0)
-        prefer_main = bool(_setting("ma_fan_prefer_main", True))
+        prefer_main = bool(_setting("ma_fan_prefer_main", False))
         if force_all:
             return await run_ma_fan_all_due_slices(
                 trade_date=day_s,

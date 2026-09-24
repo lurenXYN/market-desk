@@ -143,7 +143,7 @@ DEFAULTS: dict[str, Any] = {
     "ma_fan_min_amount_yi": 1.2,
     "ma_fan_boards": "all",
     "ma_fan_min_price": 0,
-    "ma_fan_prefer_main": True,
+    "ma_fan_prefer_main": False,
     "account_equity": 50000.0,
     "risk_pct_per_trade": 1.0,
     # Total market-cap floor (亿元) for stock recommend cards; 0 = off.

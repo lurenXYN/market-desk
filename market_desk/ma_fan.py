@@ -588,7 +588,7 @@ async def _score_one(
     boards: str,
     *,
     min_price: float = 0.0,
-    prefer_main: bool = True,
+    prefer_main: bool = False,
 ) -> dict[str, Any] | None:
     """Fetch bars and score one quote row into a hit dict."""
     code = normalize_code(row.get("code")) or ""
@@ -717,7 +717,7 @@ async def run_ma_fan_scan(
     replace: bool = False,
     snapshot: dict[str, Any] | None = None,
     min_price: float = 0.0,
-    prefer_main: bool = True,
+    prefer_main: bool = False,
 ) -> dict[str, Any]:
     """Scan one amount-rank slice and merge into the day payload.
 
@@ -828,7 +828,7 @@ async def run_ma_fan_all_due_slices(
     force_all: bool = False,
     snapshot: dict[str, Any] | None = None,
     min_price: float = 0.0,
-    prefer_main: bool = True,
+    prefer_main: bool = False,
 ) -> dict[str, Any]:
     """Run the next due slice (or all slices when ``force_all``)."""
     day = str(trade_date or "")[:10]
