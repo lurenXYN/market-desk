@@ -480,6 +480,61 @@ def notify_serverchan(sendkey: str, title: str, desp: str) -> bool:
         return False
 
 
+def _daily_once_key(alert_key: str) -> str:
+    """Return the per-day dedupe id for buy/fly WeChat alerts, or ``""``."""
+    k = str(alert_key or "")
+    if k.startswith(("buy:", "fly:")):
+        return k
+    return ""
+
+
+def drop_daily_repeats(
+    alerts: list[tuple[str, str, str]],
+    *,
+    trade_date: str,
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Drop buy/fly alerts already pushed to WeChat on ``trade_date``.
+
+    Card flicker re-fires the page toast edge; WeChat only needs one ping per
+    code per day. Returns ``(kept, newly_marked_keys)``.
+    """
+    day = str(trade_date or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+    try:
+        from market_desk.db import load_setting
+
+        sent = set(load_setting(f"sc_daily_once:{day}") or [])
+    except Exception:
+        sent = set()
+    kept: list[tuple[str, str, str]] = []
+    marked: list[str] = []
+    for key, title, body in alerts:
+        once = _daily_once_key(key)
+        if once:
+            if once in sent or once in marked:
+                continue
+            marked.append(once)
+        kept.append((key, title, body))
+    return kept, marked
+
+
+def _mark_daily_once(trade_date: str, keys: list[str]) -> None:
+    """Persist buy/fly keys pushed today so restarts do not re-ping."""
+    if not keys:
+        return
+    day = str(trade_date or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+    try:
+        from market_desk.db import load_setting, save_setting
+
+        store = f"sc_daily_once:{day}"
+        cur = list(load_setting(store) or [])
+        for k in keys:
+            if k not in cur:
+                cur.append(k)
+        save_setting(store, cur)
+    except Exception:
+        log.exception("mark serverchan daily-once failed")
+
+
 def push_serverchan_alerts(
     alerts: list[tuple[str, str, str]],
     current: dict[str, Any] | None = None,
@@ -488,7 +543,12 @@ def push_serverchan_alerts(
 
     No SendKey / not allowed / off → skip. Returns number of successful POSTs.
     Per-user ``serverchan_sell_only`` mutes buy/fly/soft-sell pushes.
+    Buy / fly alerts go out at most once per code per trade day.
     """
+    trade_date = str((current or {}).get("trade_date") or "")[:10]
+    alerts, once_keys = drop_daily_repeats(alerts, trade_date=trade_date)
+    if not alerts:
+        return 0
     try:
         from market_desk.db import list_serverchan_recipients, load_user_setting
 
@@ -498,6 +558,7 @@ def push_serverchan_alerts(
         return 0
     if not recipients:
         return 0
+    _mark_daily_once(trade_date, once_keys)
     ok_n = 0
     for user in recipients:
         key = str(user.get("serverchan_sendkey") or "").strip()

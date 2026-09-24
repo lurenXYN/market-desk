@@ -55,7 +55,7 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "浅踩将飞": {
         "mean": "价带半仓或可试探已开、分时仍贴尖/抬高点时，提示「半仓窗口，再等可能飞」。不改闸门，只喊醒执行。",
         "algo": "tag_fly_window_items → fly_warn；build_fly_window_alerts 边沿 toast（fly:code），跟决策提醒开关；"
-        "可走 Server酱。卡面「将飞·半仓」+ 顶栏操作条。",
+        "可走 Server酱（同一代码每交易日最多推一次微信；页面 toast 仍按冷却）。卡面「将飞·半仓」+ 顶栏操作条。",
     },
     "提醒分级": {
         "mean": "价带提醒范围；决策提醒单独开关。",
