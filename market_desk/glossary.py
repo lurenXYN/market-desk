@@ -676,6 +676,7 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "推 buy: / sell: / lhb: / eod: / morning:。买点附主线/相位/阶段/作战结论。\n"
         "lhb 含变坏与变好，正文写新增/消退标志与 risk_reason。\n"
         "users.serverchan_sendkey + serverchan_on（本人）+ serverchan_allowed（管理员）。\n"
+        "admin 默认允许，也可在设置取消「开启推送」或在账号管理给自己「禁推送」，重启不会被恢复。\n"
         "POST sctapi.ftqq.com/{SendKey}.send；与 Windows toast 并行。Key 只存 desk.db，不进 Git。",
     },
     "建议卖出": {

@@ -10730,7 +10730,9 @@
           if (!sd.ok) {
             scHint.textContent = sd.detail || "无法加载微信推送配置（游客不可用）";
           } else if (!sc.allowed) {
-            scHint.textContent = "管理员未允许本账号微信推送；可先填 Key，待开通后再开。";
+            scHint.textContent = authUser && authUser.role === "admin"
+              ? "本账号已在「账号管理」禁推送；点自己那行「允推送」即可恢复。"
+              : "管理员未允许本账号微信推送；可先填 Key，待开通后再开。";
           } else {
             scHint.textContent = sc.configured
               ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 买卖/LHB/收盘一页纸/早决策；无 Key 不推`

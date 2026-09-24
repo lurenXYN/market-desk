@@ -712,6 +712,7 @@ def _ensure_auth_and_user_scope(conn: sqlite3.Connection) -> None:
         """
     )
     user_cols = _table_cols(conn, "users")
+    added_allowed = "serverchan_allowed" not in user_cols
     for col, decl in (
         ("serverchan_sendkey", "TEXT"),
         ("serverchan_on", "INTEGER NOT NULL DEFAULT 0"),
@@ -719,14 +720,16 @@ def _ensure_auth_and_user_scope(conn: sqlite3.Connection) -> None:
     ):
         if col not in user_cols:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
-    # Admins may enable push by default; others wait for admin grant.
-    conn.execute(
-        """
-        UPDATE users
-        SET serverchan_allowed = 1
-        WHERE role = 'admin' AND COALESCE(serverchan_allowed, 0) = 0
-        """
-    )
+    # One-time grant when the column is introduced; init_db runs often, and a
+    # recurring grant would undo an admin revoking their own push permission.
+    if added_allowed:
+        conn.execute(
+            """
+            UPDATE users
+            SET serverchan_allowed = 1
+            WHERE role = 'admin'
+            """
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS auth_sessions (
