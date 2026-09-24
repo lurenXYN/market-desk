@@ -9,6 +9,9 @@ import pytest
 
 import market_desk.db as desk_db
 import market_desk.ma_fan as mf
+from market_desk.ma_fan import job as mf_job
+from market_desk.ma_fan import scan as mf_scan
+from market_desk.ma_fan import sources as mf_src
 
 
 @pytest.fixture(autouse=True)
@@ -16,17 +19,17 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(desk_db, "DB_PATH", tmp_path / "desk.db")
     monkeypatch.setattr(desk_db, "DATA_DIR", tmp_path)
     desk_db.init_db()
-    monkeypatch.setattr(mf, "MA_FAN_MIN_INTERVAL_S", 0.0)
-    monkeypatch.setattr(mf, "MA_FAN_PAGE_DELAY_S", 0.0)
-    mf._PROGRESS.clear()
-    mf._PROGRESS["running"] = False
-    mf._SCORE_CACHE.clear()
-    monkeypatch.setattr(mf, "_LAST_FORCE_END", 0.0)
-    monkeypatch.setattr(mf, "MA_FAN_CACHE_FROM", (24, 0))
+    monkeypatch.setattr(mf_scan, "MA_FAN_MIN_INTERVAL_S", 0.0)
+    monkeypatch.setattr(mf_src, "MA_FAN_PAGE_DELAY_S", 0.0)
+    mf_job._PROGRESS.clear()
+    mf_job._PROGRESS["running"] = False
+    mf_job._SCORE_CACHE.clear()
+    monkeypatch.setattr(mf_job, "_LAST_FORCE_END", 0.0)
+    monkeypatch.setattr(mf_job, "MA_FAN_CACHE_FROM", (24, 0))
     yield
-    mf._PROGRESS.clear()
-    mf._PROGRESS["running"] = False
-    mf._SCORE_CACHE.clear()
+    mf_job._PROGRESS.clear()
+    mf_job._PROGRESS["running"] = False
+    mf_job._SCORE_CACHE.clear()
 
 
 def _universe(n: int) -> list[dict]:
@@ -67,7 +70,7 @@ def test_slice_scan_does_not_start_cooldown() -> None:
 
 def test_pacer_spaces_request_starts() -> None:
     async def go() -> float:
-        pacer = mf._Pacer(0.05)
+        pacer = mf_job._Pacer(0.05)
         t0 = time.monotonic()
         await asyncio.gather(*[pacer.wait() for _ in range(4)])
         return time.monotonic() - t0
@@ -85,8 +88,8 @@ def test_force_loads_universe_once_and_tracks_progress(monkeypatch) -> None:
     async def fake_bars(client, code, limit=120):
         return _flat_bars()
 
-    monkeypatch.setattr(mf, "load_universe", fake_universe)
-    monkeypatch.setattr(mf, "fetch_daily_bars", fake_bars)
+    monkeypatch.setattr(mf_scan, "load_universe", fake_universe)
+    monkeypatch.setattr(mf_scan, "fetch_daily_bars", fake_bars)
     out = asyncio.run(_run_force())
     assert calls == [1000]
     assert out["slices_done"] == ["0-400", "400-800", "800-1000"]
@@ -106,8 +109,8 @@ def test_force_aborts_when_bar_source_keeps_failing(monkeypatch) -> None:
         fetched.append(code)
         return []
 
-    monkeypatch.setattr(mf, "load_universe", fake_universe)
-    monkeypatch.setattr(mf, "fetch_daily_bars", dead_bars)
+    monkeypatch.setattr(mf_scan, "load_universe", fake_universe)
+    monkeypatch.setattr(mf_scan, "fetch_daily_bars", dead_bars)
     with pytest.raises(RuntimeError, match="限流"):
         asyncio.run(_run_force())
     p = mf.scan_progress()
@@ -122,7 +125,7 @@ def test_empty_universe_keeps_existing_day(monkeypatch) -> None:
     async def empty_universe(client, **kw):
         return []
 
-    monkeypatch.setattr(mf, "load_universe", empty_universe)
+    monkeypatch.setattr(mf_scan, "load_universe", empty_universe)
     with pytest.raises(RuntimeError, match="成交额榜为空"):
         asyncio.run(_run_force())
     body = desk_db.load_ma_fan_day("2026-09-24") or {}
@@ -133,7 +136,7 @@ def test_busy_slot_returns_busy_without_scanning(monkeypatch) -> None:
     async def boom(client, **kw):
         raise AssertionError("must not scan while busy")
 
-    monkeypatch.setattr(mf, "load_universe", boom)
+    monkeypatch.setattr(mf_scan, "load_universe", boom)
     assert mf.try_claim_scan("slice", "2026-09-24")
     out = asyncio.run(_run_force())
     assert out["ok"] is False and out["busy"] is True
@@ -149,22 +152,22 @@ def test_post_close_rescan_reuses_cached_scores(monkeypatch) -> None:
         fetched.append(code)
         return _flat_bars()
 
-    monkeypatch.setattr(mf, "MA_FAN_CACHE_FROM", (0, 0))
-    monkeypatch.setattr(mf, "load_universe", fake_universe)
-    monkeypatch.setattr(mf, "fetch_daily_bars", fake_bars)
+    monkeypatch.setattr(mf_job, "MA_FAN_CACHE_FROM", (0, 0))
+    monkeypatch.setattr(mf_scan, "load_universe", fake_universe)
+    monkeypatch.setattr(mf_scan, "fetch_daily_bars", fake_bars)
     asyncio.run(_run_force())
     assert len(fetched) == 1000
     mf.release_scan()
-    monkeypatch.setattr(mf, "_LAST_FORCE_END", 0.0)
+    monkeypatch.setattr(mf_job, "_LAST_FORCE_END", 0.0)
     asyncio.run(_run_force())
     assert len(fetched) == 1000
     assert mf.scan_progress()["done"] == 1000
 
 
 def test_intraday_scan_does_not_cache() -> None:
-    mf._score_cache_put("600000", None, None)
-    assert mf._SCORE_CACHE == {}
-    assert mf._score_cache_get("600000") is None
+    mf_job._score_cache_put("600000", None, None)
+    assert mf_job._SCORE_CACHE == {}
+    assert mf_job._score_cache_get("600000") is None
 
 
 def test_enrich_hits_meta_fills_missing_rows_only(monkeypatch) -> None:
@@ -177,8 +180,8 @@ def test_enrich_hits_meta_fills_missing_rows_only(monkeypatch) -> None:
     async def fake_holders(client, codes):
         return {c: {"holder_num": 45678, "holder_chg_pct": -3.2, "holder_end": "2026-06-30"} for c in codes}
 
-    monkeypatch.setattr(mf, "fetch_stock_meta_many", fake_meta)
-    monkeypatch.setattr(mf, "fetch_holder_stats_many", fake_holders)
+    monkeypatch.setattr(mf_src, "fetch_stock_meta_many", fake_meta)
+    monkeypatch.setattr(mf_src, "fetch_holder_stats_many", fake_holders)
     items = [
         {"code": "600000", "industry": "银行Ⅱ", "mv_yi": 3000.0},
         {"code": "300308", "mv_yi": 10.0},

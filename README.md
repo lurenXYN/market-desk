@@ -81,7 +81,7 @@ chmod +x start.sh deploy/install-systemd.sh
 ## 技术栈
 
 - 后端：FastAPI + uvicorn + httpx + SQLite
-- 前端：单页 `market_desk/static/index.html` + 复盘助手 `/static/js/md-review.js`
+- 前端：单页 `market_desk/static/index.html` + 样式 `static/css/desk.css` + 页面脚本 `static/js/desk/*.js`（服务端合并为 `/assets/desk.js`）+ 复盘助手 `/static/js/md-review.js`
 - 行情：东财涨停/板块/成分，腾讯 ETF 与持仓报价；**日线趋势**优先腾讯前复权日K（东财历史常断连时回退新浪）
 
 ### 本地单测
@@ -278,17 +278,24 @@ market-desk/
 ├── requirements.txt
 ├── tests/                    # unittest（filters / leaders / review）
 ├── market_desk/
-│   ├── app.py                # FastAPI 入口
+│   ├── app.py                # FastAPI 入口：lifespan、静态挂载、注册路由
+│   ├── routes/               # 按页签/功能拆的 APIRouter（auth / market / review / positions / settings / lists / reports / ops / ma_fan / backtest / pages）
 │   ├── engine.py             # 刷新循环与板块 enrichment
 │   ├── sentiment.py          # 温度 / 相位 / 板块状态
 │   ├── mainline.py           # 主线挑选与 ETF 映射
 │   ├── verdict.py            # 结论、买卖建议、仓位估值
 │   ├── eastmoney.py / tencent.py
-│   ├── db.py                 # SQLite
+│   ├── db/                   # SQLite，按业务拆（core / schema / users / market / positions / signals / state / lists / backup / backtest …）；`from market_desk.db import X` 照旧可用
+│   ├── ma_fan/               # 均线发散：pattern 形态打分 / job 限速进度缓存 / sources 数据源 / context 主线复盘联动 / scan 扫描流程
+│   ├── assets.py             # 把 static/js/desk/*.js 按文件名顺序拼成 /assets/desk.js（ETag 缓存）
+│   ├── logs.py               # 滚动文件日志 data/logs/market-desk.log
 │   ├── config.py
 │   └── static/
-│       ├── index.html        # 作战台 UI
-│       └── js/md-review.js   # 复盘来源/图窗描述助手
+│       ├── index.html        # 作战台 UI（仅结构）
+│       ├── css/desk.css      # 全部样式
+│       └── js/
+│           ├── desk/NN-*.js  # 页面脚本按页签拆分，编号即加载顺序（经 /assets/desk.js 合并为一个脚本）
+│           └── md-review.js  # 复盘来源/图窗描述助手
 └── data/                     # 本地库（gitignore）
 ```
 
