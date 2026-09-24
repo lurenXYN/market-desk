@@ -3781,7 +3781,7 @@
         <h2 style="text-transform:none">均线发散<button type="button" class="q" data-term="均线发散">?</button>
           <span class="mod-stamp" id="maFanStamp" title="扫描落盘时间"></span>
         </h2>
-        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000。v5：振幅可控 + 渐进发散 + MA60 不下行；复盘轻加权（低价/主板不偏置）。观察层，不进 ready。</p>
+        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000。v7：振幅/渐进偏软；<b>MA60 明显下行剔除</b>，轻微走弱打「⚠MA60偏弱」。复盘只打交集不加分。观察层，不进 ready。</p>
         <div class="rev-daybar" id="maFanDayBar">
           <div class="rev-day-nav">
             <button type="button" class="rev-col-btn" id="maFanDayPrev" title="更早一日">←</button>
@@ -8462,7 +8462,8 @@
           if (t === "贴主线" || t === "近主线" || t === "主线同主题") return "rev-chip up";
           if (t === "贴支线" || t === "近支线" || t === "支线同主题" || t === "贴联动" || t === "近联动" || t === "联动同主题") return "rev-chip";
           if (String(t).startsWith("额档·")) return "rev-chip";
-          if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || t === "一日拉开" || t === "MA60偏弱" || String(t).startsWith("已拉")) return "rev-chip gate soft";
+          if (t === "⚠MA60偏弱" || t === "MA60偏弱") return "rev-chip down";
+          if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || t === "一日拉开" || String(t).startsWith("已拉")) return "rev-chip gate soft";
           return "rev-chip";
         };
         for (const t of rawTags) {

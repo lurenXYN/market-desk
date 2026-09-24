@@ -25,7 +25,7 @@ from market_desk.filters import (
 log = logging.getLogger("market_desk.ma_fan")
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 6
+MA_FAN_FORMULA_VERSION = 7
 
 # Nightly staggered slices: (earliest minute-of-day, amount-rank offset, count, key).
 # 18:00 → 0–400；20:00 → 400–800；22:00 → 800–1000（末段流动性更薄，只扫 200）.
@@ -183,12 +183,14 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         and rising_steps <= 1
     )
 
-    # P1 soft: MA60 slope — tag/score only; do not hard-drop (avoid over-filtering).
+    # P1: clear MA60 downtrend hard-drops; mild weakness stays with a loud tag.
     ma60_now = _sma(closes, k, 60)
     ma60_prev = _sma(closes, k - 10, 60) if k >= 70 else None
     ma60_ok = True
     ma60_strong = False
     if ma60_now is not None and ma60_prev is not None and ma60_prev > 0:
+        if ma60_now < ma60_prev * 0.985:
+            return None  # clear MA60 downtrend — noise / down-leg squeeze
         ma60_ok = ma60_now >= ma60_prev * 0.995
         ma60_strong = ma60_now >= ma60_prev * 1.002
 
@@ -261,6 +263,13 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         score -= 4
 
     tags: list[str] = [stage, freshness]
+    # Surface MA60 first so the list chip is hard to miss.
+    if ma60_strong:
+        tags.append("MA60稳升")
+    elif ma60_ok:
+        tags.append("MA60稳")
+    else:
+        tags.append("⚠MA60偏弱")
     if sticky_avg <= 2.8:
         tags.append("粘连很紧")
     elif sticky_avg <= 4.5:
@@ -277,12 +286,6 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         tags.append("渐进发散")
     elif one_day_pop:
         tags.append("一日拉开")
-    if ma60_strong:
-        tags.append("MA60稳升")
-    elif ma60_ok:
-        tags.append("MA60稳")
-    else:
-        tags.append("MA60偏弱")
     if 1.25 <= vol_ratio <= 2.9:
         tags.append("量能温和")
     elif vol_ratio < 1.25:
