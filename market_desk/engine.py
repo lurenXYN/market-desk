@@ -1243,7 +1243,7 @@ class DeskEngine:
         from market_desk.settings import setting as _setting
 
         day_s = str(day or "").strip()[:10]
-        top = int(_setting("ma_fan_top", 60) or 60)
+        top = int(_setting("ma_fan_top", 80) or 80)
         min_amt = float(_setting("ma_fan_min_amount_yi", 1.2) or 1.2)
         boards = str(_setting("ma_fan_boards", "all") or "all")
         boards = boards if boards in ("main", "growth", "all") else "all"
