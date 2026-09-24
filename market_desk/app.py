@@ -2030,7 +2030,7 @@ def api_ma_fan(
         "view_date": want or None,
         "dates": dates,
         "scan": body,
-        "note": "每晚约 18:00 扫日线；当日不重复刷新。观察层，不进 ready。",
+        "note": "18/20/22 点分档扫成交额榜并合并；当日同档不重复。观察层，不进 ready。",
     }
 
 
@@ -2039,23 +2039,19 @@ async def api_ma_fan_run(
     force: bool = Query(default=False),
     user: dict = Depends(current_admin_required),
 ) -> dict:
-    """Admin-only: force a MA-fan scan for today's trade date."""
+    """Admin-only: run due MA-fan slices (force=True rebuilds 0–1000 tonight)."""
     del user
     from datetime import datetime as _dt
 
-    from market_desk.db import load_ma_fan_day
     from market_desk.ma_fan import attach_review_flags_to_ma_fan
 
     day = _dt.now().strftime("%Y-%m-%d")
-    if not force and load_ma_fan_day(day):
-        body = attach_review_flags_to_ma_fan(load_ma_fan_day(day), day)
-        return {"ok": True, "skipped": True, "scan": body, "view_date": day}
-    out = await engine._run_ma_fan_scan(day)
-    engine._ma_fan_date = day
+    out = await engine._run_ma_fan_scan(day, force_all=bool(force))
+    scan = out if out.get("items") is not None else out.get("scan") or out
     return {
         "ok": True,
-        "skipped": False,
-        "scan": attach_review_flags_to_ma_fan(out, day),
+        "skipped": bool(out.get("skipped")),
+        "scan": attach_review_flags_to_ma_fan(scan, day),
         "view_date": day,
     }
 

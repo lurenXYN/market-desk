@@ -139,7 +139,7 @@ DEFAULTS: dict[str, Any] = {
     "backup_keep": 30,
     # Nightly MA stickiness→fan scan (observation only).
     "ma_fan_limit": 400,
-    "ma_fan_top": 40,
+    "ma_fan_top": 60,
     "ma_fan_min_amount_yi": 1.2,
     "ma_fan_boards": "all",
     "account_equity": 50000.0,

@@ -25,7 +25,15 @@ from market_desk.filters import (
 log = logging.getLogger("market_desk.ma_fan")
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 1
+MA_FAN_FORMULA_VERSION = 2
+
+# Nightly staggered slices: (earliest minute-of-day, amount-rank offset, count, key).
+# 18:00 → 0–400；20:00 → 400–800；22:00 → 800–1000（末段流动性更薄，只扫 200）.
+MA_FAN_SCHEDULE: tuple[tuple[int, int, int, str], ...] = (
+    (18 * 60, 0, 400, "0-400"),
+    (20 * 60, 400, 400, "400-800"),
+    (22 * 60, 800, 200, "800-1000"),
+)
 
 
 def _sma(closes: list[float], end: int, n: int) -> float | None:
@@ -145,30 +153,44 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     if ext > 120:
         return None
 
+    # Stage by extension from sticky mid (观察分层，不改硬门槛).
+    if ext <= 25:
+        stage = "初期"
+    elif ext <= 50:
+        stage = "中期"
+    else:
+        stage = "后期"
+
     score = 0.0
     score += max(0.0, (sticky_max - sticky_avg) * 8)
     score += min(35.0, (fan_ratio - 1.5) * 12)
-    score += min(20.0, (vol_ratio - 1.15) * 10)
-    if 1.4 <= vol_ratio <= 2.6:
-        score += 8
-    score += float(fan_pick["slopes"]) * 2
-    if ext <= 35:
-        score += 10
-    elif ext <= 55:
+    # Volume sweet spot tightened: prefer mild expansion 1.3–2.8×.
+    if 1.3 <= vol_ratio <= 2.8:
+        score += 12
+    elif 1.08 <= vol_ratio < 1.3:
         score += 4
+    elif 2.8 < vol_ratio <= 3.5:
+        score += 2
     else:
-        score -= (ext - 55) * 0.35
+        score -= 6
+    score += float(fan_pick["slopes"]) * 2
+    if stage == "初期":
+        score += 12
+    elif stage == "中期":
+        score += 5
+    else:
+        score -= (ext - 50) * 0.4
 
-    note_bits: list[str] = []
+    note_bits: list[str] = [f"阶段·{stage}"]
     if sticky_avg <= 2.5:
         note_bits.append("粘连很紧")
-    if 1.4 <= vol_ratio <= 2.6:
+    if 1.3 <= vol_ratio <= 2.8:
         note_bits.append("量能温和")
-    elif vol_ratio > 2.6:
+    elif vol_ratio > 2.8:
         note_bits.append("量略猛")
-    if ext > 55:
+    if stage == "后期":
         note_bits.append(f"已拉{ext:.0f}%")
-    elif ext > 35:
+    elif stage == "中期":
         note_bits.append(f"离开粘连区{ext:.0f}%")
     else:
         note_bits.append("发散初期")
@@ -185,6 +207,7 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         "ma_order": ">".join(f"{v:.2f}" for v in mas),
         "note": " · ".join(note_bits) or "命中",
         "ext_pct": round(ext, 1),
+        "stage": stage,
     }
 
 
@@ -201,10 +224,10 @@ async def load_universe(
     client: httpx.AsyncClient,
     *,
     boards: str = "all",
-    limit: int = 400,
+    need: int = 400,
     min_amount_yi: float = 1.2,
 ) -> list[dict[str, Any]]:
-    """Load a liquid name pool from Sina amount-ranked HQ nodes."""
+    """Load amount-ranked names from Sina until ``need`` rows (or pages run out)."""
     if boards == "main":
         nodes = ["hs_a"]
     elif boards == "growth":
@@ -214,7 +237,8 @@ async def load_universe(
     pool: list[dict[str, Any]] = []
     seen: set[str] = set()
     per_page = 80
-    pages = max(2, min(12, (limit // max(1, len(nodes)) // per_page) + 2))
+    want = max(50, int(need or 400))
+    pages = max(3, min(20, (want // max(1, len(nodes)) // per_page) + 3))
     for node in nodes:
         for page in range(1, pages + 1):
             url = (
@@ -263,12 +287,12 @@ async def load_universe(
                     }
                 )
             await asyncio.sleep(0.12)
-            if len(pool) >= limit * 2:
+            if len(pool) >= want * 2:
                 break
-        if len(pool) >= limit * 2:
+        if len(pool) >= want * 2:
             break
     pool.sort(key=lambda x: float(x.get("amount") or 0), reverse=True)
-    return pool[: max(50, limit)]
+    return pool[:want]
 
 
 async def _score_one(
@@ -308,65 +332,189 @@ async def _score_one(
         "ma_order": str(got["ma_order"]),
         "note": str(got["note"]),
         "ext_pct": got.get("ext_pct"),
+        "stage": got.get("stage") or "",
     }
+
+
+def _merge_hits(
+    prev_items: list[dict[str, Any]],
+    new_items: list[dict[str, Any]],
+    *,
+    keep: int,
+) -> list[dict[str, Any]]:
+    """Merge hits by code, keeping the higher score, then trim to ``keep``."""
+    by_code: dict[str, dict[str, Any]] = {}
+    for raw in list(prev_items or []) + list(new_items or []):
+        item = dict(raw or {})
+        code = normalize_code(item.get("code")) or ""
+        if not code:
+            continue
+        old = by_code.get(code)
+        if old is None or float(item.get("score") or 0) >= float(old.get("score") or 0):
+            by_code[code] = item
+    out = list(by_code.values())
+    out.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
+    return out[: max(10, keep)]
+
+
+def slices_done_for_day(trade_date: str) -> set[str]:
+    """Return slice keys already persisted for ``trade_date``."""
+    from market_desk.db import load_ma_fan_day
+
+    body = load_ma_fan_day(str(trade_date or "")[:10]) or {}
+    return {str(x) for x in (body.get("slices_done") or []) if x}
+
+
+def next_due_ma_fan_slice(
+    *,
+    trade_date: str,
+    minutes: int,
+) -> tuple[int, int, str] | None:
+    """Return ``(offset, count, key)`` for the next due unfinished slice, or None."""
+    done = slices_done_for_day(trade_date)
+    for start_min, offset, count, key in MA_FAN_SCHEDULE:
+        if int(minutes) < int(start_min):
+            continue
+        if key in done:
+            continue
+        return int(offset), int(count), str(key)
+    return None
 
 
 async def run_ma_fan_scan(
     *,
     trade_date: str,
+    offset: int = 0,
     limit: int = 400,
-    top: int = 40,
+    slice_key: str = "0-400",
+    top: int = 60,
     min_amount_yi: float = 1.2,
     boards: str = "all",
     persist: bool = True,
+    replace: bool = False,
 ) -> dict[str, Any]:
-    """Scan liquid names and optionally persist the day payload.
+    """Scan one amount-rank slice and merge into the day payload.
 
-    Intended for the nightly engine tick (≈18:00) or an admin force-run.
+    ``offset``/``limit`` select the liquidity band (e.g. 400–800). Results merge
+    into ``ma_fan_day`` unless ``replace=True`` (admin full rebuild of this slice
+    still merges by code; pass replace to clear prior slices_done for a fresh day).
     """
     day = str(trade_date or "")[:10]
     if not day:
         day = datetime.now().strftime("%Y-%m-%d")
+    off = max(0, int(offset))
+    lim = max(20, min(int(limit or 400), 500))
+    key = str(slice_key or f"{off}-{off + lim}")
+    need = off + lim
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), trust_env=False) as client:
-        pool = await load_universe(
-            client, boards=boards, limit=limit, min_amount_yi=min_amount_yi
+        universe = await load_universe(
+            client, boards=boards, need=need, min_amount_yi=min_amount_yi
         )
+        pool = universe[off : off + lim]
         sem = asyncio.Semaphore(5)
         raw = await asyncio.gather(
             *[_score_one(client, sem, row, boards) for row in pool]
         )
-    hits = [h for h in raw if h]
-    hits.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
-    hits = hits[: max(5, top)]
-    # Soft-tag intersection with same-day paper buy signals (if any).
+    chunk = [h for h in raw if h]
+    chunk.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
+
+    from market_desk.db import load_ma_fan_day, save_ma_fan_day
+
+    prev = {} if replace else (load_ma_fan_day(day) or {})
+    prev_items = [] if replace else list(prev.get("items") or [])
+    keep = max(20, min(int(top or 60), 120))
+    merged = _merge_hits(prev_items, chunk, keep=keep)
+
     signal_codes = _buy_signal_codes_for_day(day)
-    for h in hits:
+    for h in merged:
         code = normalize_code(h.get("code")) or ""
         h["in_review"] = bool(code and code in signal_codes)
+
+    done = set() if replace else {str(x) for x in (prev.get("slices_done") or [])}
+    done.add(key)
+    scanned_total = int(prev.get("scanned") or 0) + len(pool)
+    if replace:
+        scanned_total = len(pool)
+
     payload = {
         "ok": True,
         "trade_date": day,
-        "scanned": len(pool),
-        "hit_n": len(hits),
+        "scanned": scanned_total,
+        "hit_n": len(merged),
         "boards": boards,
-        "limit": limit,
         "min_amount_yi": min_amount_yi,
         "formula_version": MA_FAN_FORMULA_VERSION,
-        "items": hits,
+        "items": merged,
+        "slices_done": sorted(done, key=lambda s: (len(s), s)),
+        "last_slice": key,
+        "last_slice_scanned": len(pool),
+        "last_slice_hits": len(chunk),
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "note": "观察层：粘连→向上发散→量能温和；不进 ready / 不改买卖闸门。",
+        "note": (
+            "观察层：粘连→向上发散→量能温和；18/20/22 点分档扫描成交额榜；"
+            "不进 ready / 不改买卖闸门。"
+        ),
     }
     if persist:
-        from market_desk.db import save_ma_fan_day
-
         save_ma_fan_day(day, payload)
         log.info(
-            "ma_fan scan saved %s scanned=%s hits=%s",
+            "ma_fan slice %s day=%s pool=%s chunk_hits=%s merged=%s done=%s",
+            key,
             day,
-            payload["scanned"],
-            payload["hit_n"],
+            len(pool),
+            len(chunk),
+            len(merged),
+            sorted(done),
         )
     return payload
+
+
+async def run_ma_fan_all_due_slices(
+    *,
+    trade_date: str,
+    minutes: int,
+    top: int = 60,
+    min_amount_yi: float = 1.2,
+    boards: str = "all",
+    force_all: bool = False,
+) -> dict[str, Any]:
+    """Run the next due slice (or all slices when ``force_all``)."""
+    day = str(trade_date or "")[:10]
+    if force_all:
+        out: dict[str, Any] = {}
+        first = True
+        for _start, offset, count, key in MA_FAN_SCHEDULE:
+            out = await run_ma_fan_scan(
+                trade_date=day,
+                offset=offset,
+                limit=count,
+                slice_key=key,
+                top=top,
+                min_amount_yi=min_amount_yi,
+                boards=boards,
+                persist=True,
+                replace=first,
+            )
+            first = False
+        return out or {"ok": False, "detail": "no slices"}
+    due = next_due_ma_fan_slice(trade_date=day, minutes=minutes)
+    if not due:
+        from market_desk.db import load_ma_fan_day
+
+        body = load_ma_fan_day(day) or {}
+        return {"ok": True, "skipped": True, "scan": body, "view_date": day}
+    offset, count, key = due
+    return await run_ma_fan_scan(
+        trade_date=day,
+        offset=offset,
+        limit=count,
+        slice_key=key,
+        top=top,
+        min_amount_yi=min_amount_yi,
+        boards=boards,
+        persist=True,
+        replace=False,
+    )
 
 
 def _buy_signal_codes_for_day(trade_date: str) -> set[str]:
@@ -437,6 +585,7 @@ def enrich_signals_with_ma_fan(
             hit = payload_by_code.get(code) or {}
             item["ma_fan_note"] = hit.get("note") or "均线粘连后向上发散"
             item["ma_fan_score"] = hit.get("score")
+            item["ma_fan_stage"] = hit.get("stage") or ""
         out.append(item)
     return out
 

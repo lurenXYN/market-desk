@@ -396,11 +396,7 @@ class DeskEngine:
             after_close = (
                 is_trading_day(now) and _minutes(now) >= 15 * 60 + 5 and self._eod_date != today
             )
-            ma_fan_due = (
-                is_trading_day(now)
-                and _minutes(now) >= 18 * 60
-                and self._ma_fan_date != today
-            )
+            ma_fan_due = is_trading_day(now) and _minutes(now) >= 18 * 60
             if first or live or after_close:
                 try:
                     await self.refresh()
@@ -447,13 +443,13 @@ class DeskEngine:
                 self.snapshot["trading_day"] = is_trading_day(now)
             if ma_fan_due:
                 try:
-                    from market_desk.db import load_ma_fan_day
+                    from market_desk.ma_fan import next_due_ma_fan_slice
 
-                    if load_ma_fan_day(today):
-                        self._ma_fan_date = today
-                    else:
-                        await self._run_ma_fan_scan(today)
-                        self._ma_fan_date = today
+                    due = next_due_ma_fan_slice(
+                        trade_date=today, minutes=_minutes(now)
+                    )
+                    if due:
+                        await self._run_ma_fan_scan(today, slice_spec=due)
                 except Exception:
                     log.exception("ma_fan nightly scan failed")
             await asyncio.sleep(_effective_refresh_seconds(now) if live else int(setting("idle_seconds", 60)))
@@ -1235,25 +1231,53 @@ class DeskEngine:
         except Exception:
             pass
 
-    async def _run_ma_fan_scan(self, day: str) -> dict[str, Any]:
-        """Nightly MA stickiness→fan scan; once per trade date (historical bars)."""
-        from market_desk.ma_fan import run_ma_fan_scan
+    async def _run_ma_fan_scan(
+        self,
+        day: str,
+        *,
+        slice_spec: tuple[int, int, str] | None = None,
+        force_all: bool = False,
+    ) -> dict[str, Any]:
+        """Run one due MA-fan liquidity slice (or all slices when forced)."""
+        from market_desk.ma_fan import run_ma_fan_all_due_slices, run_ma_fan_scan
         from market_desk.settings import setting as _setting
 
         day_s = str(day or "").strip()[:10]
-        limit = int(_setting("ma_fan_limit", 400) or 400)
-        top = int(_setting("ma_fan_top", 40) or 40)
+        top = int(_setting("ma_fan_top", 60) or 60)
         min_amt = float(_setting("ma_fan_min_amount_yi", 1.2) or 1.2)
         boards = str(_setting("ma_fan_boards", "all") or "all")
-        out = await run_ma_fan_scan(
+        boards = boards if boards in ("main", "growth", "all") else "all"
+        top_n = max(20, min(top, 120))
+        min_yi = max(0.5, min_amt)
+        if force_all:
+            return await run_ma_fan_all_due_slices(
+                trade_date=day_s,
+                minutes=22 * 60,
+                top=top_n,
+                min_amount_yi=min_yi,
+                boards=boards,
+                force_all=True,
+            )
+        if slice_spec:
+            offset, count, key = slice_spec
+            return await run_ma_fan_scan(
+                trade_date=day_s,
+                offset=int(offset),
+                limit=int(count),
+                slice_key=str(key),
+                top=top_n,
+                min_amount_yi=min_yi,
+                boards=boards,
+                persist=True,
+            )
+        return await run_ma_fan_all_due_slices(
             trade_date=day_s,
-            limit=max(80, min(limit, 800)),
-            top=max(10, min(top, 80)),
-            min_amount_yi=max(0.5, min_amt),
-            boards=boards if boards in ("main", "growth", "all") else "all",
-            persist=True,
+            minutes=22 * 60,
+            top=top_n,
+            min_amount_yi=min_yi,
+            boards=boards,
+            force_all=False,
         )
-        return out
 
     async def _write_eod_onepager(self, day: str) -> None:
         """Persist the end-of-day one-pager and push ServerChan once per day.
