@@ -107,34 +107,34 @@ def build_toast_alerts(
     alerts.extend(build_fly_window_alerts(previous, current))
 
     prev_ready = {
-        f"{x.get('urgency')}:{x.get('code')}"
-        for x in ((previous.get("sell_advice") or {}).get("items") or [])
-        if x.get("ready")
+        k for k, _, _ in build_sell_ready_alerts((previous.get("sell_advice") or {}).get("items"))
     }
-    for item in ((current.get("sell_advice") or {}).get("items") or []):
+    for alert in build_sell_ready_alerts((current.get("sell_advice") or {}).get("items")):
+        if alert[0] not in prev_ready:
+            alerts.append(alert)
+    return alerts
+
+
+def build_sell_ready_alerts(
+    items: list[dict[str, Any]] | None,
+) -> list[tuple[str, str, str]]:
+    """Map ready stop / take / trim sell cards to ``sell:{urgency}:{code}`` alerts."""
+    urg_map = {"stop": "止损", "take": "止盈", "trim": "减仓"}
+    out: list[tuple[str, str, str]] = []
+    for item in items or []:
         if not item.get("ready"):
             continue
         urgency = str(item.get("urgency") or "")
-        if urgency not in ("stop", "take", "trim"):
+        if urgency not in urg_map:
             continue
         code = item.get("code") or ""
-        key = f"{urgency}:{code}"
-        if key in prev_ready:
-            continue
-        urg_map = {"stop": "止损", "take": "止盈", "trim": "减仓"}
-        kind = urg_map.get(urgency, "卖出")
         name = item.get("name") or ""
-        alerts.append(
-            (
-                f"sell:{key}",
-                _push_title(kind, name, code),
-                (
-                    f"{name} {code} 建议卖 {item.get('sell_price')} "
-                    f"浮盈 {item.get('pnl_pct')}%"
-                ).strip(),
-            )
-        )
-    return alerts
+        body = f"{name} {code} 建议卖 {item.get('sell_price')} 浮盈 {item.get('pnl_pct')}%".strip()
+        role = str(item.get("role_label") or "").strip()
+        if role:
+            body = f"{body}\n{role}"
+        out.append((f"sell:{urgency}:{code}", _push_title(urg_map[urgency], name, code), body))
+    return out
 
 
 def _push_title(kind: str, name: Any = "", code: Any = "") -> str:
@@ -598,6 +598,65 @@ def push_serverchan_alerts(
                     user.get("username") or user.get("id"),
                     title,
                 )
+    return ok_n
+
+
+def is_sell_push_window(now: datetime, *, trading_day: bool) -> bool:
+    """True inside matched trading time (09:25–11:30, 13:00–15:00) on a trading day."""
+    if not trading_day:
+        return False
+    m = now.hour * 60 + now.minute
+    return (9 * 60 + 25 <= m <= 11 * 60 + 30) or (13 * 60 <= m < 15 * 60)
+
+
+def push_user_sell_alerts(
+    user: dict[str, Any],
+    snap: dict[str, Any],
+    *,
+    trade_date: str,
+) -> int:
+    """Push this user's newly ready sells to their own SendKey only.
+
+    Each ``sell:{urgency}:{code}`` goes out at most once per trade day per user
+    (persisted, so restarts or ready flicker do not re-ping).
+    """
+    key = str(user.get("serverchan_sendkey") or "").strip()
+    try:
+        uid = int(user.get("id") or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    day = str(trade_date or "")[:10]
+    if not key or uid <= 0 or not day:
+        return 0
+    alerts = build_sell_ready_alerts((snap.get("sell_advice") or {}).get("items"))
+    if not alerts:
+        return 0
+    store = f"sc_sell_once:{day}:{uid}"
+    try:
+        from market_desk.db import load_setting, load_user_setting, save_setting
+
+        sent = list(load_setting(store) or [])
+        raw = load_user_setting(uid, "runtime")
+        sell_only = bool(raw.get("serverchan_sell_only")) if isinstance(raw, dict) else False
+    except Exception:
+        log.exception("load user sell push state failed uid=%s", uid)
+        return 0
+    fresh = [a for a in alerts if a[0] not in sent]
+    fresh = filter_serverchan_alerts(fresh, sell_only=sell_only)
+    if not fresh:
+        return 0
+    ok_n = 0
+    for alert_key, title, body in fresh:
+        desp = format_serverchan_desp(alert_key, title, body, snap)
+        if notify_serverchan(key, title, desp):
+            ok_n += 1
+            sent.append(alert_key)
+            log.info("serverchan sell -> user %s | %s", user.get("username") or uid, title)
+    if ok_n:
+        try:
+            save_setting(store, sent)
+        except Exception:
+            log.exception("save user sell push state failed uid=%s", uid)
     return ok_n
 
 

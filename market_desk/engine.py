@@ -268,6 +268,35 @@ class DeskEngine:
         # Keep shared snapshot free of personal data; caller uses return / layered.
         return list(layered.get("positions") or [])
 
+    def _push_personal_sells(self, now: datetime) -> int:
+        """Build each ServerChan user's sell cards and push new ready sells to them.
+
+        The shared snapshot never carries personal books, so sell pushes must be
+        evaluated per user here rather than in ``_emit_toasts``.
+        """
+        from market_desk.notify import is_sell_push_window, push_user_sell_alerts
+
+        if not is_sell_push_window(now, trading_day=is_trading_day(now)):
+            return 0
+        from market_desk.db import list_serverchan_recipients
+
+        trade_date = str((self.snapshot or {}).get("trade_date") or now.strftime("%Y-%m-%d"))
+        if len(trade_date) == 8 and trade_date.isdigit():
+            trade_date = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}"
+        ok_n = 0
+        for user in list_serverchan_recipients():
+            try:
+                uid = int(user.get("id") or 0)
+                if uid <= 0:
+                    continue
+                snap = self.snapshot_for_user(uid)
+                if snap.get("personal_locked"):
+                    continue
+                ok_n += push_user_sell_alerts(user, snap, trade_date=trade_date)
+            except Exception:
+                log.exception("personal sell push failed user=%s", user.get("id"))
+        return ok_n
+
     def snapshot_for_user(self, user_id: int | None) -> dict[str, Any]:
         """Market snapshot plus optional personal layer for the logged-in user."""
         # Shallow copy is fine: we overwrite every personal key below.
@@ -1077,6 +1106,10 @@ class DeskEngine:
                 except Exception:
                     log.exception("signal record failed")
                 self.snapshot = payload
+                try:
+                    self._push_personal_sells(now)
+                except Exception:
+                    log.exception("personal sell push failed")
 
                 # Phase B: slow enrich (holders / trial trends / favorite) after UI can paint.
                 try:
