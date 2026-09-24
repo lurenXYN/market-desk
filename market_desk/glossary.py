@@ -342,7 +342,7 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "P1：粘连窗振幅偏好≤20%、极端>28%才丢窗；渐进发散加分/一日拉开轻降分；"
         "MA60 近 10 日明显下行（约 &lt;−1.5%）硬剔除，轻微走弱打醒目标签「⚠MA60偏弱」。\n"
         "P2：低价过滤与主板偏置默认关。主题旁注轻加分可幂等重算。\n"
-        "落库 ma_fan_day（默认 top≈80）；观察层不进 ready。公式版本 MA_FAN_FORMULA_VERSION。",
+        "落库 ma_fan_day（默认 top≈80）；观察层不进 ready。列表支持阶段/MA60/额档/主线/复盘交集/渐进筛选与表头排序（localStorage）。公式版本 MA_FAN_FORMULA_VERSION。",
         "see": ["信号复盘", "ready", "推荐买入", "主线"],
     },
     "信号复盘": {

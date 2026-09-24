@@ -3781,7 +3781,7 @@
         <h2 style="text-transform:none">均线发散<button type="button" class="q" data-term="均线发散">?</button>
           <span class="mod-stamp" id="maFanStamp" title="扫描落盘时间"></span>
         </h2>
-        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000。v7：振幅/渐进偏软；<b>MA60 明显下行剔除</b>，轻微走弱打「⚠MA60偏弱」。复盘只打交集不加分。观察层，不进 ready。</p>
+        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000。v7：振幅/渐进偏软；<b>MA60 明显下行剔除</b>，轻微走弱打「⚠MA60偏弱」。表头可排序，上方可筛阶段/MA60/额档/主线。复盘只打交集不加分。观察层，不进 ready。</p>
         <div class="rev-daybar" id="maFanDayBar">
           <div class="rev-day-nav">
             <button type="button" class="rev-col-btn" id="maFanDayPrev" title="更早一日">←</button>
@@ -3793,22 +3793,56 @@
           <div class="rev-day-chips" id="maFanDayChips"></div>
         </div>
         <div class="rev-today" id="maFanSummary"></div>
+        <div class="rev-toolbar" style="margin-top:8px">
+          <div class="pos-form" id="maFanFilters" style="grid-template-columns:90px 110px 120px 110px auto auto auto auto;margin:0;flex:1;align-items:end">
+            <label>阶段
+              <select id="maFanFltStage" title="初期/中期/后期">
+                <option value="">全部</option>
+                <option value="初期">初期</option>
+                <option value="中期">中期</option>
+                <option value="后期">后期</option>
+              </select>
+            </label>
+            <label>MA60
+              <select id="maFanFltMa60" title="稳升/稳 / 偏弱醒目">
+                <option value="">全部</option>
+                <option value="ok">稳/稳升</option>
+                <option value="weak">⚠偏弱</option>
+              </select>
+            </label>
+            <label>额档
+              <select id="maFanFltBand">
+                <option value="">全部</option>
+                <option value="额档·头百">头百</option>
+                <option value="额档·前400">前400</option>
+                <option value="额档·400-800">400-800</option>
+                <option value="额档·800+">800+</option>
+              </select>
+            </label>
+            <label>主线
+              <select id="maFanFltTheme" title="贴/近/同主题主线">
+                <option value="">全部</option>
+                <option value="yes">有主线相关</option>
+                <option value="no">无主线相关</option>
+              </select>
+            </label>
+            <label class="settings-check" style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="maFanFltReview" />
+              <span>仅复盘交集</span>
+            </label>
+            <label class="settings-check" style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="maFanFltProgressive" />
+              <span>仅渐进发散</span>
+            </label>
+            <button type="button" class="rev-col-btn" id="maFanFltApply">筛选</button>
+            <button type="button" class="rev-col-btn" id="maFanFltReset">重置</button>
+            <span class="meta" id="maFanFltCount" style="align-self:center"></span>
+          </div>
+        </div>
         <div class="rev-table-wrap">
-          <table class="rev-table">
+          <table class="rev-table" id="maFanTable">
             <thead>
-              <tr>
-                <th>代码</th>
-                <th>名称</th>
-                <th>阶段</th>
-                <th>分</th>
-                <th>收盘</th>
-                <th>涨跌%</th>
-                <th>粘连%</th>
-                <th>发散%</th>
-                <th>量比</th>
-                <th>标签</th>
-                <th>备注</th>
-              </tr>
+              <tr id="maFanHead"></tr>
             </thead>
             <tbody id="maFanBody">
               <tr><td colspan="11" class="meta">打开页签后加载…</td></tr>
@@ -8366,6 +8400,164 @@
     let maFanViewDate = "";
     let maFanLoadedAt = 0;
     let lastMaFan = { dates: [], scan: null };
+    const MAFAN_FILTER_KEY = "md_mafan_filters_v1";
+    let maFanSort = { id: "score", dir: -1 };
+    let maFanFilters = {
+      stage: "",
+      ma60: "",
+      band: "",
+      theme: "",
+      review: false,
+      progressive: false,
+    };
+
+    function loadMaFanFilters() {
+      try {
+        const raw = localStorage.getItem(MAFAN_FILTER_KEY);
+        if (!raw) return;
+        const o = JSON.parse(raw);
+        if (!o || typeof o !== "object") return;
+        maFanFilters = {
+          stage: String(o.stage || ""),
+          ma60: String(o.ma60 || ""),
+          band: String(o.band || ""),
+          theme: String(o.theme || ""),
+          review: !!o.review,
+          progressive: !!o.progressive,
+        };
+      } catch (e) {}
+    }
+
+    function saveMaFanFilters() {
+      try {
+        localStorage.setItem(MAFAN_FILTER_KEY, JSON.stringify(maFanFilters));
+      } catch (e) {}
+    }
+
+    function syncMaFanFilterInputs() {
+      const set = (id, val) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.type === "checkbox") el.checked = !!val;
+        else el.value = val == null ? "" : String(val);
+      };
+      set("maFanFltStage", maFanFilters.stage);
+      set("maFanFltMa60", maFanFilters.ma60);
+      set("maFanFltBand", maFanFilters.band);
+      set("maFanFltTheme", maFanFilters.theme);
+      set("maFanFltReview", maFanFilters.review);
+      set("maFanFltProgressive", maFanFilters.progressive);
+    }
+
+    function readMaFanFilterInputs() {
+      const g = (id) => document.getElementById(id);
+      maFanFilters = {
+        stage: (g("maFanFltStage") && g("maFanFltStage").value) || "",
+        ma60: (g("maFanFltMa60") && g("maFanFltMa60").value) || "",
+        band: (g("maFanFltBand") && g("maFanFltBand").value) || "",
+        theme: (g("maFanFltTheme") && g("maFanFltTheme").value) || "",
+        review: !!(g("maFanFltReview") && g("maFanFltReview").checked),
+        progressive: !!(g("maFanFltProgressive") && g("maFanFltProgressive").checked),
+      };
+      saveMaFanFilters();
+    }
+
+    function maFanRawTags(it) {
+      if (Array.isArray(it.tags) && it.tags.length) return it.tags.map(String);
+      return [it.stage, it.freshness].filter(Boolean).map(String);
+    }
+
+    function maFanPassFilter(it) {
+      const f = maFanFilters;
+      const tags = maFanRawTags(it);
+      if (f.stage && String(it.stage || "") !== f.stage) return false;
+      if (f.ma60 === "weak") {
+        if (!tags.some((t) => t === "⚠MA60偏弱" || t === "MA60偏弱")) return false;
+      } else if (f.ma60 === "ok") {
+        if (tags.some((t) => t === "⚠MA60偏弱" || t === "MA60偏弱")) return false;
+        if (!tags.some((t) => t === "MA60稳" || t === "MA60稳升")) return false;
+      }
+      if (f.band) {
+        const band = String(it.amount_band || "");
+        if (band !== f.band && !tags.includes(f.band)) return false;
+      }
+      const hasTheme = !!(it.theme_tag) || tags.some((t) =>
+        t === "贴主线" || t === "近主线" || t === "主线同主题"
+        || t === "贴支线" || t === "近支线" || t === "支线同主题"
+        || t === "贴联动" || t === "近联动" || t === "联动同主题"
+      );
+      if (f.theme === "yes" && !hasTheme) return false;
+      if (f.theme === "no" && hasTheme) return false;
+      if (f.review && !it.in_review) return false;
+      if (f.progressive) {
+        if (!(it.progressive || tags.includes("渐进发散"))) return false;
+      }
+      return true;
+    }
+
+    function maFanSortValue(it, id) {
+      if (id === "code") return String(it.code || "");
+      if (id === "name") return String(it.name || "");
+      if (id === "stage") {
+        const m = { 初期: 1, 中期: 2, 后期: 3 };
+        return m[it.stage] || 9;
+      }
+      if (id === "score") return Number(it.score);
+      if (id === "close") return Number(it.close);
+      if (id === "pct") return Number(it.pct);
+      if (id === "sticky") return Number(it.sticky_spread);
+      if (id === "fan") return Number(it.fan_spread);
+      if (id === "vol") return Number(it.vol_ratio);
+      if (id === "rank") return Number(it.amount_rank);
+      return 0;
+    }
+
+    function maFanFilteredSorted(items) {
+      const rows = (items || []).filter(maFanPassFilter);
+      const id = maFanSort.id;
+      if (!id) return rows;
+      const dir = maFanSort.dir || 1;
+      return rows.slice().sort((a, b) => {
+        const va = maFanSortValue(a, id);
+        const vb = maFanSortValue(b, id);
+        const na = typeof va === "number" && !Number.isNaN(va);
+        const nb = typeof vb === "number" && !Number.isNaN(vb);
+        if (na && nb) {
+          if (va === vb) return 0;
+          if (Number.isNaN(va)) return 1;
+          if (Number.isNaN(vb)) return -1;
+          return va < vb ? -dir : dir;
+        }
+        const sa = String(va ?? "");
+        const sb = String(vb ?? "");
+        if (sa === sb) return 0;
+        return sa < sb ? -dir : dir;
+      });
+    }
+
+    function paintMaFanHead() {
+      const head = document.getElementById("maFanHead");
+      if (!head) return;
+      const cols = [
+        ["code", "代码"],
+        ["name", "名称"],
+        ["stage", "阶段"],
+        ["score", "分"],
+        ["close", "收盘"],
+        ["pct", "涨跌%"],
+        ["sticky", "粘连%"],
+        ["fan", "发散%"],
+        ["vol", "量比"],
+        ["", "标签"],
+        ["", "备注"],
+      ];
+      head.innerHTML = cols.map(([id, label]) => {
+        if (!id) return `<th>${label}</th>`;
+        const on = maFanSort.id === id;
+        const ind = on ? (maFanSort.dir > 0 ? "▲" : "▼") : "";
+        return `<th class="rev-sort" data-sort="${id}">${label}<span class="sort-ind">${ind}</span></th>`;
+      }).join("");
+    }
 
     async function loadMaFan(force, date) {
       const now = Date.now();
@@ -8439,11 +8631,20 @@
       }
       const forceBtn = document.getElementById("maFanForceRun");
       if (forceBtn) forceBtn.hidden = !(authUser && authUser.role === "admin");
-      const items = (scan.items || []);
+      syncMaFanFilterInputs();
+      paintMaFanHead();
+      const all = (scan.items || []);
+      const items = maFanFilteredSorted(all);
+      const cnt = document.getElementById("maFanFltCount");
+      if (cnt) cnt.textContent = all.length ? `显示 ${items.length} / ${all.length}` : "";
       const body = document.getElementById("maFanBody");
       if (!body) return;
-      if (!items.length) {
+      if (!all.length) {
         body.innerHTML = `<tr><td colspan="11" class="meta">该日无命中（或尚未扫描）</td></tr>`;
+        return;
+      }
+      if (!items.length) {
+        body.innerHTML = `<tr><td colspan="11" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
         return;
       }
       body.innerHTML = items.map((it) => {
@@ -8453,9 +8654,7 @@
         const stage = it.stage || "—";
         const tags = [];
         if (it.in_review) tags.push(`<span class="rev-chip up" title="当日复盘有买信号">复盘交集</span>`);
-        const rawTags = Array.isArray(it.tags) && it.tags.length
-          ? it.tags
-          : [stage, it.freshness].filter(Boolean);
+        const rawTags = maFanRawTags(it);
         const chipClass = (t) => {
           if (t === "初期" || t === "刚发散" || t === "量能温和" || t === "粘连很紧" || t === "多头排列" || t === "坡度强") return "rev-chip up";
           if (t === "渐进发散" || t === "振幅小" || t === "MA60稳升" || t === "MA60稳" || t === "主板") return "rev-chip up";
@@ -10374,6 +10573,39 @@
     document.getElementById("maFanDayInput")?.addEventListener("change", () => {
       const v = document.getElementById("maFanDayInput").value;
       if (v) loadMaFan(true, v);
+    });
+    loadMaFanFilters();
+    const maFanFilterApply = () => {
+      readMaFanFilterInputs();
+      paintMaFan(lastMaFan);
+    };
+    document.getElementById("maFanFltApply")?.addEventListener("click", maFanFilterApply);
+    document.getElementById("maFanFltReset")?.addEventListener("click", () => {
+      maFanFilters = {
+        stage: "", ma60: "", band: "", theme: "",
+        review: false, progressive: false,
+      };
+      saveMaFanFilters();
+      syncMaFanFilterInputs();
+      paintMaFan(lastMaFan);
+    });
+    ["maFanFltStage", "maFanFltMa60", "maFanFltBand", "maFanFltTheme"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("change", maFanFilterApply);
+    });
+    ["maFanFltReview", "maFanFltProgressive"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("change", maFanFilterApply);
+    });
+    document.getElementById("maFanHead")?.addEventListener("click", (ev) => {
+      const th = ev.target && ev.target.closest ? ev.target.closest("th.rev-sort") : null;
+      if (!th) return;
+      const col = th.getAttribute("data-sort");
+      if (!col) return;
+      if (maFanSort.id === col) maFanSort.dir = -maFanSort.dir;
+      else {
+        maFanSort.id = col;
+        maFanSort.dir = -1;
+      }
+      paintMaFan(lastMaFan);
     });
     document.getElementById("panel-mafan")?.addEventListener("click", (ev) => {
       const dayBtn = ev.target.closest("[data-mafan-day]");
