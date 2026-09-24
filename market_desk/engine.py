@@ -1276,9 +1276,10 @@ class DeskEngine:
         *,
         slice_spec: tuple[int, int, str] | None = None,
         force_all: bool = False,
+        claimed: bool = False,
     ) -> dict[str, Any]:
         """Run one due MA-fan liquidity slice (or all slices when forced)."""
-        from market_desk.ma_fan import run_ma_fan_all_due_slices, run_ma_fan_scan
+        from market_desk.ma_fan import run_ma_fan_all_due_slices
         from market_desk.settings import setting as _setting
 
         day_s = str(day or "").strip()[:10]
@@ -1290,43 +1291,22 @@ class DeskEngine:
         min_yi = max(0.5, min_amt)
         min_price = float(_setting("ma_fan_min_price", 0) or 0)
         prefer_main = bool(_setting("ma_fan_prefer_main", False))
-        if force_all:
-            return await run_ma_fan_all_due_slices(
-                trade_date=day_s,
-                minutes=22 * 60,
-                top=top_n,
-                min_amount_yi=min_yi,
-                boards=boards,
-                force_all=True,
-                snapshot=self.snapshot,
-                min_price=min_price,
-                prefer_main=prefer_main,
-            )
-        if slice_spec:
+        spec = None
+        if slice_spec and not force_all:
             offset, count, key = slice_spec
-            return await run_ma_fan_scan(
-                trade_date=day_s,
-                offset=int(offset),
-                limit=int(count),
-                slice_key=str(key),
-                top=top_n,
-                min_amount_yi=min_yi,
-                boards=boards,
-                persist=True,
-                snapshot=self.snapshot,
-                min_price=min_price,
-                prefer_main=prefer_main,
-            )
+            spec = (int(offset), int(count), str(key))
         return await run_ma_fan_all_due_slices(
             trade_date=day_s,
             minutes=22 * 60,
             top=top_n,
             min_amount_yi=min_yi,
             boards=boards,
-            force_all=False,
+            force_all=bool(force_all),
             snapshot=self.snapshot,
             min_price=min_price,
             prefer_main=prefer_main,
+            slice_spec=spec,
+            claimed=claimed,
         )
 
     async def _write_eod_onepager(self, day: str) -> None:

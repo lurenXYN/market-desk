@@ -168,6 +168,33 @@
       color: #fde68a;
       background: #1a1608;
     }
+    .mafan-prog {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      margin: 6px 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .mafan-prog-bar {
+      flex: 0 0 260px;
+      max-width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      background: #1e293b;
+      overflow: hidden;
+    }
+    .mafan-prog-bar i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: #38bdf8;
+      transition: width 0.4s;
+    }
+    .mafan-prog.err .mafan-prog-bar i { background: #f87171; }
+    .mafan-prog.err { color: #fca5a5; }
+    .mafan-err a { color: #93c5fd; }
     .mod-stamp {
       margin-left: 8px;
       font-size: 12px;
@@ -3791,6 +3818,10 @@
             <button type="button" class="rev-col-btn" id="maFanForceRun" hidden title="管理员：强制重扫今日">重扫</button>
           </div>
           <div class="rev-day-chips" id="maFanDayChips"></div>
+        </div>
+        <div class="mafan-prog" id="maFanProgress" hidden>
+          <div class="mafan-prog-bar"><i id="maFanProgressFill"></i></div>
+          <span id="maFanProgressText"></span>
         </div>
         <div class="rev-today" id="maFanSummary"></div>
         <div class="rev-toolbar" style="margin-top:8px">
@@ -8573,26 +8604,155 @@
         ? String(date).trim()
         : (maFanViewDate || "").trim();
       if (!force && date === undefined && now - maFanLoadedAt < 60000) return;
+      let stage = "请求";
+      let status = null;
       try {
         const params = new URLSearchParams();
         if (want) params.set("date", want);
         const q = params.toString() ? ("?" + params.toString()) : "";
         setModStamp("maFanStamp", null, { loading: true, label: "发散" });
         const r = await fetch("/api/ma-fan" + q, { credentials: "same-origin" });
-        const d = await r.json();
+        status = r.status;
+        stage = "解析";
+        const text = await r.text();
+        let d;
+        try {
+          d = JSON.parse(text);
+        } catch (_) {
+          throw new Error(`返回非 JSON：${text.slice(0, 160) || "(空)"}`);
+        }
+        if (!r.ok || d.ok === false) {
+          throw new Error(typeof d.detail === "string" ? d.detail : "接口返回失败");
+        }
         maFanLoadedAt = Date.now();
         maFanViewDate = d.view_date || want || "";
         lastMaFan = d;
+        stage = "渲染";
         paintMaFan(d);
+        if (d.warn) {
+          document.getElementById("maFanSummary")?.insertAdjacentHTML(
+            "beforeend", ` <span class="meta" style="color:#fca5a5">· ${escAttr(d.warn)}</span>`,
+          );
+        }
         setModStamp("maFanStamp", (d.scan && d.scan.saved_at) || null, {
           label: "发散",
           title: d.note || "夜间日线扫描",
         });
       } catch (e) {
+        const msg = (e && e.message) || String(e);
+        const where = `${stage}${status != null ? " · HTTP " + status : ""}`;
+        const isAdmin = !!(authUser && authUser.role === "admin");
         document.getElementById("maFanBody").innerHTML =
-          `<tr><td colspan="11" class="meta">均线发散加载失败</td></tr>`;
+          `<tr><td colspan="11" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
+          + (isAdmin
+            ? ` · <a href="/api/ops/logs?level=warning&lines=300" target="_blank" rel="noopener">看错误日志</a>`
+            : "")
+          + `</td></tr>`;
         setModStamp("maFanStamp", null, { stale: true, label: "发散" });
+        console.error("loadMaFan failed", where, e);
+        reportClientError("mafan-load", msg, status, where + (e && e.stack ? " | " + String(e.stack).slice(0, 300) : ""));
       }
+    }
+
+    /** Best-effort: write a browser-side failure into the server log. */
+    function reportClientError(where, message, status, detail) {
+      try {
+        fetch("/api/ops/client-error", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            where: String(where || "").slice(0, 60),
+            message: String(message || "").slice(0, 500),
+            status: status == null ? null : Number(status),
+            detail: String(detail || "").slice(0, 500),
+          }),
+        }).catch(() => {});
+      } catch (_) {}
+    }
+
+    let maFanPollTimer = null;
+
+    function fmtSecs(s) {
+      const n = Math.max(0, Math.round(Number(s) || 0));
+      return n >= 60 ? `${Math.floor(n / 60)}分${String(n % 60).padStart(2, "0")}秒` : `${n}秒`;
+    }
+
+    /** Render the MA-fan rescan progress bar; returns true while a scan runs. */
+    function paintMaFanProgress(p) {
+      const box = document.getElementById("maFanProgress");
+      const fill = document.getElementById("maFanProgressFill");
+      const txt = document.getElementById("maFanProgressText");
+      const btn = document.getElementById("maFanForceRun");
+      if (!box || !p) return false;
+      const running = !!p.running;
+      const cool = Number(p.cooldown_s || 0);
+      if (btn) {
+        btn.disabled = running || cool > 0;
+        btn.title = running
+          ? "扫描进行中"
+          : (cool > 0 ? `冷却中，约 ${Math.ceil(cool / 60)} 分钟后可再扫（防数据源封禁）` : "管理员：强制重扫今日 0–1000");
+      }
+      if (!running && !p.error && p.phase !== "done") {
+        box.hidden = true;
+        return false;
+      }
+      box.hidden = false;
+      box.classList.toggle("err", !!p.error);
+      const pct = Math.max(0, Math.min(100, Number(p.pct || 0)));
+      if (fill) fill.style.width = (running ? pct : (p.error ? pct : 100)) + "%";
+      const phaseZh = { queued: "排队", universe: "拉成交额榜", bars: "拉日线", done: "完成", error: "失败" }[p.phase] || p.phase || "";
+      const parts = [];
+      if (running) {
+        parts.push(`${p.kind === "force" ? "重扫" : "定时档"} · ${phaseZh}`);
+        if (p.slice) parts.push(`档 ${p.slice}（${p.slice_idx || 1}/${p.slice_n || 1}）`);
+        if (p.total) parts.push(`${p.done || 0}/${p.total} · ${pct}%`);
+        parts.push(`命中 ${p.hits || 0}`);
+        if (p.fails) parts.push(`失败 ${p.fails}`);
+        parts.push(`已用 ${fmtSecs(p.elapsed_s)}`);
+        if (p.eta_s != null) parts.push(`预计还要 ${fmtSecs(p.eta_s)}`);
+      } else if (p.error) {
+        parts.push(`上次扫描失败：${p.error}`);
+        if (p.finished_at) parts.push(p.finished_at);
+      } else {
+        parts.push(`上次扫描完成 · 扫 ${p.done || 0} 只 · 命中 ${p.hits || 0} · 用时 ${fmtSecs(p.elapsed_s)}`);
+        if (p.finished_at) parts.push(p.finished_at);
+        if (cool > 0) parts.push(`冷却 ${fmtSecs(cool)}`);
+      }
+      if (txt) {
+        txt.innerHTML = parts.map(escAttr).join(" · ")
+          + (p.error ? ` · <a href="/api/ops/logs?q=ma_fan&lines=300" target="_blank" rel="noopener">看日志</a>` : "");
+      }
+      return running;
+    }
+
+    /** Poll scan progress (admin only) until the scan ends, then reload the list. */
+    async function pollMaFanProgress() {
+      if (!(authUser && authUser.role === "admin")) return;
+      if (maFanPollTimer) {
+        clearTimeout(maFanPollTimer);
+        maFanPollTimer = null;
+      }
+      let wasRunning = false;
+      const tick = async () => {
+        let p = null;
+        try {
+          const r = await fetch("/api/ma-fan/progress", { credentials: "same-origin" });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok) p = d.progress || null;
+        } catch (_) {}
+        const running = p ? paintMaFanProgress(p) : wasRunning;
+        if (running) {
+          wasRunning = true;
+          maFanPollTimer = setTimeout(tick, 2000);
+          return;
+        }
+        maFanPollTimer = null;
+        if (wasRunning) {
+          await loadMaFan(true, (p && p.trade_date) || maFanViewDate);
+        }
+      };
+      await tick();
     }
 
     function paintMaFan(d) {
@@ -9127,7 +9287,10 @@
         if (el) el.hidden = name !== currentMain;
       });
       if (currentMain === "review") loadReview(false);
-      if (currentMain === "mafan") loadMaFan(false);
+      if (currentMain === "mafan") {
+        loadMaFan(false);
+        if (!maFanPollTimer) pollMaFanProgress();
+      }
       if (currentMain === "backtest" && typeof ensureBacktestDefaults === "function") ensureBacktestDefaults();
       if (currentMain === "funds") ensureFundFlowFull();
       if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
@@ -10624,6 +10787,7 @@
     });
     document.getElementById("maFanForceRun")?.addEventListener("click", async () => {
       if (!(authUser && authUser.role === "admin")) return;
+      if (!confirm("重扫今日成交额榜前 1000 只（限速拉日线，约 3–4 分钟），会覆盖今日已有结果。继续？")) return;
       const btn = document.getElementById("maFanForceRun");
       if (btn) btn.disabled = true;
       try {
@@ -10632,12 +10796,17 @@
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || d.ok === false) {
-          alert(d.detail || "重扫失败");
+          alert(typeof d.detail === "string" ? d.detail : `重扫启动失败（HTTP ${r.status}）`);
+          if (r.status >= 500) reportClientError("mafan-rescan", d.detail || "start failed", r.status, "");
+          await pollMaFanProgress();
           return;
         }
         maFanViewDate = d.view_date || "";
-        await loadMaFan(true, maFanViewDate);
-      } finally {
+        if (d.progress) paintMaFanProgress(d.progress);
+        await pollMaFanProgress();
+      } catch (e) {
+        alert("重扫请求失败：" + ((e && e.message) || e));
+        reportClientError("mafan-rescan", (e && e.message) || String(e), null, "");
         if (btn) btn.disabled = false;
       }
     });

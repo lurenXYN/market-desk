@@ -5,3 +5,4 @@ data/*.db
 data/*.db-*
 data/*.db-journal
 data/backup/
+data/logs/

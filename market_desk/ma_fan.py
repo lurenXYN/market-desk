@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -34,6 +35,161 @@ MA_FAN_SCHEDULE: tuple[tuple[int, int, int, str], ...] = (
     (20 * 60, 400, 400, "400-800"),
     (22 * 60, 800, 200, "800-1000"),
 )
+
+# Outbound pacing. Sina rank pages and Tencent/East Money daily bars are free
+# public endpoints that ban bursty clients; this layer is nightly-grade, so
+# slow and steady beats fast: ~1000 codes take about 3–4 minutes.
+MA_FAN_CONCURRENCY = 2
+MA_FAN_MIN_INTERVAL_S = 0.2
+MA_FAN_PAGE_DELAY_S = 0.5
+MA_FAN_MAX_CONSECUTIVE_FAIL = 30
+MA_FAN_FORCE_COOLDOWN_S = 600
+
+_PROGRESS: dict[str, Any] = {"running": False}
+_LAST_FORCE_END = 0.0
+
+
+class _Pacer:
+    """Space request starts at least ``interval`` seconds apart across tasks."""
+
+    def __init__(self, interval: float) -> None:
+        self.interval = max(0.0, float(interval))
+        self._lock = asyncio.Lock()
+        self._next = 0.0
+
+    async def wait(self) -> None:
+        """Block until this caller may start its request."""
+        async with self._lock:
+            now = time.monotonic()
+            delay = self._next - now
+            if delay > 0:
+                await asyncio.sleep(delay)
+                now = time.monotonic()
+            self._next = now + self.interval
+
+
+class _ScanStats:
+    """Per-run counters; ``live`` runs mirror them into the shared progress."""
+
+    def __init__(self, *, live: bool) -> None:
+        self.live = live
+        self.consecutive_fail = 0
+        self.aborted = False
+        self.total_fixed = False
+
+    def phase(self, name: str) -> None:
+        """Record the current phase (universe / bars)."""
+        if self.live:
+            _PROGRESS["phase"] = name
+            if name == "bars" and "_tb" not in _PROGRESS:
+                _PROGRESS["_tb"] = time.monotonic()
+
+    def begin_slice(self, key: str, idx: int, n: int) -> None:
+        """Record which liquidity slice is being scanned."""
+        if self.live:
+            _PROGRESS.update({"slice": key, "slice_idx": idx, "slice_n": n})
+
+    def set_total(self, total: int) -> None:
+        """Fix the overall code count so the bar spans every slice."""
+        self.total_fixed = True
+        if self.live:
+            _PROGRESS["total"] = int(total)
+
+    def add_total(self, n: int) -> None:
+        """Grow the code count when slices are scanned one at a time."""
+        if self.live and not self.total_fixed:
+            _PROGRESS["total"] = int(_PROGRESS.get("total") or 0) + int(n)
+
+    def record_fetch(self, ok: bool) -> None:
+        """Count one bar fetch; trip ``aborted`` after a long failure streak."""
+        if ok:
+            self.consecutive_fail = 0
+        else:
+            self.consecutive_fail += 1
+            if self.consecutive_fail >= MA_FAN_MAX_CONSECUTIVE_FAIL:
+                self.aborted = True
+        if self.live:
+            _PROGRESS["done"] = int(_PROGRESS.get("done") or 0) + 1
+            if not ok:
+                _PROGRESS["fails"] = int(_PROGRESS.get("fails") or 0) + 1
+
+    def record_hit(self) -> None:
+        """Count one pattern hit."""
+        if self.live:
+            _PROGRESS["hits"] = int(_PROGRESS.get("hits") or 0) + 1
+
+
+def try_claim_scan(kind: str, trade_date: str) -> bool:
+    """Mark a scan as running; return False when another scan holds the slot.
+
+    Call from the event loop before scheduling the task so a double click
+    cannot start two scans.
+    """
+    if _PROGRESS.get("running"):
+        return False
+    _PROGRESS.clear()
+    _PROGRESS.update(
+        {
+            "running": True,
+            "kind": str(kind),
+            "trade_date": str(trade_date or "")[:10],
+            "phase": "queued",
+            "slice": "",
+            "slice_idx": 0,
+            "slice_n": 0,
+            "done": 0,
+            "total": 0,
+            "hits": 0,
+            "fails": 0,
+            "error": None,
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": None,
+            "_t0": time.monotonic(),
+        }
+    )
+    return True
+
+
+def release_scan(*, error: str | None = None) -> None:
+    """Mark the running scan finished (or failed) and start the force cooldown."""
+    global _LAST_FORCE_END
+    t0 = float(_PROGRESS.get("_t0") or time.monotonic())
+    _PROGRESS.update(
+        {
+            "running": False,
+            "phase": "error" if error else "done",
+            "error": error,
+            "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "elapsed_s": round(time.monotonic() - t0, 1),
+        }
+    )
+    if _PROGRESS.get("kind") == "force":
+        _LAST_FORCE_END = time.monotonic()
+
+
+def force_cooldown_left() -> int:
+    """Seconds until another manual full rescan is allowed (0 when ready)."""
+    if not _LAST_FORCE_END:
+        return 0
+    left = MA_FAN_FORCE_COOLDOWN_S - (time.monotonic() - _LAST_FORCE_END)
+    return max(0, int(left + 0.999))
+
+
+def scan_progress() -> dict[str, Any]:
+    """Public snapshot of the current / last scan with percent and ETA."""
+    out = {k: v for k, v in _PROGRESS.items() if not str(k).startswith("_")}
+    done = int(out.get("done") or 0)
+    total = int(out.get("total") or 0)
+    out["pct"] = round(min(100.0, done * 100.0 / total), 1) if total else 0.0
+    if out.get("running"):
+        now = time.monotonic()
+        out["elapsed_s"] = round(now - float(_PROGRESS.get("_t0") or now), 1)
+        bars_s = now - float(_PROGRESS.get("_tb") or now)
+        out["eta_s"] = (
+            int(bars_s / done * (total - done)) if done and total > done and bars_s > 0 else None
+        )
+    out["cooldown_s"] = force_cooldown_left()
+    return out
 
 
 def _sma(closes: list[float], end: int, n: int) -> float | None:
@@ -532,7 +688,8 @@ async def load_universe(
                 resp = await client.get(url, timeout=20.0)
                 resp.raise_for_status()
                 rows = resp.json()
-            except Exception:
+            except Exception as exc:
+                log.warning("ma_fan universe page failed node=%s page=%s: %r", node, page, exc)
                 break
             if not isinstance(rows, list) or not rows:
                 break
@@ -567,7 +724,7 @@ async def load_universe(
                         "last": item.get("trade"),
                     }
                 )
-            await asyncio.sleep(0.12)
+            await asyncio.sleep(MA_FAN_PAGE_DELAY_S)
             if len(pool) >= want * 2:
                 break
         if len(pool) >= want * 2:
@@ -584,6 +741,8 @@ async def _score_one(
     *,
     min_price: float = 0.0,
     prefer_main: bool = False,
+    pacer: _Pacer | None = None,
+    stats: _ScanStats | None = None,
 ) -> dict[str, Any] | None:
     """Fetch bars and score one quote row into a hit dict."""
     code = normalize_code(row.get("code")) or ""
@@ -591,11 +750,19 @@ async def _score_one(
     if not code or not _board_ok(code, boards) or is_st(name):
         return None
     async with sem:
+        if stats is not None and stats.aborted:
+            return None
+        if pacer is not None:
+            await pacer.wait()
         try:
             bars = await fetch_daily_bars(client, code, limit=120)
-        except Exception:
-            return None
-        await asyncio.sleep(0.04)
+        except Exception as exc:
+            log.debug("ma_fan bars failed code=%s: %r", code, exc)
+            bars = []
+        if pacer is None:
+            await asyncio.sleep(0.04)
+    if stats is not None:
+        stats.record_fetch(bool(bars))
     got = score_pattern(bars or [])
     if not got:
         return None
@@ -713,12 +880,19 @@ async def run_ma_fan_scan(
     snapshot: dict[str, Any] | None = None,
     min_price: float = 0.0,
     prefer_main: bool = False,
+    universe: list[dict[str, Any]] | None = None,
+    stats: _ScanStats | None = None,
 ) -> dict[str, Any]:
     """Scan one amount-rank slice and merge into the day payload.
 
     ``offset``/``limit`` select the liquidity band (e.g. 400–800). Results merge
     into ``ma_fan_day`` unless ``replace=True`` (admin full rebuild of this slice
     still merges by code; pass replace to clear prior slices_done for a fresh day).
+    Pass a preloaded ``universe`` to skip re-paging the amount ranking.
+
+    Raises:
+        RuntimeError: The ranking came back empty or the bar source kept
+            failing; the stored day payload is left untouched.
     """
     day = str(trade_date or "")[:10]
     if not day:
@@ -729,29 +903,45 @@ async def run_ma_fan_scan(
     need = off + lim
     min_px = max(0.0, float(min_price or 0))
     prefer = bool(prefer_main)
+    st = stats or _ScanStats(live=False)
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), trust_env=False) as client:
-        universe = await load_universe(
-            client, boards=boards, need=need, min_amount_yi=min_amount_yi
-        )
+        if universe is None:
+            st.phase("universe")
+            universe = await load_universe(
+                client, boards=boards, need=need, min_amount_yi=min_amount_yi
+            )
+        if not universe:
+            raise RuntimeError("成交额榜为空（新浪无响应或限流），未改动已有结果")
         pool = universe[off : off + lim]
         ranked: list[dict[str, Any]] = []
         for i, row in enumerate(pool):
             item = dict(row or {})
             item["_rank"] = off + i + 1
             ranked.append(item)
-        sem = asyncio.Semaphore(5)
-        raw = await asyncio.gather(
-            *[
-                _score_one(
-                    client,
-                    sem,
-                    row,
-                    boards,
-                    min_price=min_px,
-                    prefer_main=prefer,
-                )
-                for row in ranked
-            ]
+        st.add_total(len(ranked))
+        st.phase("bars")
+        sem = asyncio.Semaphore(MA_FAN_CONCURRENCY)
+        pacer = _Pacer(MA_FAN_MIN_INTERVAL_S)
+
+        async def _one(row: dict[str, Any]) -> dict[str, Any] | None:
+            hit = await _score_one(
+                client,
+                sem,
+                row,
+                boards,
+                min_price=min_px,
+                prefer_main=prefer,
+                pacer=pacer,
+                stats=st,
+            )
+            if hit:
+                st.record_hit()
+            return hit
+
+        raw = await asyncio.gather(*[_one(row) for row in ranked])
+    if st.aborted:
+        raise RuntimeError(
+            f"日线源连续失败 {MA_FAN_MAX_CONSECUTIVE_FAIL} 次，疑似被限流，已中止（档 {key}）"
         )
     chunk = [h for h in raw if h]
     chunk.sort(key=lambda h: float(h.get("score_base") or h.get("score") or 0), reverse=True)
@@ -824,50 +1014,90 @@ async def run_ma_fan_all_due_slices(
     snapshot: dict[str, Any] | None = None,
     min_price: float = 0.0,
     prefer_main: bool = False,
+    slice_spec: tuple[int, int, str] | None = None,
+    claimed: bool = False,
 ) -> dict[str, Any]:
-    """Run the next due slice (or all slices when ``force_all``)."""
-    day = str(trade_date or "")[:10]
-    if force_all:
-        out: dict[str, Any] = {}
-        first = True
-        for _start, offset, count, key in MA_FAN_SCHEDULE:
-            out = await run_ma_fan_scan(
-                trade_date=day,
-                offset=offset,
-                limit=count,
-                slice_key=key,
-                top=top,
-                min_amount_yi=min_amount_yi,
-                boards=boards,
-                persist=True,
-                replace=first,
-                snapshot=snapshot,
-                min_price=min_price,
-                prefer_main=prefer_main,
-            )
-            first = False
-        return out or {"ok": False, "detail": "no slices"}
-    due = next_due_ma_fan_slice(trade_date=day, minutes=minutes)
-    if not due:
-        from market_desk.db import load_ma_fan_day
+    """Run the next due slice (or all slices when ``force_all``).
 
-        body = load_ma_fan_day(day) or {}
-        return {"ok": True, "skipped": True, "scan": body, "view_date": day}
-    offset, count, key = due
-    return await run_ma_fan_scan(
-        trade_date=day,
-        offset=offset,
-        limit=count,
-        slice_key=key,
-        top=top,
-        min_amount_yi=min_amount_yi,
-        boards=boards,
-        persist=True,
-        replace=False,
-        snapshot=snapshot,
-        min_price=min_price,
-        prefer_main=prefer_main,
+    Only one scan runs at a time. Pass ``claimed=True`` when the caller already
+    holds the slot via :func:`try_claim_scan`; otherwise a busy slot returns
+    ``{"ok": False, "busy": True}`` without scanning.
+    """
+    day = str(trade_date or "")[:10]
+    due: tuple[int, int, str] | None = None
+    if not force_all:
+        due = slice_spec or next_due_ma_fan_slice(trade_date=day, minutes=minutes)
+        if not due:
+            from market_desk.db import load_ma_fan_day
+
+            body = load_ma_fan_day(day) or {}
+            return {"ok": True, "skipped": True, "scan": body, "view_date": day}
+    kind = "force" if force_all else "slice"
+    if not claimed and not try_claim_scan(kind, day):
+        return {
+            "ok": False,
+            "busy": True,
+            "detail": "已有均线发散扫描在跑",
+            "progress": scan_progress(),
+        }
+    stats = _ScanStats(live=True)
+    common = {
+        "trade_date": day,
+        "top": top,
+        "min_amount_yi": min_amount_yi,
+        "boards": boards,
+        "persist": True,
+        "snapshot": snapshot,
+        "min_price": min_price,
+        "prefer_main": prefer_main,
+        "stats": stats,
+    }
+    try:
+        if force_all:
+            out = await _run_all_slices(common, stats=stats)
+        else:
+            offset, count, key = due  # type: ignore[misc]
+            stats.begin_slice(key, 1, 1)
+            out = await run_ma_fan_scan(
+                offset=offset, limit=count, slice_key=key, replace=False, **common
+            )
+    except Exception as exc:
+        log.exception("ma_fan %s scan failed day=%s", kind, day)
+        release_scan(error=str(exc) or exc.__class__.__name__)
+        raise
+    release_scan()
+    return out
+
+
+async def _run_all_slices(common: dict[str, Any], *, stats: _ScanStats) -> dict[str, Any]:
+    """Load the amount ranking once, then rebuild every scheduled slice."""
+    need = max(off + cnt for _s, off, cnt, _k in MA_FAN_SCHEDULE)
+    stats.phase("universe")
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), trust_env=False) as client:
+        universe = await load_universe(
+            client,
+            boards=common["boards"],
+            need=need,
+            min_amount_yi=common["min_amount_yi"],
+        )
+    if not universe:
+        raise RuntimeError("成交额榜为空（新浪无响应或限流），未改动已有结果")
+    stats.set_total(
+        sum(len(universe[off : off + cnt]) for _s, off, cnt, _k in MA_FAN_SCHEDULE)
     )
+    out: dict[str, Any] = {}
+    n = len(MA_FAN_SCHEDULE)
+    for idx, (_start, offset, count, key) in enumerate(MA_FAN_SCHEDULE, start=1):
+        stats.begin_slice(key, idx, n)
+        out = await run_ma_fan_scan(
+            offset=offset,
+            limit=count,
+            slice_key=key,
+            replace=idx == 1,
+            universe=universe,
+            **common,
+        )
+    return out or {"ok": False, "detail": "no slices"}
 
 
 def _buy_signal_codes_for_day(trade_date: str) -> set[str]:
