@@ -1249,7 +1249,7 @@ class DeskEngine:
         boards = boards if boards in ("main", "growth", "all") else "all"
         top_n = max(20, min(top, 120))
         min_yi = max(0.5, min_amt)
-        min_price = float(_setting("ma_fan_min_price", 3.0) or 0)
+        min_price = float(_setting("ma_fan_min_price", 0) or 0)
         prefer_main = bool(_setting("ma_fan_prefer_main", True))
         if force_all:
             return await run_ma_fan_all_due_slices(

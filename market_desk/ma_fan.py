@@ -587,7 +587,7 @@ async def _score_one(
     row: dict[str, Any],
     boards: str,
     *,
-    min_price: float = 3.0,
+    min_price: float = 0.0,
     prefer_main: bool = True,
 ) -> dict[str, Any] | None:
     """Fetch bars and score one quote row into a hit dict."""
@@ -716,7 +716,7 @@ async def run_ma_fan_scan(
     persist: bool = True,
     replace: bool = False,
     snapshot: dict[str, Any] | None = None,
-    min_price: float = 3.0,
+    min_price: float = 0.0,
     prefer_main: bool = True,
 ) -> dict[str, Any]:
     """Scan one amount-rank slice and merge into the day payload.
@@ -827,7 +827,7 @@ async def run_ma_fan_all_due_slices(
     boards: str = "all",
     force_all: bool = False,
     snapshot: dict[str, Any] | None = None,
-    min_price: float = 3.0,
+    min_price: float = 0.0,
     prefer_main: bool = True,
 ) -> dict[str, Any]:
     """Run the next due slice (or all slices when ``force_all``)."""
