@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 # Display labels (UI / glossary). Internal stage keys stay English.
@@ -23,25 +24,80 @@ def build_mainline_lifecycle(
     hot: list[dict[str, Any]] | None,
     pins: list[dict[str, Any]] | None = None,
     limit_each: int = 4,
+    *,
+    hist_map: dict[str, list[dict[str, Any]]] | None = None,
+    frozen: dict[str, str] | None = None,
+    final: bool = True,
 ) -> dict[str, Any]:
     """Classify watched boards into starting / ongoing / ending buckets.
 
-    Uses today's status plus stored prior-day hist on each card (already attached
-    by the engine enrichment). Boards that never showed strength are skipped.
+    Lifecycle is a multi-day view, so columns only move once per day:
+
+    * ``final=True`` (after the close): classify today's cards with the closed
+      session included; ``stage_map`` should be persisted as tomorrow's
+      ``frozen`` baseline.
+    * ``final=False`` (pre-open / intraday): columns come from ``frozen`` (the
+      last close) or, when missing, from closed-day ``hist_map`` rows only.
+      Live cards only decorate the rows (``live_hint``) and feed ``fresh``
+      (intraday ignitions not yet counted).
+
     Thresholds soften when recent review hit-rate is weak.
     """
     bias = _review_lifecycle_bias()
-    seen: set[str] = set()
-    pool: list[dict[str, Any]] = []
+    live: dict[str, dict[str, Any]] = {}
     for src in (hot or []) + (pins or []):
         bk = str(src.get("bk") or src.get("name") or "")
-        if not bk or bk in seen:
-            continue
-        seen.add(bk)
-        stage = classify_lifecycle(src, bias=bias)
-        if not stage:
-            continue
-        pool.append(_compact(src, stage, bias=bias))
+        if bk and bk not in live:
+            live[bk] = src
+
+    stage_map: dict[str, str] = {}
+    pool: list[dict[str, Any]] = []
+    fresh: list[dict[str, Any]] = []
+    if final or hist_map is None:
+        for bk, src in live.items():
+            stage = classify_lifecycle(src, bias=bias)
+            stage_map[bk] = stage or ""
+            if stage:
+                pool.append(_compact(src, stage, bias=bias))
+        mode = "close" if final else "live"
+    else:
+        closed = _closed_series_map(hist_map)
+        base = dict(frozen or {})
+        for bk, series in closed.items():
+            if bk not in base:
+                base[bk] = closed_stage_from_hist(series, bias=bias) or ""
+        for bk, stage in base.items():
+            stage_map[bk] = stage
+            if not stage:
+                continue
+            card = live.get(bk)
+            if card is not None:
+                row = _compact(card, stage, bias=bias)
+                live_stage = classify_lifecycle(card, bias=bias)
+                if live_stage != stage:
+                    row["live_stage"] = live_stage or ""
+                    row["live_hint"] = _live_hint(live_stage)
+            else:
+                series = closed.get(bk) or []
+                if not series:
+                    continue
+                row = _compact(_card_from_closed(series), stage, bias=bias)
+                row["live_hint"] = "今日未进热门 · 数据为上一收盘"
+            pool.append(row)
+        for bk, card in live.items():
+            if stage_map.get(bk):
+                continue
+            if classify_lifecycle(card, bias=bias) == "starting":
+                fresh.append(
+                    {
+                        "bk": card.get("bk"),
+                        "name": card.get("name"),
+                        "pct": card.get("pct"),
+                        "zt_n": card.get("zt_n"),
+                    }
+                )
+        fresh.sort(key=lambda r: (int(r.get("zt_n") or 0), float(r.get("pct") or 0)), reverse=True)
+        mode = "frozen"
 
     starting = [x for x in pool if x["stage"] == "starting"]
     ongoing = [x for x in pool if x["stage"] == "ongoing"]
@@ -52,6 +108,10 @@ def build_mainline_lifecycle(
     ending.sort(key=_rank_ending, reverse=True)
 
     note = "按近几日热点持续度划分：萌芽 / 主升 / 衰退（非买卖指令）"
+    if mode == "frozen":
+        note += "；按上一收盘分列，盘中不换列，收盘后更新"
+    elif mode == "close":
+        note += "；已按今日收盘更新"
     if bias.get("strict"):
         note += f"；复盘命中偏弱({bias.get('hit_rate')}%)，衰退判定更敏感"
     elif bias.get("hit_rate") is not None:
@@ -61,9 +121,98 @@ def build_mainline_lifecycle(
         "starting": starting[:limit_each],
         "ongoing": ongoing[:limit_each],
         "ending": ending[:limit_each],
+        "fresh": fresh[:limit_each],
         "note": note,
+        "mode": mode,
+        "stage_map": stage_map,
         "bias": bias,
     }
+
+
+def closed_stage_from_hist(
+    series: list[dict[str, Any]],
+    *,
+    bias: dict[str, Any] | None = None,
+) -> str | None:
+    """Classify a board using closed sessions only (last row acts as "today")."""
+    if not series:
+        return None
+    return classify_lifecycle(_card_from_closed(series), bias=bias)
+
+
+def _card_from_closed(series: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a pseudo card whose "today" is the last closed session."""
+    last = series[-1]
+    return {
+        "bk": last.get("bk"),
+        "name": last.get("name"),
+        "zt_n": int(last.get("zt_n") or 0),
+        "pct": float(last.get("pct") or 0),
+        "status": str(last.get("status") or ""),
+        "leader_boards": last.get("leader_boards"),
+        "headline": last.get("status"),
+        "hist": list(series[:-1]),
+        "tags": [],
+    }
+
+
+def _closed_series_map(
+    hist_map: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Keep trading-day rows and boards seen in the last two closed sessions.
+
+    Boards seen two sessions ago but missing on the last one get a cooled
+    placeholder day so they can still register as fading.
+    """
+    try:
+        from market_desk.calendar import is_trading_day
+    except Exception:  # noqa: BLE001
+        is_trading_day = None  # type: ignore[assignment]
+
+    def _ok(day: str) -> bool:
+        if is_trading_day is None:
+            return True
+        try:
+            return bool(is_trading_day(datetime.strptime(day[:10], "%Y-%m-%d")))
+        except (TypeError, ValueError):
+            return True
+
+    cleaned: dict[str, list[dict[str, Any]]] = {}
+    dates: set[str] = set()
+    for bk, rows in (hist_map or {}).items():
+        keep = [dict(r, bk=bk) for r in rows if _ok(str(r.get("trade_date") or ""))]
+        if keep:
+            cleaned[bk] = keep
+            dates.update(str(r.get("trade_date") or "") for r in keep)
+    recent = sorted(d for d in dates if d)[-2:]
+    if not recent:
+        return {}
+    last_day = recent[-1]
+    out: dict[str, list[dict[str, Any]]] = {}
+    for bk, rows in cleaned.items():
+        tail = str(rows[-1].get("trade_date") or "")
+        if tail == last_day:
+            out[bk] = rows
+        elif tail in recent:
+            out[bk] = rows + [
+                {
+                    "trade_date": last_day,
+                    "bk": bk,
+                    "name": rows[-1].get("name"),
+                    "zt_n": 0,
+                    "pct": 0.0,
+                    "status": "",
+                    "leader_boards": 0,
+                }
+            ]
+    return out
+
+
+def _live_hint(live_stage: str | None) -> str:
+    """Short intraday note when live data disagrees with the frozen column."""
+    if not live_stage:
+        return "盘中转淡 · 收盘复核"
+    return f"盘中像{stage_label(live_stage)} · 收盘复核"
 
 
 def classify_lifecycle(

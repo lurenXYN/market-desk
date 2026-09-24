@@ -5552,16 +5552,24 @@
           <div class="spark">${spark}</div>
           <div class="meta">${termHtml("聚集度")} ${b.cluster || (b.zt_n ?? 0)} · 热度日 ${b.hot_days ?? 0}</div>
           <div class="meta" style="margin-top:4px">${termHtml("总龙头")} ${b.leader_name || "—"} ${b.leader_boards || 0}板 · ${fmtPct(b.pct)}</div>
+          ${b.live_hint ? `<div class="meta" style="margin-top:4px;color:var(--amber, #e0a84a)">⏱ ${b.live_hint}</div>` : ""}
           <div class="note" style="margin-top:6px">${b.note || ""}</div>
         </article>`;
       };
-      const lifeCol = (cls, title, rows) => `
+      const freshRows = life.fresh || [];
+      const freshHtml = freshRows.length
+        ? `<div class="meta" style="margin-top:6px">盘中新苗（未计入，收盘确认）：`
+          + freshRows.map((f) => `${f.name || "—"} ${fmtPct(f.pct)}${f.zt_n ? ` · ${f.zt_n}停` : ""}`).join("；")
+          + `</div>`
+        : "";
+      const lifeCol = (cls, title, rows, extra = "") => `
         <div class="life-col ${cls}">
           <h3>${title} · ${(rows || []).length}</h3>
           ${(rows || []).map(lifeCard).join("") || `<div class="meta">暂无</div>`}
+          ${extra}
         </div>`;
       document.getElementById("lifeGrid").innerHTML =
-        lifeCol("start", "萌芽", life.starting) +
+        lifeCol("start", "萌芽", life.starting, freshHtml) +
         lifeCol("run", "主升", life.ongoing) +
         lifeCol("end", "衰退", life.ending);
       const cg = d.contagion || {};

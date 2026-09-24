@@ -994,7 +994,12 @@ class DeskEngine:
                     "desk_gate_summary": desk_gate_summary,
                     "session_segments": segments,
                     "mainline_switches": switches,
-                    "mainline_lifecycle": build_mainline_lifecycle(hot_cards, pin_cards),
+                    "mainline_lifecycle": _stable_mainline_lifecycle(
+                        hot_cards,
+                        pin_cards,
+                        ctx.get("hist") if isinstance(ctx, dict) else None,
+                        now=now,
+                    ),
                     # Multi-user: shared snap never carries personal books.
                     "positions": [],
                     "position_summary": position_summary([]),
@@ -3278,6 +3283,57 @@ async def _safe(fn, *args, errors: list[str], label: str):
 
 def _minutes(now: datetime) -> int:
     return now.hour * 60 + now.minute
+
+
+def _prev_trading_day(now: datetime, *, max_back: int = 15) -> str:
+    """Return the last trading date strictly before ``now``'s calendar day."""
+    day = now.date()
+    for _ in range(max_back):
+        day = day - timedelta(days=1)
+        if is_trading_day(day):
+            return day.isoformat()
+    return ""
+
+
+def _stable_mainline_lifecycle(
+    hot_cards: list[dict[str, Any]],
+    pin_cards: list[dict[str, Any]],
+    hist_map: dict[str, list[dict[str, Any]]] | None,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    """Build the lifecycle panel so columns change at most once per trading day.
+
+    After the close the live classification is final and stored as
+    ``lifecycle_close:{date}``; before that the previous close is reused.
+    """
+    from market_desk.db import load_setting, save_setting
+
+    today = now.strftime("%Y-%m-%d")
+    final = is_trading_day(now) and _minutes(now) >= 15 * 60
+    if final:
+        out = build_mainline_lifecycle(hot_cards, pin_cards, final=True)
+        if out.get("stage_map"):
+            try:
+                save_setting(f"lifecycle_close:{today}", out["stage_map"])
+            except Exception:
+                log.exception("save lifecycle close failed")
+        return out
+    frozen = None
+    prev_day = _prev_trading_day(now)
+    if prev_day:
+        try:
+            got = load_setting(f"lifecycle_close:{prev_day}")
+            frozen = got if isinstance(got, dict) and got else None
+        except Exception:
+            frozen = None
+    return build_mainline_lifecycle(
+        hot_cards,
+        pin_cards,
+        hist_map=hist_map or {},
+        frozen=frozen,
+        final=False,
+    )
 
 
 def _effective_refresh_seconds(now: datetime) -> int:
