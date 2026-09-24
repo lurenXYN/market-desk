@@ -212,7 +212,8 @@ OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
 # v5: watch-track sell fly uses day0 open as 09:45 decision-price proxy.
 # v6: round pct before label thresholds; deep 次日绿 beats 冲高回落.
 # v7: do not lock day1 labels on an in-progress session bar (wait until 15:05).
-OUTCOME_FORMULA_VERSION = 7
+# v8: ignore any unfinished forward bar; refresh 三日% until day-3 close; wider rescore.
+OUTCOME_FORMULA_VERSION = 8
 # Review display standards (DB always stores classic).
 OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.

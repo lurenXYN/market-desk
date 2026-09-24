@@ -3569,11 +3569,25 @@ def purge_sentinel_signal_dates() -> int:
     return n
 
 
-def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, Any]]:
-    """Return signals before a date that still lack an outcome label."""
+def load_unscored_signals(
+    before_date: str,
+    limit: int = 80,
+    *,
+    labeled_since: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return signals before a date that still lack an outcome label.
+
+    With ``labeled_since``, also return already-labeled rows from that date on so
+    callers can refresh outcomes whose 3-session horizon was still open.
+    """
+    label_clause = "(outcome_label IS NULL OR outcome_label = '')"
+    params: tuple[Any, ...] = (before_date, limit)
+    if labeled_since:
+        label_clause = f"({label_clause} OR trade_date >= ?)"
+        params = (before_date, labeled_since, limit)
     with _connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT id, trade_date, signaled_at, signal_type, action, phase, mainline,
                    code, name, kind, price, last, ready, payload,
                    outcome_day1_pct, outcome_day3_pct, outcome_mfe_pct, outcome_mae_pct,
@@ -3581,12 +3595,12 @@ def load_unscored_signals(before_date: str, limit: int = 80) -> list[dict[str, A
                    fill_price, fill_qty
             FROM signals
             WHERE trade_date < ?
-              AND (outcome_label IS NULL OR outcome_label = '')
+              AND {label_clause}
               AND IFNULL(skipped, 0) = 0
             ORDER BY trade_date ASC, id ASC
             LIMIT ?
             """,
-            (before_date, limit),
+            params,
         ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:

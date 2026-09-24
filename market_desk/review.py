@@ -923,9 +923,11 @@ def score_signal_with_closes(
     after_dates = sorted(d for d in bar_by_day if d > trade_date)
     if not after_dates and std != "same_day_plan":
         return None
-    # Refuse to lock labels on today's unfinished bar (close == last print).
-    if after_dates and not forward_session_ready(after_dates[0]):
+    # Refuse to use today's unfinished bar (close == last print) for any horizon.
+    settled = [d for d in after_dates if forward_session_ready(d)]
+    if after_dates and not settled:
         return _pending_outcome_clear()
+    after_dates = settled
 
     day0 = bar_by_day.get(trade_date) or {}
     day0_close = num(day0.get("close"))
@@ -3473,6 +3475,44 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+OUTCOME_HORIZON_SESSIONS = 3
+
+
+def outcome_final_date(trade_date: str, sessions: int = OUTCOME_HORIZON_SESSIONS) -> str:
+    """Return the trading date whose close completes the ``sessions``-day horizon."""
+    from datetime import date as _date
+
+    from market_desk.calendar import is_trading_day
+
+    try:
+        d = _date.fromisoformat(str(trade_date or "")[:10])
+    except ValueError:
+        return ""
+    n = 0
+    for _ in range(40):
+        d = d + timedelta(days=1)
+        if is_trading_day(d):
+            n += 1
+            if n >= sessions:
+                return d.isoformat()
+    return ""
+
+
+def outcome_is_final(row: dict[str, Any]) -> bool:
+    """True when the stored outcome was scored after the day-3 close settled.
+
+    Rows scored earlier carry a partial 三日% (day1/day2 close) and a label that
+    may still flip, so they are re-scored until the horizon completes.
+    """
+    if not row.get("outcome_label"):
+        return False
+    final_day = outcome_final_date(str(row.get("trade_date") or ""))
+    checked = str(row.get("outcome_checked_at") or "")
+    if not final_day or len(checked) < 10:
+        return False
+    return checked >= f"{final_day} 15:05"
+
+
 def apply_outcomes(
     rows: list[dict[str, Any]],
     closes_map: dict[str, tuple[list[str], list[float]]],
@@ -3482,7 +3522,8 @@ def apply_outcomes(
     """Write scored outcomes for signals that have forward closes. Return update count.
 
     When ``overwrite`` is True, re-score rows that already have a label (used by
-    formula-version migrations such as OHLC fake-red labels).
+    formula-version migrations such as OHLC fake-red labels). Labeled rows whose
+    3-session horizon was not complete at scoring time are always refreshed.
 
     If day1 is still the in-progress session, clear any premature label so the
     review UI shows 待隔日 until 15:05.
@@ -3515,10 +3556,27 @@ def apply_outcomes(
                 if mark_signal_outcome(int(row["id"]), outcome):
                     n += 1
             continue
-        if row.get("outcome_label") and not overwrite:
+        if row.get("outcome_label") and not overwrite and outcome_is_final(row):
             continue
         if not outcome:
+            continue
+        if row.get("outcome_label") and _same_outcome(row, outcome):
+            if outcome_is_final({**row, **outcome}):
+                mark_signal_outcome(int(row["id"]), outcome)
             continue
         if mark_signal_outcome(int(row["id"]), outcome):
             n += 1
     return n
+
+
+def _same_outcome(row: dict[str, Any], outcome: dict[str, Any]) -> bool:
+    """True when label and stored pct fields already match a fresh score."""
+    if str(row.get("outcome_label") or "") != str(outcome.get("outcome_label") or ""):
+        return False
+    for key in ("outcome_day1_pct", "outcome_day3_pct", "outcome_mfe_pct", "outcome_mae_pct"):
+        a, b = row.get(key), outcome.get(key)
+        if a is None and b is None:
+            continue
+        if a is None or b is None or abs(float(a) - float(b)) > 1e-6:
+            return False
+    return True

@@ -1485,7 +1485,14 @@ class DeskEngine:
             cached["trends_ready"] = False
             return cached
 
-        pending = load_unscored_signals(today, limit=80)
+        from market_desk.review import outcome_is_final
+
+        since = (datetime.now(CN_TZ) - timedelta(days=12)).strftime("%Y-%m-%d")
+        pending = [
+            r
+            for r in load_unscored_signals(today, limit=240, labeled_since=since)
+            if not outcome_is_final(r)
+        ][:80]
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
         day_rows: list[dict[str, Any]] = []
@@ -1538,13 +1545,13 @@ class DeskEngine:
                         return
                     rows = [
                         r
-                        for r in load_signals(limit=220)
+                        for r in load_signals(limit=800)
                         if r.get("outcome_label")
                         and str(r.get("trade_date") or "") < today
                     ]
                     if rows:
-                        codes = [str(r.get("code") or "") for r in rows]
-                        packed = await fetch_daily_klines_many(client, codes, limit=40)
+                        codes = list(dict.fromkeys(str(r.get("code") or "") for r in rows))
+                        packed = await fetch_daily_klines_many(client, codes, limit=60)
                         n = apply_outcomes(rows, packed, overwrite=True)
                         log.info(
                             "outcome formula v%s rescore updated %s / %s rows",
