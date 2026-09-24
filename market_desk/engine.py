@@ -1249,6 +1249,8 @@ class DeskEngine:
         boards = boards if boards in ("main", "growth", "all") else "all"
         top_n = max(20, min(top, 120))
         min_yi = max(0.5, min_amt)
+        min_price = float(_setting("ma_fan_min_price", 3.0) or 0)
+        prefer_main = bool(_setting("ma_fan_prefer_main", True))
         if force_all:
             return await run_ma_fan_all_due_slices(
                 trade_date=day_s,
@@ -1258,6 +1260,8 @@ class DeskEngine:
                 boards=boards,
                 force_all=True,
                 snapshot=self.snapshot,
+                min_price=min_price,
+                prefer_main=prefer_main,
             )
         if slice_spec:
             offset, count, key = slice_spec
@@ -1271,6 +1275,8 @@ class DeskEngine:
                 boards=boards,
                 persist=True,
                 snapshot=self.snapshot,
+                min_price=min_price,
+                prefer_main=prefer_main,
             )
         return await run_ma_fan_all_due_slices(
             trade_date=day_s,
@@ -1280,6 +1286,8 @@ class DeskEngine:
             boards=boards,
             force_all=False,
             snapshot=self.snapshot,
+            min_price=min_price,
+            prefer_main=prefer_main,
         )
 
     async def _write_eod_onepager(self, day: str) -> None:

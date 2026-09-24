@@ -8458,10 +8458,11 @@
           : [stage, it.freshness].filter(Boolean);
         const chipClass = (t) => {
           if (t === "初期" || t === "刚发散" || t === "量能温和" || t === "粘连很紧" || t === "多头排列" || t === "坡度强") return "rev-chip up";
+          if (t === "渐进发散" || t === "振幅小" || t === "MA60稳升" || t === "MA60稳" || t === "主板" || t === "复盘加权") return "rev-chip up";
           if (t === "贴主线" || t === "近主线" || t === "主线同主题") return "rev-chip up";
           if (t === "贴支线" || t === "近支线" || t === "支线同主题" || t === "贴联动" || t === "近联动" || t === "联动同主题") return "rev-chip";
           if (String(t).startsWith("额档·")) return "rev-chip";
-          if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || String(t).startsWith("已拉")) return "rev-chip gate soft";
+          if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || t === "一日拉开" || t === "MA60偏弱" || String(t).startsWith("已拉")) return "rev-chip gate soft";
           return "rev-chip";
         };
         for (const t of rawTags) {

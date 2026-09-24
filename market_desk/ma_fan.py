@@ -25,7 +25,7 @@ from market_desk.filters import (
 log = logging.getLogger("market_desk.ma_fan")
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 4
+MA_FAN_FORMULA_VERSION = 5
 
 # Nightly staggered slices: (earliest minute-of-day, amount-rank offset, count, key).
 # 18:00 → 0–400；20:00 → 400–800；22:00 → 800–1000（末段流动性更薄，只扫 200）.
@@ -83,13 +83,16 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     if len(bars) < 80:
         return None
     closes = [float(b["close"]) for b in bars]
+    highs = [float(b.get("high") or b["close"]) for b in bars]
+    lows = [float(b.get("low") or b["close"]) for b in bars]
     vols = [float(b.get("volume") or 0) for b in bars]
     i = len(bars) - 1
 
-    # v3: slightly looser stickiness so more names reach the tag layer.
+    # Stickiness: MA spread + price amplitude (P1 — filter noisy squeezes).
     sticky_max = 6.2
-    sticky_len = 10  # was 12; shorter window still counts as stickiness
-    best: tuple[float, int, int] | None = None
+    sticky_len = 10
+    sticky_amp_max = 20.0
+    best: tuple[float, float, int, int] | None = None  # avg, amp, s, e
     lo = max(60, i - 55)
     hi = i - 4
     for end in range(lo + (sticky_len - 1), hi + 1):
@@ -108,12 +111,20 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
             spreads.append(sp)
         if not ok or not spreads:
             continue
+        hi_w = max(highs[start : end + 1])
+        lo_w = min(lows[start : end + 1])
+        mid_w = (hi_w + lo_w) / 2.0
+        amp = ((hi_w - lo_w) / mid_w * 100.0) if mid_w > 0 else 999.0
+        if amp > sticky_amp_max:
+            continue
         avg = sum(spreads) / len(spreads)
-        if best is None or avg < best[0]:
-            best = (avg, start, end)
+        # Prefer tighter MA + quieter price; amp is a soft tie-break.
+        key = avg + amp * 0.04
+        if best is None or key < (best[0] + best[1] * 0.04):
+            best = (avg, amp, start, end)
     if best is None:
         return None
-    sticky_avg, sticky_s, sticky_e = best
+    sticky_avg, sticky_amp, sticky_s, sticky_e = best
 
     fan_pick: dict[str, Any] | None = None
     for k in range(max(i - 6, sticky_e + 1), i + 1):
@@ -131,7 +142,6 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         if slopes < 2:
             continue
         fan_sp = _spread_pct(mas)
-        # Milder fan expansion gate than v2.
         if fan_sp < sticky_avg * 1.18 and fan_sp < 3.6:
             continue
         if closes[k] < mas[0] * 0.985:
@@ -154,6 +164,35 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     slopes = int(fan_pick["slopes"])
     ordered = bool(fan_pick["ordered"])
 
+    # P1: progressive fan — MA spread should rise over recent sessions.
+    spread_hist: list[float] = []
+    for t in range(max(sticky_e + 1, k - 4), k + 1):
+        m = _ma_bundle(closes, t)
+        if m:
+            spread_hist.append(_spread_pct(m))
+    rising_steps = 0
+    if len(spread_hist) >= 2:
+        rising_steps = sum(
+            1 for a, b in zip(spread_hist, spread_hist[1:]) if b + 0.08 >= a
+        )
+    progressive = len(spread_hist) >= 3 and rising_steps >= max(1, len(spread_hist) - 2)
+    one_day_pop = (
+        len(spread_hist) >= 2
+        and spread_hist[-1] >= spread_hist[0] * 1.55
+        and rising_steps <= 1
+    )
+
+    # P1: MA60 not in clear downtrend (exclude down-leg squeezes).
+    ma60_now = _sma(closes, k, 60)
+    ma60_prev = _sma(closes, k - 10, 60) if k >= 70 else None
+    ma60_ok = True
+    ma60_strong = False
+    if ma60_now is not None and ma60_prev is not None and ma60_prev > 0:
+        if ma60_now < ma60_prev * 0.985:
+            return None  # clear MA60 downtrend
+        ma60_ok = ma60_now >= ma60_prev * 0.998
+        ma60_strong = ma60_now >= ma60_prev * 1.002
+
     sticky_vols = [vols[j] for j in range(sticky_s, sticky_e + 1) if vols[j] > 0]
     if len(sticky_vols) < 4:
         return None
@@ -163,7 +202,6 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         return None
     recent_vol = sum(recent) / len(recent)
     vol_ratio = recent_vol / sticky_vol
-    # Soft volume band; only extreme outliers hard-fail.
     if vol_ratio < 0.95 or vol_ratio > 5.5:
         return None
     day_spike = vols[k] / max(recent_vol, 1.0)
@@ -173,7 +211,6 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     if ext > 150:
         return None
 
-    # Stage by extension from sticky mid (观察分层).
     if ext <= 28:
         stage = "初期"
     elif ext <= 55:
@@ -188,6 +225,7 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     score = 0.0
     score += max(0.0, (sticky_max - sticky_avg) * 7)
+    score += max(0.0, (sticky_amp_max - sticky_amp) * 0.35)
     score += min(32.0, (fan_ratio - 1.3) * 11)
     if 1.25 <= vol_ratio <= 2.9:
         score += 12
@@ -214,6 +252,14 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         score += 4
     elif freshness == "远端发散":
         score -= 3
+    if progressive:
+        score += 7
+    elif one_day_pop:
+        score -= 8
+    if ma60_strong:
+        score += 4
+    elif not ma60_ok:
+        score -= 5
 
     tags: list[str] = [stage, freshness]
     if sticky_avg <= 2.8:
@@ -222,6 +268,22 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         tags.append("粘连够")
     else:
         tags.append("粘连偏松")
+    if sticky_amp <= 12:
+        tags.append("振幅小")
+    elif sticky_amp <= 16:
+        tags.append("振幅可控")
+    else:
+        tags.append("振幅偏大")
+    if progressive:
+        tags.append("渐进发散")
+    elif one_day_pop:
+        tags.append("一日拉开")
+    if ma60_strong:
+        tags.append("MA60稳升")
+    elif ma60_ok:
+        tags.append("MA60稳")
+    else:
+        tags.append("MA60偏弱")
     if 1.25 <= vol_ratio <= 2.9:
         tags.append("量能温和")
     elif vol_ratio < 1.25:
@@ -247,23 +309,25 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     elif stage == "中期":
         tags.append(f"离开{ext:.0f}%")
 
-    note_bits = list(tags)
     return {
         "score": round(score, 1),
         "close": round(closes[k], 2),
         "pct": bars[k].get("pct"),
         "sticky_end": str(bars[sticky_e].get("date") or ""),
         "sticky_spread": round(sticky_avg, 2),
+        "sticky_amp": round(sticky_amp, 1),
         "fan_spread": round(fan_sp, 2),
         "fan_ratio": round(fan_ratio, 2),
         "vol_ratio": round(vol_ratio, 2),
         "ma_order": ">".join(f"{v:.2f}" for v in mas),
-        "note": " · ".join(note_bits) or "命中",
+        "note": " · ".join(tags) or "命中",
         "ext_pct": round(ext, 1),
         "stage": stage,
         "tags": tags,
         "freshness": freshness,
         "slopes": slopes,
+        "progressive": progressive,
+        "ma60_ok": ma60_ok,
     }
 
 
@@ -347,6 +411,7 @@ def annotate_hits_with_desk_context(
         "贴主线", "近主线", "主线同主题",
         "贴支线", "近支线", "支线同主题",
         "贴联动", "近联动", "联动同主题",
+        "复盘加权",
     }
     out: list[dict[str, Any]] = []
     for raw in items or []:
@@ -415,7 +480,15 @@ def annotate_hits_with_desk_context(
             break  # main wins over side/link
 
         item["theme_tag"] = theme_hit
-        item["score"] = round(score_base + score_nudge, 1)
+        item["theme_nudge"] = score_nudge
+        # P2: same-day review buy-signal soft boost (idempotent via score_base).
+        review_nudge = 0.0
+        if item.get("in_review"):
+            review_nudge = 8.0
+            if "复盘加权" not in tags:
+                tags.append("复盘加权")
+        item["review_nudge"] = review_nudge
+        item["score"] = round(score_base + score_nudge + review_nudge, 1)
         item["tags"] = tags
         item["note"] = " · ".join(tags) if tags else (item.get("note") or "命中")
         item.pop("_theme_nudged", None)
@@ -513,6 +586,9 @@ async def _score_one(
     sem: asyncio.Semaphore,
     row: dict[str, Any],
     boards: str,
+    *,
+    min_price: float = 3.0,
+    prefer_main: bool = True,
 ) -> dict[str, Any] | None:
     """Fetch bars and score one quote row into a hit dict."""
     code = normalize_code(row.get("code")) or ""
@@ -528,6 +604,9 @@ async def _score_one(
     got = score_pattern(bars or [])
     if not got:
         return None
+    close = float(got["close"])
+    if min_price > 0 and close < float(min_price):
+        return None
     amt = row.get("amount")
     amt_yi = round(float(amt) / 1e8, 2) if amt not in (None, "") else None
     try:
@@ -538,18 +617,27 @@ async def _score_one(
     tags = list(got.get("tags") or [])
     if band and band not in tags:
         tags.append(band)
+    score_base = float(got["score"])
+    if prefer_main and is_main_board(code):
+        score_base += 3.0
+        if "主板" not in tags:
+            tags.append("主板")
+    elif prefer_main and is_chinext_or_star(code):
+        if "成长板" not in tags:
+            tags.append("成长板")
     return {
         "code": code,
         "name": name,
-        "score": float(got["score"]),
-        "score_base": float(got["score"]),
-        "close": float(got["close"]),
+        "score": score_base,
+        "score_base": score_base,
+        "close": close,
         "pct": None if got.get("pct") is None else float(got["pct"]),
         "amount_yi": amt_yi,
         "amount_rank": amount_rank,
         "amount_band": band,
         "sticky_end": str(got["sticky_end"]),
         "sticky_spread": float(got["sticky_spread"]),
+        "sticky_amp": got.get("sticky_amp"),
         "fan_spread": float(got["fan_spread"]),
         "fan_ratio": float(got["fan_ratio"]),
         "vol_ratio": float(got["vol_ratio"]),
@@ -560,6 +648,8 @@ async def _score_one(
         "tags": tags,
         "freshness": got.get("freshness") or "",
         "slopes": got.get("slopes"),
+        "progressive": bool(got.get("progressive")),
+        "ma60_ok": bool(got.get("ma60_ok", True)),
     }
 
 
@@ -626,6 +716,8 @@ async def run_ma_fan_scan(
     persist: bool = True,
     replace: bool = False,
     snapshot: dict[str, Any] | None = None,
+    min_price: float = 3.0,
+    prefer_main: bool = True,
 ) -> dict[str, Any]:
     """Scan one amount-rank slice and merge into the day payload.
 
@@ -640,6 +732,8 @@ async def run_ma_fan_scan(
     lim = max(20, min(int(limit or 400), 500))
     key = str(slice_key or f"{off}-{off + lim}")
     need = off + lim
+    min_px = max(0.0, float(min_price or 0))
+    prefer = bool(prefer_main)
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), trust_env=False) as client:
         universe = await load_universe(
             client, boards=boards, need=need, min_amount_yi=min_amount_yi
@@ -652,10 +746,20 @@ async def run_ma_fan_scan(
             ranked.append(item)
         sem = asyncio.Semaphore(5)
         raw = await asyncio.gather(
-            *[_score_one(client, sem, row, boards) for row in ranked]
+            *[
+                _score_one(
+                    client,
+                    sem,
+                    row,
+                    boards,
+                    min_price=min_px,
+                    prefer_main=prefer,
+                )
+                for row in ranked
+            ]
         )
     chunk = [h for h in raw if h]
-    chunk.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
+    chunk.sort(key=lambda h: float(h.get("score_base") or h.get("score") or 0), reverse=True)
 
     from market_desk.db import load_ma_fan_day, save_ma_fan_day
 
@@ -663,17 +767,15 @@ async def run_ma_fan_scan(
     prev_items = [] if replace else list(prev.get("items") or [])
     keep = max(20, min(int(top or 80), 150))
     merged = _merge_hits(prev_items, chunk, keep=keep)
-    merged = annotate_hits_with_desk_context(
-        merged, trade_date=day, snapshot=snapshot
-    )
-    # Re-trim after theme score nudge.
-    merged = merged[:keep]
-
     signal_codes = _buy_signal_codes_for_day(day)
     for h in merged:
         code = normalize_code(h.get("code")) or ""
         h["in_review"] = bool(code and code in signal_codes)
-        h.pop("_theme_nudged", None)
+    merged = annotate_hits_with_desk_context(
+        merged, trade_date=day, snapshot=snapshot
+    )
+    # Re-trim after theme / review score nudges.
+    merged = merged[:keep]
 
     done = set() if replace else {str(x) for x in (prev.get("slices_done") or [])}
     done.add(key)
@@ -688,6 +790,8 @@ async def run_ma_fan_scan(
         "hit_n": len(merged),
         "boards": boards,
         "min_amount_yi": min_amount_yi,
+        "min_price": min_px,
+        "prefer_main": prefer,
         "formula_version": MA_FAN_FORMULA_VERSION,
         "items": merged,
         "slices_done": sorted(done, key=lambda s: (len(s), s)),
@@ -696,8 +800,8 @@ async def run_ma_fan_scan(
         "last_slice_hits": len(chunk),
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "note": (
-            "观察层：粘连→向上发散；18/20/22 点分档扫成交额榜；"
-            "标签含额档与主线/支线/联动同主题旁注；不进 ready。"
+            "观察层：粘连→渐进发散；18/20/22 分档扫成交额榜；"
+            "标签含额档/主线/复盘加权；不进 ready。"
         ),
     }
     if persist:
@@ -723,6 +827,8 @@ async def run_ma_fan_all_due_slices(
     boards: str = "all",
     force_all: bool = False,
     snapshot: dict[str, Any] | None = None,
+    min_price: float = 3.0,
+    prefer_main: bool = True,
 ) -> dict[str, Any]:
     """Run the next due slice (or all slices when ``force_all``)."""
     day = str(trade_date or "")[:10]
@@ -741,6 +847,8 @@ async def run_ma_fan_all_due_slices(
                 persist=True,
                 replace=first,
                 snapshot=snapshot,
+                min_price=min_price,
+                prefer_main=prefer_main,
             )
             first = False
         return out or {"ok": False, "detail": "no slices"}
@@ -762,6 +870,8 @@ async def run_ma_fan_all_due_slices(
         persist=True,
         replace=False,
         snapshot=snapshot,
+        min_price=min_price,
+        prefer_main=prefer_main,
     )
 
 
@@ -852,14 +962,17 @@ def attach_review_flags_to_ma_fan(
     body = dict(payload or {})
     day = str(trade_date or body.get("trade_date") or "")[:10]
     signal_codes = _buy_signal_codes_for_day(day) if day else set()
+    seeded: list[dict[str, Any]] = []
+    for raw in body.get("items") or []:
+        item = dict(raw or {})
+        code = normalize_code(item.get("code")) or ""
+        item["in_review"] = bool(code and code in signal_codes)
+        seeded.append(item)
     items = annotate_hits_with_desk_context(
-        list(body.get("items") or []),
+        seeded,
         trade_date=day,
         snapshot=snapshot,
     )
-    for item in items:
-        code = normalize_code(item.get("code")) or ""
-        item["in_review"] = bool(code and code in signal_codes)
     body["items"] = items
     body["review_overlap_n"] = sum(1 for x in items if x.get("in_review"))
     body["theme_overlap_n"] = sum(1 for x in items if x.get("theme_tag"))
