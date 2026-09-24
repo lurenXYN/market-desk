@@ -3781,7 +3781,7 @@
         <h2 style="text-transform:none">均线发散<button type="button" class="q" data-term="均线发散">?</button>
           <span class="mod-stamp" id="maFanStamp" title="扫描落盘时间"></span>
         </h2>
-        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫成交额 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000，同日合并落盘。v3 门槛偏松、靠标签分层：初期/中期/后期、刚发散/续发散、粘连紧松、量能、坡度、多头。观察层，不进 ready。与复盘买信号同码打「复盘交集」。</p>
+        <p class="rev-note">日线 MA5/10/20/30/60 粘连后向上发散。交易日 <b>18:00</b> 扫成交额 0–400、<b>20:00</b> 扫 400–800、<b>22:00</b> 扫 800–1000，同日合并落盘。v4 旁注：额档·头百/前400/…、贴主线/主线同主题（及支线·联动）。观察层，不进 ready。与复盘买信号同码打「复盘交集」。</p>
         <div class="rev-daybar" id="maFanDayBar">
           <div class="rev-day-nav">
             <button type="button" class="rev-col-btn" id="maFanDayPrev" title="更早一日">←</button>
@@ -8421,6 +8421,9 @@
             const s = it.stage || "";
             if (s in stages) stages[s] += 1;
           }
+          const themeN = scan.theme_overlap_n != null
+            ? scan.theme_overlap_n
+            : ((scan.items || []).filter((x) => x.theme_tag).length);
           sum.innerHTML = [
             `<b>${scan.trade_date}</b>`,
             `扫描累加 ${scan.scanned ?? "—"}`,
@@ -8428,6 +8431,7 @@
             `档位 ${slices}`,
             `初/中/后 ${stages["初期"]}/${stages["中期"]}/${stages["后期"]}`,
             `复盘交集 ${overlap}`,
+            `主线相关 ${themeN}`,
             scan.saved_at ? `落盘 ${scan.saved_at}` : "",
             scan.formula_version != null ? `公式 v${scan.formula_version}` : "",
           ].filter(Boolean).map((t, i) => (i ? `<span class="meta"> · ${t}</span>` : t)).join("");
@@ -8454,6 +8458,9 @@
           : [stage, it.freshness].filter(Boolean);
         const chipClass = (t) => {
           if (t === "初期" || t === "刚发散" || t === "量能温和" || t === "粘连很紧" || t === "多头排列" || t === "坡度强") return "rev-chip up";
+          if (t === "贴主线" || t === "近主线" || t === "主线同主题") return "rev-chip up";
+          if (t === "贴支线" || t === "近支线" || t === "支线同主题" || t === "贴联动" || t === "近联动" || t === "联动同主题") return "rev-chip";
+          if (String(t).startsWith("额档·")) return "rev-chip";
           if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || String(t).startsWith("已拉")) return "rev-chip gate soft";
           return "rev-chip";
         };

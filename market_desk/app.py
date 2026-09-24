@@ -2024,13 +2024,13 @@ def api_ma_fan(
         want = dates[0] if dates else ""
     body = load_ma_fan_day(want) if want else None
     if body:
-        body = attach_review_flags_to_ma_fan(body, want)
+        body = attach_review_flags_to_ma_fan(body, want, snapshot=engine.snapshot)
     return {
         "ok": True,
         "view_date": want or None,
         "dates": dates,
         "scan": body,
-        "note": "18/20/22 点分档扫成交额榜并合并；当日同档不重复。观察层，不进 ready。",
+        "note": "18/20/22 点分档扫成交额榜并合并；标签含额档与主线同主题旁注。观察层，不进 ready。",
     }
 
 
@@ -2051,7 +2051,7 @@ async def api_ma_fan_run(
     return {
         "ok": True,
         "skipped": bool(out.get("skipped")),
-        "scan": attach_review_flags_to_ma_fan(scan, day),
+        "scan": attach_review_flags_to_ma_fan(scan, day, snapshot=engine.snapshot),
         "view_date": day,
     }
 

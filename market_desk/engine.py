@@ -1257,6 +1257,7 @@ class DeskEngine:
                 min_amount_yi=min_yi,
                 boards=boards,
                 force_all=True,
+                snapshot=self.snapshot,
             )
         if slice_spec:
             offset, count, key = slice_spec
@@ -1269,6 +1270,7 @@ class DeskEngine:
                 min_amount_yi=min_yi,
                 boards=boards,
                 persist=True,
+                snapshot=self.snapshot,
             )
         return await run_ma_fan_all_due_slices(
             trade_date=day_s,
@@ -1277,6 +1279,7 @@ class DeskEngine:
             min_amount_yi=min_yi,
             boards=boards,
             force_all=False,
+            snapshot=self.snapshot,
         )
 
     async def _write_eod_onepager(self, day: str) -> None:

@@ -25,7 +25,7 @@ from market_desk.filters import (
 log = logging.getLogger("market_desk.ma_fan")
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 3
+MA_FAN_FORMULA_VERSION = 4
 
 # Nightly staggered slices: (earliest minute-of-day, amount-rank offset, count, key).
 # 18:00 → 0–400；20:00 → 400–800；22:00 → 800–1000（末段流动性更薄，只扫 200）.
@@ -267,6 +267,163 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+def amount_band_for_rank(rank: int | None) -> str:
+    """Map a 1-based amount rank into a short liquidity-band tag."""
+    try:
+        r = int(rank or 0)
+    except (TypeError, ValueError):
+        r = 0
+    if r <= 0:
+        return ""
+    if r <= 100:
+        return "额档·头百"
+    if r <= 400:
+        return "额档·前400"
+    if r <= 800:
+        return "额档·400-800"
+    return "额档·800+"
+
+
+def _code_board_index(snapshot: dict[str, Any] | None) -> dict[str, list[str]]:
+    """Build code → board-name list from desk snapshot pools."""
+    snap = snapshot or {}
+    out: dict[str, list[str]] = {}
+    for key in ("hot_boards", "pin_boards", "ice_boards", "favorite_boards"):
+        for card in snap.get(key) or []:
+            if not isinstance(card, dict):
+                continue
+            bname = str(card.get("name") or "").strip()
+            if not bname:
+                continue
+            for member in card.get("pool") or card.get("members") or []:
+                if not isinstance(member, dict):
+                    continue
+                code = normalize_code(member.get("code"))
+                if not code:
+                    continue
+                bucket = out.setdefault(code, [])
+                if bname not in bucket:
+                    bucket.append(bname)
+    return out
+
+
+def _desk_theme_names(snapshot: dict[str, Any] | None, trade_date: str) -> dict[str, str]:
+    """Resolve sticky main / side / link board names for soft theme tags."""
+    snap = snapshot or {}
+    verdict = snap.get("verdict") if isinstance(snap.get("verdict"), dict) else {}
+    main = str(((verdict.get("mainline") or {}) if isinstance(verdict, dict) else {}).get("name") or "").strip()
+    side = str(((verdict.get("side_mainline") or {}) if isinstance(verdict, dict) else {}).get("name") or "").strip()
+    link = str(((verdict.get("link_mainline") or {}) if isinstance(verdict, dict) else {}).get("name") or "").strip()
+    if not main:
+        try:
+            from market_desk.db import load_daily
+
+            day = str(trade_date or "")[:10]
+            for row in load_daily(limit=40):
+                if str(row.get("trade_date") or "")[:10] == day:
+                    main = str(row.get("mainline") or "").strip()
+                    break
+        except Exception:
+            pass
+    return {"main": main, "side": side, "link": link}
+
+
+def annotate_hits_with_desk_context(
+    items: list[dict[str, Any]],
+    *,
+    trade_date: str,
+    snapshot: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Attach amount-band and mainline/side/link theme soft tags onto hits.
+
+    Does not gate ready; only nudges score slightly when theme-aligned.
+    Idempotent: recomputes from ``score_base`` so refresh does not stack nudges.
+    """
+    from market_desk.review import compare_boards_to_mainline
+
+    themes = _desk_theme_names(snapshot, trade_date)
+    board_ix = _code_board_index(snapshot)
+    theme_labels = {
+        "贴主线", "近主线", "主线同主题",
+        "贴支线", "近支线", "支线同主题",
+        "贴联动", "近联动", "联动同主题",
+    }
+    out: list[dict[str, Any]] = []
+    for raw in items or []:
+        item = dict(raw or {})
+        code = normalize_code(item.get("code")) or ""
+        try:
+            score_base = float(item.get("score_base") or item.get("score") or 0)
+        except (TypeError, ValueError):
+            score_base = 0.0
+        item["score_base"] = score_base
+        tags = [
+            str(t) for t in (item.get("tags") or [])
+            if t and str(t) not in theme_labels
+        ]
+        # Amount band from scan rank (preferred) or amount_yi fallback.
+        band = str(item.get("amount_band") or "").strip()
+        if not band:
+            band = amount_band_for_rank(item.get("amount_rank"))
+        if not band and item.get("amount_yi") is not None:
+            try:
+                yi = float(item.get("amount_yi") or 0)
+            except (TypeError, ValueError):
+                yi = 0.0
+            if yi >= 20:
+                band = "额档·头百"
+            elif yi >= 5:
+                band = "额档·前400"
+            elif yi >= 2:
+                band = "额档·400-800"
+            elif yi > 0:
+                band = "额档·800+"
+        # Keep a single amount-band tag.
+        tags = [t for t in tags if not str(t).startswith("额档·")]
+        if band:
+            tags.append(band)
+        item["amount_band"] = band
+
+        boards = list(item.get("boards") or [])
+        if not boards and code and code in board_ix:
+            boards = list(board_ix[code])
+        item["boards"] = boards
+
+        theme_hit = ""
+        score_nudge = 0.0
+        for role, label_prefix, bump in (
+            ("main", "主线", 6.0),
+            ("side", "支线", 3.0),
+            ("link", "联动", 2.0),
+        ):
+            target = themes.get(role) or ""
+            if not target or not boards:
+                continue
+            cmp = compare_boards_to_mainline(boards, target, role=role)
+            align = str(cmp.get("align") or "")
+            if align not in ("belong", "near", "theme"):
+                continue
+            if align == "belong":
+                tag = f"贴{label_prefix}"
+            elif align == "near":
+                tag = f"近{label_prefix}"
+            else:
+                tag = f"{label_prefix}同主题"
+            tags.append(tag)
+            theme_hit = tag
+            score_nudge = bump
+            break  # main wins over side/link
+
+        item["theme_tag"] = theme_hit
+        item["score"] = round(score_base + score_nudge, 1)
+        item["tags"] = tags
+        item["note"] = " · ".join(tags) if tags else (item.get("note") or "命中")
+        item.pop("_theme_nudged", None)
+        out.append(item)
+    out.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
+    return out
+
+
 def _board_ok(code: str, boards: str) -> bool:
     """Return True when ``code`` is in the requested board set."""
     if boards == "main":
@@ -373,23 +530,34 @@ async def _score_one(
         return None
     amt = row.get("amount")
     amt_yi = round(float(amt) / 1e8, 2) if amt not in (None, "") else None
+    try:
+        amount_rank = int(row.get("_rank") or 0) or None
+    except (TypeError, ValueError):
+        amount_rank = None
+    band = amount_band_for_rank(amount_rank)
+    tags = list(got.get("tags") or [])
+    if band and band not in tags:
+        tags.append(band)
     return {
         "code": code,
         "name": name,
         "score": float(got["score"]),
+        "score_base": float(got["score"]),
         "close": float(got["close"]),
         "pct": None if got.get("pct") is None else float(got["pct"]),
         "amount_yi": amt_yi,
+        "amount_rank": amount_rank,
+        "amount_band": band,
         "sticky_end": str(got["sticky_end"]),
         "sticky_spread": float(got["sticky_spread"]),
         "fan_spread": float(got["fan_spread"]),
         "fan_ratio": float(got["fan_ratio"]),
         "vol_ratio": float(got["vol_ratio"]),
         "ma_order": str(got["ma_order"]),
-        "note": str(got["note"]),
+        "note": " · ".join(tags) if tags else str(got["note"]),
         "ext_pct": got.get("ext_pct"),
         "stage": got.get("stage") or "",
-        "tags": list(got.get("tags") or []),
+        "tags": tags,
         "freshness": got.get("freshness") or "",
         "slopes": got.get("slopes"),
     }
@@ -401,18 +569,24 @@ def _merge_hits(
     *,
     keep: int,
 ) -> list[dict[str, Any]]:
-    """Merge hits by code, keeping the higher score, then trim to ``keep``."""
+    """Merge hits by code, keeping the higher pattern score, then trim to ``keep``."""
     by_code: dict[str, dict[str, Any]] = {}
     for raw in list(prev_items or []) + list(new_items or []):
         item = dict(raw or {})
         code = normalize_code(item.get("code")) or ""
         if not code:
             continue
+        try:
+            base = float(item.get("score_base") or item.get("score") or 0)
+        except (TypeError, ValueError):
+            base = 0.0
+        item["score_base"] = base
         old = by_code.get(code)
-        if old is None or float(item.get("score") or 0) >= float(old.get("score") or 0):
+        old_base = float((old or {}).get("score_base") or (old or {}).get("score") or 0) if old else -1e9
+        if old is None or base >= old_base:
             by_code[code] = item
     out = list(by_code.values())
-    out.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
+    out.sort(key=lambda h: float(h.get("score_base") or h.get("score") or 0), reverse=True)
     return out[: max(10, keep)]
 
 
@@ -451,6 +625,7 @@ async def run_ma_fan_scan(
     boards: str = "all",
     persist: bool = True,
     replace: bool = False,
+    snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Scan one amount-rank slice and merge into the day payload.
 
@@ -470,9 +645,14 @@ async def run_ma_fan_scan(
             client, boards=boards, need=need, min_amount_yi=min_amount_yi
         )
         pool = universe[off : off + lim]
+        ranked: list[dict[str, Any]] = []
+        for i, row in enumerate(pool):
+            item = dict(row or {})
+            item["_rank"] = off + i + 1
+            ranked.append(item)
         sem = asyncio.Semaphore(5)
         raw = await asyncio.gather(
-            *[_score_one(client, sem, row, boards) for row in pool]
+            *[_score_one(client, sem, row, boards) for row in ranked]
         )
     chunk = [h for h in raw if h]
     chunk.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
@@ -483,11 +663,17 @@ async def run_ma_fan_scan(
     prev_items = [] if replace else list(prev.get("items") or [])
     keep = max(20, min(int(top or 80), 150))
     merged = _merge_hits(prev_items, chunk, keep=keep)
+    merged = annotate_hits_with_desk_context(
+        merged, trade_date=day, snapshot=snapshot
+    )
+    # Re-trim after theme score nudge.
+    merged = merged[:keep]
 
     signal_codes = _buy_signal_codes_for_day(day)
     for h in merged:
         code = normalize_code(h.get("code")) or ""
         h["in_review"] = bool(code and code in signal_codes)
+        h.pop("_theme_nudged", None)
 
     done = set() if replace else {str(x) for x in (prev.get("slices_done") or [])}
     done.add(key)
@@ -510,8 +696,8 @@ async def run_ma_fan_scan(
         "last_slice_hits": len(chunk),
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "note": (
-            "观察层：粘连→向上发散→量能温和；18/20/22 点分档扫描成交额榜；"
-            "不进 ready / 不改买卖闸门。"
+            "观察层：粘连→向上发散；18/20/22 点分档扫成交额榜；"
+            "标签含额档与主线/支线/联动同主题旁注；不进 ready。"
         ),
     }
     if persist:
@@ -536,6 +722,7 @@ async def run_ma_fan_all_due_slices(
     min_amount_yi: float = 1.2,
     boards: str = "all",
     force_all: bool = False,
+    snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the next due slice (or all slices when ``force_all``)."""
     day = str(trade_date or "")[:10]
@@ -553,6 +740,7 @@ async def run_ma_fan_all_due_slices(
                 boards=boards,
                 persist=True,
                 replace=first,
+                snapshot=snapshot,
             )
             first = False
         return out or {"ok": False, "detail": "no slices"}
@@ -573,6 +761,7 @@ async def run_ma_fan_all_due_slices(
         boards=boards,
         persist=True,
         replace=False,
+        snapshot=snapshot,
     )
 
 
@@ -647,6 +836,8 @@ def enrich_signals_with_ma_fan(
             item["ma_fan_stage"] = hit.get("stage") or ""
             item["ma_fan_tags"] = list(hit.get("tags") or [])
             item["ma_fan_freshness"] = hit.get("freshness") or ""
+            item["ma_fan_theme"] = hit.get("theme_tag") or ""
+            item["ma_fan_amount_band"] = hit.get("amount_band") or ""
         out.append(item)
     return out
 
@@ -654,17 +845,22 @@ def enrich_signals_with_ma_fan(
 def attach_review_flags_to_ma_fan(
     payload: dict[str, Any] | None,
     trade_date: str | None = None,
+    *,
+    snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Refresh ``in_review`` on stored hits (cheap; no rescan)."""
+    """Refresh ``in_review`` and theme/amount soft tags on stored hits."""
     body = dict(payload or {})
     day = str(trade_date or body.get("trade_date") or "")[:10]
     signal_codes = _buy_signal_codes_for_day(day) if day else set()
-    items: list[dict[str, Any]] = []
-    for raw in body.get("items") or []:
-        item = dict(raw or {})
+    items = annotate_hits_with_desk_context(
+        list(body.get("items") or []),
+        trade_date=day,
+        snapshot=snapshot,
+    )
+    for item in items:
         code = normalize_code(item.get("code")) or ""
         item["in_review"] = bool(code and code in signal_codes)
-        items.append(item)
     body["items"] = items
     body["review_overlap_n"] = sum(1 for x in items if x.get("in_review"))
+    body["theme_overlap_n"] = sum(1 for x in items if x.get("theme_tag"))
     return body
