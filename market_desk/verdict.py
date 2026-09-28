@@ -28,7 +28,7 @@ from market_desk.mainline import (
 from market_desk.playbook import build_playbook, suggest_risk_qty
 from market_desk.session import apply_segment_bias, session_segment
 from market_desk.settings import setting
-from market_desk.trend import classify_daily_trend, classify_many, trend_score_adj
+from market_desk.trend import classify_daily_trend, trend_score_adj
 
 
 def build_verdict(
@@ -3404,16 +3404,14 @@ def _apply_ready_confirmations(
         str(main.get("status") or "") in ("确认中", "观察")
         and int(main.get("zt_n") or 0) <= int(THIN_CONFIRM_ZT_MAX)
     )
-    gate_bias: dict[str, Any] = {}
     try:
         from market_desk.adapt import resolve_gate_mult
         from market_desk.review import cached_buy_gate_bias
 
-        gate_bias = cached_buy_gate_bias() or {}
+        cached_buy_gate_bias()  # warms the day cache resolve_gate_mult reads
         off_mult = float(resolve_gate_mult("off_high", 1.0))
         thin_mult = float(resolve_gate_mult("thin", 1.0))
     except Exception:
-        gate_bias = {}
         off_mult = 1.0
         thin_mult = 1.0
     changed = False

@@ -133,7 +133,6 @@ from market_desk.verdict import (
     build_desk_gate_summary,
     build_favorite_desk_plans,
     build_risk_overview,
-    build_sell_advice,
     build_verdict,
     build_watch_trial_recommend,
     finalize_recommend_buy_ux,
@@ -3677,6 +3676,10 @@ def _build_health(
         if clist.get("boards_source") == "sina":
             tips.append(
                 f"板块走新浪备用源（东财板块被拦，{int(clist.get('boards_pause_sec') or 0)}s 后重试东财）"
+            )
+        if clist.get("minute_source") == "tencent":
+            tips.append(
+                f"分时走腾讯备用源（东财分时拉空，{int(clist.get('minute_pause_sec') or 0)}s 后重试东财）"
             )
     except Exception:
         clist = {}

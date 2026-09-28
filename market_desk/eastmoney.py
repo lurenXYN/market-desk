@@ -12,6 +12,7 @@ import time
 import httpx
 
 from market_desk import board_fallback
+from market_desk import tencent as tencent_client
 from market_desk.config import (
     CONCEPT_JUNK_KEYWORDS,
     CONSTITUENT_TOP,
@@ -73,6 +74,8 @@ def clist_runtime_status() -> dict[str, Any]:
         "quotes_pause_sec": round(max(0.0, _QUOTES_CLIST_PAUSE_UNTIL - time.time()), 1),
         "boards_source": _BOARDS_SOURCE,
         "boards_pause_sec": round(max(0.0, _BOARDS_CLIST_PAUSE_UNTIL - time.time()), 1),
+        "minute_source": _MINUTE_SOURCE,
+        "minute_pause_sec": round(max(0.0, _MINUTE_EM_PAUSE_UNTIL - time.time()), 1),
     }
 
 
@@ -301,24 +304,6 @@ async def fetch_yesterday_zt(
             }
         )
     return out
-
-
-async def previous_trade_date(client: httpx.AsyncClient, today: date) -> str:
-    """Return an as-of date whose yesterday-ZT pool is non-empty (prefer today)."""
-    cursor = today
-    for _ in range(10):
-        if cursor.weekday() >= 5:
-            cursor -= timedelta(days=1)
-            continue
-        key = cursor.strftime("%Y%m%d")
-        try:
-            rows = await fetch_yesterday_zt(client, key)
-        except httpx.HTTPError:
-            rows = []
-        if rows:
-            return key
-        cursor -= timedelta(days=1)
-    return today.strftime("%Y%m%d")
 
 
 def _quote_from_diff(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -1325,7 +1310,8 @@ async def fetch_minute_bars_for_day(
     """Fetch one session's 1-minute bars for ``trade_date`` (YYYY-MM-DD).
 
     Uses East Money history kline ``klt=1``. Today's session falls back to
-    ``trends2`` when kline is empty.
+    ``trends2`` (then Tencent); earlier sessions within the last five fall back
+    to Tencent's five-day minute feed.
     """
     c = normalize_code(code)
     day = str(trade_date or "")[:10]
@@ -1341,7 +1327,7 @@ async def fetch_minute_bars_for_day(
             "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
             f"&klt=1&fqt=1&beg={day_compact}&end={day_compact}&lmt=1000"
         )
-        hosts = (
+        hosts = () if _minute_em_paused() else (
             "push2his.eastmoney.com",
             "push2delay.eastmoney.com",
         )
@@ -1366,7 +1352,10 @@ async def fetch_minute_bars_for_day(
                 return filtered or out
         if day == today:
             return await _fetch_minute_trends_unlocked(client, c)
-    return []
+        recent = (await tencent_client.fetch_minute_days(client, c)).get(day) or []
+        if recent:
+            _note_minute_fallback(bool(hosts))
+        return recent
 
 
 async def fetch_minute_bars_many_days(
@@ -1405,14 +1394,55 @@ async def fetch_minute_bars_many_days(
     return {key: rows for key, rows in results}
 
 
+_MINUTE_SOURCE = "eastmoney"
+# After East Money minute feeds come back empty while Tencent has data, skip
+# East Money minute calls for this long and read Tencent directly.
+_MINUTE_EM_PAUSE_UNTIL = 0.0
+_MINUTE_EM_PAUSE_SEC = 600.0
+
+
+def _minute_em_paused() -> bool:
+    return time.time() < _MINUTE_EM_PAUSE_UNTIL
+
+
+def _note_minute_fallback(em_tried: bool) -> None:
+    """Record that minute data came from Tencent; arm the pause if EM just failed."""
+    global _MINUTE_SOURCE, _MINUTE_EM_PAUSE_UNTIL
+    if em_tried:
+        _MINUTE_EM_PAUSE_UNTIL = time.time() + _MINUTE_EM_PAUSE_SEC
+    if _MINUTE_SOURCE != "tencent":
+        log.warning("minute trends via Tencent fallback (East Money minute feed empty)")
+    _MINUTE_SOURCE = "tencent"
+
+
 async def _fetch_minute_trends_unlocked(
     client: httpx.AsyncClient,
     code: str,
 ) -> list[dict[str, Any]]:
-    """Single-code minute fetch without taking the concurrency semaphore."""
+    """Single-code minute fetch without taking the concurrency semaphore.
+
+    East Money ``trends2`` first; Tencent when it is paused or returns nothing.
+    """
+    global _MINUTE_SOURCE
     c = normalize_code(code)
     if not c:
         return []
+    em_tried = not _minute_em_paused()
+    if em_tried:
+        out = await _minute_trends_eastmoney(client, c)
+        if out:
+            _MINUTE_SOURCE = "eastmoney"
+            return out
+    out = await tencent_client.fetch_minute_trends(client, c)
+    if out:
+        _note_minute_fallback(em_tried)
+    return out
+
+
+async def _minute_trends_eastmoney(
+    client: httpx.AsyncClient, c: str
+) -> list[dict[str, Any]]:
+    """Fetch today's minute points from East Money ``trends2`` hosts."""
     path = (
         "/api/qt/stock/trends2/get"
         f"?secid={_secid(c)}&ut={EASTMONEY_UT}"
@@ -1474,8 +1504,7 @@ async def fetch_daily_closes_many(
     for code, triple in packed.items():
         if not triple:
             continue
-        _dates, closes = triple[0], triple[1]
-        out[code] = closes
+        out[code] = triple[1]
     return out
 
 

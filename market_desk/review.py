@@ -947,7 +947,6 @@ def score_signal_with_closes(
     after_dates = settled
 
     day0 = bar_by_day.get(trade_date) or {}
-    day0_close = num(day0.get("close"))
     day0_low = num(day0.get("low"))
 
     if is_sell_signal(sig_type):
@@ -2342,7 +2341,7 @@ def build_gate_kill_stats(
                 "true_kill_n": tk,
                 "false_kill_rate": false_rate,
                 "note": (
-                    f"误杀偏多" if fk >= 3 and (false_rate or 0) >= 50 else
+                    "误杀偏多" if fk >= 3 and (false_rate or 0) >= 50 else
                     ("挡得住" if tk >= 3 and fk == 0 else "")
                 ),
             }

@@ -209,6 +209,7 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
                     f" · 东财暂停剩{clist.get('quotes_pause_sec') or 0}s"
                     f" · 板块源={clist.get('boards_source')}"
                     f" · 板块东财暂停剩{clist.get('boards_pause_sec') or 0}s"
+                    f" · 分时源={clist.get('minute_source')}"
                 ),
             }
         )

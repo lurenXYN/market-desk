@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from market_desk import db as desk_db
 from market_desk.db import (
     clear_backtest_runs,

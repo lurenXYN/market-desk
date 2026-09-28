@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -196,6 +197,99 @@ async def fetch_daily_bars_symbol(
         )
         prev_close = float(cl)
     return out[-n:] if len(out) > n else out
+
+
+_MINUTE_HEADERS = {**HTTP_HEADERS, "Referer": "https://gu.qq.com/"}
+_MINUTE_URL = "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={sym}"
+_MINUTE_DAYS_URL = "https://web.ifzq.gtimg.cn/appstock/app/day/query?code={sym}"
+_MINUTE_DAYS_TTL_S = 600.0
+_MINUTE_DAYS_CACHE: dict[str, tuple[float, dict[str, list[dict[str, Any]]]]] = {}
+
+
+def _minute_points(rows: list[Any], day: str) -> list[dict[str, Any]]:
+    """Map Tencent minute rows into East Money ``trends2`` point shape.
+
+    Tencent rows are ``"HHMM price cum_volume(手) cum_amount(元)"``. Volume and
+    amount become per-minute deltas, ``avg`` the running VWAP; rows after 15:00
+    (after-hours prints) are dropped.
+    """
+    d = str(day or "").replace("-", "")
+    if len(d) != 8:
+        return []
+    date_s = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+    out: list[dict[str, Any]] = []
+    prev_vol = prev_amt = 0.0
+    for row in rows:
+        parts = str(row).split()
+        if len(parts) < 2 or len(parts[0]) != 4 or parts[0] > "1500":
+            continue
+        px = num(parts[1])
+        if px is None or px <= 0:
+            continue
+        point: dict[str, Any] = {
+            "time": f"{date_s} {parts[0][:2]}:{parts[0][2:]}",
+            "price": float(px),
+        }
+        cum_vol = num(parts[2]) if len(parts) > 2 else None
+        cum_amt = num(parts[3]) if len(parts) > 3 else None
+        if cum_vol is not None and cum_amt is not None:
+            point["volume"] = max(0.0, float(cum_vol) - prev_vol)
+            point["amount"] = max(0.0, float(cum_amt) - prev_amt)
+            if cum_vol > 0 and cum_amt > 0:
+                point["avg"] = float(cum_amt) / (float(cum_vol) * 100.0)
+            prev_vol, prev_amt = float(cum_vol), float(cum_amt)
+        out.append(point)
+    return out
+
+
+async def _get_minute_node(client: httpx.AsyncClient, url: str, sym: str) -> Any:
+    resp = await client.get(url, headers=_MINUTE_HEADERS, timeout=10.0)
+    resp.raise_for_status()
+    return ((resp.json() or {}).get("data") or {}).get(sym) or {}
+
+
+async def fetch_minute_trends(client: httpx.AsyncClient, code: str) -> list[dict[str, Any]]:
+    """Fetch today's minute points from Tencent (``[]`` on any failure)."""
+    c = str(code or "").strip().zfill(6)
+    if len(c) != 6 or not c.isdigit():
+        return []
+    sym = tencent_symbol(c)
+    try:
+        node = await _get_minute_node(client, _MINUTE_URL.format(sym=sym), sym)
+    except Exception:
+        return []
+    inner = node.get("data") if isinstance(node, dict) else None
+    if not isinstance(inner, dict):
+        return []
+    return _minute_points(inner.get("data") or [], str(inner.get("date") or ""))
+
+
+async def fetch_minute_days(
+    client: httpx.AsyncClient, code: str
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch the last five sessions of minute points keyed by ``YYYY-MM-DD``."""
+    c = str(code or "").strip().zfill(6)
+    if len(c) != 6 or not c.isdigit():
+        return {}
+    now = time.time()
+    hit = _MINUTE_DAYS_CACHE.get(c)
+    if hit and now - hit[0] < _MINUTE_DAYS_TTL_S:
+        return hit[1]
+    sym = tencent_symbol(c)
+    try:
+        node = await _get_minute_node(client, _MINUTE_DAYS_URL.format(sym=sym), sym)
+    except Exception:
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for day in (node.get("data") if isinstance(node, dict) else None) or []:
+        if not isinstance(day, dict):
+            continue
+        points = _minute_points(day.get("data") or [], str(day.get("date") or ""))
+        if points:
+            out[points[0]["time"][:10]] = points
+    if out:
+        _MINUTE_DAYS_CACHE[c] = (now, out)
+    return out
 
 
 async def _fetch_daily_bars_sina_symbol(

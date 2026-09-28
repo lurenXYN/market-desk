@@ -7,7 +7,6 @@ from market_desk.config import (
     THEME_REP_MIN_SAMPLES,
     THEME_REP_SETTLE_MAX,
     THEME_REP_THIN_FEED_MULT,
-    THEME_REP_THIN_N,
 )
 from market_desk.theme_memory import (
     attach_board_affinity,
