@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Any
 
 import asyncio
+import logging
+import time
+
 import httpx
 
 from market_desk.config import (
@@ -17,6 +20,8 @@ from market_desk.config import (
 )
 from market_desk.filters import is_main_board, normalize_code
 from market_desk.numbers import num
+
+log = logging.getLogger("market_desk.eastmoney")
 
 # Prefer push2 for clist; delay edge often returns 502 on quotes/boards.
 _CLIST_HOSTS: tuple[str, ...] = (
@@ -63,6 +68,8 @@ def clist_runtime_status() -> dict[str, Any]:
         "backoff": rem > 0,
         "backoff_sec": round(rem, 1),
         "fail_streak": int(_CLIST_FAIL_STREAK),
+        "quotes_source": _MAIN_QUOTES_SOURCE,
+        "quotes_pause_sec": round(max(0.0, _QUOTES_CLIST_PAUSE_UNTIL - time.time()), 1),
     }
 
 
@@ -420,6 +427,47 @@ async def _fetch_clist_pages(
     return rows
 
 
+_QUOTE_PROBE: tuple[float, str] = (0.0, "")
+_QUOTE_PROBE_EVERY_SEC = 600.0
+
+
+async def _probe_quote_edges(client: httpx.AsyncClient) -> str:
+    """Summarize what each quote edge returns for page 1, at most every 10 minutes.
+
+    Used only after a total main-board failure so the health strip and log show
+    the real cause (HTTP status, empty ``data``, connect errors) instead of a
+    generic "empty" message.
+    """
+    global _QUOTE_PROBE
+    now = time.time()
+    if _QUOTE_PROBE[1] and now - _QUOTE_PROBE[0] < _QUOTE_PROBE_EVERY_SEC:
+        return _QUOTE_PROBE[1]
+    parts: list[str] = []
+    for h in _QUOTES_CLIST_HOSTS:
+        tag = h.split(".")[0]
+        try:
+            resp = await client.get(
+                _clist_url("m:1+t:2", pz=100, pn=1, host=h), headers=HTTP_HEADERS, timeout=10.0
+            )
+            try:
+                data = resp.json()
+                inner = data.get("data") if isinstance(data, dict) else None
+                rc = data.get("rc") if isinstance(data, dict) else "?"
+                shape = (
+                    f"total={inner.get('total')}" if isinstance(inner, dict) else "data=null"
+                )
+                parts.append(f"{tag}={resp.status_code} rc={rc} {shape}")
+            except ValueError:
+                body = " ".join(resp.text[:40].split())
+                parts.append(f"{tag}={resp.status_code} {body}")
+        except Exception as exc:
+            parts.append(f"{tag}={type(exc).__name__} {str(exc)[:60]}")
+    summary = " | ".join(parts)
+    _QUOTE_PROBE = (now, summary)
+    log.warning("quotes edge probe: %s", summary)
+    return summary
+
+
 # Heavy main-board pagination: prefer delay edge (push2 drops mid-list often).
 _QUOTES_CLIST_HOSTS: tuple[str, ...] = (
     "push2delay.eastmoney.com",
@@ -435,11 +483,13 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     Auction uses a medium TTL (not sub-5s): full-market paging cannot keep up
     with call-auction poll cadence and trips edge disconnects.
     Partial pages are accepted when the edge dies mid-list (≥200 rows).
+    When clist fails outright (East Money blocks list endpoints for some IPs),
+    clist is paused for ``_QUOTES_CLIST_PAUSE_SEC`` and quotes come from the
+    Tencent fallback in ``quotes_fallback``.
     """
-    import time
     from datetime import datetime, timezone, timedelta
 
-    global _MAIN_QUOTES_CACHE
+    global _MAIN_QUOTES_CACHE, _QUOTES_CLIST_PAUSE_UNTIL, _MAIN_QUOTES_SOURCE
     now = time.time()
     ttl = _MAIN_QUOTES_TTL_SEC
     try:
@@ -456,9 +506,57 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     if clist_in_backoff() and _MAIN_QUOTES_CACHE:
         return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
 
+    from market_desk import quotes_fallback
+
+    out: list[dict[str, Any]] = []
+    clist_note = "clist paused"
+    if now >= _QUOTES_CLIST_PAUSE_UNTIL:
+        out, errs = await _main_quotes_from_clist(client)
+        if len(out) >= _QUOTES_CLIST_MIN_ROWS:
+            quotes_fallback.remember_universe([row["code"] for row in out])
+            if _MAIN_QUOTES_SOURCE != "eastmoney":
+                log.info("main-board quotes back on East Money (%s rows)", len(out))
+            _MAIN_QUOTES_SOURCE = "eastmoney"
+        else:
+            # Hammering a blocked edge every tick keeps the IP blocked; rest it.
+            _QUOTES_CLIST_PAUSE_UNTIL = now + _QUOTES_CLIST_PAUSE_SEC
+            why = "; ".join(errs) or "pages returned no rows"
+            clist_note = f"[{await _probe_quote_edges(client)}] ({why})"
+            out = []
+    if not out:
+        try:
+            out = await quotes_fallback.fetch_main_quotes_tencent(client)
+        except Exception as exc:
+            if _MAIN_QUOTES_CACHE:
+                return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+            raise RuntimeError(
+                f"main-board quotes empty {clist_note}; fallback: {str(exc)[:80]}"
+            ) from exc
+        if _MAIN_QUOTES_SOURCE != "tencent":
+            log.warning(
+                "main-board quotes via Tencent fallback (%s rows); %s", len(out), clist_note
+            )
+        _MAIN_QUOTES_SOURCE = "tencent"
+    # Never let an emergency ~200-row sample replace a full-market cache —
+    # that poisons ups/downs (e.g. 200/0) for the whole TTL window.
+    if _MAIN_QUOTES_CACHE:
+        cached_n = len(_MAIN_QUOTES_CACHE[1])
+        if len(out) < MAIN_QUOTES_BREADTH_MIN and cached_n >= MAIN_QUOTES_BREADTH_MIN:
+            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+        if len(out) < cached_n and len(out) < MAIN_QUOTES_BREADTH_MIN:
+            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
+    _MAIN_QUOTES_CACHE = (now, out)
+    return [dict(row) for row in out]
+
+
+async def _main_quotes_from_clist(
+    client: httpx.AsyncClient,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Page SH + SZ main-board clist lists; return mapped rows and error notes."""
     hosts = list(_QUOTES_CLIST_HOSTS)
     sh_rows: list[dict[str, Any]] = []
     sz_rows: list[dict[str, Any]] = []
+    errs: list[str] = []
     # Fetch markets independently so one edge death does not discard the other.
     try:
         sh_rows = await _fetch_clist_pages(
@@ -469,8 +567,9 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
             page_sleep=0.2,
             allow_partial=True,
         )
-    except Exception:
+    except Exception as exc:
         sh_rows = []
+        errs.append(f"sh {type(exc).__name__}: {str(exc)[:80]}")
     try:
         sz_rows = await _fetch_clist_pages(
             client,
@@ -480,8 +579,9 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
             page_sleep=0.2,
             allow_partial=True,
         )
-    except Exception:
+    except Exception as exc:
         sz_rows = []
+        errs.append(f"sz {type(exc).__name__}: {str(exc)[:80]}")
     # Emergency sample: a few pages beat a hard empty (breadth / auction still usable).
     if len(sh_rows) + len(sz_rows) < 100:
         for fs, bucket in (("m:1+t:2", "sh"), ("m:0+t:6", "sz")):
@@ -507,24 +607,16 @@ async def fetch_main_quotes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         if mapped and mapped["code"] not in seen:
             seen.add(mapped["code"])
             out.append(mapped)
-    if len(out) < 50:
-        if _MAIN_QUOTES_CACHE:
-            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
-        if not out:
-            raise RuntimeError("main-board quote lists were empty")
-    # Never let an emergency ~200-row sample replace a full-market cache —
-    # that poisons ups/downs (e.g. 200/0) for the whole TTL window.
-    if _MAIN_QUOTES_CACHE:
-        cached_n = len(_MAIN_QUOTES_CACHE[1])
-        if len(out) < MAIN_QUOTES_BREADTH_MIN and cached_n >= MAIN_QUOTES_BREADTH_MIN:
-            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
-        if len(out) < cached_n and len(out) < MAIN_QUOTES_BREADTH_MIN:
-            return [dict(row) for row in _MAIN_QUOTES_CACHE[1]]
-    _MAIN_QUOTES_CACHE = (now, out)
-    return [dict(row) for row in out]
+    return out, errs
 
 
 _MAIN_QUOTES_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+_MAIN_QUOTES_SOURCE = "eastmoney"
+# After a total clist failure, skip clist for this long and use the fallback.
+_QUOTES_CLIST_PAUSE_UNTIL = 0.0
+_QUOTES_CLIST_PAUSE_SEC = 600.0
+# Fewer clist rows than this counts as a failed pull.
+_QUOTES_CLIST_MIN_ROWS = 50
 _MAIN_QUOTES_TTL_SEC = 240.0
 _MAIN_QUOTES_OPEN_TTL_SEC = 90.0
 # Auction used to be 4s and re-pulled ~36 clist pages every tick → disconnect storm.

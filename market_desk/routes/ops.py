@@ -196,10 +196,15 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
             {
                 "id": "clist",
                 "title": "东财 clist",
-                "level": "warn" if clist.get("backoff") else "ok",
+                "level": (
+                    "warn"
+                    if clist.get("backoff") or clist.get("quotes_source") == "tencent"
+                    else "ok"
+                ),
                 "detail": (
                     f"host={clist.get('host') or '—'} · backoff={clist.get('backoff')} "
-                    f"剩{clist.get('backoff_sec') or 0}s"
+                    f"剩{clist.get('backoff_sec') or 0}s · 主板行情源={clist.get('quotes_source')}"
+                    f" · 东财暂停剩{clist.get('quotes_pause_sec') or 0}s"
                 ),
             }
         )

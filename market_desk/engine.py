@@ -3665,6 +3665,10 @@ def _build_health(
             score -= 2
         else:
             tips.append(f"clist · {short}")
+        if clist.get("quotes_source") == "tencent":
+            tips.append(
+                f"主板行情走腾讯备用源（东财列表被拦，{int(clist.get('quotes_pause_sec') or 0)}s 后重试东财）"
+            )
     except Exception:
         clist = {}
     nr = payload.get("news_radar") if isinstance(payload.get("news_radar"), dict) else {}
