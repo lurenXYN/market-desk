@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from market_desk.notify import is_risk_toast, is_serverchan_alert
 from market_desk.review import (
@@ -94,8 +95,9 @@ class WeekPolishTests(unittest.TestCase):
         self.assertTrue(is_risk_toast("ops:backup:2026-09-20"))
         self.assertTrue(is_risk_toast("ops:health:2026-09-20"))
         # Health stays on-page; do not WeChat-push 数据降级.
-        self.assertFalse(is_serverchan_alert("ops:health:2026-09-20"))
-        self.assertTrue(is_serverchan_alert("ops:backup:2026-09-20"))
+        with mock.patch("market_desk.config.SERVERCHAN_EVENT_PUSH", True):
+            self.assertFalse(is_serverchan_alert("ops:health:2026-09-20"))
+            self.assertTrue(is_serverchan_alert("ops:backup:2026-09-20"))
 
 
 if __name__ == "__main__":

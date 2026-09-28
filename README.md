@@ -285,6 +285,9 @@ market-desk/
 │   ├── mainline.py           # 主线挑选与 ETF 映射
 │   ├── verdict.py            # 结论、买卖建议、仓位估值
 │   ├── eastmoney.py / tencent.py
+│   ├── quotes_fallback.py    # 东财列表被拦时：主板行情改走腾讯（代码表来自新浪 / 库存）
+│   ├── board_fallback.py     # 东财板块被拦时：热点板块 / 当日资金流 / 成分股改走新浪
+│   ├── seeds/em_boards.json  # 东财板块 BK 代码表（名称 → BK），让新浪同名板块沿用 BK
 │   ├── db/                   # SQLite，按业务拆（core / schema / users / market / positions / signals / state / lists / backup / backtest …）；`from market_desk.db import X` 照旧可用
 │   ├── ma_fan/               # 均线发散：pattern 形态打分 / job 限速进度缓存 / sources 数据源 / context 主线复盘联动 / scan 扫描流程
 │   ├── assets.py             # 把 static/js/desk/*.js 按文件名顺序拼成 /assets/desk.js（ETag 缓存）

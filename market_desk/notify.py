@@ -351,13 +351,19 @@ def select_toasts_for_round(
 
 
 def is_serverchan_alert(key: str) -> bool:
-    """Return True for buy/sell/lhb/eod/morning/ops alerts that may go to ServerChan.
+    """Return True for alerts that may go to ServerChan.
 
+    Only scheduled ``eod:`` / ``morning:`` pushes pass while
+    ``SERVERCHAN_EVENT_PUSH`` is off; otherwise buy/sell/lhb/ops alerts too.
     Health/degraded banners stay on-page only — ``ops:health:`` is never WeChat-pushed.
     """
+    from market_desk.config import SERVERCHAN_EVENT_PUSH
+
     k = str(key or "")
     if k.startswith("ops:health:"):
         return False
+    if not SERVERCHAN_EVENT_PUSH:
+        return k.startswith(("eod:", "morning:"))
     return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:"))
 
 

@@ -11,6 +11,7 @@ from market_desk import notify
 def _setup(monkeypatch, *, sell_only: bool = False):
     store: dict[str, object] = {}
     sent: list[tuple[str, str]] = []
+    monkeypatch.setattr("market_desk.config.SERVERCHAN_EVENT_PUSH", True)
     monkeypatch.setattr(db, "load_setting", lambda key: store.get(key))
     monkeypatch.setattr(db, "save_setting", lambda key, value: store.__setitem__(key, value))
     monkeypatch.setattr(db, "load_user_setting", lambda uid, key: {"serverchan_sell_only": sell_only})

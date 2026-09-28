@@ -464,8 +464,10 @@ def test_compare_sim_vs_filled_pairs() -> None:
     assert out["paired_n"] == 0
 
 
-def test_serverchan_sell_only_filter() -> None:
+def test_serverchan_sell_only_filter(monkeypatch) -> None:
     from market_desk.notify import filter_serverchan_alerts
+
+    monkeypatch.setattr("market_desk.config.SERVERCHAN_EVENT_PUSH", True)
 
     alerts = [
         ("buy:600000", "可买", "x"),

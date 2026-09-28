@@ -821,7 +821,7 @@ function render(d) {
     warns.push("ETF 报价为空，可能腾讯源异常");
   }
   if (d.live && Array.isArray(d.hot_boards) && d.hot_boards.length === 0 && !tips.some((t) => t.includes("热点"))) {
-    warns.push("热点板块为空，东财板块源可能失败");
+    warns.push("热点板块为空，东财与新浪板块源可能都失败");
   }
   if (warns.length || health.degraded) {
     const lvl = health.degraded && health.level === "ok"
@@ -976,7 +976,7 @@ function render(d) {
     const prefix = pin ? (b.pin_label + " · ") : "";
     const bk = String(b.bk || "");
     const favOn = !!b.in_favorite;
-    const favBtn = bk
+    const favBtn = bk.toUpperCase().startsWith("BK")
       ? (favOn
         ? `<button type="button" class="fav-btn on" data-bk="${bk}" data-id="${b.favorite_id || ""}">取消看好</button>`
         : `<button type="button" class="fav-btn" data-bk="${bk}" data-name="${String(b.name || "").replace(/"/g, "&quot;")}" data-kind="${b.kind || ""}">加入看好</button>`)

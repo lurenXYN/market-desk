@@ -33,7 +33,8 @@ def test_tag_fly_window_on_band_ready(monkeypatch) -> None:
     assert "再等可能飞" in str(item.get("fly_note") or "")
 
 
-def test_fly_toast_edge_only() -> None:
+def test_fly_toast_edge_only(monkeypatch) -> None:
+    monkeypatch.setattr("market_desk.config.SERVERCHAN_EVENT_PUSH", True)
     item = {
         "code": "600000",
         "name": "测试",

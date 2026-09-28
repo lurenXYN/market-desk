@@ -11,6 +11,7 @@ import time
 
 import httpx
 
+from market_desk import board_fallback
 from market_desk.config import (
     CONCEPT_JUNK_KEYWORDS,
     CONSTITUENT_TOP,
@@ -70,6 +71,8 @@ def clist_runtime_status() -> dict[str, Any]:
         "fail_streak": int(_CLIST_FAIL_STREAK),
         "quotes_source": _MAIN_QUOTES_SOURCE,
         "quotes_pause_sec": round(max(0.0, _QUOTES_CLIST_PAUSE_UNTIL - time.time()), 1),
+        "boards_source": _BOARDS_SOURCE,
+        "boards_pause_sec": round(max(0.0, _BOARDS_CLIST_PAUSE_UNTIL - time.time()), 1),
     }
 
 
@@ -666,11 +669,44 @@ def _hot_board_from_flow(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_BOARDS_SOURCE = "eastmoney"
+# After boards clist comes back empty, skip board / flow / member clist calls
+# for this long and serve them from Sina (``board_fallback``).
+_BOARDS_CLIST_PAUSE_UNTIL = 0.0
+_BOARDS_CLIST_PAUSE_SEC = 600.0
+
+
+def _boards_clist_paused() -> bool:
+    return time.time() < _BOARDS_CLIST_PAUSE_UNTIL
+
+
 async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch concept gainers and the full industry universe.
 
     Uses ``bypass_backoff`` so quote-edge cooldowns do not wipe board cards.
+    When East Money returns nothing (blocked IP), board clist calls are paused
+    for ``_BOARDS_CLIST_PAUSE_SEC`` and boards come from Sina instead.
     """
+    global _BOARDS_SOURCE, _BOARDS_CLIST_PAUSE_UNTIL
+    if not _boards_clist_paused():
+        out = await _hot_boards_from_clist(client)
+        if out:
+            _BOARDS_SOURCE = "eastmoney"
+            return out
+        _BOARDS_CLIST_PAUSE_UNTIL = time.time() + _BOARDS_CLIST_PAUSE_SEC
+    try:
+        rows = await board_fallback.fetch_hot_boards_sina(client)
+    except Exception as exc:
+        log.warning("hot boards: clist empty and sina fallback failed: %r", exc)
+        return []
+    if _BOARDS_SOURCE != "sina":
+        log.warning("hot boards via Sina fallback (%s rows)", len(rows))
+    _BOARDS_SOURCE = "sina"
+    return rows
+
+
+async def _hot_boards_from_clist(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Pull hot boards from East Money clist (gainers, then fund-flow rows)."""
     out: list[dict[str, Any]] = []
     try:
         concept_payload, _host = await _get_clist_json(
@@ -701,11 +737,12 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     except Exception:
         pass
     if out:
+        board_fallback.remember_em_boards(out)
         return out
     # Same clist edge as fund-flow; keeps boards non-empty when gainers API blips.
     flow_c, flow_i = await asyncio.gather(
-        fetch_board_fund_flow(client, "concept", limit=80),
-        fetch_board_fund_flow(client, "industry", limit=100),
+        _board_fund_flow_clist(client, "concept", 80, "day"),
+        _board_fund_flow_clist(client, "industry", 100, "day"),
     )
     for row in [*flow_c, *flow_i]:
         out.append(_hot_board_from_flow(row))
@@ -769,7 +806,30 @@ async def fetch_board_fund_flow(
     limit: int = 80,
     period: str = "day",
 ) -> list[dict[str, Any]]:
-    """Fetch board money-flow ranked by main-force net inflow for one period."""
+    """Fetch board money-flow ranked by main-force net inflow for one period.
+
+    Day flow falls back to Sina (net inflow only) when clist is paused or
+    returns nothing; week / month have no fallback and may come back empty.
+    """
+    rows = [] if _boards_clist_paused() else await _board_fund_flow_clist(
+        client, kind, limit, period
+    )
+    if rows or period != "day":
+        return rows
+    try:
+        return await board_fallback.fetch_board_flow_sina(client, kind, limit)
+    except Exception as exc:
+        log.debug("sina board flow fallback failed (%s): %r", kind, exc)
+        return []
+
+
+async def _board_fund_flow_clist(
+    client: httpx.AsyncClient,
+    kind: str,
+    limit: int,
+    period: str,
+) -> list[dict[str, Any]]:
+    """Fetch one period of board money-flow from East Money clist."""
     cfg = _FLOW_PERIODS.get(period) or _FLOW_PERIODS["day"]
     fs = "m:90+t:2" if kind == "industry" else "m:90+t:3"
     fid = cfg["fid"]
@@ -851,14 +911,31 @@ async def fetch_board_members(
     """Fetch board constituents; weakest=True returns the largest losers first.
 
     Constituent lists change slowly intraday; cache briefly to cut refresh fan-out.
+    Falls back to the board's Sina node when clist is paused or returns nothing.
     """
-    import time
-
     key = f"{str(bk or '').upper()}:{'w' if weakest else 's'}"
     now = time.time()
     hit = _BOARD_MEMBERS_CACHE.get(key)
     if hit and now - hit[0] < _BOARD_MEMBERS_TTL_SEC:
         return [dict(row) for row in hit[1]]
+    members: list[dict[str, Any]] = []
+    if str(bk or "").upper().startswith("BK") and not _boards_clist_paused():
+        members = await _board_members_clist(client, bk, weakest)
+    if not members:
+        try:
+            members = await board_fallback.fetch_board_members_sina(client, bk, weakest=weakest)
+        except Exception as exc:
+            log.debug("sina board members fallback failed (%s): %r", bk, exc)
+            members = []
+    if members:
+        _BOARD_MEMBERS_CACHE[key] = (now, members)
+    return [dict(row) for row in members]
+
+
+async def _board_members_clist(
+    client: httpx.AsyncClient, bk: str, weakest: bool
+) -> list[dict[str, Any]]:
+    """Fetch main-board constituents of one East Money board via clist."""
     try:
         payload, _host = await _get_clist_json(
             client,
@@ -891,8 +968,7 @@ async def fetch_board_members(
         )
         if len(members) >= CONSTITUENT_TOP:
             break
-    _BOARD_MEMBERS_CACHE[key] = (now, members)
-    return [dict(row) for row in members]
+    return members
 
 
 _BOARD_MEMBERS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}

@@ -496,15 +496,19 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "algo": "POST /api/backtest/vs-filled → compare_sim_vs_filled；命中=次日红/三日红。",
     },
     "微信只推止损": {
-        "mean": "Server酱静音档：只推止损/必卖（sell:stop）以及 LHB/EOD/运维，不推可买、将飞、止盈减仓。",
+        "mean": "Server酱静音档：只推止损/必卖（sell:stop）以及 LHB/EOD/运维，不推可买、将飞、止盈减仓。"
+        "当前盘中推送整体停用（Server酱每日 5 条额度），此开关暂不生效。",
         "algo": "settings.serverchan_sell_only；push_serverchan_alerts 按用户过滤 is_serverchan_must_sell。\n"
         "ops:health（数据降级）一律不进微信，与是否 sell_only 无关。",
     },
     "运维自检": {
-        "mean": "管理员账号面板一页看：库完整性、desk.db、快照新鲜度、clist 冷却、主板行情源、自动备份年龄、新闻雷达。",
+        "mean": "管理员账号面板一页看：库完整性、desk.db、快照新鲜度、clist 冷却、主板行情源、板块源、自动备份年龄、新闻雷达。",
         "algo": "GET /api/ops/check；账号管理 → 运维自检。\n"
         "主板行情源：东财 clist 整体失败（部分 IP 会被东财断连）时暂停东财 10 分钟，改用腾讯批量行情；"
-        "主板代码表每天从新浪取一次并存库（东财完整拉取成功时也会更新），失败日志含各东财节点探测结果。",
+        "主板代码表每天从新浪取一次并存库（东财完整拉取成功时也会更新），失败日志含各东财节点探测结果。\n"
+        "板块源：东财板块列表拉空时同样暂停东财 10 分钟，热点板块 / 当日资金流 / 成分股改走新浪"
+        "（新浪行业约 49 个 + 概念约 170 个；资金流只有净流入，无超大单/大单拆分；近5/10日资金流无备用）。"
+        "与东财同名的板块沿用 BK 代码（历史、看好、新闻雷达照常），其余以 SINA: 开头，不能加入看好。",
     },
     "回测异步": {
         "mean": "长区间回测进后台任务，前端轮询进度；同步仍≤90天，勾异步或超90天自动异步（最多180天）。",
@@ -679,8 +683,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "关闭 Windows 通知时仍写入页内提醒条。",
     },
     "Server酱": {
-        "mean": "用 Server酱³ 把买卖点、龙虎席位变坏/变好、收盘一页纸、可选早决策推到微信。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
-        "algo": "推 buy: / sell: / lhb: / eod: / morning:。买点附主线/相位/阶段/作战结论。\n"
+        "mean": "用 Server酱³ 把收盘一页纸推到微信（每天 15:05 一条）。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
+        "algo": "免费版每个 SendKey 每天只能发 5 条，与新闻雷达共用（9:00 盘前 / 13:00 盘中 / 21:00 晚间）。"
+        "因此作战台只推 eod:；盘中 buy: / fly: / sell: / lhb: / ops: 和 9:25 早决策只在页面提醒"
+        "（config.SERVERCHAN_EVENT_PUSH / SERVERCHAN_MORNING_PUSH 可重新打开）。\n"
+        "打开后：推 buy: / sell: / lhb: / eod: / morning:。买点附主线/相位/阶段/作战结论。\n"
         "lhb 含变坏与变好，正文写新增/消退标志与 risk_reason。\n"
         "users.serverchan_sendkey + serverchan_on（本人）+ serverchan_allowed（管理员）。\n"
         "admin 默认允许，也可在设置取消「开启推送」或在账号管理给自己「禁推送」，重启不会被恢复。\n"

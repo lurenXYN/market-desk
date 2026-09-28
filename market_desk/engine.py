@@ -274,8 +274,11 @@ class DeskEngine:
         The shared snapshot never carries personal books, so sell pushes must be
         evaluated per user here rather than in ``_emit_toasts``.
         """
+        from market_desk.config import SERVERCHAN_EVENT_PUSH
         from market_desk.notify import is_sell_push_window, push_user_sell_alerts
 
+        if not SERVERCHAN_EVENT_PUSH:
+            return 0
         if not is_sell_push_window(now, trading_day=is_trading_day(now)):
             return 0
         from market_desk.db import list_serverchan_recipients
@@ -1400,7 +1403,9 @@ class DeskEngine:
 
     async def _maybe_push_morning_brief(self, now: datetime) -> None:
         """Push morning decision brief once per day (09:25–09:50) when enabled."""
-        if not is_trading_day(now):
+        from market_desk.config import SERVERCHAN_MORNING_PUSH
+
+        if not SERVERCHAN_MORNING_PUSH or not is_trading_day(now):
             return
         mins = _minutes(now)
         # After auction lock window through early open.
@@ -3668,6 +3673,10 @@ def _build_health(
         if clist.get("quotes_source") == "tencent":
             tips.append(
                 f"主板行情走腾讯备用源（东财列表被拦，{int(clist.get('quotes_pause_sec') or 0)}s 后重试东财）"
+            )
+        if clist.get("boards_source") == "sina":
+            tips.append(
+                f"板块走新浪备用源（东财板块被拦，{int(clist.get('boards_pause_sec') or 0)}s 后重试东财）"
             )
     except Exception:
         clist = {}

@@ -179,6 +179,13 @@ HOT_BOARD_COUNT = 8
 ICE_BOARD_COUNT = 4
 CONSTITUENT_TOP = 20
 
+# Server酱 free tier: 5 pushes per SendKey per day, shared with news-radar
+# (09:00 / 13:00 / 21:00 digests). market-desk only pushes the 15:05 EOD
+# one-pager; intraday buy / fly / sell / LHB / ops alerts and the 09:25 morning
+# brief stay on the page unless these switches are turned back on.
+SERVERCHAN_EVENT_PUSH = False
+SERVERCHAN_MORNING_PUSH = False
+
 # Soft risk hints for the local position book (not hard blocks).
 POSITION_MAX_NAMES = 6
 POSITION_MAX_SINGLE_PCT = 35.0

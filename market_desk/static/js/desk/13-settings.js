@@ -65,6 +65,7 @@ async function openSettings() {
     window.__settingsPresets = d.presets || null;
   } catch (e) {}
   // Per-user Server酱 (separate from shared runtime settings).
+  const SC_SCOPE_TEXT = "只推 15:05 收盘一页纸（盘中买卖/LHB/早决策已停用，省 Server酱每日 5 条额度）；无 Key 不推";
   try {
     const scEl = document.getElementById("setScKey");
     const scOn = document.getElementById("setScOn");
@@ -85,8 +86,8 @@ async function openSettings() {
           : "管理员未允许本账号微信推送；可先填 Key，待开通后再开。";
       } else {
         scHint.textContent = sc.configured
-          ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · 买卖/LHB/收盘一页纸/早决策；无 Key 不推`
-          : "未配置 Key · 填 SCT… 后勾选开启；推买卖、LHB、收盘一页纸、可选早决策";
+          ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · ${SC_SCOPE_TEXT}`
+          : `未配置 Key · 填 SCT… 后勾选开启；${SC_SCOPE_TEXT}`;
       }
     }
     if (scOn) {
@@ -95,21 +96,14 @@ async function openSettings() {
     }
     if (morningEl) {
       morningEl.checked = !!s.morning_push;
-      morningEl.disabled = !sc.allowed;
+      morningEl.disabled = true;
     }
     const sellOnlyEl = document.getElementById("setScSellOnly");
     if (sellOnlyEl) {
       sellOnlyEl.checked = !!s.serverchan_sell_only;
-      sellOnlyEl.disabled = !sc.allowed;
+      sellOnlyEl.disabled = true;
     }
     if (scEl) scEl.disabled = false;
-    if (scHint && sc.allowed) {
-      scHint.textContent = sc.configured
-        ? `已配置 Key：${sc.sendkey_masked || "SCT***"} · `
-          + (s.serverchan_sell_only ? "仅止损/必卖(+EOD/LHB)" : "买卖/LHB/收盘/早决策")
-          + "；无 Key 不推"
-        : "未配置 Key · 填 SCT… 后勾选开启；可勾「只推止损」静音可买";
-    }
   } catch (e) {
     const scHint = document.getElementById("setScHint");
     if (scHint) scHint.textContent = "微信推送配置加载失败";
