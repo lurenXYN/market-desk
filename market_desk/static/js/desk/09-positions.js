@@ -110,12 +110,28 @@ function maybeToastLhbSeatEdge(items) {
 }
 let _posDiaryAt = 0;
 let _posCalAt = 0;
+const POS_DIARY_PAGE_SIZE = 20;
+let _posDiaryPage = 0;
+function paintPosDiaryPager(total) {
+  const pager = document.getElementById("posDiaryPager");
+  if (!pager) return;
+  const pages = Math.max(1, Math.ceil(total / POS_DIARY_PAGE_SIZE));
+  pager.hidden = total <= POS_DIARY_PAGE_SIZE;
+  const info = document.getElementById("posDiaryPageInfo");
+  if (info) info.textContent = `第 ${_posDiaryPage + 1} / ${pages} 页 · 共 ${total} 笔`;
+  const prev = document.getElementById("posDiaryPrev");
+  const next = document.getElementById("posDiaryNext");
+  if (prev) prev.disabled = _posDiaryPage <= 0;
+  if (next) next.disabled = _posDiaryPage >= pages - 1;
+}
 function paintPosDiary(payload) {
   const body = document.getElementById("posDiaryBody");
   const meta = document.getElementById("posDiaryMeta");
   if (!body) return;
   const items = (payload && payload.items) || [];
-  if (meta) meta.textContent = items.length ? `近 ${items.length} 笔` : "";
+  const total = Number((payload && payload.total) ?? items.length) || 0;
+  if (meta) meta.textContent = total ? `共 ${total} 笔` : "";
+  paintPosDiaryPager(total);
   if (!items.length) {
     body.innerHTML = `<div class="meta">暂无执行日记；记账买/减/清后自动出现</div>`;
     return;
@@ -138,7 +154,7 @@ function paintPosDiary(payload) {
       + `<b>${it.name || ""}</b> <span class="meta">${it.code || ""}</span> `
       + `${it.qty != null ? it.qty + "股" : ""}`
       + `${it.price != null ? " @ " + it.price : ""}`
-      + `<div class="meta">${(it.created_at || "").slice(11, 19) || (it.trade_date || "")}`
+      + `<div class="meta">${(it.created_at || "").slice(5, 19) || (it.trade_date || "")}`
       + `${bits.length ? " · " + bits.join(" · ") : ""}`
       + `${it.note ? " · " + it.note : ""}</div></div>`;
   }).join("");
@@ -207,9 +223,18 @@ async function ensurePosDiary(force) {
   box.hidden = false;
   if (!force && _posDiaryAt && Date.now() - _posDiaryAt < 45000) return;
   try {
-    const r = await fetch("/api/exec-diary?limit=30", { credentials: "same-origin" });
+    const offset = _posDiaryPage * POS_DIARY_PAGE_SIZE;
+    const r = await fetch(`/api/exec-diary?limit=${POS_DIARY_PAGE_SIZE}&offset=${offset}`, {
+      credentials: "same-origin",
+    });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error("diary");
+    const total = Number(d.total || 0);
+    const lastPage = Math.max(0, Math.ceil(total / POS_DIARY_PAGE_SIZE) - 1);
+    if (_posDiaryPage > lastPage) {
+      _posDiaryPage = lastPage;
+      return ensurePosDiary(true);
+    }
     _posDiaryAt = Date.now();
     paintPosDiary(d);
   } catch (e) {
@@ -219,6 +244,16 @@ async function ensurePosDiary(force) {
 }
 document.getElementById("posDiaryRefresh")?.addEventListener("click", () => {
   _posDiaryAt = 0;
+  _posDiaryPage = 0;
+  ensurePosDiary(true);
+});
+document.getElementById("posDiaryPrev")?.addEventListener("click", () => {
+  if (_posDiaryPage <= 0) return;
+  _posDiaryPage -= 1;
+  ensurePosDiary(true);
+});
+document.getElementById("posDiaryNext")?.addEventListener("click", () => {
+  _posDiaryPage += 1;
   ensurePosDiary(true);
 });
 async function ensurePosLhb(force) {

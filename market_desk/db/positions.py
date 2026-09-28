@@ -237,12 +237,14 @@ def load_exec_diary(
     user_id: int,
     trade_date: str | None = None,
     limit: int = 40,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return recent exec diary rows for one user (newest first)."""
+    """Return exec diary rows for one user (newest first), skipping ``offset`` rows."""
     import json
 
     uid = int(user_id)
     lim = max(1, min(int(limit or 40), 500))
+    off = max(0, int(offset or 0))
     with _connect() as conn:
         if trade_date:
             rows = conn.execute(
@@ -252,9 +254,9 @@ def load_exec_diary(
                 FROM exec_diary
                 WHERE user_id = ? AND trade_date = ?
                 ORDER BY id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (uid, str(trade_date)[:10], lim),
+                (uid, str(trade_date)[:10], lim, off),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -264,9 +266,9 @@ def load_exec_diary(
                 FROM exec_diary
                 WHERE user_id = ?
                 ORDER BY id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (uid, lim),
+                (uid, lim, off),
             ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -278,6 +280,22 @@ def load_exec_diary(
             item["advice"] = {}
         out.append(item)
     return out
+
+
+def count_exec_diary(*, user_id: int, trade_date: str | None = None) -> int:
+    """Return how many exec diary rows one user has (optionally for one day)."""
+    with _connect() as conn:
+        if trade_date:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM exec_diary WHERE user_id = ? AND trade_date = ?",
+                (int(user_id), str(trade_date)[:10]),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM exec_diary WHERE user_id = ?",
+                (int(user_id),),
+            ).fetchone()
+    return int(row[0] if row else 0)
 
 
 def load_recent_buy_diary(*, limit: int = 40) -> list[dict[str, Any]]:

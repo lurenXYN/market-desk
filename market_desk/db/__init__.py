@@ -84,6 +84,7 @@ from market_desk.db.positions import (  # noqa: F401
     load_lots_for_positions,
     add_exec_diary,
     load_exec_diary,
+    count_exec_diary,
     load_recent_buy_diary,
     _position_item,
     touch_position_peaks,

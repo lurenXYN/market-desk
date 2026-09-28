@@ -229,12 +229,24 @@ def positions_stats(
 def list_exec_diary(
     trade_date: str | None = Query(default=None),
     limit: int = Query(default=40, ge=1, le=120),
+    offset: int = Query(default=0, ge=0),
     user: dict = Depends(current_member_required),
 ) -> dict:
-    """Return recent buy/sell execution diary rows for the caller."""
+    """Return one page of buy/sell execution diary rows for the caller (newest first)."""
+    from market_desk.db import count_exec_diary
+
+    uid = int(user["id"])
     day = str(trade_date or "").strip()[:10] or None
-    rows = load_exec_diary(user_id=int(user["id"]), trade_date=day, limit=limit)
-    return {"ok": True, "items": rows, "trade_date": day}
+    rows = load_exec_diary(user_id=uid, trade_date=day, limit=limit, offset=offset)
+    total = count_exec_diary(user_id=uid, trade_date=day)
+    return {
+        "ok": True,
+        "items": rows,
+        "trade_date": day,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.get("/api/positions/lhb")

@@ -2422,6 +2422,15 @@ tr.pos-closed td:first-child { color: var(--muted); }
 .pos-diary .side-buy { color: var(--up, #1a7f37); font-weight: 700; }
 .pos-diary .side-half { color: #b86a00; font-weight: 700; }
 .pos-diary .side-clear { color: var(--down, #c23); font-weight: 700; }
+.pos-diary .diary-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.pos-diary .diary-pager[hidden] { display: none; }
+.pos-diary .diary-pager button:disabled { opacity: 0.4; cursor: default; }
 .pos-cal {
   border: 1px solid var(--line, #333);
   border-radius: 8px;
