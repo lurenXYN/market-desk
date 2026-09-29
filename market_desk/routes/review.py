@@ -58,6 +58,24 @@ class SignalTradeIn(BaseModel):
     sell_mode: str | None = None
 
 
+class PickScoreIn(BaseModel):
+    """Candidates to compare: review signal ids and/or manual six-digit codes."""
+
+    signal_ids: list[int] = Field(default_factory=list, max_length=12)
+    codes: list[str] = Field(default_factory=list, max_length=12)
+
+
+@router.post("/api/pick-score")
+async def pick_score(body: PickScoreIn, user: dict = Depends(current_user_required)) -> dict:
+    """Score a handful of hesitant picks side by side (display only)."""
+    del user
+    codes = [normalize_code(c) for c in body.codes]
+    bad = [c for c, n in zip(body.codes, codes) if len(n) != 6 or not n.isdigit()]
+    if bad:
+        raise HTTPException(400, f"代码格式不对：{'、'.join(str(b) for b in bad[:3])}")
+    return await engine.score_picks(list(body.signal_ids), codes)
+
+
 @router.get("/api/review")
 async def review(
     date: str | None = Query(default=None),

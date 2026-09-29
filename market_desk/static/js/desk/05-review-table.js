@@ -69,6 +69,8 @@ const REV_COL_CATALOG = [
   { id: "ops", label: "操作" },
 ];
 const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({ id: c.id, on: true }));
+// Review signal ids ticked for 纠结对比; survives table repaints / auto-refresh.
+const revPickIds = new Set();
 let revSort = { id: "", dir: 1 }; // dir: 1 asc, -1 desc
 
 function fmtHolderNum(n) {
@@ -346,7 +348,12 @@ function revCellHtml(col, r, ctx) {
     const pmWeak = r.pm_weak
       ? ` <span class="rev-chip pm-weak" title="午后开盘弱窗里出的买点，近期胜率明显偏低：只看不追，确需开仓就缩仓">午后弱窗</span>`
       : "";
-    return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
+    const st = String(r.signal_type || "");
+    const pickChk = (r.id != null && (st === "buy" || st.startsWith("buy_")))
+      ? `<input type="checkbox" class="rev-pick-chk" data-id="${escAttr(String(r.id))}" title="加入纠结对比"${revPickIds.has(String(r.id)) ? " checked" : ""} />`
+      : "";
+    return pickChk
+      + `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
       + revTrendChips(r)
       + pmWeak
       + histBtn

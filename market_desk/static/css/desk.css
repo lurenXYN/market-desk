@@ -2052,6 +2052,34 @@ th { color: var(--muted); font-weight: 600; }
 .rev-session ul { margin: 4px 0 0; padding-left: 18px; }
 .rev-session .meta { margin-top: 4px; }
 .rev-chip.pm-weak { border-color: #5b4a2a; color: #fbbf24; background: #1a1508; }
+.rev-pick { margin: 8px 0; }
+.rev-pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.rev-pick-bar input {
+  flex: 1 1 220px; min-width: 160px; background: #151c28; color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px;
+}
+.rev-pick-bar .rev-col-btn.primary { border-color: #164e63; color: var(--ice); background: #082028; }
+.rev-pick-chk { margin-right: 4px; vertical-align: middle; cursor: pointer; }
+.rev-pick-out {
+  margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: #0e141c; font-size: 13px;
+}
+.rev-pick-out .verdict { font-weight: 700; margin-bottom: 8px; }
+.rev-pick-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.rev-pick-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #111827; }
+.rev-pick-card.top { border-color: #14532d; }
+.rev-pick-card .hd { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.rev-pick-card .score { font-size: 22px; font-weight: 700; }
+.rev-pick-card .score.g-hi { color: #86efac; }
+.rev-pick-card .score.g-mid { color: var(--text); }
+.rev-pick-card .score.g-lo { color: #fbbf24; }
+.rev-pick-card .score.g-drop { color: var(--muted); }
+.rev-pick-card ul { margin: 6px 0 0; padding: 0; list-style: none; }
+.rev-pick-card li { display: flex; gap: 6px; margin: 2px 0; line-height: 1.4; }
+.rev-pick-card li .pts { min-width: 3.2em; text-align: right; font-weight: 700; }
+.rev-pick-card li .pts.plus { color: var(--up); }
+.rev-pick-card li .pts.minus { color: var(--down, #38bdf8); }
+.rev-pick-card li .hist { display: block; color: var(--muted); font-size: 11px; }
 .rev-missed li { margin: 2px 0; }
 .risk-tips { margin-top: 6px; color: var(--warn); font-size: 12px; line-height: 1.45; }
 .similar-box {

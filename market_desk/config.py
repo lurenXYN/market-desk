@@ -232,6 +232,16 @@ REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
 # page cadence only re-pulls the single batched live-quote call.
 REVIEW_TODAY_CACHE_SEC = 25.0
 REVIEW_HEAVY_REFRESH_SEC = 300.0
+# Pick compare scoring (display only): base score, and how local history nudges
+# rule points — each win-rate pp above/below the overall rate is worth
+# PICK_HIST_PP_TO_PTS, capped at ±PICK_HIST_MAX_ADJ, ignored below PICK_HIST_MIN_N
+# rows or PICK_HIST_MIN_DAYS distinct sessions. Win rates are day-balanced.
+PICK_BASE_SCORE = 60.0
+PICK_HIST_MIN_N = 8
+PICK_HIST_MIN_DAYS = 5
+PICK_HIST_PP_TO_PTS = 0.3
+PICK_HIST_MAX_ADJ = 6.0
+PICK_MAX_ITEMS = 6
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
 SELL_OPEN_WATCH_MINUTES = 15
 # Soft: during open watch, "must" stop that only barely lost open may wait (false break).

@@ -1798,6 +1798,126 @@ class DeskEngine:
             self._review_trend_cache.pop(k, None)
         return payload
 
+    async def score_picks(
+        self,
+        signal_ids: list[int],
+        codes: list[str],
+    ) -> dict[str, Any]:
+        """Score review signals and/or manual tickers side by side (display only).
+
+        Review rows keep their plan price, source and gates; manual codes are
+        scored on live quote, daily trend, board fit and stock traits only.
+        """
+        from market_desk.config import PICK_MAX_ITEMS
+        from market_desk.db import load_signal, load_signals
+        from market_desk.ma_fan import enrich_signals_with_ma_fan
+        from market_desk.pick_score import rank_picks
+        from market_desk.review import (
+            _flatten_signal_prices,
+            enrich_signals_with_boards,
+            enrich_signals_with_holders,
+            enrich_signals_with_live_marks,
+            enrich_signals_with_trends,
+            mark_pm_weak_signals,
+        )
+        from market_desk.zt_stats import enrich_signals_with_zt_ytd
+
+        today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for sid in signal_ids:
+            row = load_signal(int(sid))
+            code = normalize_code((row or {}).get("code"))
+            if not row or not code or code in seen:
+                continue
+            seen.add(code)
+            rows.append(_flatten_signal_prices(row))
+        for raw in codes:
+            code = normalize_code(raw)
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            rows.append(
+                {
+                    "code": code,
+                    "name": code,
+                    "signal_type": "manual",
+                    "kind": "etf" if code.startswith(("1", "5")) else "stock",
+                    "manual": True,
+                    "payload": {},
+                }
+            )
+        rows = rows[: int(PICK_MAX_ITEMS)]
+        if not rows:
+            return {"ok": False, "error": "请至少选择一只票", "items": []}
+        all_codes = [str(r["code"]) for r in rows]
+        stock_codes = [str(r["code"]) for r in rows if r.get("kind") != "etf"]
+        names = {str(r["code"]): str(r.get("name") or "") for r in rows}
+        quotes: dict[str, dict[str, Any]] = {}
+        trends: dict[str, dict[str, Any]] = {}
+        holders: dict[str, dict[str, Any]] = {}
+        zt_map: dict[str, dict[str, Any]] = {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+
+                async def _trends() -> dict[str, dict[str, Any]]:
+                    closes, ok = await self._resolve_daily_closes(client, all_codes, today)
+                    return classify_many(closes, ok)
+
+                async def _zt() -> dict[str, dict[str, Any]]:
+                    if not stock_codes:
+                        return {}
+                    return await self._zt_ytd_for_codes(
+                        client, stock_codes, names, trade_date=today
+                    )
+
+                async def _holders() -> dict[str, dict[str, Any]]:
+                    if not stock_codes:
+                        return {}
+                    return await fetch_holder_stats_many(client, stock_codes)
+
+                results = await asyncio.gather(
+                    fetch_quotes(client, all_codes),
+                    _trends(),
+                    _zt(),
+                    _holders(),
+                    return_exceptions=True,
+                )
+                quotes, trends, zt_map, holders = [
+                    r if isinstance(r, dict) else {} for r in results
+                ]
+        except Exception:
+            log.exception("pick score enrich failed")
+        for r in rows:
+            q = quotes.get(str(r["code"])) or {}
+            if r.get("manual") and q.get("name"):
+                r["name"] = q["name"]
+        snap = self.snapshot or {}
+        rows = enrich_signals_with_live_marks(rows, quotes) if quotes else rows
+        rows = mark_pm_weak_signals(rows)
+        rows = enrich_signals_with_boards(
+            rows,
+            list(snap.get("hot_boards") or []) + list(snap.get("pin_boards") or []),
+            live_mainline=((snap.get("verdict") or {}).get("mainline") or {}).get("name"),
+        )
+        if trends:
+            rows = enrich_signals_with_trends(rows, trends)
+        if holders:
+            rows = enrich_signals_with_holders(rows, holders)
+        if zt_map:
+            rows = enrich_signals_with_zt_ytd(rows, zt_map)
+        try:
+            rows = enrich_signals_with_ma_fan(rows, today)
+        except Exception:
+            pass
+        try:
+            history = load_signals(limit=800)
+        except Exception:
+            history = []
+        out = rank_picks(rows, history)
+        out["scored_at"] = datetime.now(CN_TZ).strftime("%H:%M:%S")
+        return out
+
     async def build_review_code_history(
         self,
         code: str,
