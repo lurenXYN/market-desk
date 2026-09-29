@@ -2972,6 +2972,146 @@ def build_price_touch_alerts(snapshot: dict[str, Any] | None) -> list[tuple[str,
     return filtered
 
 
+def _above_plan_pct(
+    sig_type: Any,
+    last: float | None,
+    plan: float | None,
+    flags: list[str],
+) -> float | None:
+    """Return the live premium over plan (%) when a buy row is being chased.
+
+    Only buy signals whose live price sits at least ``REVIEW_ABOVE_PLAN_WARN_PCT``
+    above plan qualify; stop / chase-cap hits keep their own stronger caution.
+    """
+    from market_desk.config import REVIEW_ABOVE_PLAN_WARN_PCT
+
+    if not is_buy_signal(sig_type) or last is None or plan is None or plan <= 0:
+        return None
+    if "stop_hit" in flags or "chase_hit" in flags:
+        return None
+    pct = (float(last) / float(plan) - 1.0) * 100.0
+    if pct < float(REVIEW_ABOVE_PLAN_WARN_PCT):
+        return None
+    return round(pct, 2)
+
+
+def _signal_hhmm(row: dict[str, Any]) -> str:
+    """Return the ``HH:MM`` part of a signal's ``signaled_at`` stamp, or ``""``."""
+    raw = str(row.get("signaled_at") or "")
+    hhmm = raw[11:16] if len(raw) >= 16 else ""
+    return hhmm if len(hhmm) == 5 and hhmm[2] == ":" else ""
+
+
+def in_pm_weak_window(hhmm: str) -> bool:
+    """Return True when ``HH:MM`` falls inside the afternoon-open weak window."""
+    from market_desk.config import REVIEW_PM_WEAK_WINDOW
+
+    start, end = REVIEW_PM_WEAK_WINDOW
+    return bool(hhmm) and start <= hhmm < end
+
+
+def mark_pm_weak_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tag buy rows signaled inside the afternoon weak window (display only)."""
+    out: list[dict[str, Any]] = []
+    for raw in rows or []:
+        item = dict(raw)
+        item["pm_weak"] = bool(
+            is_buy_signal(item.get("signal_type")) and in_pm_weak_window(_signal_hhmm(item))
+        )
+        out.append(item)
+    return out
+
+
+def build_pm_weak_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare 3-day win rate of weak-window buys against all other scored buys."""
+
+    def _agg(items: list[dict[str, Any]]) -> dict[str, Any]:
+        scored = [num(r.get("outcome_day3_pct")) for r in items]
+        scored = [v for v in scored if v is not None]
+        if not scored:
+            return {"n": 0, "win3": None, "d3": None}
+        wins = sum(1 for v in scored if v > 0)
+        return {
+            "n": len(scored),
+            "win3": round(100.0 * wins / len(scored), 1),
+            "d3": round(sum(scored) / len(scored), 2),
+        }
+
+    buys = [r for r in rows or [] if is_buy_signal(r.get("signal_type"))]
+    inside = [r for r in buys if in_pm_weak_window(_signal_hhmm(r))]
+    outside = [r for r in buys if not in_pm_weak_window(_signal_hhmm(r))]
+    return {"window": _agg(inside), "rest": _agg(outside)}
+
+
+def build_review_session_hint(
+    day_rows: list[dict[str, Any]],
+    *,
+    is_today: bool,
+    now: datetime | None = None,
+    stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the review-page banner: session window, today's buy counts, cautions.
+
+    Display only; the banner never blocks or rewrites any signal.
+    """
+    from market_desk.calendar import is_trading_day
+    from market_desk.config import REVIEW_ABOVE_PLAN_WARN_PCT, REVIEW_PM_WEAK_WINDOW
+
+    start, end = REVIEW_PM_WEAK_WINDOW
+    if not is_today:
+        return {"ok": False}
+    now = now or datetime.now(_CN_TZ)
+    hhmm = now.strftime("%H:%M")
+    trading = is_trading_day(now)
+    if not trading:
+        session, level = "非交易日", "info"
+    elif hhmm < "09:15":
+        session, level = "盘前", "info"
+    elif hhmm < "11:30":
+        session, level = "上午盘", "info"
+    elif hhmm < start:
+        session, level = "午休", "info"
+    elif hhmm < end:
+        session, level = f"午后弱窗（{start}–{end}）", "warn"
+    elif hhmm < "15:00":
+        session, level = "尾盘段", "info"
+    else:
+        session, level = "已收盘", "info"
+    buys = [r for r in day_rows or [] if is_buy_signal(r.get("signal_type"))]
+    pm_n = sum(1 for r in buys if r.get("pm_weak"))
+    above_n = sum(1 for r in buys if "above_plan" in (r.get("price_flags") or []))
+    tips: list[str] = []
+    if level == "warn":
+        tips.append("当前在午后弱窗：新买点只看不追，确需开仓就缩仓")
+    if above_n:
+        tips.append(
+            f"{above_n} 条买点现价已高于计划价 {REVIEW_ABOVE_PLAN_WARN_PCT:g}% 以上，只按计划价挂单"
+        )
+    if pm_n:
+        tips.append(f"{pm_n} 条买点出在午后弱窗，已在名称旁标注")
+    st = stats or {}
+    win, rest = st.get("window") or {}, st.get("rest") or {}
+    hist = ""
+    if win.get("n") and rest.get("n") and win.get("win3") is not None and rest.get("win3") is not None:
+        hist = (
+            f"近期样本：弱窗买点三日胜率 {win['win3']}%（{win['n']} 条）"
+            f"，其余时段 {rest['win3']}%（{rest['n']} 条）"
+        )
+    return {
+        "ok": True,
+        "now": hhmm,
+        "session": session,
+        "level": level,
+        "in_pm_weak": level == "warn",
+        "window": [start, end],
+        "buy_n": len(buys),
+        "pm_weak_n": pm_n,
+        "above_plan_n": above_n,
+        "tips": tips,
+        "history": hist,
+    }
+
+
 def enrich_signals_with_live_marks(
     rows: list[dict[str, Any]],
     quotes: dict[str, dict[str, Any]],
@@ -3033,6 +3173,11 @@ def enrich_signals_with_live_marks(
         ):
             flags.append("in_band")
             labels.append("建议价附近")
+        above_pct = _above_plan_pct(item.get("signal_type"), last, sig_px, flags)
+        if above_pct is not None:
+            flags.append("above_plan")
+            labels.append(f"高于计划价 +{above_pct:.1f}%")
+        item["above_plan_pct"] = above_pct
         item["live_last"] = last
         item["live_pct"] = num(q.get("pct"))
         # Keep a live last for booking defaults; do not overwrite plan suggest (price).
@@ -3059,6 +3204,10 @@ def enrich_signals_with_live_marks(
                 item["buy_caution"] = "现价已到止损带，当日不宜再按原计划买"
             elif "chase_hit" in flags:
                 item["buy_caution"] = "现价已过不追价，当日不宜追高"
+            elif "above_plan" in flags:
+                item["buy_caution"] = (
+                    f"现价高于计划价 +{above_pct:.1f}%：只按计划价挂单，不追；过不追价就放弃"
+                )
             elif "miss_pullback" in flags:
                 item["buy_caution"] = "未回踩建议价已上行，勿死等；可对照不追价决定是否放弃"
             elif "near_wait" in flags:
@@ -3316,6 +3465,7 @@ def build_review_payload(
     day_rows = filter_signals_for_viewer(day_rows, user_id)
     if quotes:
         day_rows = enrich_signals_with_live_marks(day_rows, quotes)
+    day_rows = mark_pm_weak_signals(day_rows)
     day_rows = enrich_signals_with_boards(
         day_rows, boards, live_mainline=compare_ml
     )
@@ -3408,6 +3558,13 @@ def build_review_payload(
         "note": "三标准对照需日线，加载中或暂无样本",
     }
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
+    try:
+        pm_stats = build_pm_weak_stats(load_signals(limit=800))
+    except Exception:
+        pm_stats = None
+    summary["session_hint"] = build_review_session_hint(
+        day_rows, is_today=day == calendar_today, stats=pm_stats
+    )
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     try:
         summary["sell_fly_board"] = build_sell_fly_board(global_rows)

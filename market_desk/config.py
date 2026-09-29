@@ -223,6 +223,10 @@ OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
 OUTCOME_FORMULA_VERSION = 8
 # Review display standards (DB always stores classic).
 OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
+# Review-page hints only (never gate signals): afternoon-open weak window and
+# the live-vs-plan premium that marks a buy row as chasing.
+REVIEW_PM_WEAK_WINDOW = ("13:00", "14:00")
+REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
 SELL_OPEN_WATCH_MINUTES = 15
 # Soft: during open watch, "must" stop that only barely lost open may wait (false break).

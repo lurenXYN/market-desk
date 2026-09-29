@@ -343,8 +343,12 @@ function revCellHtml(col, r, ctx) {
     const histBtn = code
       ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
       : "";
+    const pmWeak = r.pm_weak
+      ? ` <span class="rev-chip pm-weak" title="午后开盘弱窗里出的买点，近期胜率明显偏低：只看不追，确需开仓就缩仓">午后弱窗</span>`
+      : "";
     return `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
       + revTrendChips(r)
+      + pmWeak
       + histBtn
       + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
   }
@@ -449,6 +453,27 @@ function revCellHtml(col, r, ctx) {
   return "";
 }
 
+function paintReviewSession(hint) {
+  const el = document.getElementById("revSession");
+  if (!el) return;
+  const h = hint || {};
+  if (!h.ok) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.className = "rev-session" + (h.level === "warn" ? " warn" : "");
+  const counts = `今日买点 ${h.buy_n ?? 0}`
+    + ` · 午后弱窗 ${h.pm_weak_n ?? 0}`
+    + ` · 高于计划价 ${h.above_plan_n ?? 0}`;
+  const tips = (h.tips || []).map((t) => `<li>${escAttr(String(t))}</li>`).join("");
+  el.innerHTML = `<div class="hd">${escAttr(h.now || "")} · ${escAttr(h.session || "")}</div>`
+    + `<div>${counts}</div>`
+    + (tips ? `<ul>${tips}</ul>` : "")
+    + (h.history ? `<div class="meta">${escAttr(h.history)}</div>` : "");
+}
+
 function paintReview(payload) {
   lastReview = payload || { signals: [], summary: {} };
   const sum = lastReview.summary || {};
@@ -473,6 +498,7 @@ function paintReview(payload) {
       return `<button type="button" class="${cls}" data-rev-day="${d}">${short}${d === calendarToday ? "·今" : ""}</button>`;
     }).join("");
   }
+  paintReviewSession(sum.session_hint);
   const cell = (lab, val, cls) =>
     `<div class="rev-card"><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
   const tcell = (lab, val, cls) =>
@@ -766,7 +792,7 @@ function paintReview(payload) {
     if (r.outcome_label) return false;
     const flags = r.price_flags || [];
     // Keep actionable / diagnostic rows visible.
-    if (flags.some((f) => ["miss_pullback", "chase_hit", "stop_hit", "in_band", "near_wait"].includes(f))) {
+    if (flags.some((f) => ["miss_pullback", "chase_hit", "above_plan", "stop_hit", "in_band", "near_wait"].includes(f))) {
       return false;
     }
     const near = !!(r.near_entry || (r.payload && r.payload.near_entry));
@@ -838,6 +864,7 @@ function paintReview(payload) {
     let markCls = "";
     if (flags.includes("stop_hit")) markCls = "mark-stop";
     else if (flags.includes("chase_hit")) markCls = "mark-chase";
+    else if (flags.includes("above_plan")) markCls = "mark-chase";
     else if (flags.includes("miss_pullback")) markCls = "mark-miss";
     else if (r.price_mark) markCls = "mark-ok";
     const markHtml = r.price_mark
