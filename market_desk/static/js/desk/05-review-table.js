@@ -348,6 +348,9 @@ function revCellHtml(col, r, ctx) {
     const pmWeak = r.pm_weak
       ? ` <span class="rev-chip pm-weak" title="午后开盘弱窗里出的买点，近期胜率明显偏低：只看不追，确需开仓就缩仓">午后弱窗</span>`
       : "";
+    const cvChips = (r.cv_tags || []).map((t) =>
+      ` <span class="rev-chip cv-${t.tone === "good" ? "good" : "warn"}" title="${escAttr(t.title || "")}">${escAttr(t.label || "")}</span>`
+    ).join("");
     const st = String(r.signal_type || "");
     const pickChk = (r.id != null && (st === "buy" || st.startsWith("buy_")))
       ? `<input type="checkbox" class="rev-pick-chk" data-id="${escAttr(String(r.id))}" title="加入纠结对比"${revPickIds.has(String(r.id)) ? " checked" : ""} />`
@@ -356,6 +359,7 @@ function revCellHtml(col, r, ctx) {
       + `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
       + revTrendChips(r)
       + pmWeak
+      + cvChips
       + histBtn
       + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
   }

@@ -242,6 +242,19 @@ PICK_HIST_MIN_DAYS = 5
 PICK_HIST_PP_TO_PTS = 0.3
 PICK_HIST_MAX_ADJ = 6.0
 PICK_MAX_ITEMS = 6
+# Chip-peak / daily-volume context (prior-day bars only). Offline audit on
+# 2026-09 buys: entry 5–15% above chip average cost or on ≥80% profit chips
+# ran ~7–11pp below the base 3-day win rate; a quiet prior day ran ~+7–11pp;
+# 3-day volume fade ~-10pp. Rule points stay small; history nudges on top.
+CV_CHIP_WINDOW = 120
+CV_CHIP_MIN_BARS = 60
+CV_CHIP_BINS = 200
+CV_FETCH_CONCURRENCY = 4
+CV_TICK_TIMEOUT_S = 6.0
+PICK_CV_CHIP_HIGH_PTS = -5.0
+PICK_CV_VOL_SHRINK_PTS = 3.0
+PICK_CV_VOL_SPIKE_PTS = -3.0
+PICK_CV_VOL_FADE_PTS = -3.0
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8

@@ -11,6 +11,10 @@ from typing import Any
 
 from market_desk.config import (
     PICK_BASE_SCORE,
+    PICK_CV_CHIP_HIGH_PTS,
+    PICK_CV_VOL_FADE_PTS,
+    PICK_CV_VOL_SHRINK_PTS,
+    PICK_CV_VOL_SPIKE_PTS,
     PICK_HIST_MAX_ADJ,
     PICK_HIST_MIN_DAYS,
     PICK_HIST_MIN_N,
@@ -77,6 +81,11 @@ def history_buckets(row: dict[str, Any], *, live: bool) -> dict[str, str]:
         if fails is not None:
             out["gate"] = "fail" if fails else "clean"
         out["ready"] = "1" if int(row.get("ready") or 0) else "0"
+    cv = row.get("cv") if live else payload.get("cv")
+    if isinstance(cv, dict):
+        for key in ("chip_pos", "vol1", "vol3"):
+            if cv.get(key):
+                out[key] = str(cv[key])
     return out
 
 
@@ -169,6 +178,38 @@ def _position_factor(row: dict[str, Any]) -> dict[str, Any] | None:
     return _factor("pos", "买点位置", 0, "略高于计划价（<1%）")
 
 
+def _cv_factors(
+    row: dict[str, Any], buckets: dict[str, str], stats: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Score chip position and prior-day volume from the row's ``cv`` context."""
+    cv = row.get("cv") if isinstance(row.get("cv"), dict) else {}
+    out: list[dict[str, Any]] = []
+    chip = buckets.get("chip_pos")
+    if chip:
+        profit, vc = num(cv.get("profit")), num(cv.get("vs_cost"))
+        text = f"获利盘 {profit:.0f}%，距平均成本 {vc:+.1f}%" if profit is not None and vc is not None else "筹码位置"
+        adj, note = _hist_adj("chip_pos", chip, stats)
+        if chip == "high":
+            out.append(_factor("chip", "筹码位置", float(PICK_CV_CHIP_HIGH_PTS) + adj, text + "，位置偏高", note))
+        else:
+            out.append(_factor("chip", "筹码位置", adj, text, note))
+    vol1 = buckets.get("vol1")
+    vr = num(cv.get("vr_prev"))
+    if vol1 == "shrink":
+        adj, note = _hist_adj("vol1", vol1, stats)
+        out.append(_factor("vol1", "昨日量能", float(PICK_CV_VOL_SHRINK_PTS) + adj, f"昨缩量（量比 {vr}）", note))
+    elif vol1 == "spike":
+        adj, note = _hist_adj("vol1", vol1, stats)
+        out.append(_factor("vol1", "昨日量能", float(PICK_CV_VOL_SPIKE_PTS) + adj, f"昨巨量（量比 {vr}）", note))
+    if buckets.get("vol3") == "fade":
+        adj, note = _hist_adj("vol3", "fade", stats)
+        out.append(_factor(
+            "vol3", "量能趋势", float(PICK_CV_VOL_FADE_PTS) + adj,
+            f"近 3 日连续缩量（{cv.get('vol_trend3')} 倍）", note,
+        ))
+    return out
+
+
 def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     """Score one candidate row; return total, grade and per-factor breakdown."""
     factors: list[dict[str, Any]] = []
@@ -240,6 +281,8 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
 
     if row.get("ma_fan"):
         factors.append(_factor("mafan", "均线", 5, "均线粘连后向上发散"))
+
+    factors.extend(_cv_factors(row, buckets, stats))
 
     total = float(PICK_BASE_SCORE) + sum(float(f["points"]) for f in factors)
     score = int(round(max(0.0, min(100.0, total))))

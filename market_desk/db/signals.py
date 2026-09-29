@@ -71,6 +71,9 @@ def upsert_signal(row: dict[str, Any]) -> None:
             pass
         if old_payload.get("source_board") and not incoming.get("source_board"):
             merged["source_board"] = old_payload.get("source_board")
+        # Chip / volume context is signal-time evidence: first capture wins.
+        if isinstance(old_payload.get("cv"), dict):
+            merged["cv"] = old_payload["cv"]
 
         # Gate evolution: keep first_ready / fail history across same-day upserts.
         ready_now = 1 if row.get("ready") else 0

@@ -637,6 +637,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "vs_source": (origin_cmp or {}).get("vs_mainline"),
                         "source_match": (origin_cmp or {}).get("match"),
                         "context": trade_ctx or None,
+                        "cv": item.get("cv") if isinstance(item.get("cv"), dict) else None,
                     },
                 }
             )
@@ -3645,6 +3646,12 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         item["role_label"] = payload.get("role_label")
     if not isinstance(item.get("minute"), dict) and isinstance(payload.get("minute"), dict):
         item["minute"] = payload.get("minute")
+    if not isinstance(item.get("cv"), dict) and isinstance(payload.get("cv"), dict):
+        item["cv"] = payload.get("cv")
+    if isinstance(item.get("cv"), dict) and "cv_tags" not in item:
+        from market_desk.chip_volume import cv_tags
+
+        item["cv_tags"] = cv_tags(item["cv"])
     return item
 
 

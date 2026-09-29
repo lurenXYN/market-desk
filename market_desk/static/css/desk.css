@@ -2052,6 +2052,8 @@ th { color: var(--muted); font-weight: 600; }
 .rev-session ul { margin: 4px 0 0; padding-left: 18px; }
 .rev-session .meta { margin-top: 4px; }
 .rev-chip.pm-weak { border-color: #5b4a2a; color: #fbbf24; background: #1a1508; }
+.rev-chip.cv-warn { border-color: #5a3a2a; color: #fdba74; background: #1a120c; }
+.rev-chip.cv-good { border-color: #14532d; color: #86efac; background: #0c1a12; }
 .rev-pick { margin: 8px 0; }
 .rev-pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .rev-pick-bar input {

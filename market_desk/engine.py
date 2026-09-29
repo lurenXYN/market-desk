@@ -1815,6 +1815,7 @@ class DeskEngine:
         Review rows keep their plan price, source and gates; manual codes are
         scored on live quote, daily trend, board fit and stock traits only.
         """
+        from market_desk.chip_volume import bars_before_many, build_cv
         from market_desk.config import PICK_MAX_ITEMS
         from market_desk.db import load_signal, load_signals
         from market_desk.ma_fan import enrich_signals_with_ma_fan
@@ -1883,17 +1884,24 @@ class DeskEngine:
                         return {}
                     return await fetch_holder_stats_many(client, stock_codes)
 
+                async def _cv_bars() -> dict[str, list[dict[str, Any]]]:
+                    if not stock_codes:
+                        return {}
+                    return await bars_before_many(client, stock_codes, today)
+
                 results = await asyncio.gather(
                     fetch_quotes(client, all_codes),
                     _trends(),
                     _zt(),
                     _holders(),
+                    _cv_bars(),
                     return_exceptions=True,
                 )
-                quotes, trends, zt_map, holders = [
+                quotes, trends, zt_map, holders, cv_bars = [
                     r if isinstance(r, dict) else {} for r in results
                 ]
         except Exception:
+            cv_bars = {}
             log.exception("pick score enrich failed")
         for r in rows:
             q = quotes.get(str(r["code"])) or {}
@@ -1917,6 +1925,13 @@ class DeskEngine:
             rows = enrich_signals_with_ma_fan(rows, today)
         except Exception:
             pass
+        for r in rows:
+            stored_today = isinstance(r.get("cv"), dict) and str(r.get("trade_date") or "")[:10] == today
+            bars = cv_bars.get(str(r["code"]))
+            if stored_today or not bars:
+                continue
+            price = num(r.get("plan_price")) or num(r.get("price")) or num(r.get("live_last"))
+            r["cv"] = build_cv(bars, price)
         try:
             history = load_signals(limit=800)
         except Exception:
@@ -2421,6 +2436,39 @@ class DeskEngine:
                 if item.get("wait_price") is not None:
                     item["buy_price"] = item.get("wait_price")
             verdict["independent_recommend"]["buy"] = False
+        await self._attach_recommend_cv(client, verdict, trade_date)
+
+    async def _attach_recommend_cv(
+        self,
+        client: httpx.AsyncClient,
+        verdict: dict[str, Any],
+        trade_date: str,
+    ) -> None:
+        """Attach prior-day chip / volume context to recommended stocks (time-boxed, soft)."""
+        from market_desk.chip_volume import attach_cv
+        from market_desk.config import CV_TICK_TIMEOUT_S
+
+        items = [
+            it
+            for key in (
+                "recommend",
+                "side_recommend",
+                "link_recommend",
+                "dragon_recommend",
+                "independent_recommend",
+                "watch_trial_recommend",
+            )
+            for it in ((verdict.get(key) or {}).get("items") or [])
+            if isinstance(it, dict)
+        ]
+        if not items:
+            return
+        try:
+            await asyncio.wait_for(
+                attach_cv(client, items, trade_date), timeout=float(CV_TICK_TIMEOUT_S)
+            )
+        except Exception as exc:
+            log.debug("recommend chip/volume context skipped: %r", exc)
 
     async def _filter_stock_recommends_by_zt_ytd(
         self,
