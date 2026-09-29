@@ -242,6 +242,9 @@ PICK_HIST_MIN_DAYS = 5
 PICK_HIST_PP_TO_PTS = 0.3
 PICK_HIST_MAX_ADJ = 6.0
 PICK_MAX_ITEMS = 6
+# Lifecycle boards frozen from the last close but missing from today's hot list:
+# fetch at most this many separately per tick so their cards show live data.
+LIFECYCLE_SIDE_MAX = 8
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
 SELL_OPEN_WATCH_MINUTES = 15
 # Soft: during open watch, "must" stop that only barely lost open may wait (false break).

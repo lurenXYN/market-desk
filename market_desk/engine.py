@@ -960,6 +960,18 @@ class DeskEngine:
                     )
                 except Exception:
                     log.exception("attach_switch_guard failed")
+                lc_hist = ctx.get("hist") if isinstance(ctx, dict) else None
+                lifecycle = _stable_mainline_lifecycle(hot_cards, pin_cards, lc_hist, now=now)
+                side_window = is_trading_day(now) and 9 * 60 + 25 <= _minutes(now) < 15 * 60
+                if lifecycle.get("mode") == "frozen" and side_window:
+                    try:
+                        side = await self._lifecycle_side_cards(client, boards, lifecycle, ctx)
+                        if side:
+                            lifecycle = _stable_mainline_lifecycle(
+                                hot_cards, pin_cards, lc_hist, now=now, side_live=side
+                            )
+                    except Exception:
+                        log.exception("lifecycle side boards failed")
                 payload = {
                     "ok": True,
                     "error": None,
@@ -1029,12 +1041,7 @@ class DeskEngine:
                     "desk_gate_summary": desk_gate_summary,
                     "session_segments": segments,
                     "mainline_switches": switches,
-                    "mainline_lifecycle": _stable_mainline_lifecycle(
-                        hot_cards,
-                        pin_cards,
-                        ctx.get("hist") if isinstance(ctx, dict) else None,
-                        now=now,
-                    ),
+                    "mainline_lifecycle": lifecycle,
                     # Multi-user: shared snap never carries personal books.
                     "positions": [],
                     "position_summary": position_summary([]),
@@ -3195,6 +3202,65 @@ class DeskEngine:
         enriched = await _map_capped(_one, picked, limit=3)
         return [card for card in enriched if card]
 
+    async def _lifecycle_side_cards(
+        self,
+        client: httpx.AsyncClient,
+        boards: list[dict[str, Any]],
+        lifecycle: dict[str, Any],
+        ctx: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Enrich frozen lifecycle boards absent from today's hot list, keyed by ``bk``.
+
+        Looks each board up in this tick's universe first, then in the cached
+        Sina full list; boards found nowhere keep their last-close row.
+        """
+        from market_desk import board_fallback
+        from market_desk.config import LIFECYCLE_SIDE_MAX
+
+        off = [
+            r
+            for col in ("starting", "ongoing", "ending")
+            for r in (lifecycle.get(col) or [])
+            if r.get("off_hot") and r.get("bk")
+        ][: int(LIFECYCLE_SIDE_MAX)]
+        if not off:
+            return {}
+
+        def _index(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+            by_bk = {str(b.get("bk") or "").upper(): b for b in rows if b.get("bk")}
+            by_name = {str(b.get("name") or ""): b for b in rows if b.get("name")}
+            return by_bk, by_name
+
+        by_bk, by_name = _index(boards)
+        picks: list[tuple[str, dict[str, Any] | None, str]] = []
+        for r in off:
+            bk, name = str(r["bk"]), str(r.get("name") or "")
+            picks.append((bk, by_bk.get(bk.upper()) or by_name.get(name), name))
+        if any(match is None for _, match, _ in picks):
+            try:
+                sina_bk, sina_name = _index(await board_fallback.fetch_hot_boards_sina(client))
+                picks = [
+                    (bk, match or sina_bk.get(bk.upper()) or sina_name.get(name), name)
+                    for bk, match, name in picks
+                ]
+            except Exception as exc:
+                log.debug("lifecycle side boards: sina list failed: %r", exc)
+
+        async def _one(pick: tuple[str, dict[str, Any] | None, str]) -> dict[str, Any] | None:
+            bk, match, _name = pick
+            if match is None:
+                return None
+            try:
+                card = await _enrich_board(client, dict(match, bk=bk), ctx)
+            except Exception as exc:
+                log.debug("lifecycle side board %s enrich failed: %r", bk, exc)
+                return None
+            # No members means zt counts would read 0; keep the last-close row instead.
+            return card if card and card.get("pool") else None
+
+        cards = await _map_capped(_one, picks, limit=3)
+        return {str(c["bk"]): c for c in cards if c and c.get("bk")}
+
     async def _ice_cards(
         self,
         client: httpx.AsyncClient,
@@ -3504,11 +3570,13 @@ def _stable_mainline_lifecycle(
     hist_map: dict[str, list[dict[str, Any]]] | None,
     *,
     now: datetime,
+    side_live: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the lifecycle panel so columns change at most once per trading day.
 
     After the close the live classification is final and stored as
-    ``lifecycle_close:{date}``; before that the previous close is reused.
+    ``lifecycle_close:{date}``; before that the previous close is reused and
+    ``side_live`` cards refresh frozen boards missing from today's hot list.
     """
     from market_desk.db import load_setting, save_setting
 
@@ -3536,6 +3604,7 @@ def _stable_mainline_lifecycle(
         hist_map=hist_map or {},
         frozen=frozen,
         final=False,
+        side_live=side_live,
     )
 
 

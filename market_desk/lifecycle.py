@@ -28,6 +28,7 @@ def build_mainline_lifecycle(
     hist_map: dict[str, list[dict[str, Any]]] | None = None,
     frozen: dict[str, str] | None = None,
     final: bool = True,
+    side_live: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Classify watched boards into starting / ongoing / ending buckets.
 
@@ -40,6 +41,10 @@ def build_mainline_lifecycle(
       last close) or, when missing, from closed-day ``hist_map`` rows only.
       Live cards only decorate the rows (``live_hint``) and feed ``fresh``
       (intraday ignitions not yet counted).
+
+    ``side_live`` holds cards fetched separately for frozen boards that fell out
+    of today's hot list (keyed by ``bk``); they refresh those rows only and
+    never feed ``fresh``. Rows still without live data are flagged ``off_hot``.
 
     Thresholds soften when recent review hit-rate is weak.
     """
@@ -71,17 +76,28 @@ def build_mainline_lifecycle(
             if not stage:
                 continue
             card = live.get(bk)
+            side = (side_live or {}).get(bk) if card is None else None
             if card is not None:
                 row = _compact(card, stage, bias=bias)
                 live_stage = classify_lifecycle(card, bias=bias)
                 if live_stage != stage:
                     row["live_stage"] = live_stage or ""
                     row["live_hint"] = _live_hint(live_stage)
+            elif side is not None:
+                row = _compact(side, stage, bias=bias)
+                row["off_hot"] = True
+                live_stage = classify_lifecycle(side, bias=bias)
+                hint = "今日未进热门 · 盘中实时"
+                if live_stage != stage:
+                    row["live_stage"] = live_stage or ""
+                    hint += " · " + _live_hint(live_stage)
+                row["live_hint"] = hint
             else:
                 series = closed.get(bk) or []
                 if not series:
                     continue
                 row = _compact(_card_from_closed(series), stage, bias=bias)
+                row["off_hot"] = True
                 row["live_hint"] = "今日未进热门 · 数据为上一收盘"
             pool.append(row)
         for bk, card in live.items():
