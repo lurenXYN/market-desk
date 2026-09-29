@@ -16,6 +16,108 @@ function pickScoreClass(grade) {
   return ({ 优先: "g-hi", 可以考虑: "g-mid", 谨慎: "g-lo", 放弃: "g-drop" })[grade] || "g-mid";
 }
 
+function pickFactorsHtml(factors) {
+  return (factors || []).map((f) => {
+    const p = Number(f.points || 0);
+    const cls = p > 0 ? "plus" : (p < 0 ? "minus" : "");
+    const hist = f.hist ? `<span class="hist">${escAttr(f.hist)}</span>` : "";
+    return `<li><span class="pts ${cls}">${p > 0 ? "+" : ""}${p}</span>`
+      + `<span><b>${escAttr(f.label)}</b> ${escAttr(f.detail)}${hist}</span></li>`;
+  }).join("") || `<li class="meta">没有可比的加减分项</li>`;
+}
+
+function revTopPicksHtml(viewDate, isToday) {
+  if (revScores.day !== viewDate || !(revScores.top || []).length) return "";
+  const lab = isToday ? "今日高分" : "当日高分（信号时）";
+  const links = revScores.top.map((t) =>
+    `<button type="button" class="rev-top-pick ${pickScoreClass(t.grade)}" data-id="${escAttr(String(t.id))}">${escAttr(t.name || t.code)} <b>${t.score}</b></button>`
+  ).join("");
+  return `<div class="rev-top-picks"><span class="lab">${lab}</span>${links}</div>`;
+}
+
+async function loadReviewScores(date) {
+  const want = String(date || "").trim();
+  const seq = ++reviewScoreSeq;
+  if (revScores.day !== want) revScores = { day: want, live: false, items: {}, top: [], loading: true };
+  else revScores.loading = true;
+  try {
+    const r = await fetch("/api/review/scores" + (want ? "?date=" + encodeURIComponent(want) : ""));
+    const d = await r.json();
+    if (seq !== reviewScoreSeq || !d || !d.ok) return;
+    revScores = {
+      day: d.trade_date || want,
+      live: !!d.live,
+      items: d.items || {},
+      top: d.top || [],
+      loading: false,
+      scored_at: d.scored_at || "",
+      history_n: d.history_n || 0,
+      base_win3: d.base_win3,
+    };
+  } catch (e) {
+    if (seq !== reviewScoreSeq) return;
+  } finally {
+    if (seq === reviewScoreSeq) {
+      revScores.loading = false;
+      if (lastReview && (lastReview.signals || []).length) paintReview(lastReview);
+    }
+  }
+}
+
+function closeScorePop() {
+  const pop = document.getElementById("revScorePop");
+  if (pop) pop.remove();
+}
+
+function showScorePop(anchor, id) {
+  closeScorePop();
+  const it = revScores.items[String(id)];
+  if (!it) return;
+  const pop = document.createElement("div");
+  pop.id = "revScorePop";
+  pop.className = "rev-score-pop";
+  const when = revScores.live
+    ? `实时打分 ${escAttr(it.at || revScores.scored_at || "")}`
+    : `信号当时打分 ${escAttr(it.at || "")}`;
+  const first = it.first && it.first.score != null
+    ? ` · 首次 ${it.first.score} 分（${escAttr(it.first.at || "")}）`
+    : "";
+  const base = revScores.base_win3 == null ? "" : `，整体三日胜率 ${revScores.base_win3}%`;
+  pop.innerHTML = `<div class="hd"><span><b>${escAttr(it.name || it.code || "")}</b> <span class="meta">${escAttr(it.code || "")}</span></span>`
+    + `<span class="score ${pickScoreClass(it.grade)}">${it.score}</span></div>`
+    + `<div class="meta">${escAttr(it.grade || "")} · ${when}${first}</div>`
+    + `<ul>${pickFactorsHtml(it.factors)}</ul>`
+    + `<div class="meta">基础分 60，按上面各项加减后截到 0–100；≥75 优先、60–74 可以考虑、45–59 谨慎、&lt;45 放弃。`
+    + (revScores.live ? `历史微调参考近 ${revScores.history_n || 0} 条已打分买点${base}。` : "")
+    + `只作参考，不改信号。<button type="button" class="q" data-term="纠结对比">规则</button></div>`;
+  document.body.appendChild(pop);
+  const rc = anchor.getBoundingClientRect();
+  const w = pop.offsetWidth;
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8, rc.left + window.scrollX));
+  pop.style.left = left + "px";
+  pop.style.top = (rc.bottom + window.scrollY + 4) + "px";
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".rev-score-btn, .rev-top-pick");
+  if (btn) {
+    ev.stopPropagation();
+    const open = document.getElementById("revScorePop");
+    if (open && open.dataset.id === btn.getAttribute("data-id")) {
+      closeScorePop();
+      return;
+    }
+    showScorePop(btn, btn.getAttribute("data-id"));
+    const pop = document.getElementById("revScorePop");
+    if (pop) pop.dataset.id = btn.getAttribute("data-id") || "";
+    return;
+  }
+  if (!ev.target.closest("#revScorePop")) closeScorePop();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeScorePop();
+});
+
 function paintPickResult(d) {
   const out = document.getElementById("revPickOut");
   if (!out) return;
@@ -28,13 +130,7 @@ function paintPickResult(d) {
     const pct = it.live_pct == null ? "" : ` ${(it.live_pct > 0 ? "+" : "") + Number(it.live_pct).toFixed(2)}%`;
     const px = it.live_last == null ? "" : `现价 ${it.live_last}${pct}`;
     const plan = it.price == null ? "" : ` · 计划 ${it.price}`;
-    const rows = (it.factors || []).map((f) => {
-      const p = Number(f.points || 0);
-      const cls = p > 0 ? "plus" : (p < 0 ? "minus" : "");
-      const hist = f.hist ? `<span class="hist">${escAttr(f.hist)}</span>` : "";
-      return `<li><span class="pts ${cls}">${p > 0 ? "+" : ""}${p}</span>`
-        + `<span><b>${escAttr(f.label)}</b> ${escAttr(f.detail)}${hist}</span></li>`;
-    }).join("") || `<li class="meta">没有可比的加减分项</li>`;
+    const rows = pickFactorsHtml(it.factors);
     return `<div class="rev-pick-card${i === 0 ? " top" : ""}">`
       + `<div class="hd"><span><b>${escAttr(it.name || it.code)}</b> <span class="meta">${escAttr(it.code || "")} · ${escAttr(it.source_label || "")}</span></span>`
       + `<span class="score ${pickScoreClass(it.grade)}">${it.score}</span></div>`

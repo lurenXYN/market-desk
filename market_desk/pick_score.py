@@ -275,9 +275,9 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     chg = num(row.get("holder_chg_pct"))
     if chg is not None:
         if chg <= -5:
-            factors.append(_factor("holder", "筹码", 4, f"股东户数 {chg:.1f}%，筹码集中"))
+            factors.append(_factor("holder", "股东户数", 4, f"环比 {chg:.1f}%，筹码集中"))
         elif chg >= 10:
-            factors.append(_factor("holder", "筹码", -4, f"股东户数 +{chg:.1f}%，筹码分散"))
+            factors.append(_factor("holder", "股东户数", -4, f"环比 +{chg:.1f}%，筹码分散"))
 
     if row.get("ma_fan"):
         factors.append(_factor("mafan", "均线", 5, "均线粘连后向上发散"))
@@ -309,6 +309,25 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
         "factors": factors,
         "waiting": bool(pos and pos["key"] == "pos" and "等回踩" in pos["detail"]),
     }
+
+
+def pick_top(items: dict[str, dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    """Return the best-scored codes (one row per code, score ≥ 60), highest first."""
+    best: dict[str, dict[str, Any]] = {}
+    for sid, it in (items or {}).items():
+        code = str(it.get("code") or "")
+        score = it.get("score")
+        if not code or score is None or int(score) < 60:
+            continue
+        if code not in best or int(score) > int(best[code]["score"]):
+            best[code] = {
+                "id": sid,
+                "code": code,
+                "name": it.get("name") or code,
+                "score": int(score),
+                "grade": it.get("grade"),
+            }
+    return sorted(best.values(), key=lambda x: (-x["score"], x["code"]))[:limit]
 
 
 def rank_picks(rows: list[dict[str, Any]], history: list[dict[str, Any]] | None) -> dict[str, Any]:

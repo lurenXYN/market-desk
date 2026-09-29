@@ -104,6 +104,16 @@ async def review_zt_ytd(
     return await engine.build_review_zt_ytd(view_date=date)
 
 
+@router.get("/api/review/scores")
+async def review_scores(
+    date: str | None = Query(default=None),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return per-row pick scores for the review day's buy signals (display only)."""
+    del user
+    return await engine.build_review_scores(view_date=date)
+
+
 @router.get("/api/review/trends")
 async def review_trends(
     date: str | None = Query(default=None),

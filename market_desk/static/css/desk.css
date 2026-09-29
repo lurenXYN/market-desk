@@ -2082,6 +2082,41 @@ th { color: var(--muted); font-weight: 600; }
 .rev-pick-card li .pts.plus { color: var(--up); }
 .rev-pick-card li .pts.minus { color: var(--down, #38bdf8); }
 .rev-pick-card li .hist { display: block; color: var(--muted); font-size: 11px; }
+.rev-score-btn {
+  display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: #111827;
+  color: var(--text); cursor: pointer; white-space: nowrap; font: inherit;
+}
+.rev-score-btn b { font-size: 14px; }
+.rev-score-btn small { font-size: 11px; color: var(--muted); }
+.rev-score-btn.g-hi { border-color: #14532d; }
+.rev-score-btn.g-hi b { color: #86efac; }
+.rev-score-btn.g-lo b { color: #fbbf24; }
+.rev-score-btn.g-drop b { color: var(--muted); }
+.rev-top-picks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.rev-top-picks .lab { margin-right: 2px; }
+.rev-top-pick {
+  padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: #111827; color: var(--text); cursor: pointer; font: inherit;
+}
+.rev-top-pick.g-hi { border-color: #14532d; }
+.rev-top-pick.g-hi b { color: #86efac; }
+.rev-score-pop {
+  position: absolute; z-index: 60; width: min(360px, calc(100vw - 16px));
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: #0e141c; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); font-size: 13px;
+}
+.rev-score-pop .hd { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.rev-score-pop .score { font-size: 22px; font-weight: 700; }
+.rev-score-pop .score.g-hi { color: #86efac; }
+.rev-score-pop .score.g-lo { color: #fbbf24; }
+.rev-score-pop .score.g-drop { color: var(--muted); }
+.rev-score-pop ul { margin: 6px 0; padding: 0; list-style: none; }
+.rev-score-pop li { display: flex; gap: 6px; margin: 2px 0; line-height: 1.4; }
+.rev-score-pop li .pts { min-width: 3.2em; text-align: right; font-weight: 700; }
+.rev-score-pop li .pts.plus { color: var(--up); }
+.rev-score-pop li .pts.minus { color: var(--down, #38bdf8); }
+.rev-score-pop li .hist { display: block; color: var(--muted); font-size: 11px; }
 .rev-missed li { margin: 2px 0; }
 .risk-tips { margin-top: 6px; color: var(--warn); font-size: 12px; line-height: 1.45; }
 .similar-box {

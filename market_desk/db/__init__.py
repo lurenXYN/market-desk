@@ -101,6 +101,7 @@ from market_desk.db.positions import (  # noqa: F401
 )
 from market_desk.db.signals import (  # noqa: F401
     upsert_signal,
+    set_signal_payload_once,
     load_signal,
     _SIGNAL_SELECT,
     _decode_signal_rows,

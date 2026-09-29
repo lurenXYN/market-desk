@@ -242,6 +242,11 @@ PICK_HIST_MIN_DAYS = 5
 PICK_HIST_PP_TO_PTS = 0.3
 PICK_HIST_MAX_ADJ = 6.0
 PICK_MAX_ITEMS = 6
+# Review score column: today's rows are re-scored at most this often; during the
+# session a background pass runs every REVIEW_SCORE_BG_SEC so the first score
+# (payload.pick0, shown on past days) is captured close to signal time.
+REVIEW_SCORE_CACHE_SEC = 45.0
+REVIEW_SCORE_BG_SEC = 180.0
 # Chip-peak / daily-volume context (prior-day bars only). Offline audit on
 # 2026-09 buys: entry 5–15% above chip average cost or on ≥80% profit chips
 # ran ~7–11pp below the base 3-day win rate; a quiet prior day ran ~+7–11pp;

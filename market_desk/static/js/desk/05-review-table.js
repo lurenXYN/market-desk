@@ -51,6 +51,7 @@ const REV_COL_CATALOG = [
   { id: "date", label: "信号时间" },
   { id: "type", label: "类型" },
   { id: "name", label: "名称" },
+  { id: "score", label: "打分" },
   { id: "code", label: "代码" },
   { id: "price", label: "建议价" },
   { id: "fill", label: "成交" },
@@ -71,6 +72,9 @@ const REV_COL_CATALOG = [
 const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({ id: c.id, on: true }));
 // Review signal ids ticked for 纠结对比; survives table repaints / auto-refresh.
 const revPickIds = new Set();
+// Per-row pick scores from /api/review/scores (today live, past days stored at signal time).
+let revScores = { day: "", live: false, items: {}, top: [], loading: false };
+let reviewScoreSeq = 0;
 let revSort = { id: "", dir: 1 }; // dir: 1 asc, -1 desc
 
 function fmtHolderNum(n) {
@@ -99,9 +103,13 @@ function loadRevColState() {
       seen.add(id);
       out.push({ id, on: row.on !== false });
     }
-    for (const c of REV_COL_CATALOG) {
-      if (!seen.has(c.id)) out.push({ id: c.id, on: true });
-    }
+    REV_COL_CATALOG.forEach((c, i) => {
+      if (seen.has(c.id)) return;
+      // New columns land after their catalog predecessor instead of at the end.
+      const prev = i > 0 ? out.findIndex((x) => x.id === REV_COL_CATALOG[i - 1].id) : -1;
+      out.splice(prev >= 0 ? prev + 1 : out.length, 0, { id: c.id, on: true });
+      seen.add(c.id);
+    });
     if (!out.some((x) => x.on)) out[0].on = true;
     return out;
   } catch (e) {
@@ -156,6 +164,10 @@ function revSortValue(r, id) {
   if (id === "holder_chg") return r.holder_chg_pct == null ? null : Number(r.holder_chg_pct);
   if (id === "holder_avg") return r.holder_avg_wan == null ? null : Number(r.holder_avg_wan);
   if (id === "zt_ytd") return r.zt_ytd == null ? null : Number(r.zt_ytd);
+  if (id === "score") {
+    const it = revScores.items[String(r.id)];
+    return it && it.score != null ? Number(it.score) : null;
+  }
   return "";
 }
 function applyRevSort(rows) {
@@ -363,6 +375,15 @@ function revCellHtml(col, r, ctx) {
       + histBtn
       + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
   }
+  if (col === "score") {
+    const st = String(r.signal_type || "");
+    if (!(st === "buy" || st.startsWith("buy_"))) return "";
+    const it = revScores.items[String(r.id)];
+    if (!it) return revScores.loading ? `<span class="meta">…</span>` : `<span class="meta">—</span>`;
+    const tip = revScores.live ? "实时打分，点开看每项加减" : "信号当时的打分，点开看每项加减";
+    return `<button type="button" class="rev-score-btn ${pickScoreClass(it.grade)}" data-id="${escAttr(String(r.id))}" title="${tip}">`
+      + `<b>${it.score}</b><small>${escAttr(it.grade || "")}</small></button>`;
+  }
   if (col === "code") return r.code || "";
   if (col === "price") return `${r.price ?? "—"}${ctx.devHtml}`;
   if (col === "fill") {
@@ -522,6 +543,7 @@ function paintReview(payload) {
     tcell("价带内", today.in_band_n ?? 0, "up"),
     tcell("已交易/未交易", `${today.traded_n ?? 0} / ${today.skipped_n ?? 0}`),
     tcell("主线切换", today.switch_n ?? 0),
+    revTopPicksHtml(viewDate, isToday),
   ].join("");
   const ex = sum.exec || today.exec || {};
   const by = ex.by_kind || {};

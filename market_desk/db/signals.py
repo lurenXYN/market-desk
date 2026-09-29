@@ -504,6 +504,35 @@ def mark_signal_outcome(signal_id: int, outcome: dict[str, Any]) -> bool:
         return cur.rowcount > 0
 
 
+def set_signal_payload_once(values: dict[int, tuple[str, Any]]) -> int:
+    """Write ``payload[key] = value`` per signal id only where the key is still absent.
+
+    Returns how many signals were updated.
+    """
+    if not values:
+        return 0
+    n = 0
+    with _connect() as conn:
+        for sid, (key, value) in values.items():
+            row = conn.execute("SELECT payload FROM signals WHERE id = ?", (int(sid),)).fetchone()
+            if not row:
+                continue
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict) or payload.get(key) is not None:
+                continue
+            payload[key] = value
+            conn.execute(
+                "UPDATE signals SET payload = ? WHERE id = ?",
+                (json.dumps(payload, ensure_ascii=False), int(sid)),
+            )
+            n += 1
+        conn.commit()
+    return n
+
+
 def update_signal_meta(
     signal_id: int,
     *,

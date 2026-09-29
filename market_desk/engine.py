@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from datetime import timedelta as _timedelta
 from typing import Any
@@ -1118,6 +1119,7 @@ class DeskEngine:
                 except Exception:
                     log.exception("signal record failed")
                 self.snapshot = payload
+                self._maybe_capture_pick_scores(now)
                 try:
                     self._push_personal_sells(now)
                 except Exception:
@@ -1815,20 +1817,10 @@ class DeskEngine:
         Review rows keep their plan price, source and gates; manual codes are
         scored on live quote, daily trend, board fit and stock traits only.
         """
-        from market_desk.chip_volume import bars_before_many, build_cv
         from market_desk.config import PICK_MAX_ITEMS
         from market_desk.db import load_signal, load_signals
-        from market_desk.ma_fan import enrich_signals_with_ma_fan
         from market_desk.pick_score import rank_picks
-        from market_desk.review import (
-            _flatten_signal_prices,
-            enrich_signals_with_boards,
-            enrich_signals_with_holders,
-            enrich_signals_with_live_marks,
-            enrich_signals_with_trends,
-            mark_pm_weak_signals,
-        )
-        from market_desk.zt_stats import enrich_signals_with_zt_ytd
+        from market_desk.review import _flatten_signal_prices
 
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         rows: list[dict[str, Any]] = []
@@ -1858,8 +1850,32 @@ class DeskEngine:
         rows = rows[: int(PICK_MAX_ITEMS)]
         if not rows:
             return {"ok": False, "error": "请至少选择一只票", "items": []}
-        all_codes = [str(r["code"]) for r in rows]
-        stock_codes = [str(r["code"]) for r in rows if r.get("kind") != "etf"]
+        rows = await self._enrich_pick_rows(rows, today)
+        try:
+            history = load_signals(limit=800)
+        except Exception:
+            history = []
+        out = rank_picks(rows, history)
+        out["scored_at"] = datetime.now(CN_TZ).strftime("%H:%M:%S")
+        return out
+
+    async def _enrich_pick_rows(
+        self, rows: list[dict[str, Any]], today: str
+    ) -> list[dict[str, Any]]:
+        """Attach live quote, trend, board fit, holders, zt count, ma-fan and cv for scoring."""
+        from market_desk.chip_volume import bars_before_many, build_cv
+        from market_desk.ma_fan import enrich_signals_with_ma_fan
+        from market_desk.review import (
+            enrich_signals_with_boards,
+            enrich_signals_with_holders,
+            enrich_signals_with_live_marks,
+            enrich_signals_with_trends,
+            mark_pm_weak_signals,
+        )
+        from market_desk.zt_stats import enrich_signals_with_zt_ytd
+
+        all_codes = list(dict.fromkeys(str(r["code"]) for r in rows))
+        stock_codes = list(dict.fromkeys(str(r["code"]) for r in rows if r.get("kind") != "etf"))
         names = {str(r["code"]): str(r.get("name") or "") for r in rows}
         quotes: dict[str, dict[str, Any]] = {}
         trends: dict[str, dict[str, Any]] = {}
@@ -1932,13 +1948,114 @@ class DeskEngine:
                 continue
             price = num(r.get("plan_price")) or num(r.get("price")) or num(r.get("live_last"))
             r["cv"] = build_cv(bars, price)
-        try:
-            history = load_signals(limit=800)
-        except Exception:
-            history = []
-        out = rank_picks(rows, history)
-        out["scored_at"] = datetime.now(CN_TZ).strftime("%H:%M:%S")
-        return out
+        return rows
+
+    async def build_review_scores(self, view_date: str | None = None) -> dict[str, Any]:
+        """Per-row pick scores for one review day's buy signals.
+
+        Today is live-scored (briefly cached) and the first score per signal is
+        kept in ``payload.pick0``; past days only show that stored score, since
+        live price factors would be meaningless there.
+        """
+        from market_desk.config import REVIEW_SCORE_CACHE_SEC
+        from market_desk.db import load_signals, load_signals_for_date, set_signal_payload_once
+        from market_desk.pick_score import build_history_stats, pick_top, score_pick
+        from market_desk.review import _flatten_signal_prices, is_buy_signal
+
+        now = datetime.now(CN_TZ)
+        today = now.strftime("%Y-%m-%d")
+        day = str(view_date or today)[:10]
+        raw = [r for r in load_signals_for_date(day) if is_buy_signal(r.get("signal_type"))]
+
+        def _stored(r: dict[str, Any]) -> dict[str, Any] | None:
+            p0 = (r.get("payload") or {}).get("pick0") if isinstance(r.get("payload"), dict) else None
+            return p0 if isinstance(p0, dict) and p0.get("score") is not None else None
+
+        if day != today:
+            items = {
+                str(r["id"]): {**p0, "code": r.get("code"), "name": r.get("name"), "stored": True}
+                for r in raw
+                if (p0 := _stored(r))
+            }
+            return {"ok": True, "trade_date": day, "live": False, "items": items, "top": pick_top(items)}
+
+        key = (day, tuple(sorted(int(r["id"]) for r in raw)))
+        cached = getattr(self, "_review_score_cache", None)
+        if cached and cached[0] == key and time.time() - cached[1] < float(REVIEW_SCORE_CACHE_SEC):
+            return {**cached[2], "cache_hit": True}
+        lock = getattr(self, "_review_score_lock", None)
+        if lock is None:
+            lock = self._review_score_lock = asyncio.Lock()
+        async with lock:
+            cached = getattr(self, "_review_score_cache", None)
+            if cached and cached[0] == key and time.time() - cached[1] < float(REVIEW_SCORE_CACHE_SEC):
+                return {**cached[2], "cache_hit": True}
+            rows = await self._enrich_pick_rows([_flatten_signal_prices(r) for r in raw], today)
+            try:
+                stats = build_history_stats(load_signals(limit=800))
+            except Exception:
+                stats = build_history_stats([])
+            at = datetime.now(CN_TZ).strftime("%H:%M")
+            items: dict[str, dict[str, Any]] = {}
+            fresh: dict[int, tuple[str, Any]] = {}
+            for r in rows:
+                s = score_pick(r, stats)
+                item = {
+                    "code": r.get("code"),
+                    "name": r.get("name"),
+                    "score": s["score"],
+                    "grade": s["grade"],
+                    "factors": s["factors"],
+                    "waiting": s["waiting"],
+                    "at": at,
+                }
+                first = _stored(r)
+                if first:
+                    item["first"] = {"score": first.get("score"), "grade": first.get("grade"), "at": first.get("at")}
+                else:
+                    fresh[int(r["id"])] = (
+                        "pick0",
+                        {k: item[k] for k in ("score", "grade", "factors", "at")},
+                    )
+                items[str(r["id"])] = item
+            if fresh:
+                try:
+                    set_signal_payload_once(fresh)
+                except Exception:
+                    log.exception("store first pick scores failed")
+            out = {
+                "ok": True,
+                "trade_date": day,
+                "live": True,
+                "items": items,
+                "top": pick_top(items),
+                "scored_at": datetime.now(CN_TZ).strftime("%H:%M:%S"),
+                "history_n": stats["n"],
+                "base_win3": stats["base_win3"],
+            }
+            self._review_score_cache = (key, time.time(), out)
+            return out
+
+    def _maybe_capture_pick_scores(self, now: datetime) -> None:
+        """Score today's buys in the background so ``pick0`` lands near signal time."""
+        from market_desk.config import REVIEW_SCORE_BG_SEC
+
+        if not _is_session(now):
+            return
+        task = getattr(self, "_pick_bg_task", None)
+        if task is not None and not task.done():
+            return
+        if time.time() - float(getattr(self, "_pick_bg_at", 0.0)) < float(REVIEW_SCORE_BG_SEC):
+            return
+        self._pick_bg_at = time.time()
+
+        async def _run() -> None:
+            try:
+                await self.build_review_scores()
+            except Exception:
+                log.exception("background pick scores failed")
+
+        self._pick_bg_task = asyncio.create_task(_run())
 
     async def build_review_code_history(
         self,

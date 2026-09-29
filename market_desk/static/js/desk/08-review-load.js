@@ -41,6 +41,7 @@ async function loadReview(force, date, opts) {
     const tSeq = ++reviewTrendSeq;
     loadReviewTrends(day, tSeq, d.trends_fp || "");
     loadReviewZtYtd(day, seq);
+    loadReviewScores(day);
   } catch (e) {
     if (auto) {
       setModStamp("revStamp", reviewRefreshedAt || null, {
