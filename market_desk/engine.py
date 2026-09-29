@@ -181,6 +181,9 @@ class DeskEngine:
         self._review_trend_cache: dict[str, dict[str, Any]] = {}
         # Review payloads: key -> (monotonic_ts, payload)
         self._review_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        # Review daily klines for outcome compare: code -> (monotonic_ts, packed row)
+        self._review_kline_cache: dict[str, tuple[float, Any]] = {}
+        self._review_scored_at: float = 0.0
         self._fund_flow_full_at: float = 0.0
         self._fund_flow_lock = asyncio.Lock()
         # Live marks for all users' position / watchlist codes (not in public snap).
@@ -1466,6 +1469,46 @@ class DeskEngine:
         if ok_n:
             log.info("morning brief push day=%s ok=%s", day_s, ok_n)
 
+    async def _review_klines(
+        self,
+        client: httpx.AsyncClient,
+        codes: list[str],
+        limit: int = 40,
+    ) -> dict[str, Any]:
+        """Return daily klines for review compare, re-fetching only stale codes.
+
+        Entries live for ``REVIEW_HEAVY_REFRESH_SEC``; empty fetches are not cached
+        so a flaky source is retried on the next review build.
+        """
+        import time
+
+        from market_desk.config import REVIEW_HEAVY_REFRESH_SEC
+
+        ttl = float(REVIEW_HEAVY_REFRESH_SEC)
+        now_m = time.monotonic()
+        out: dict[str, Any] = {}
+        want: list[str] = []
+        for raw in codes:
+            code = normalize_code(raw)
+            if not code or code in out or code in want:
+                continue
+            hit = self._review_kline_cache.get(code)
+            if hit and now_m - hit[0] < ttl:
+                out[code] = hit[1]
+            else:
+                want.append(code)
+        if want:
+            fresh = await fetch_daily_klines_many(client, want, limit=limit)
+            for code, packed in (fresh or {}).items():
+                out[code] = packed
+                if packed and packed[0]:
+                    self._review_kline_cache[code] = (now_m, packed)
+        if len(self._review_kline_cache) > 600:
+            self._review_kline_cache = {
+                c: v for c, v in self._review_kline_cache.items() if now_m - v[0] < ttl
+            }
+        return out
+
     async def build_review(
         self,
         limit: int = 180,
@@ -1477,7 +1520,11 @@ class DeskEngine:
         """Score pending historical signals then return one trade-date review payload."""
         import time
 
-        from market_desk.config import OUTCOME_STANDARDS
+        from market_desk.config import (
+            OUTCOME_STANDARDS,
+            REVIEW_HEAVY_REFRESH_SEC,
+            REVIEW_TODAY_CACHE_SEC,
+        )
         from market_desk.settings import setting
 
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
@@ -1490,7 +1537,7 @@ class DeskEngine:
         cache_key = f"{day}|{mode_key}|{limit}|u:{uid_key}|oc:{std}"
         now_m = time.monotonic()
         hit = self._review_cache.get(cache_key)
-        ttl = 45.0 if day == today else 3600.0
+        ttl = float(REVIEW_TODAY_CACHE_SEC) if day == today else 3600.0
         if hit and now_m - hit[0] < ttl:
             cached = dict(hit[1])
             cached["cache_hit"] = True
@@ -1506,11 +1553,17 @@ class DeskEngine:
         from market_desk.review import outcome_is_final
 
         since = (datetime.now(CN_TZ) - timedelta(days=12)).strftime("%Y-%m-%d")
-        pending = [
-            r
-            for r in load_unscored_signals(today, limit=240, labeled_since=since)
-            if not outcome_is_final(r)
-        ][:80]
+        # Outcomes persist to DB, so scoring more often than the heavy cadence adds nothing.
+        run_scoring = now_m - self._review_scored_at >= float(REVIEW_HEAVY_REFRESH_SEC)
+        pending = (
+            [
+                r
+                for r in load_unscored_signals(today, limit=240, labeled_since=since)
+                if not outcome_is_final(r)
+            ][:80]
+            if run_scoring
+            else []
+        )
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
         day_rows: list[dict[str, Any]] = []
@@ -1554,6 +1607,8 @@ class DeskEngine:
                     from market_desk.config import OUTCOME_FORMULA_VERSION
                     from market_desk.db import load_setting, load_signals, save_setting
 
+                    if not run_scoring:
+                        return
                     ver = int(OUTCOME_FORMULA_VERSION)
                     try:
                         cur = int(load_setting("outcome_formula_v") or 0)
@@ -1590,7 +1645,7 @@ class DeskEngine:
                     codes = compare_codes or live_codes
                     if not codes:
                         return {}
-                    return await fetch_daily_klines_many(client, codes, limit=40)
+                    return await self._review_klines(client, codes)
 
                 # zt_ytd / daily-trend chips load async (see /api/review/zt-ytd, /trends).
                 _, _, quotes, holders, packed_overlay = await asyncio.gather(
@@ -1601,6 +1656,8 @@ class DeskEngine:
                     _overlay_klines(),
                 )
                 note_quote_ticks(quotes)
+                if run_scoring:
+                    self._review_scored_at = time.monotonic()
         except Exception:
             log.exception("signal scoring / live marks failed")
         phase = None

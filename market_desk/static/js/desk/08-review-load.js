@@ -1,9 +1,14 @@
-async function loadReview(force, date) {
+const REVIEW_AUTO_MS = 30000;
+let reviewLoadBusy = false;
+
+async function loadReview(force, date, opts) {
   const now = Date.now();
+  const auto = !!(opts && opts.auto);
   const want = (date !== undefined && date !== null)
     ? String(date).trim()
     : (reviewViewDate || "").trim();
   if (!force && date === undefined && now - reviewLoadedAt < 30000) return;
+  reviewLoadBusy = true;
   try {
     const params = new URLSearchParams();
     if (want) params.set("date", want);
@@ -13,7 +18,7 @@ async function loadReview(force, date) {
     reviewOcMode = oc;
     if (oc) params.set("oc", oc);
     const q = params.toString() ? ("?" + params.toString()) : "";
-    setModStamp("revStamp", null, { loading: true, label: "复盘" });
+    if (!auto) setModStamp("revStamp", null, { loading: true, label: "复盘" });
     const r = await fetch("/api/review" + q);
     const d = await r.json();
     const day = d.view_date || (d.summary || {}).view_date || want;
@@ -23,7 +28,8 @@ async function loadReview(force, date) {
     reviewRefreshedAt = new Date().toTimeString().slice(0, 8);
     setModStamp("revStamp", reviewRefreshedAt, {
       label: "复盘",
-      title: d.cache_hit ? "命中复盘缓存" : "复盘主表已刷新",
+      title: (d.cache_hit ? "命中复盘缓存" : "复盘主表已刷新")
+        + "；看今天且盘中时每 30 秒自动刷新",
     });
     if (!d.trends_ready) {
       for (const row of (d.signals || [])) {
@@ -36,12 +42,40 @@ async function loadReview(force, date) {
     loadReviewTrends(day, tSeq, d.trends_fp || "");
     loadReviewZtYtd(day, seq);
   } catch (e) {
+    if (auto) {
+      setModStamp("revStamp", reviewRefreshedAt || null, {
+        stale: true,
+        label: "复盘",
+        title: "自动刷新失败，表格保留上次结果",
+      });
+      return;
+    }
     const n = Math.max(visibleRevCols().length, 1);
     document.getElementById("revBody").innerHTML =
       `<tr><td colspan="${n}" class="meta">复盘加载失败</td></tr>`;
     setModStamp("revStamp", null, { stale: true, label: "复盘" });
+  } finally {
+    reviewLoadBusy = false;
   }
 }
+
+function reviewAutoRefreshBlocked() {
+  if (document.querySelector("#revBody .rev-fill-ed")) return true;
+  const colPanel = document.getElementById("revColPanel");
+  if (colPanel && !colPanel.hidden) return true;
+  const ae = document.activeElement;
+  return !!(ae && ae.closest && ae.closest("#panel-review")
+    && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName));
+}
+
+// Poll cheaply; only reload when today's live review has gone 30s stale.
+setInterval(() => {
+  if (currentMain !== "review" || document.hidden || reviewLoadBusy) return;
+  if (!(lastData && lastData.live) || !isTodayView()) return;
+  if (Date.now() - reviewLoadedAt < REVIEW_AUTO_MS) return;
+  if (reviewAutoRefreshBlocked()) return;
+  loadReview(true, reviewViewDate || "", { auto: true });
+}, 5000);
 
 function shiftReviewDay(delta) {
   const dates = lastReview.dates || (lastReview.summary || {}).dates || [];

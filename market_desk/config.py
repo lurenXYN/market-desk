@@ -227,6 +227,11 @@ OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
 # the live-vs-plan premium that marks a buy row as chasing.
 REVIEW_PM_WEAK_WINDOW = ("13:00", "14:00")
 REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
+# Review payload cache for today (the page auto-refreshes every 30s in session).
+# Daily klines and pending outcome scoring are throttled separately so a fast
+# page cadence only re-pulls the single batched live-quote call.
+REVIEW_TODAY_CACHE_SEC = 25.0
+REVIEW_HEAVY_REFRESH_SEC = 300.0
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
 SELL_OPEN_WATCH_MINUTES = 15
 # Soft: during open watch, "must" stop that only barely lost open may wait (false break).
