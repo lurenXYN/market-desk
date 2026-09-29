@@ -19,6 +19,7 @@ from market_desk.config import (
     PICK_HIST_MIN_DAYS,
     PICK_HIST_MIN_N,
     PICK_HIST_PP_TO_PTS,
+    PICK_PM_WEAK_PTS,
 )
 from market_desk.numbers import num
 
@@ -138,6 +139,8 @@ def _hist_adj(key: str, bucket: str | None, stats: dict[str, Any]) -> tuple[floa
     if base is None or not hit or hit.get("win3") is None:
         return 0.0, ""
     note = f"历史三日胜率 {hit['win3']}%（{hit['n']} 条 / {hit['days']} 天，整体 {base}%）"
+    if float(PICK_HIST_PP_TO_PTS) == 0.0:
+        return 0.0, note + "·仅参考不计分"
     if int(hit["n"]) < int(PICK_HIST_MIN_N) or int(hit["days"]) < int(PICK_HIST_MIN_DAYS):
         return 0.0, note + "·样本少不计"
     raw = (float(hit["win3"]) - float(base)) * float(PICK_HIST_PP_TO_PTS)
@@ -220,20 +223,20 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     if pos:
         factors.append(pos)
 
+    # Trend / board / ready carry no rule points: the 2026-09 audit found their
+    # classic direction reversed on stored pullback buys; only the (optional) history nudge applies.
     trend = buckets.get("trend")
-    rule = {"up": 10.0, "down": -12.0, "flat": 0.0}.get(trend or "", 0.0)
     adj, note = _hist_adj("trend", trend, stats)
     if trend:
         label = {"up": "日线上升", "down": "日线下降", "flat": "日线震荡"}[trend]
-        factors.append(_factor("trend", "日线趋势", rule + adj, label, note))
+        factors.append(_factor("trend", "日线趋势", adj, label, note))
 
     board = buckets.get("board")
     if board:
-        rule = 8.0 if board == "match" else -4.0
         adj, note = _hist_adj("board", board, stats)
         of = str(row.get("vs_mainline_of") or "主线")
         text = f"贴合{of}" if board == "match" else f"偏离{of}"
-        factors.append(_factor("board", "板块", rule + adj, text, note))
+        factors.append(_factor("board", "板块", adj, text, note))
 
     src = buckets.get("source")
     if src:
@@ -242,7 +245,7 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
 
     if buckets.get("pm") == "weak":
         adj, note = _hist_adj("pm", "weak", stats)
-        factors.append(_factor("pm", "出信号时段", -10.0 + adj, "午后弱窗（13:00–14:00）", note))
+        factors.append(_factor("pm", "出信号时段", float(PICK_PM_WEAK_PTS) + adj, "午后弱窗（13:00–14:00）", note))
 
     gate = buckets.get("gate")
     if gate == "fail":
@@ -253,24 +256,15 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
 
     if buckets.get("ready") == "1":
         adj, note = _hist_adj("ready", "1", stats)
-        factors.append(_factor("ready", "可买入", 6.0 + adj, "作战板亮过可买", note))
+        factors.append(_factor("ready", "可买入", adj, "作战板亮过可买", note))
 
     pct = num(row.get("live_pct"))
-    if pct is not None:
-        if pct >= 9.5:
-            factors.append(_factor("pct", "当日涨幅", -12, f"+{pct:.1f}% 接近涨停，难按计划买"))
-        elif pct >= 6:
-            factors.append(_factor("pct", "当日涨幅", -6, f"+{pct:.1f}% 当日已涨多"))
-        elif pct <= -5:
-            factors.append(_factor("pct", "当日涨幅", -6, f"{pct:.1f}% 当日弱势"))
+    if pct is not None and pct >= 9.5:
+        factors.append(_factor("pct", "当日涨幅", -12, f"+{pct:.1f}% 接近涨停，难按计划买"))
 
     zt = row.get("zt_ytd")
-    if kind != "etf" and zt is not None:
-        n = int(zt)
-        if n == 0:
-            factors.append(_factor("zt", "股性", -8, "年内无涨停"))
-        elif n >= 3:
-            factors.append(_factor("zt", "股性", 5, f"年内涨停 {n} 次，股性活跃"))
+    if kind != "etf" and zt is not None and int(zt) == 0:
+        factors.append(_factor("zt", "股性", -4, "年内无涨停"))
 
     chg = num(row.get("holder_chg_pct"))
     if chg is not None:

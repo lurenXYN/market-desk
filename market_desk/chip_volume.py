@@ -248,7 +248,7 @@ def cv_tags(cv: dict[str, Any] | None) -> list[dict[str, str]]:
             "tone": "warn",
             "title": (
                 f"按计划价算，筹码获利盘 {profit}%，高于平均成本 {vc:+.1f}%；"
-                "历史上这类位置三日胜率偏低（获利盘兑现压力），挂计划价不追。"
+                "获利盘多、有兑现压力，挂计划价不追（打分只小幅扣分）。"
             ),
         })
     vol1, vr = cv.get("vol1"), num(cv.get("vr_prev"))
@@ -257,14 +257,14 @@ def cv_tags(cv: dict[str, Any] | None) -> list[dict[str, str]]:
             "k": "vol_shrink",
             "label": "昨缩量",
             "tone": "good",
-            "title": f"前一日量比 {vr}（对前 5 日均量）；缩量休整后的回踩历史上略好。",
+            "title": f"前一日量比 {vr}（对前 5 日均量），缩量休整；仅作提示，不计分。",
         })
     elif vol1 == "spike":
         tags.append({
             "k": "vol_spike",
             "label": "昨巨量",
             "tone": "warn",
-            "title": f"前一日量比 {vr}，巨量后次日分歧概率大，别追高。",
+            "title": f"前一日量比 {vr}，巨量后容易分歧，别追高；仅作提示，不计分。",
         })
     if cv.get("vol3") == "fade":
         tags.append({

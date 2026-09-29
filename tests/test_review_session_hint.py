@@ -35,8 +35,10 @@ def test_above_plan_marks_chase_and_caution():
     r = rows[0]
     assert "above_plan" in r["price_flags"]
     assert r["above_plan_pct"] == 2.0
-    assert "高于计划价 +2.0%" in r["price_mark"]
-    assert "不追" in r["buy_caution"]
+    assert r["price_mark"] == "高于计划价 +2.0%"
+    assert "in_band" in r["price_flags"]
+    assert r["buy_caution"] == "挂计划价，不追"
+    assert "只按计划价挂单" in r["buy_caution_tip"]
 
 
 def test_above_plan_skipped_below_threshold_and_on_chase_hit():
@@ -49,7 +51,8 @@ def test_above_plan_skipped_below_threshold_and_on_chase_hit():
     )[0]
     assert "chase_hit" in capped["price_flags"]
     assert "above_plan" not in capped["price_flags"]
-    assert capped["buy_caution"] == "现价已过不追价，当日不宜追高"
+    assert capped["buy_caution"] == "过不追价，放弃"
+    assert capped["buy_caution_tip"] == "现价已过不追价，当日不宜追高"
 
 
 def test_sell_rows_never_marked_above_plan():

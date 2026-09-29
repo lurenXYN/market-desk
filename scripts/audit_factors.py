@@ -181,15 +181,18 @@ async def fetch_flow(client: httpx.AsyncClient, code: str) -> dict[str, dict[str
     return out
 
 
-async def fetch_all(codes: list[str], refresh: bool) -> dict[str, Any]:
-    """Fetch klines + flow per code, reusing a temp-dir cache between runs."""
+async def fetch_all(codes: list[str], refresh: bool, need_flow: bool = True) -> dict[str, Any]:
+    """Fetch klines (+ flow when ``need_flow``) per code, reusing a temp-dir cache."""
     cache: dict[str, Any] = {}
     if CACHE.exists() and not refresh:
         try:
             cache = json.loads(CACHE.read_text(encoding="utf-8"))
         except Exception:
             cache = {}
-    todo = [c for c in codes if not (cache.get(c) or {}).get("bars") or not (cache.get(c) or {}).get("flow")]
+    todo = [
+        c for c in codes
+        if not (cache.get(c) or {}).get("bars") or (need_flow and not (cache.get(c) or {}).get("flow"))
+    ]
     sem = asyncio.Semaphore(3)
 
     async def one(client: httpx.AsyncClient, code: str) -> None:
@@ -198,9 +201,9 @@ async def fetch_all(codes: list[str], refresh: bool) -> dict[str, Any]:
             for attempt in range(3):
                 if not slot.get("bars"):
                     slot["bars"] = await fetch_klines(client, code)
-                if not slot.get("flow"):
+                if need_flow and not slot.get("flow"):
                     slot["flow"] = await fetch_flow(client, code)
-                if slot.get("bars") and slot.get("flow"):
+                if slot.get("bars") and (slot.get("flow") or not need_flow):
                     break
                 await asyncio.sleep(1.5 * (attempt + 1))
 

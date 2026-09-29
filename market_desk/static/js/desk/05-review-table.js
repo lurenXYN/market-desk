@@ -904,7 +904,7 @@ function paintReview(payload) {
       ? `<div class="${markCls}">${r.price_mark}</div>`
       : "";
     const cautionHtml = r.buy_caution
-      ? `<div class="meta ${markCls}">${r.buy_caution}</div>`
+      ? `<div class="meta ${markCls}" title="${escAttr(r.buy_caution_tip || "")}">${r.buy_caution}</div>`
       : "";
     const liveHtml = r.live_last != null
       ? `<div class="meta">现价 ${r.live_last}${liveArrowHtml(r)}${r.live_pct == null ? "" : " " + ((r.live_pct > 0 ? "+" : "") + Number(r.live_pct).toFixed(2) + "%")}</div>`

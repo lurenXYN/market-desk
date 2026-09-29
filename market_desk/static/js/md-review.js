@@ -185,7 +185,7 @@
       .concat(softs.filter((f) => !String(f).startsWith("分时")));
     if (gates.length) rows.push({ k: "闸门", v: gates.join(" · ") });
     if (r.price_mark) rows.push({ k: "价带", v: String(r.price_mark) });
-    if (r.buy_caution) rows.push({ k: "当日", v: String(r.buy_caution) });
+    if (r.buy_caution) rows.push({ k: "当日", v: String(r.buy_caution_tip || r.buy_caution) });
     return rows;
   }
 

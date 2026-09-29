@@ -69,6 +69,8 @@ function closeScorePop() {
   if (pop) pop.remove();
 }
 
+const PICK_AUDIT_NOTE = "回测：分数与三日收益只有弱正相关，最高分不稳定跑赢；更适合看低分项当风险清单。";
+
 function showScorePop(anchor, id) {
   closeScorePop();
   const it = revScores.items[String(id)];
@@ -88,8 +90,9 @@ function showScorePop(anchor, id) {
     + `<div class="meta">${escAttr(it.grade || "")} · ${when}${first}</div>`
     + `<ul>${pickFactorsHtml(it.factors)}</ul>`
     + `<div class="meta">基础分 60，按上面各项加减后截到 0–100；≥75 优先、60–74 可以考虑、45–59 谨慎、&lt;45 放弃。`
-    + (revScores.live ? `历史微调参考近 ${revScores.history_n || 0} 条已打分买点${base}。` : "")
-    + `只作参考，不改信号。<button type="button" class="q" data-term="纠结对比">规则</button></div>`;
+    + (revScores.live ? `历史胜率参考近 ${revScores.history_n || 0} 条已打分买点${base}（仅参考，不计分）。` : "")
+    + `只作参考，不改信号。<button type="button" class="q" data-term="纠结对比">规则</button></div>`
+    + `<div class="meta">${PICK_AUDIT_NOTE}</div>`;
   document.body.appendChild(pop);
   const rc = anchor.getBoundingClientRect();
   const w = pop.offsetWidth;
@@ -140,7 +143,8 @@ function paintPickResult(d) {
   const base = d.base_win3 == null ? "" : `，整体三日胜率 ${d.base_win3}%`;
   out.innerHTML = `<div class="verdict">${escAttr(d.verdict || "")}</div>`
     + `<div class="rev-pick-cards">${cards}</div>`
-    + `<div class="meta" style="margin-top:6px">${escAttr(d.scored_at || "")} 打分 · 基础分 60，按各项加减；历史微调参考近 ${d.history_n || 0} 条已打分买点${base}。只作参考，不改信号。</div>`;
+    + `<div class="meta" style="margin-top:6px">${escAttr(d.scored_at || "")} 打分 · 基础分 60，按各项加减；历史胜率参考近 ${d.history_n || 0} 条已打分买点${base}（不计分）。只作参考，不改信号。</div>`
+    + `<div class="meta">${PICK_AUDIT_NOTE}</div>`;
 }
 
 async function runPickScore() {

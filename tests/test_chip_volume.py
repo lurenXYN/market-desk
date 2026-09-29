@@ -67,11 +67,12 @@ def test_bars_before_many_excludes_signal_day(monkeypatch):
 
 def test_pick_score_uses_cv_factors():
     row = {"code": "600001", "kind": "stock", "manual": True,
-           "cv": {"chip_pos": "high", "profit": 88.0, "vs_cost": 7.0, "vol1": "shrink", "vr_prev": 0.6}}
+           "cv": {"chip_pos": "high", "profit": 88.0, "vs_cost": 7.0, "vol1": "shrink", "vr_prev": 0.6,
+                  "vol3": "fade", "vol_trend3": 0.7}}
     out = score_pick(row, build_history_stats([]))
     by = {f["key"]: f["points"] for f in out["factors"]}
-    assert by["chip"] == -5.0 and by["vol1"] == 3.0
-    assert out["score"] == 58
+    assert by["chip"] == -2.0 and by["vol1"] == 0.0 and by["vol3"] == -2.0
+    assert out["score"] == 56
 
 
 def test_upsert_keeps_first_cv(monkeypatch, tmp_path):

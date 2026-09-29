@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import market_desk.pick_score as pick_score
 from market_desk.pick_score import build_history_stats, rank_picks, score_pick
 
 
@@ -51,20 +52,29 @@ def test_history_win_rate_is_day_balanced():
     assert st["buckets"]["trend:down"] == {"n": 12, "days": 5, "win3": 20.0}
 
 
-def test_history_nudge_capped_and_ignored_when_thin():
+def test_history_nudge_off_by_default_shows_note_only():
+    rows = [_hist("buy", "10:00", 2.0, day=i + 1, trend_ok=True) for i in range(9)]
+    rows += [_hist("buy", "10:00", -3.0, day=i + 1, trend_down=True) for i in range(9)]
+    up = score_pick(_cand("600001", trend_ok=True, daily_trend="上升"), build_history_stats(rows))
+    trend = next(f for f in up["factors"] if f["key"] == "trend")
+    assert trend["points"] == 0.0 and "仅参考不计分" in trend["hist"]
+
+
+def test_history_nudge_capped_and_ignored_when_thin(monkeypatch):
+    monkeypatch.setattr(pick_score, "PICK_HIST_PP_TO_PTS", 0.4)
     rows = [_hist("buy", "10:00", 2.0, day=i + 1, trend_ok=True) for i in range(9)]
     rows += [_hist("buy", "10:00", -3.0, day=i + 1, trend_down=True) for i in range(9)]
     st = build_history_stats(rows)
     up = score_pick(_cand("600001", trend_ok=True, daily_trend="上升"), st)
     trend = next(f for f in up["factors"] if f["key"] == "trend")
-    # Rule +10 plus the capped +6 history nudge (100% vs 50% base).
-    assert trend["points"] == 16.0
+    # No rule points for trend; only the capped +8 history nudge (100% vs 50% base).
+    assert trend["points"] == 8.0
     few_days = [_hist("buy", "10:00", 2.0, day=1 + i % 3, trend_ok=True) for i in range(9)]
     few_days += [_hist("buy", "10:00", -3.0, day=1 + i % 3, trend_down=True) for i in range(9)]
     thin = build_history_stats(few_days)
     up_thin = score_pick(_cand("600001", trend_ok=True, daily_trend="上升"), thin)
     trend_thin = next(f for f in up_thin["factors"] if f["key"] == "trend")
-    assert trend_thin["points"] == 10.0 and "样本少不计" in trend_thin["hist"]
+    assert trend_thin["points"] == 0.0 and "样本少不计" in trend_thin["hist"]
 
 
 def test_position_factor_prefers_band_over_chasing():
@@ -94,8 +104,8 @@ def test_manual_row_skips_plan_and_signal_factors():
     }
     res = score_pick(manual, st)
     keys = {f["key"] for f in res["factors"]}
-    assert keys == {"pct", "zt"}
-    assert res["score"] == 60 - 6 - 8 and res["source_label"] == "手输"
+    assert keys == {"zt"}
+    assert res["score"] == 60 - 4 and res["source_label"] == "手输"
 
 
 def test_rank_verdict_names_top_close_gap_and_drops():

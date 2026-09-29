@@ -3177,6 +3177,9 @@ def enrich_signals_with_live_marks(
         above_pct = _above_plan_pct(item.get("signal_type"), last, sig_px, flags)
         if above_pct is not None:
             flags.append("above_plan")
+            # In-band yet above plan reads contradictory; the above-plan label wins.
+            if "建议价附近" in labels:
+                labels.remove("建议价附近")
             labels.append(f"高于计划价 +{above_pct:.1f}%")
         item["above_plan_pct"] = above_pct
         item["live_last"] = last
@@ -3199,24 +3202,22 @@ def enrich_signals_with_live_marks(
             item["chase_dev_pct"] = None
         item["price_flags"] = flags
         item["price_mark"] = " / ".join(labels) if labels else ""
-        # Buying caution for same-day signals.
+        # Buying caution for same-day signals: short line for the table, full text as tip.
+        caution, tip = "", ""
         if is_buy_signal(item.get("signal_type")):
             if "stop_hit" in flags:
-                item["buy_caution"] = "现价已到止损带，当日不宜再按原计划买"
+                caution, tip = "到止损带，今日不买", "现价已到止损带，当日不宜再按原计划买"
             elif "chase_hit" in flags:
-                item["buy_caution"] = "现价已过不追价，当日不宜追高"
+                caution, tip = "过不追价，放弃", "现价已过不追价，当日不宜追高"
             elif "above_plan" in flags:
-                item["buy_caution"] = (
-                    f"现价高于计划价 +{above_pct:.1f}%：只按计划价挂单，不追；过不追价就放弃"
-                )
+                caution = "挂计划价，不追"
+                tip = f"现价高于计划价 +{above_pct:.1f}%：只按计划价挂单，不追；过不追价就放弃"
             elif "miss_pullback" in flags:
-                item["buy_caution"] = "未回踩建议价已上行，勿死等；可对照不追价决定是否放弃"
+                caution, tip = "已上行，别死等", "未回踩建议价已上行，勿死等；可对照不追价决定是否放弃"
             elif "near_wait" in flags:
-                item["buy_caution"] = "现价在回踩带，可观察是否站稳"
-            else:
-                item["buy_caution"] = ""
-        else:
-            item["buy_caution"] = ""
+                caution, tip = "回踩带，看站稳", "现价在回踩带，可观察是否站稳"
+        item["buy_caution"] = caution
+        item["buy_caution_tip"] = tip
         out.append(item)
     return out
 

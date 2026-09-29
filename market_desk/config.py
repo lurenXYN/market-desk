@@ -239,8 +239,13 @@ REVIEW_HEAVY_REFRESH_SEC = 300.0
 PICK_BASE_SCORE = 60.0
 PICK_HIST_MIN_N = 8
 PICK_HIST_MIN_DAYS = 5
-PICK_HIST_PP_TO_PTS = 0.3
-PICK_HIST_MAX_ADJ = 6.0
+# 2026-09 audits (scripts/audit_pick_score.py, scripts/optimize_pick_score.py):
+# classic trend / board / ready rule points ranked stored buys backwards, and a
+# walk-forward test showed the history nudge (bucket win rates from < 20 trading
+# days) hurt ranking, so it is off (0) and the win rate is shown as info only.
+PICK_HIST_PP_TO_PTS = 0.0
+PICK_HIST_MAX_ADJ = 8.0
+PICK_PM_WEAK_PTS = -6.0
 PICK_MAX_ITEMS = 6
 # Review score column: today's rows are re-scored at most this often; during the
 # session a background pass runs every REVIEW_SCORE_BG_SEC so the first score
@@ -256,10 +261,12 @@ CV_CHIP_MIN_BARS = 60
 CV_CHIP_BINS = 200
 CV_FETCH_CONCURRENCY = 4
 CV_TICK_TIMEOUT_S = 6.0
-PICK_CV_CHIP_HIGH_PTS = -5.0
-PICK_CV_VOL_SHRINK_PTS = 3.0
-PICK_CV_VOL_SPIKE_PTS = -3.0
-PICK_CV_VOL_FADE_PTS = -3.0
+# Kept small: on ~15k uptrend-pullback days across the signaled universe the
+# chip / volume buckets showed no measurable 3-day edge.
+PICK_CV_CHIP_HIGH_PTS = -2.0
+PICK_CV_VOL_SHRINK_PTS = 0.0
+PICK_CV_VOL_SPIKE_PTS = 0.0
+PICK_CV_VOL_FADE_PTS = -2.0
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8
