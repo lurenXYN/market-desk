@@ -15,15 +15,27 @@ router = APIRouter()
 
 
 @router.get("/api/ma-fan")
-def api_ma_fan(
+async def api_ma_fan(
     date: str | None = Query(default=None),
     user: dict = Depends(current_user_required),
 ) -> dict:
-    """Return one night's MA-fan scan (review-style day list)."""
-    del user
-    from market_desk.db import list_ma_fan_dates, load_ma_fan_day
-    from market_desk.ma_fan import attach_review_flags_to_ma_fan
+    """Return one night's MA-fan scan (review-style day list).
 
+    Rows whose industry failed to load at scan time are backfilled here (throttled)
+    and written back, unless a scan for that day is running.
+    """
+    del user
+    from market_desk.db import list_ma_fan_dates, load_ma_fan_day, save_ma_fan_day
+    from market_desk.ma_fan import (
+        attach_review_flags_to_ma_fan,
+        backfill_day_meta,
+        build_outcome_summary,
+        refresh_ma_fan_extras,
+        scan_progress,
+    )
+    from market_desk.ma_fan.extras import MA_FAN_EXTRAS_DAYS
+
+    _spawn(refresh_ma_fan_extras())
     dates = list_ma_fan_dates(limit=40)
     want = str(date or "").strip()[:10]
     if not want:
@@ -31,22 +43,45 @@ def api_ma_fan(
     body = load_ma_fan_day(want) if want else None
     warn = None
     if body:
+        prog = scan_progress() or {}
+        busy = bool(prog.get("running")) and str(prog.get("trade_date") or "") == want
+        if not busy:
+            try:
+                if await backfill_day_meta(want, body):
+                    save_ma_fan_day(want, body)
+            except Exception:
+                log.exception("ma_fan meta backfill persist failed date=%s", want)
         try:
             body = attach_review_flags_to_ma_fan(body, want, snapshot=engine.snapshot)
         except Exception:
             log.exception("ma_fan review flags failed date=%s", want)
             warn = "复盘交集标注失败（已记日志），列表照常显示"
+    outcome = None
+    if body:
+        try:
+            recent = {d: load_ma_fan_day(d) or {} for d in dates[:MA_FAN_EXTRAS_DAYS]}
+            outcome = build_outcome_summary(want, body, recent)
+        except Exception:
+            log.exception("ma_fan outcome summary failed date=%s", want)
     return {
         "ok": True,
         "view_date": want or None,
         "dates": dates,
         "scan": body,
+        "outcome": outcome,
         "warn": warn,
         "note": "18/20/22 点分档扫成交额榜并合并；标签含额档与主线同主题旁注。观察层，不进 ready。",
     }
 
 
 _MA_FAN_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    """Run a coroutine in the background, keeping a reference until it ends."""
+    task = asyncio.create_task(coro)
+    _MA_FAN_TASKS.add(task)
+    task.add_done_callback(_MA_FAN_TASKS.discard)
 
 
 @router.post("/api/ma-fan/run")

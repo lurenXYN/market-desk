@@ -1563,7 +1563,10 @@ async def fetch_stock_meta_many(
             "secids": ",".join(_secid(c) for c in chunk),
         }
         rows: list[dict[str, Any]] = []
-        for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+        # Both hosts drop connections intermittently; a second round with backoff
+        # recovers most of the blanks that used to stick on the MA-fan list.
+        hosts = ("push2.eastmoney.com", "push2delay.eastmoney.com") * 2
+        for attempt, host in enumerate(hosts):
             try:
                 resp = await client.get(
                     f"https://{host}/api/qt/ulist.np/get",
@@ -1573,9 +1576,11 @@ async def fetch_stock_meta_many(
                 )
                 resp.raise_for_status()
                 rows = list(((resp.json() or {}).get("data") or {}).get("diff") or [])
-                break
+                if rows:
+                    break
             except Exception:
-                await asyncio.sleep(0.3)
+                pass
+            await asyncio.sleep(0.3 * (attempt + 1))
         for row in rows:
             code = normalize_code(row.get("f12"))
             if not code:

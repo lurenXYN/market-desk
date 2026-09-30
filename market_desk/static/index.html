@@ -878,7 +878,7 @@
         </div>
         <div class="rev-today" id="maFanSummary"></div>
         <div class="rev-toolbar" style="margin-top:8px">
-          <div class="pos-form" id="maFanFilters" style="grid-template-columns:90px 110px 120px 110px auto auto auto auto;margin:0;flex:1;align-items:end">
+          <div class="pos-form" id="maFanFilters" style="grid-template-columns:90px 110px 120px 110px 100px auto auto auto auto;margin:0;flex:1;align-items:end">
             <label>阶段
               <select id="maFanFltStage" title="初期/中期/后期">
                 <option value="">全部</option>
@@ -910,6 +910,16 @@
                 <option value="no">无主线相关</option>
               </select>
             </label>
+            <label>上市板
+              <select id="maFanFltMkt" title="按代码前缀：沪A 60x、深A 00x、创业 30x、科创 688">
+                <option value="">全部</option>
+                <option value="main">主板（沪A+深A）</option>
+                <option value="沪A">沪A</option>
+                <option value="深A">深A</option>
+                <option value="创业">创业</option>
+                <option value="科创">科创</option>
+              </select>
+            </label>
             <label class="settings-check" style="display:flex;align-items:center;gap:6px">
               <input type="checkbox" id="maFanFltReview" />
               <span>仅复盘交集</span>
@@ -929,7 +939,7 @@
               <tr id="maFanHead"></tr>
             </thead>
             <tbody id="maFanBody">
-              <tr><td colspan="14" class="meta">打开页签后加载…</td></tr>
+              <tr><td colspan="17" class="meta">打开页签后加载…</td></tr>
             </tbody>
           </table>
         </div>

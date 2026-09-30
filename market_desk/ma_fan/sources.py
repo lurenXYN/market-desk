@@ -110,19 +110,22 @@ def _wan_to_yi(v: Any) -> float | None:
     return round(f / 1e4, 1) if f > 0 else None
 
 
+def _needs_meta(h: dict[str, Any]) -> bool:
+    """Return True when a hit still lacks industry (missing key or empty string)."""
+    return bool(normalize_code(h.get("code"))) and not str(h.get("industry") or "").strip()
+
+
 async def enrich_hits_meta(
     client: httpx.AsyncClient, items: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Attach industry, total market cap and shareholder counts onto hits.
 
-    Only rows without ``industry`` are fetched, so merging later slices does not
-    re-request earlier ones. Costs one quote batch plus 1–2 holder batches.
+    Rows whose ``industry`` is missing or empty are (re)fetched, so a transient
+    source failure in one slice is repaired by the next slice or page load.
+    Fetched blanks never overwrite values already present. Costs one quote batch
+    plus 1–2 holder batches.
     """
-    need = [
-        normalize_code(h.get("code")) or ""
-        for h in items
-        if "industry" not in h and normalize_code(h.get("code"))
-    ]
+    need = [normalize_code(h.get("code")) for h in items if _needs_meta(h)]
     if not need:
         return items
     meta: dict[str, dict[str, Any]] = {}
@@ -141,12 +144,51 @@ async def enrich_hits_meta(
         if code not in wanted:
             continue
         m = meta.get(code) or {}
-        h["industry"] = str(m.get("industry") or "")
+        industry = str(m.get("industry") or "").strip()
+        if industry or "industry" not in h:
+            h["industry"] = industry
         if m.get("mv_yi") is not None:
             h["mv_yi"] = m["mv_yi"]
         hd = holders.get(code) or {}
-        h["holder_num"] = hd.get("holder_num")
-        h["holder_chg_pct"] = hd.get("holder_chg_pct")
-        h["holder_avg_wan"] = hd.get("holder_avg_wan")
-        h["holder_end"] = hd.get("holder_end")
+        for key in ("holder_num", "holder_chg_pct", "holder_avg_wan", "holder_end"):
+            if hd.get(key) is not None or key not in h:
+                h[key] = hd.get(key)
     return items
+
+
+# Page-load backfill: at most one outbound attempt per trade date per window.
+_BACKFILL_AT: dict[str, float] = {}
+MA_FAN_BACKFILL_RETRY_S = 600.0
+
+
+async def backfill_day_meta(
+    day: str, body: dict[str, Any], *, timeout_s: float = 8.0
+) -> bool:
+    """Fill missing industry / holder meta on a stored day payload in place.
+
+    Throttled per ``day`` so repeated page loads do not hammer the source.
+
+    Returns:
+        True when at least one row gained a non-empty industry.
+    """
+    import time
+
+    items = list(body.get("items") or [])
+    if not any(_needs_meta(h) for h in items):
+        return False
+    now = time.monotonic()
+    if now - _BACKFILL_AT.get(day, -1e9) < MA_FAN_BACKFILL_RETRY_S:
+        return False
+    _BACKFILL_AT[day] = now
+    before = sum(1 for h in items if not _needs_meta(h))
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s), trust_env=False) as client:
+            await asyncio.wait_for(enrich_hits_meta(client, items), timeout=timeout_s * 2)
+    except Exception as exc:
+        log.warning("ma_fan meta backfill failed day=%s: %r", day, exc)
+        return False
+    after = sum(1 for h in items if not _needs_meta(h))
+    body["items"] = items
+    if after > before:
+        log.info("ma_fan meta backfill day=%s filled=%s", day, after - before)
+    return after > before

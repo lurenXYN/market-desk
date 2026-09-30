@@ -891,7 +891,7 @@ const maFanFilterApply = () => {
 document.getElementById("maFanFltApply")?.addEventListener("click", maFanFilterApply);
 document.getElementById("maFanFltReset")?.addEventListener("click", () => {
   maFanFilters = {
-    stage: "", ma60: "", band: "", theme: "",
+    stage: "", ma60: "", band: "", theme: "", mkt: "",
     review: false, progressive: false,
   };
   saveMaFanFilters();

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from market_desk.filters import normalize_code
+from market_desk.filters import listing_board_label, normalize_code
 from market_desk.ma_fan.pattern import amount_band_for_rank
 
 
@@ -107,6 +107,7 @@ def annotate_hits_with_desk_context(
         if band:
             tags.append(band)
         item["amount_band"] = band
+        item["market_board"] = listing_board_label(code)
 
         boards = list(item.get("boards") or [])
         if not boards and code and code in board_ix:

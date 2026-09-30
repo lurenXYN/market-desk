@@ -103,17 +103,13 @@ async def bars_before_many(
     return {c: list(_BARS_CACHE[c][1]) for c in uniq if (_BARS_CACHE.get(c) or ("", []))[0] == day}
 
 
-async def index_returns_before(
-    client: httpx.AsyncClient, trade_date: str, sym: str = CV_IVOL_INDEX
-) -> dict[str, float]:
-    """Return ``{date: pct}`` of the market index for days before ``trade_date`` (cached per day)."""
-    day = str(trade_date or "")[:10]
-    hit = _INDEX_CACHE.get(day)
-    if hit is not None:
-        return hit
+async def fetch_index_closes(
+    client: httpx.AsyncClient, sym: str = CV_IVOL_INDEX, limit: int = 60
+) -> list[tuple[str, float]]:
+    """Return ``[(date, close)]`` (oldest first) for a Tencent index symbol, or [] on failure."""
     url = (
         "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
-        f"?param={sym},day,,,{int(CV_IVOL_WINDOW) + 15},qfq"
+        f"?param={sym},day,,,{int(limit)},qfq"
     )
     try:
         resp = await client.get(
@@ -123,19 +119,39 @@ async def index_returns_before(
         node = ((resp.json().get("data") or {}).get(sym)) or {}
     except Exception as exc:
         log.debug("cv index %s failed: %r", sym, exc)
-        return {}
-    out: dict[str, float] = {}
-    prev: float | None = None
+        return []
+    out: list[tuple[str, float]] = []
     for row in node.get("qfqday") or node.get("day") or []:
         if not isinstance(row, (list, tuple)) or len(row) < 3:
             continue
         close = num(row[2])
-        date = str(row[0])[:10]
-        if close is None:
-            continue
-        if prev and date < day:
-            out[date] = (float(close) / prev - 1.0) * 100.0
-        prev = float(close)
+        if close is not None:
+            out.append((str(row[0])[:10], float(close)))
+    return out
+
+
+def index_pct_map(closes: list[tuple[str, float]], *, before: str | None = None) -> dict[str, float]:
+    """Turn ``[(date, close)]`` into ``{date: pct}``, optionally only dates before ``before``."""
+    out: dict[str, float] = {}
+    prev: float | None = None
+    for date, close in closes:
+        if prev and (before is None or date < before):
+            out[date] = (close / prev - 1.0) * 100.0
+        prev = close
+    return out
+
+
+async def index_returns_before(
+    client: httpx.AsyncClient, trade_date: str, sym: str = CV_IVOL_INDEX
+) -> dict[str, float]:
+    """Return ``{date: pct}`` of the market index for days before ``trade_date`` (cached per day)."""
+    day = str(trade_date or "")[:10]
+    hit = _INDEX_CACHE.get(day)
+    if hit is not None:
+        return hit
+    out = index_pct_map(
+        await fetch_index_closes(client, sym, int(CV_IVOL_WINDOW) + 15), before=day
+    )
     if out:
         _INDEX_CACHE.clear()
         _INDEX_CACHE[day] = out

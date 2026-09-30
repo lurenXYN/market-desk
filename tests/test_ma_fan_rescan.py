@@ -193,6 +193,52 @@ def test_enrich_hits_meta_fills_missing_rows_only(monkeypatch) -> None:
     assert out[1]["holder_num"] == 45678 and out[1]["holder_chg_pct"] == -3.2
 
 
+def test_enrich_hits_meta_retries_blank_and_keeps_existing(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    async def flaky_meta(client, codes):
+        calls.append(list(codes))
+        return {} if len(calls) == 1 else {c: {"industry": "医疗器械"} for c in codes}
+
+    async def no_holders(client, codes):
+        return {}
+
+    monkeypatch.setattr(mf_src, "fetch_stock_meta_many", flaky_meta)
+    monkeypatch.setattr(mf_src, "fetch_holder_stats_many", no_holders)
+    items = [{"code": "300171", "holder_num": 1234}]
+    asyncio.run(mf.enrich_hits_meta(None, items))
+    assert items[0]["industry"] == "" and items[0]["holder_num"] == 1234
+    asyncio.run(mf.enrich_hits_meta(None, items))
+    assert calls == [["300171"], ["300171"]]
+    assert items[0]["industry"] == "医疗器械" and items[0]["holder_num"] == 1234
+
+
+def test_backfill_day_meta_is_throttled_per_day(monkeypatch) -> None:
+    async def meta(client, codes):
+        return {c: {"industry": "半导体"} for c in codes}
+
+    async def no_holders(client, codes):
+        return {}
+
+    monkeypatch.setattr(mf_src, "fetch_stock_meta_many", meta)
+    monkeypatch.setattr(mf_src, "fetch_holder_stats_many", no_holders)
+    mf_src._BACKFILL_AT.clear()
+    body = {"items": [{"code": "688620", "industry": ""}, {"code": "600000", "industry": "银行Ⅱ"}]}
+    assert asyncio.run(mf.backfill_day_meta("2026-09-29", body)) is True
+    assert body["items"][0]["industry"] == "半导体"
+    body2 = {"items": [{"code": "300634"}]}
+    assert asyncio.run(mf.backfill_day_meta("2026-09-29", body2)) is False
+    assert "industry" not in body2["items"][0]
+
+
+def test_listing_board_label() -> None:
+    from market_desk.filters import listing_board_label
+
+    assert [listing_board_label(c) for c in ("000002", "002011", "600048", "300171", "301207", "688620", "830799")] == [
+        "深A", "深A", "沪A", "创业", "创业", "科创", "北交",
+    ]
+
+
 def test_ytd_limit_up_uses_board_threshold() -> None:
     from market_desk.zt_stats import count_limit_ups_ytd_from_bars
 

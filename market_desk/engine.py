@@ -1309,7 +1309,7 @@ class DeskEngine:
         if slice_spec and not force_all:
             offset, count, key = slice_spec
             spec = (int(offset), int(count), str(key))
-        return await run_ma_fan_all_due_slices(
+        out = await run_ma_fan_all_due_slices(
             trade_date=day_s,
             minutes=22 * 60,
             top=top_n,
@@ -1322,6 +1322,14 @@ class DeskEngine:
             slice_spec=spec,
             claimed=claimed,
         )
+        if out.get("ok") and not out.get("skipped"):
+            try:
+                from market_desk.ma_fan import refresh_ma_fan_extras
+
+                await refresh_ma_fan_extras(force=True)
+            except Exception:
+                log.exception("ma_fan extras after scan failed day=%s", day_s)
+        return out
 
     async def _write_eod_onepager(self, day: str) -> None:
         """Persist the end-of-day one-pager and push ServerChan once per day.

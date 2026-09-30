@@ -8,9 +8,11 @@ let maFanFilters = {
   ma60: "",
   band: "",
   theme: "",
+  mkt: "",
   review: false,
   progressive: false,
 };
+const MAFAN_MKT_CLS = { 沪A: "sh", 深A: "sz", 创业: "cy", 科创: "kc", 北交: "bj" };
 
 function loadMaFanFilters() {
   try {
@@ -23,6 +25,7 @@ function loadMaFanFilters() {
       ma60: String(o.ma60 || ""),
       band: String(o.band || ""),
       theme: String(o.theme || ""),
+      mkt: String(o.mkt || ""),
       review: !!o.review,
       progressive: !!o.progressive,
     };
@@ -46,6 +49,7 @@ function syncMaFanFilterInputs() {
   set("maFanFltMa60", maFanFilters.ma60);
   set("maFanFltBand", maFanFilters.band);
   set("maFanFltTheme", maFanFilters.theme);
+  set("maFanFltMkt", maFanFilters.mkt);
   set("maFanFltReview", maFanFilters.review);
   set("maFanFltProgressive", maFanFilters.progressive);
 }
@@ -57,6 +61,7 @@ function readMaFanFilterInputs() {
     ma60: (g("maFanFltMa60") && g("maFanFltMa60").value) || "",
     band: (g("maFanFltBand") && g("maFanFltBand").value) || "",
     theme: (g("maFanFltTheme") && g("maFanFltTheme").value) || "",
+    mkt: (g("maFanFltMkt") && g("maFanFltMkt").value) || "",
     review: !!(g("maFanFltReview") && g("maFanFltReview").checked),
     progressive: !!(g("maFanFltProgressive") && g("maFanFltProgressive").checked),
   };
@@ -89,6 +94,10 @@ function maFanPassFilter(it) {
   );
   if (f.theme === "yes" && !hasTheme) return false;
   if (f.theme === "no" && hasTheme) return false;
+  if (f.mkt) {
+    const mb = String(it.market_board || "");
+    if (f.mkt === "main" ? !(mb === "沪A" || mb === "深A") : mb !== f.mkt) return false;
+  }
   if (f.review && !it.in_review) return false;
   if (f.progressive) {
     if (!(it.progressive || tags.includes("渐进发散"))) return false;
@@ -104,6 +113,11 @@ function maFanSortValue(it, id) {
     return m[it.stage] || 9;
   }
   if (id === "score") return Number(it.score);
+  if (id === "pick") return it.pick && it.pick.score != null ? Number(it.pick.score) : NaN;
+  if (id === "d1" || id === "d3") {
+    const f = it.fwd || {};
+    return f[id] == null ? NaN : Number(f[id]);
+  }
   if (id === "close") return Number(it.close);
   if (id === "pct") return Number(it.pct);
   if (id === "sticky") return Number(it.sticky_spread);
@@ -147,9 +161,12 @@ function paintMaFanHead() {
     ["code", "股票"],
     ["sector", "板块"],
     ["stage", "阶段"],
-    ["score", "分"],
+    ["score", "形态分"],
+    ["pick", "打分"],
     ["close", "收盘"],
     ["pct", "涨跌%"],
+    ["d1", "次日%"],
+    ["d3", "三日%"],
     ["mv", "市值"],
     ["zt", "年内涨停"],
     ["holder", "股东户数"],
@@ -212,7 +229,7 @@ async function loadMaFan(force, date) {
     const where = `${stage}${status != null ? " · HTTP " + status : ""}`;
     const isAdmin = !!(authUser && authUser.role === "admin");
     document.getElementById("maFanBody").innerHTML =
-      `<tr><td colspan="14" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
+      `<tr><td colspan="17" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
       + (isAdmin
         ? ` · <a href="/api/ops/logs?level=warning&lines=300" target="_blank" rel="noopener">看错误日志</a>`
         : "")
@@ -363,7 +380,8 @@ function paintMaFan(d) {
         `主线相关 ${themeN}`,
         scan.saved_at ? `落盘 ${scan.saved_at}` : "",
         scan.formula_version != null ? `公式 v${scan.formula_version}` : "",
-      ].filter(Boolean).map((t, i) => (i ? `<span class="meta"> · ${t}</span>` : t)).join("");
+      ].filter(Boolean).map((t, i) => (i ? `<span class="meta"> · ${t}</span>` : t)).join("")
+        + maFanOutcomeHtml(d.outcome);
     }
   }
   const forceBtn = document.getElementById("maFanForceRun");
@@ -377,11 +395,11 @@ function paintMaFan(d) {
   const body = document.getElementById("maFanBody");
   if (!body) return;
   if (!all.length) {
-    body.innerHTML = `<tr><td colspan="14" class="meta">该日无命中（或尚未扫描）</td></tr>`;
+    body.innerHTML = `<tr><td colspan="17" class="meta">该日无命中（或尚未扫描）</td></tr>`;
     return;
   }
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="14" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
+    body.innerHTML = `<tr><td colspan="17" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
     return;
   }
   body.innerHTML = items.map((it) => {
@@ -389,6 +407,9 @@ function paintMaFan(d) {
     const pct = it.pct == null ? "—" : (Number(it.pct) >= 0 ? "+" : "") + Number(it.pct).toFixed(1);
     const stage = it.stage || "—";
     const tags = [];
+    if (it.market_board) {
+      tags.push(`<span class="rev-chip mkt-chip mkt-${MAFAN_MKT_CLS[it.market_board] || "x"}">${escAttr(it.market_board)}</span>`);
+    }
     if (it.in_review) tags.push(`<span class="rev-chip up" title="当日复盘有买信号">复盘交集</span>`);
     const rawTags = maFanRawTags(it).filter((t) => t !== it.stage);
     const chipClass = (t) => {
@@ -410,8 +431,11 @@ function paintMaFan(d) {
           <td class="col-wrap col-sector">${maFanSectorHtml(it)}</td>
           <td>${stage}</td>
           <td>${it.score != null ? it.score : "—"}</td>
+          <td>${maFanPickHtml(it.pick)}</td>
           <td>${it.close != null ? it.close : "—"}</td>
           <td class="${Number(it.pct) > 0 ? "up" : (Number(it.pct) < 0 ? "down" : "")}">${pct}</td>
+          ${maFanFwdCell(it.fwd, "d1")}
+          ${maFanFwdCell(it.fwd, "d3")}
           <td>${it.mv_yi != null ? fmtMaFanMv(it.mv_yi) : "—"}</td>
           <td>${it.zt_ytd != null ? it.zt_ytd : "—"}</td>
           <td>${maFanHolderHtml(it)}</td>
@@ -422,6 +446,51 @@ function paintMaFan(d) {
           <td class="col-wrap col-note meta">${maFanRemark(it, rawTags)}</td>
         </tr>`;
   }).join("");
+}
+
+/** Comparison-scorer result (latest scan day); factors in the tooltip. */
+function maFanPickHtml(p) {
+  if (!p || p.score == null) return `<span class="meta">—</span>`;
+  const lines = (p.factors || []).map((f) => {
+    const pts = Number(f.points) || 0;
+    return `${f.label} ${pts > 0 ? "+" : ""}${pts}：${f.detail || ""}`;
+  });
+  const title = [`${p.score} 分 · ${p.grade || ""}`, `基础 ${p.base ?? "—"}`, ...lines].join("\n");
+  const cls = p.score >= 60 ? "up" : (p.score < 45 ? "down" : "");
+  return `<span class="${cls}" title="${escAttr(title)}">${p.score}</span>`
+    + `<span class="meta" style="margin-left:3px">${escAttr(p.grade || "")}</span>`;
+}
+
+/** Forward return from the scan-day close; blank until that day's bar has closed. */
+function maFanFwdCell(fwd, key) {
+  const v = fwd && fwd[key] != null ? Number(fwd[key]) : null;
+  if (v == null || Number.isNaN(v)) return `<td class="meta">—</td>`;
+  return `<td class="${v > 0 ? "up" : (v < 0 ? "down" : "")}">${v > 0 ? "+" : ""}${v.toFixed(2)}</td>`;
+}
+
+/** One-line win-rate summary: viewed day plus the pooled recent stored days. */
+function maFanOutcomeHtml(oc) {
+  if (!oc) return "";
+  const fmt = (a) => (a && a.n ? `胜 ${a.win}%（均 ${a.avg > 0 ? "+" : ""}${a.avg}%，${a.n} 只）` : "—");
+  const day = oc.day || {};
+  const rec = oc.recent || {};
+  const idx = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const parts = [
+    `当日 · 次日 ${fmt(day.d1)} · 三日 ${fmt(day.d3)} · 创业板指 次日 ${idx(day.index_d1)} / 三日 ${idx(day.index_d3)}`,
+  ];
+  if (rec.days) {
+    const grades = Object.entries(rec.by_grade || {})
+      .map(([g, a]) => `${g} ${a.win}%（${a.n}）`).join(" / ");
+    parts.push(
+      `近 ${rec.days} 个有三日结果的扫描日 · 三日 ${fmt(rec.d3)}`
+      + (rec.excess_d3 != null ? ` · 比创业板指 ${rec.excess_d3 > 0 ? "+" : ""}${rec.excess_d3}%` : "")
+      + (grades ? ` · 按打分档三日胜率 ${grades}` : ""),
+    );
+  } else {
+    parts.push("近期还没有三日结果（扫描后第 3 个交易日收盘才有）");
+  }
+  return `<div class="meta mafan-outcome"><button type="button" class="q" data-term="发散胜率">?</button> `
+    + parts.map(escAttr).join("<br>") + `</div>`;
 }
 
 function fmtMaFanMv(v) {

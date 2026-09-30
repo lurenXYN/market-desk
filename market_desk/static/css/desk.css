@@ -191,6 +191,12 @@ html, body {
 #maFanTable td.col-sector .meta { display: block; font-size: 11px; }
 .mafan-prog.err .mafan-prog-bar i { background: #f87171; }
 .mafan-prog.err { color: #fca5a5; }
+.rev-chip.mkt-chip { font-weight: 600; }
+.mafan-outcome { flex-basis: 100%; margin-top: 4px; line-height: 1.6; }
+.rev-chip.mkt-sh { color: #93c5fd; border-color: #1e3a8a; }
+.rev-chip.mkt-sz { color: #7dd3fc; border-color: #075985; }
+.rev-chip.mkt-cy { color: #fdba74; border-color: #9a3412; }
+.rev-chip.mkt-kc { color: #c4b5fd; border-color: #5b21b6; }
 .mafan-err a { color: #93c5fd; }
 .mod-stamp {
   margin-left: 8px;

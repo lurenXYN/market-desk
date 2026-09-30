@@ -60,6 +60,22 @@ def is_chinext_or_star(code: str | int | None) -> bool:
     return c.startswith(("300", "301", "688", "689"))
 
 
+def listing_board_label(code: str | int | None) -> str:
+    """Return the short listing-board label: 沪A / 深A / 创业 / 科创 / 北交, or ""."""
+    c = normalize_code(code)
+    if c.startswith(("300", "301")):
+        return "创业"
+    if c.startswith(("688", "689")):
+        return "科创"
+    if c.startswith(("000", "001", "002", "003")):
+        return "深A"
+    if c.startswith(("600", "601", "603", "605")):
+        return "沪A"
+    if c.startswith(("4", "8", "92")):
+        return "北交"
+    return ""
+
+
 def is_bj_exchange(code: str | int | None) -> bool:
     """Return True for Beijing exchange tickers (rough 30% limit band)."""
     c = normalize_code(code)

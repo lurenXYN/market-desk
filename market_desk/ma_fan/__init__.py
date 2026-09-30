@@ -10,6 +10,7 @@ Submodules:
     sources  — Sina amount ranking, East Money industry / market cap / holders
     context  — desk theme / amount-band tags and review intersections
     scan     — slice schedule and the scan pipeline
+    extras   — forward outcomes per stored hit and the latest-day pick score
 
 Patch module state on the owning submodule (e.g. ``ma_fan.scan.load_universe``);
 the names re-exported here are for callers only.
@@ -21,6 +22,7 @@ from market_desk.ma_fan.context import (
     enrich_signals_with_ma_fan,
     ma_fan_code_set,
 )
+from market_desk.ma_fan.extras import build_outcome_summary, refresh_ma_fan_extras
 from market_desk.ma_fan.job import (
     MA_FAN_BARS_LIMIT,
     MA_FAN_CONCURRENCY,
@@ -47,7 +49,7 @@ from market_desk.ma_fan.scan import (
     run_ma_fan_scan,
     slices_done_for_day,
 )
-from market_desk.ma_fan.sources import enrich_hits_meta, load_universe
+from market_desk.ma_fan.sources import backfill_day_meta, enrich_hits_meta, load_universe
 
 __all__ = [
     "MA_FAN_BARS_LIMIT",
@@ -63,12 +65,15 @@ __all__ = [
     "amount_band_for_rank",
     "annotate_hits_with_desk_context",
     "attach_review_flags_to_ma_fan",
+    "backfill_day_meta",
+    "build_outcome_summary",
     "enrich_hits_meta",
     "enrich_signals_with_ma_fan",
     "force_cooldown_left",
     "load_universe",
     "ma_fan_code_set",
     "next_due_ma_fan_slice",
+    "refresh_ma_fan_extras",
     "release_scan",
     "run_ma_fan_all_due_slices",
     "run_ma_fan_scan",

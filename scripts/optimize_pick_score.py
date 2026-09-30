@@ -745,10 +745,51 @@ def part_r2(rows: list[dict[str, Any]], cache: dict[str, Any]) -> None:
     day_m = {d: mean([float(x["outcome_day3_pct"]) for x in v]) for d, v in by_day.items()}
     day_w = {d: sum(1 for x in v if float(x["outcome_day3_pct"]) > 0) / len(v) for d, v in by_day.items()}
 
+    def post_close(r: dict[str, Any]) -> float | None:
+        """Return close(day+3) / close(day0) - 1 in percent, excluding the signal day itself."""
+        bars = (cache.get(r["code"]) or {}).get("bars") or []
+        idx = next((i for i, b in enumerate(bars) if b["date"] == r["trade_date"]), None)
+        if idx is None or idx + 3 >= len(bars) or not bars[idx].get("close"):
+            return None
+        return (bars[idx + 3]["close"] / bars[idx]["close"] - 1.0) * 100.0
+
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{aps.DB}?mode=ro", uri=True)
+    last_by = {int(i): af._f(v) for i, v in conn.execute("SELECT id, last FROM signals")}
+    conn.close()
+
+    def from_last(r: dict[str, Any]) -> float | None:
+        """Return close(day+3) / last-refresh price - 1: same moment the minute state was recorded."""
+        bars = (cache.get(r["code"]) or {}).get("bars") or []
+        idx = next((i for i, b in enumerate(bars) if b["date"] == r["trade_date"]), None)
+        last = last_by.get(int(r["id"]))
+        if idx is None or idx + 3 >= len(bars) or not last:
+            return None
+        return (bars[idx + 3]["close"] / last - 1.0) * 100.0
+
+    def day_base(fn: Any) -> tuple[dict[int, float | None], dict[str, float]]:
+        vals = {int(r["id"]): fn(r) for r in rows}
+        base: dict[str, float] = {}
+        for d, v in by_day.items():
+            got = [vals[int(x["id"])] for x in v if vals[int(x["id"])] is not None]
+            if got:
+                base[d] = mean(got)
+        return vals, base
+
+    post, post_m = day_base(post_close)
+    flast, flast_m = day_base(from_last)
+
+    def rel(sub: list[dict[str, Any]], vals: dict[int, float | None], base: dict[str, float]) -> str:
+        got = [vals[int(r["id"])] - base[r["trade_date"]] for r in sub
+               if vals[int(r["id"])] is not None and r["trade_date"] in base]
+        return f"{mean(got):>+10.2f}({len(got)})" if got else f"{'—':>10}"
+
     def stat(sub: list[dict[str, Any]]) -> str:
         ex = mean([float(r["outcome_day3_pct"]) - day_m[r["trade_date"]] for r in sub])
         wex = mean([(1.0 if float(r["outcome_day3_pct"]) > 0 else 0.0) - day_w[r["trade_date"]] for r in sub])
-        return f"{len(sub):>5}{len({r['trade_date'] for r in sub}):>4}{100 * wex:>+9.1f}{ex:>+9.2f}"
+        return (f"{len(sub):>5}{len({r['trade_date'] for r in sub}):>4}{100 * wex:>+9.1f}{ex:>+9.2f}"
+                f"{rel(sub, post, post_m)}{rel(sub, flast, flast_m)}")
 
     ever = [r for r in rows if r["payload"].get("ever_ready") or r["payload"].get("first_ready_at")]
     print("\n######## R2. 可买入深挖")
@@ -781,7 +822,7 @@ def part_r2(rows: list[dict[str, Any]], cache: dict[str, Any]) -> None:
     print(f"    全部买点里计划价=等回踩价（盯回踩口径）的 {len(eq)}/{len(same)} 条")
 
     print("\n  [B] 每个闸门/软条件：被它卡过的买点 vs 同日其他买点（后续表现好 = 这条可能卡错了）")
-    print(f"    {'条件':<28}{'n':>5}{'天':>4}{'同日胜率差':>9}{'同日超额':>9}")
+    print(f"    {'条件':<28}{'n':>5}{'天':>4}{'同日胜率差':>9}{'同日超额':>9}{'收盘起超额':>10}{'刷新价起超额':>10}")
     acc: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         p = r["payload"]
@@ -799,8 +840,8 @@ def part_r2(rows: list[dict[str, Any]], cache: dict[str, Any]) -> None:
         for x in reasons:
             acc.setdefault(x, []).append(r)
     for k, sub in sorted(acc.items(), key=lambda kv: -len(kv[1])):
-        if len(sub) >= 8:
-            print(f"    {k:<28}{stat(sub)}")
+        if len(sub) >= 4:
+            print(f"    {k:<28}{stat(sub)}{'' if len(sub) >= 8 else '  (n<8)'}")
     print(f"    {'亮过可买':<28}{stat(ever)}")
 
 
