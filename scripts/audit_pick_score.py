@@ -148,7 +148,7 @@ def candidate(row: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str, Any]
     }
     if cand["kind"] != "etf":
         cand["zt_ytd"] = zt_ytd(bars, row["trade_date"])
-        cv = build_cv(before[-130:], row["entry"], index_pct()) if before and row["entry"] else None
+        cv = build_cv(before[-130:], row["entry"], index_pct(), code=row["code"]) if before and row["entry"] else None
         if cv:
             cand["cv"] = cv
             p["cv"] = cv

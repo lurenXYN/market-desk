@@ -82,6 +82,48 @@ def test_pick_score_uses_ivol_factor():
     assert not any(f["key"] == "ivol" for f in mid["factors"])
 
 
+def test_float_cap_from_prior_bar_and_small_cap_bucket():
+    bars = _bars(30, price=20.0, vol=200000.0, turnover=4.0)
+    assert cvm.float_cap_yi(bars, "600001") == 100.0
+    assert cvm.build_cv(bars, 20.0, code="600001")["cap"] == "other"
+    small = _bars(30, price=10.0, vol=200000.0, turnover=4.0)
+    cv = cvm.build_cv(small, 10.0, code="300001")
+    assert cv["float_cap_yi"] == 50.0 and cv["cap"] == "small"
+    assert "small_cap" in [t["k"] for t in cvm.cv_tags(cv)]
+    assert cvm.float_cap_yi([{"volume": 1.0, "close": 1.0, "turnover": 0.0}], "600001") is None
+    assert cvm.float_cap_yi([], "600001") is None
+
+
+def test_float_cap_star_volume_is_shares_and_needs_code():
+    bars = _bars(30, price=20.0, vol=20000000.0, turnover=4.0)
+    assert cvm.float_cap_yi(bars, "688001") == 100.0
+    assert cvm.float_cap_yi(bars, None) is None
+    assert "float_cap_yi" not in cvm.build_cv(bars, 20.0)
+
+
+def test_add_ivol_backfills_float_cap_on_stored_cv():
+    bars = _bars(30, price=10.0, vol=200000.0, turnover=4.0)
+    cv = {"chip_pos": "ok", "ivol20": 1.0, "ivol": "low"}
+    assert cvm.add_ivol(cv, bars, {}, code="600001") and cv["cap"] == "small" and cv["ivol"] == "low"
+    assert not cvm.add_ivol(cv, bars, {}, code="600001")
+
+
+def test_pick_score_small_cap_and_watch_tags():
+    empty = build_history_stats([])
+    base = {"code": "600001", "kind": "stock", "manual": True}
+    small = score_pick({**base, "cv": {"cap": "small", "float_cap_yi": 50.0}}, empty)
+    big = score_pick({**base, "cv": {"cap": "other", "float_cap_yi": 500.0}}, empty)
+    assert small["score"] == 63 and big["score"] == 60
+    watch = score_pick({**base, "open_gap_pct": 3.2, "lhb_recent": {"date": "2026-09-28", "net_yi": -0.5}}, empty)
+    by = {f["key"]: f for f in watch["factors"]}
+    assert watch["score"] == 60 and by["gap"]["points"] == 0 and by["lhb"]["points"] == 0
+    assert "09-28" in by["lhb"]["detail"] and "-0.50" in by["lhb"]["detail"]
+    low_gap = score_pick({**base, "open_gap_pct": 1.5}, empty)
+    assert not any(f["key"] == "gap" for f in low_gap["factors"])
+    etf = score_pick({**base, "kind": "etf", "open_gap_pct": 3.0, "lhb_recent": {"date": "2026-09-28"}}, empty)
+    assert not any(f["key"] in ("gap", "lhb") for f in etf["factors"])
+
+
 def test_bars_before_many_excludes_signal_day(monkeypatch):
     cvm._BARS_CACHE.clear()
     calls: list[str] = []

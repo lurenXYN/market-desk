@@ -44,6 +44,7 @@ from market_desk.db import (
     save_auction,
     save_board_daily,
     save_daily,
+    save_fund_flow_daily,
     try_add_mainline_switch,
     upsert_session_segment,
 )
@@ -187,6 +188,8 @@ class DeskEngine:
         self._review_scored_at: float = 0.0
         self._fund_flow_full_at: float = 0.0
         self._fund_flow_lock = asyncio.Lock()
+        # (trade_date, industry rows, concept rows) from the last refresh, before the sticky fallback.
+        self._day_flow_fresh: tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | None = None
         # Live marks for all users' position / watchlist codes (not in public snap).
         self._book_quotes: dict[str, dict[str, Any]] = {}
         # Rolling source ok/fail/timeout counters for the health strip.
@@ -442,6 +445,10 @@ class DeskEngine:
                             self._ensure_eod_breadth(today)
                         except Exception:
                             log.exception("eod breadth guard failed")
+                        try:
+                            self._save_eod_fund_flow(today)
+                        except Exception:
+                            log.exception("eod fund flow snapshot failed")
                         if bool(setting("auto_backup", True)):
                             try:
                                 keep = int(setting("backup_keep", 30) or 30)
@@ -520,6 +527,7 @@ class DeskEngine:
                 etfs = etfs or []
                 indices = indices or []
                 yesterday_zt = yesterday_zt or []
+                self._day_flow_fresh = (trade_date_dash, list(flow_ind_d or []), list(flow_con_d or []))
                 prev_snap = self.snapshot or {}
                 prev_flow = prev_snap.get("fund_flow") or {}
                 prev_periods = (prev_flow.get("api_raw") or {}) if isinstance(prev_flow, dict) else {}
@@ -1877,13 +1885,14 @@ class DeskEngine:
             build_cv,
             index_returns_before,
         )
+        from market_desk.config import PICK_LHB_LOOKBACK_DAYS
+        from market_desk.lhb import recent_billboard_map
         from market_desk.ma_fan import enrich_signals_with_ma_fan
         from market_desk.review import (
             enrich_signals_with_boards,
             enrich_signals_with_holders,
             enrich_signals_with_live_marks,
             enrich_signals_with_trends,
-            mark_pm_weak_signals,
         )
         from market_desk.zt_stats import enrich_signals_with_zt_ytd
 
@@ -1923,6 +1932,11 @@ class DeskEngine:
                         return {}
                     return await index_returns_before(client, today)
 
+                async def _lhb() -> dict[str, dict[str, Any]]:
+                    if not stock_codes:
+                        return {}
+                    return await recent_billboard_map(client, today, int(PICK_LHB_LOOKBACK_DAYS))
+
                 results = await asyncio.gather(
                     fetch_quotes(client, all_codes),
                     _trends(),
@@ -1930,21 +1944,28 @@ class DeskEngine:
                     _holders(),
                     _cv_bars(),
                     _cv_mkt(),
+                    _lhb(),
                     return_exceptions=True,
                 )
-                quotes, trends, zt_map, holders, cv_bars, cv_mkt = [
+                quotes, trends, zt_map, holders, cv_bars, cv_mkt, lhb_map = [
                     r if isinstance(r, dict) else {} for r in results
                 ]
         except Exception:
-            cv_bars, cv_mkt = {}, {}
+            cv_bars, cv_mkt, lhb_map = {}, {}, {}
             log.exception("pick score enrich failed")
         for r in rows:
-            q = quotes.get(str(r["code"])) or {}
+            code = str(r["code"])
+            q = quotes.get(code) or {}
             if r.get("manual") and q.get("name"):
                 r["name"] = q["name"]
+            if r.get("kind") != "etf":
+                o, prev = num(q.get("open")), num(q.get("prev"))
+                if o and prev:
+                    r["open_gap_pct"] = round((o / prev - 1.0) * 100.0, 2)
+                if code in lhb_map:
+                    r["lhb_recent"] = lhb_map[code]
         snap = self.snapshot or {}
         rows = enrich_signals_with_live_marks(rows, quotes) if quotes else rows
-        rows = mark_pm_weak_signals(rows)
         rows = enrich_signals_with_boards(
             rows,
             list(snap.get("hot_boards") or []) + list(snap.get("pin_boards") or []),
@@ -1967,10 +1988,10 @@ class DeskEngine:
                 continue
             if stored_today:
                 r["cv"] = dict(r["cv"])
-                add_ivol(r["cv"], bars, cv_mkt)
+                add_ivol(r["cv"], bars, cv_mkt, code=str(r["code"]))
                 continue
             price = num(r.get("plan_price")) or num(r.get("price")) or num(r.get("live_last"))
-            r["cv"] = build_cv(bars, price, cv_mkt)
+            r["cv"] = build_cv(bars, price, cv_mkt, code=str(r["code"]))
         return rows
 
     async def build_review_scores(self, view_date: str | None = None) -> dict[str, Any]:
@@ -2120,6 +2141,20 @@ class DeskEngine:
             trend=trend,
             user_id=user_id,
         )
+
+    def _save_eod_fund_flow(self, day: str) -> int:
+        """Persist the post-close day board flow once per trade date; return rows written.
+
+        Research data only (e.g. prior-day board leader / board inflow for pick-score
+        tests); the funds tab keeps reading East Money directly and never loads it.
+        """
+        fresh = self._day_flow_fresh
+        if not fresh or fresh[0] != day or not (fresh[1] or fresh[2]):
+            log.warning("eod fund flow snapshot skipped: no fresh day flow for %s", day)
+            return 0
+        n = save_fund_flow_daily(day, list(fresh[1]) + list(fresh[2]))
+        log.info("eod fund flow snapshot %s rows=%s", day, n)
+        return n
 
     async def refresh_fund_flow(self, *, force: bool = False) -> dict[str, Any]:
         """Fetch East Money day/week/month fund-flow boards (funds tab on demand)."""

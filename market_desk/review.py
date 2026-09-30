@@ -511,6 +511,13 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     trade_date = snapshot.get("trade_date") or ""
     if not trade_date:
         return 0
+    try:
+        from market_desk.calendar import is_trading_day
+
+        if not is_trading_day(str(trade_date)):
+            return 0
+    except ValueError:
+        return 0
     signaled_at = snapshot.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if is_pre_match_stamp(signaled_at):
         return 0
@@ -532,6 +539,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         )
     except Exception:
         trade_ctx = {}
+    from market_desk.gate_ledger import normalize_gate_notes
+
+    market_gates = normalize_gate_notes(verdict.get("algo_notes"))
     n = 0
 
     def _log_buy_items(
@@ -638,6 +648,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "source_match": (origin_cmp or {}).get("match"),
                         "context": trade_ctx or None,
                         "cv": item.get("cv") if isinstance(item.get("cv"), dict) else None,
+                        "market_gates": market_gates,
                     },
                 }
             )
@@ -2996,54 +3007,6 @@ def _above_plan_pct(
     return round(pct, 2)
 
 
-def _signal_hhmm(row: dict[str, Any]) -> str:
-    """Return the ``HH:MM`` part of a signal's ``signaled_at`` stamp, or ``""``."""
-    raw = str(row.get("signaled_at") or "")
-    hhmm = raw[11:16] if len(raw) >= 16 else ""
-    return hhmm if len(hhmm) == 5 and hhmm[2] == ":" else ""
-
-
-def in_pm_weak_window(hhmm: str) -> bool:
-    """Return True when ``HH:MM`` falls inside the afternoon-open weak window."""
-    from market_desk.config import REVIEW_PM_WEAK_WINDOW
-
-    start, end = REVIEW_PM_WEAK_WINDOW
-    return bool(hhmm) and start <= hhmm < end
-
-
-def mark_pm_weak_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Tag buy rows signaled inside the afternoon weak window (display only)."""
-    out: list[dict[str, Any]] = []
-    for raw in rows or []:
-        item = dict(raw)
-        item["pm_weak"] = bool(
-            is_buy_signal(item.get("signal_type")) and in_pm_weak_window(_signal_hhmm(item))
-        )
-        out.append(item)
-    return out
-
-
-def build_pm_weak_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compare 3-day win rate of weak-window buys against all other scored buys."""
-
-    def _agg(items: list[dict[str, Any]]) -> dict[str, Any]:
-        scored = [num(r.get("outcome_day3_pct")) for r in items]
-        scored = [v for v in scored if v is not None]
-        if not scored:
-            return {"n": 0, "win3": None, "d3": None}
-        wins = sum(1 for v in scored if v > 0)
-        return {
-            "n": len(scored),
-            "win3": round(100.0 * wins / len(scored), 1),
-            "d3": round(sum(scored) / len(scored), 2),
-        }
-
-    buys = [r for r in rows or [] if is_buy_signal(r.get("signal_type"))]
-    inside = [r for r in buys if in_pm_weak_window(_signal_hhmm(r))]
-    outside = [r for r in buys if not in_pm_weak_window(_signal_hhmm(r))]
-    return {"window": _agg(inside), "rest": _agg(outside)}
-
-
 def _ever_ready(row: dict[str, Any]) -> bool:
     """Return True when the buy lit the ready flag at any refresh that day."""
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
@@ -3149,16 +3112,14 @@ def build_review_session_hint(
     *,
     is_today: bool,
     now: datetime | None = None,
-    stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the review-page banner: session window, today's buy counts, cautions.
 
     Display only; the banner never blocks or rewrites any signal.
     """
     from market_desk.calendar import is_trading_day
-    from market_desk.config import REVIEW_ABOVE_PLAN_WARN_PCT, REVIEW_PM_WEAK_WINDOW
+    from market_desk.config import REVIEW_ABOVE_PLAN_WARN_PCT
 
-    start, end = REVIEW_PM_WEAK_WINDOW
     if not is_today:
         return {"ok": False}
     now = now or datetime.now(_CN_TZ)
@@ -3170,46 +3131,29 @@ def build_review_session_hint(
         session, level = "盘前", "info"
     elif hhmm < "11:30":
         session, level = "上午盘", "info"
-    elif hhmm < start:
+    elif hhmm < "13:00":
         session, level = "午休", "info"
-    elif hhmm < end:
-        session, level = f"午后弱窗（{start}–{end}）", "warn"
+    elif hhmm < "14:00":
+        session, level = "午后盘", "info"
     elif hhmm < "15:00":
         session, level = "尾盘段", "info"
     else:
         session, level = "已收盘", "info"
     buys = [r for r in day_rows or [] if is_buy_signal(r.get("signal_type"))]
-    pm_n = sum(1 for r in buys if r.get("pm_weak"))
     above_n = sum(1 for r in buys if "above_plan" in (r.get("price_flags") or []))
     tips: list[str] = []
-    if level == "warn":
-        tips.append("当前在午后弱窗：新买点只看不追，确需开仓就缩仓")
     if above_n:
         tips.append(
             f"{above_n} 条买点现价已高于计划价 {REVIEW_ABOVE_PLAN_WARN_PCT:g}% 以上，只按计划价挂单"
-        )
-    if pm_n:
-        tips.append(f"{pm_n} 条买点出在午后弱窗，已在名称旁标注")
-    st = stats or {}
-    win, rest = st.get("window") or {}, st.get("rest") or {}
-    hist = ""
-    if win.get("n") and rest.get("n") and win.get("win3") is not None and rest.get("win3") is not None:
-        hist = (
-            f"近期样本：弱窗买点三日胜率 {win['win3']}%（{win['n']} 条）"
-            f"，其余时段 {rest['win3']}%（{rest['n']} 条）"
         )
     return {
         "ok": True,
         "now": hhmm,
         "session": session,
         "level": level,
-        "in_pm_weak": level == "warn",
-        "window": [start, end],
         "buy_n": len(buys),
-        "pm_weak_n": pm_n,
         "above_plan_n": above_n,
         "tips": tips,
-        "history": hist,
     }
 
 
@@ -3567,7 +3511,6 @@ def build_review_payload(
     day_rows = filter_signals_for_viewer(day_rows, user_id)
     if quotes:
         day_rows = enrich_signals_with_live_marks(day_rows, quotes)
-    day_rows = mark_pm_weak_signals(day_rows)
     day_rows = enrich_signals_with_boards(
         day_rows, boards, live_mainline=compare_ml
     )
@@ -3665,18 +3608,20 @@ def build_review_payload(
     except Exception:
         wide_rows = []
     try:
-        pm_stats = build_pm_weak_stats(wide_rows[:800])
-    except Exception:
-        pm_stats = None
-    try:
         summary["ready_monitor"] = build_ready_monitor(
             [r for r in wide_rows if not _dragon_hide_from_review(r)]
         )
     except Exception:
         summary["ready_monitor"] = {"ok": False, "tone": "low", "note": "可买入监控暂不可用"}
-    summary["session_hint"] = build_review_session_hint(
-        day_rows, is_today=day == calendar_today, stats=pm_stats
-    )
+    try:
+        from market_desk.gate_ledger import build_gate_ledger
+
+        summary["gate_ledger"] = build_gate_ledger(
+            [r for r in wide_rows if not _dragon_hide_from_review(r)]
+        )
+    except Exception:
+        summary["gate_ledger"] = {"ok": False, "rows": [], "note": "闸门账本暂不可用"}
+    summary["session_hint"] = build_review_session_hint(day_rows, is_today=day == calendar_today)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     try:
         summary["sell_fly_board"] = build_sell_fly_board(global_rows)

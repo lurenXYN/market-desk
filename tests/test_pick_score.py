@@ -34,14 +34,15 @@ def _cand(code: str, **extra):
     return row
 
 
-def test_history_stats_buckets_by_trend_and_time():
+def test_history_stats_buckets_by_trend():
     rows = [_hist("buy", "10:00", 2.0, day=i + 1, trend_ok=True) for i in range(9)]
     rows += [_hist("buy", "13:10", -3.0, day=i + 1, trend_down=True) for i in range(9)]
     rows.append({"signal_type": "sell", "outcome_day3_pct": 5.0})
     st = build_history_stats(rows)
     assert st["n"] == 18 and st["base_win3"] == 50.0
     assert st["buckets"]["trend:up"] == {"n": 9, "days": 9, "win3": 100.0}
-    assert st["buckets"]["pm:weak"] == {"n": 9, "days": 9, "win3": 0.0}
+    assert st["buckets"]["trend:down"] == {"n": 9, "days": 9, "win3": 0.0}
+    assert not any(k.startswith("pm:") for k in st["buckets"])
 
 
 def test_history_win_rate_is_day_balanced():

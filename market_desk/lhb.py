@@ -45,13 +45,14 @@ async def _dc_rows(
     sort_columns: str | None = None,
     sort_types: str | None = None,
     page_size: int = 50,
+    page_number: int = 1,
 ) -> list[dict[str, Any]]:
     """Fetch one East Money datacenter report page."""
     params: dict[str, str] = {
         "reportName": report,
         "columns": "ALL",
         "filter": filt,
-        "pageNumber": "1",
+        "pageNumber": str(max(1, int(page_number))),
         "pageSize": str(max(1, min(int(page_size), 200))),
         "source": "WEB",
         "client": "WEB",
@@ -319,6 +320,75 @@ async def _latest_appearance(
         "sell_yi": _yi(best.get("BILLBOARD_SELL_AMT")),
         "net_yi": _yi(best.get("BILLBOARD_NET_AMT")),
     }
+
+
+_RECENT_CACHE: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+
+
+def prior_sessions(trade_date: str, n: int) -> list[str]:
+    """Return the ``n`` trading dates strictly before ``trade_date`` (oldest first)."""
+    from datetime import date, timedelta
+
+    from market_desk.calendar import is_trading_day
+
+    day = date.fromisoformat(str(trade_date)[:10])
+    out: list[str] = []
+    guard = 0
+    while len(out) < n and guard < 60:
+        day -= timedelta(days=1)
+        guard += 1
+        if is_trading_day(day):
+            out.append(day.isoformat())
+    return sorted(out)
+
+
+async def recent_billboard_map(
+    client: httpx.AsyncClient, trade_date: str, days: int
+) -> dict[str, dict[str, Any]]:
+    """Map code -> latest billboard appearance within the ``days`` sessions before ``trade_date``.
+
+    One date-range query (paged) per trade date, cached for ``PICK_LHB_CACHE_SEC``.
+    Values are ``{date, net_yi}``; failures return an empty map and are not cached.
+    """
+    from market_desk.config import PICK_LHB_CACHE_SEC
+
+    day = str(trade_date or "")[:10]
+    sessions = prior_sessions(day, int(days)) if day else []
+    if not sessions:
+        return {}
+    key = f"{day}|{int(days)}"
+    hit = _RECENT_CACHE.get(key)
+    if hit and time.time() - hit[0] < float(PICK_LHB_CACHE_SEC):
+        return hit[1]
+    filt = f"(TRADE_DATE>='{sessions[0]}')(TRADE_DATE<='{sessions[-1]}')"
+    out: dict[str, dict[str, Any]] = {}
+    fetched = False
+    for page in range(1, 11):
+        rows = await _dc_rows(
+            client,
+            report="RPT_DAILYBILLBOARD_DETAILS",
+            filt=filt,
+            sort_columns="TRADE_DATE",
+            sort_types="-1",
+            page_size=200,
+            page_number=page,
+        )
+        fetched = fetched or bool(rows)
+        for r in rows:
+            raw = str(r.get("SECURITY_CODE") or "").strip()
+            d = str(r.get("TRADE_DATE") or "")[:10]
+            if not raw or not d:
+                continue
+            code = normalize_code(raw)
+            prev = out.get(code)
+            if prev is None or d > prev["date"]:
+                out[code] = {"date": d, "net_yi": _yi(r.get("BILLBOARD_NET_AMT"))}
+        if len(rows) < 200:
+            break
+    if fetched:
+        _RECENT_CACHE.clear()
+        _RECENT_CACHE[key] = (time.time(), out)
+    return out
 
 
 async def _seats_for_day(

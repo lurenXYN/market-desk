@@ -135,7 +135,7 @@ def main() -> None:
     for h in hits:
         bars = [b for b in stocks[h["code"]]["bars"] if b.get("close")]
         upto = bars[: h["i"] + 1]
-        cv = build_cv(upto, upto[-1]["close"], index_pct_map([x for x in idx if x[0] <= h["day"]]))
+        cv = build_cv(upto, upto[-1]["close"], index_pct_map([x for x in idx if x[0] <= h["day"]]), code=h["code"])
         res = score_pick({"code": h["code"], "kind": "stock", "live_pct": h["pct"], "ma_fan": True, "cv": cv}, empty_stats)
         h["pick"], h["grade"] = res["score"], res["grade"]
     day_mean = {d: {k: mean([x[k] for x in v if x[k] is not None]) for k in ("d1", "d3", "d5", "d3o")

@@ -573,14 +573,13 @@ def part_d(rows: list[dict[str, Any]]) -> None:
     days = sorted({r["trade_date"] for r in rows})
     idx = {d: i for i, d in enumerate(days)}
     names = ("PICK_HIST_PP_TO_PTS", "PICK_CV_CHIP_HIGH_PTS", "PICK_CV_VOL_FADE_PTS",
-             "PICK_CV_IVOL_HIGH_PTS", "PICK_CV_IVOL_LOW_PTS", "PICK_PM_WEAK_PTS")
+             "PICK_CV_IVOL_HIGH_PTS", "PICK_CV_IVOL_LOW_PTS")
     orig = {n: getattr(ps, n) for n in names}
     # (config patch, extra points when daily trend is up, drop the "no limit-up this year" −4)
     variants: dict[str, tuple[dict[str, float], float, bool]] = {
         "现行": ({}, 0.0, False),
         "无涨停不扣": ({}, 0.0, True),
         "无涨停不扣+连缩量−3": ({"PICK_CV_VOL_FADE_PTS": -3.0}, 0.0, True),
-        "无涨停不扣+连缩量−3+午后−3": ({"PICK_CV_VOL_FADE_PTS": -3.0, "PICK_PM_WEAK_PTS": -3.0}, 0.0, True),
         "筹码偏高/连缩量/股性躁都−5": (
             {"PICK_CV_CHIP_HIGH_PTS": -5.0, "PICK_CV_VOL_FADE_PTS": -5.0, "PICK_CV_IVOL_HIGH_PTS": -5.0}, 0.0, False),
         "走势稳不加分": ({"PICK_CV_IVOL_LOW_PTS": 0.0}, 0.0, False),

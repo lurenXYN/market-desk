@@ -23,6 +23,7 @@ from market_desk.config import (
     CV_IVOL_LOW,
     CV_IVOL_MIN_DAYS,
     CV_IVOL_WINDOW,
+    CV_SMALL_CAP_YI,
     HTTP_HEADERS,
 )
 from market_desk.numbers import num
@@ -295,13 +296,37 @@ def classify(cv: dict[str, Any]) -> dict[str, str]:
     iv = num(cv.get("ivol20"))
     if iv is not None:
         out["ivol"] = "high" if iv >= float(CV_IVOL_HIGH) else ("low" if iv <= float(CV_IVOL_LOW) else "mid")
+    cap = num(cv.get("float_cap_yi"))
+    if cap is not None:
+        out["cap"] = "small" if cap <= float(CV_SMALL_CAP_YI) else "other"
     return out
 
 
+def float_cap_yi(bars: list[dict[str, Any]], code: str | None) -> float | None:
+    """Return the last bar's float market cap in 亿 (amount / turnover), or None.
+
+    Tencent daily volume is in shares for STAR (688/689) and in lots of 100
+    shares elsewhere; without a code the unit is unknown, so None is returned.
+    The last forward-adjusted close equals the real close.
+    """
+    c = str(code or "").strip().zfill(6) if code else ""
+    if not bars or not c:
+        return None
+    b = bars[-1]
+    vol, close, turn = num(b.get("volume")), num(b.get("close")), num(b.get("turnover"))
+    if not vol or not close or not turn or turn <= 0:
+        return None
+    shares = vol if c.startswith(("688", "689")) else vol * 100.0
+    return round(shares * close / (turn / 100.0) / 1e8, 1)
+
+
 def build_cv(
-    bars: list[dict[str, Any]], price: float | None, mkt: dict[str, float] | None = None
+    bars: list[dict[str, Any]],
+    price: float | None,
+    mkt: dict[str, float] | None = None,
+    code: str | None = None,
 ) -> dict[str, Any] | None:
-    """Combine chip, volume and idiosyncratic-volatility context (bars end the prior day)."""
+    """Combine chip, volume, idiosyncratic-volatility and float-cap context (bars end the prior day)."""
     if not bars:
         return None
     out: dict[str, Any] = {"as_of": bars[-1].get("date")}
@@ -314,22 +339,36 @@ def build_cv(
     iv = ivol_profile(bars, mkt)
     if iv is not None:
         out["ivol20"] = iv
+    cap = float_cap_yi(bars, code)
+    if cap is not None:
+        out["float_cap_yi"] = cap
     if len(out) == 1:
         return None
     out.update(classify(out))
     return out
 
 
-def add_ivol(cv: dict[str, Any], bars: list[dict[str, Any]], mkt: dict[str, float] | None) -> bool:
-    """Fill ``ivol20`` / ``ivol`` onto an existing cv dict in place; return True when added."""
-    if cv.get("ivol20") is not None:
-        return False
-    iv = ivol_profile(bars, mkt)
-    if iv is None:
-        return False
-    cv["ivol20"] = iv
-    cv.update({k: v for k, v in classify(cv).items() if k == "ivol"})
-    return True
+def add_ivol(
+    cv: dict[str, Any],
+    bars: list[dict[str, Any]],
+    mkt: dict[str, float] | None,
+    code: str | None = None,
+) -> bool:
+    """Fill ``ivol20`` / ``float_cap_yi`` (and buckets) missing from a stored cv dict; return True when added."""
+    added = False
+    if cv.get("ivol20") is None:
+        iv = ivol_profile(bars, mkt)
+        if iv is not None:
+            cv["ivol20"] = iv
+            added = True
+    if cv.get("float_cap_yi") is None:
+        cap = float_cap_yi(bars, code)
+        if cap is not None:
+            cv["float_cap_yi"] = cap
+            added = True
+    if added:
+        cv.update({k: v for k, v in classify(cv).items() if k in ("ivol", "cap")})
+    return added
 
 
 def cv_tags(cv: dict[str, Any] | None) -> list[dict[str, str]]:
@@ -387,6 +426,16 @@ def cv_tags(cv: dict[str, Any] | None) -> list[dict[str, str]]:
             "tone": "warn",
             "title": f"近 3 日均量只有再前 7 日的 {cv.get('vol_trend3')} 倍，人气在退。",
         })
+    if cv.get("cap") == "small":
+        tags.append({
+            "k": "small_cap",
+            "label": "小盘",
+            "tone": "good",
+            "title": (
+                f"昨日流通市值约 {cv.get('float_cap_yi')} 亿（≤{CV_SMALL_CAP_YI:.0f} 亿）；"
+                "小盘回踩买入三日表现略好，打分小幅加分。"
+            ),
+        })
     return tags
 
 
@@ -414,7 +463,7 @@ async def attach_cv(
     for it in todo:
         bars = bars_by.get(str(it["code"]).zfill(6))
         price = next((num(it.get(k)) for k in price_keys if num(it.get(k))), None)
-        cv = build_cv(bars or [], price, mkt)
+        cv = build_cv(bars or [], price, mkt, code=str(it["code"]))
         if cv:
             it["cv"] = cv
             n += 1

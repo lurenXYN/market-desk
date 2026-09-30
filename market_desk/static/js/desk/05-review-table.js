@@ -231,6 +231,37 @@ function escAttr(s) {
     .replace(/</g, "&lt;")
     .replace(/'/g, "&#39;");
 }
+
+/**
+ * Render the gate ledger: each gate / flag vs peers without it (display only).
+ * @param {object} gl - summary.gate_ledger from /api/review.
+ */
+function paintGateLedger(gl) {
+  const box = document.getElementById("revGateLedger");
+  if (!box) return;
+  const rows = (gl && gl.rows) || [];
+  if (!gl || !gl.ok || !rows.length) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  const fmt = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const body = rows.map((r) => {
+    const scope = r.scope === "market" ? "市场" : "个股";
+    const basis = r.scope === "market" ? "对无此闸门日" : `同日对照${r.peer_n}`;
+    const tip = `${r.polarity > 0 ? "期望更好" : "期望更差"} · ${scope}级 · 依据：${basis}`;
+    return `<tr class="gl-${escAttr(r.tone)}" title="${escAttr(tip)}">`
+      + `<td>${escAttr(r.key)}</td><td class="num">${r.n}</td><td class="num">${r.days}</td>`
+      + `<td class="num">${r.win3}%</td><td class="num">${fmt(r.d3)}</td>`
+      + `<td class="num">${fmt(r.metric)}</td><td>${escAttr(r.verdict)}</td></tr>`;
+  }).join("");
+  box.hidden = false;
+  box.innerHTML =
+    `<div class="hd">闸门账本<button type="button" class="q" data-term="闸门账本">?</button> · ${escAttr(gl.note || "")}</div>`
+    + `<table class="gl-tbl"><thead><tr><th>闸门/标记</th><th>样本</th><th>天数</th>`
+    + `<th>三日胜率</th><th>三日均值</th><th>差值</th><th>结论</th></tr></thead>`
+    + `<tbody>${body}</tbody></table>`;
+}
 function closeOpenFillEditors() {
   document.querySelectorAll("#revBody .rev-fill-ed").forEach((ed) => {
     const cell = ed.closest("td");
@@ -357,9 +388,6 @@ function revCellHtml(col, r, ctx) {
     const histBtn = code
       ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
       : "";
-    const pmWeak = r.pm_weak
-      ? ` <span class="rev-chip pm-weak" title="午后开盘弱窗里出的买点，近期胜率明显偏低：只看不追，确需开仓就缩仓">午后弱窗</span>`
-      : "";
     const cvChips = (r.cv_tags || []).map((t) =>
       ` <span class="rev-chip cv-${t.tone === "good" ? "good" : "warn"}" title="${escAttr(t.title || "")}">${escAttr(t.label || "")}</span>`
     ).join("");
@@ -370,7 +398,6 @@ function revCellHtml(col, r, ctx) {
     return pickChk
       + `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
       + revTrendChips(r)
-      + pmWeak
       + cvChips
       + histBtn
       + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
@@ -498,13 +525,11 @@ function paintReviewSession(hint) {
   el.hidden = false;
   el.className = "rev-session" + (h.level === "warn" ? " warn" : "");
   const counts = `今日买点 ${h.buy_n ?? 0}`
-    + ` · 午后弱窗 ${h.pm_weak_n ?? 0}`
     + ` · 高于计划价 ${h.above_plan_n ?? 0}`;
   const tips = (h.tips || []).map((t) => `<li>${escAttr(String(t))}</li>`).join("");
   el.innerHTML = `<div class="hd">${escAttr(h.now || "")} · ${escAttr(h.session || "")}</div>`
     + `<div>${counts}</div>`
-    + (tips ? `<ul>${tips}</ul>` : "")
-    + (h.history ? `<div class="meta">${escAttr(h.history)}</div>` : "");
+    + (tips ? `<ul>${tips}</ul>` : "");
 }
 
 function paintReview(payload) {
@@ -667,6 +692,7 @@ function paintReview(payload) {
         + `<span class="meta">${oc.note || "有隔日打分后并排显示"}</span>`;
     }
   }
+  paintGateLedger(sum.gate_ledger || {});
   const chip = (lab, rate, n, lowN) =>
     `<div class="hit-chip${lowN ? " low-n" : ""}" title="${lowN ? "样本不足 n<8，灰显参考" : ""}"><div class="lab">${lab}</div>`
     + `<div class="rate ${rateCls(rate)}">${rate == null ? "—" : (rate + "%")}</div>`

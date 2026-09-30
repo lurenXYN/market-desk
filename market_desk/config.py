@@ -223,15 +223,21 @@ OUTCOME_FAKE_RED_CLOSE_MAX = 0.5  # close pct below this counts as "weak close"
 OUTCOME_FORMULA_VERSION = 8
 # Review display standards (DB always stores classic).
 OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
-# Review-page hints only (never gate signals): afternoon-open weak window and
-# the live-vs-plan premium that marks a buy row as chasing.
-REVIEW_PM_WEAK_WINDOW = ("13:00", "14:00")
+# Review-page hint only (never gates signals): the live-vs-plan premium that
+# marks a buy row as chasing.
 REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
 # Ready-gate monitor on the review board (display only): lit buys vs same-day
 # peers over the most recent scored trade days. Below MIN_N no verdict is shown.
 REVIEW_READY_MONITOR_DAYS = 20
 REVIEW_READY_MONITOR_MIN_N = 8
 REVIEW_READY_MONITOR_EXCESS_PCT = 1.0
+# Gate ledger (display only): every gate / flag a buy carried vs peers without it.
+# Row gates use same-day excess; market (day-level) gates use gated-vs-ungated raw
+# 3-day return. EDGE is the |diff| needed before a gate is called good or harmful.
+GATE_LEDGER_DAYS = 20
+GATE_LEDGER_MIN_N = 8
+GATE_LEDGER_MIN_DAYS = 3
+GATE_LEDGER_EDGE_PCT = 0.8
 # Review payload cache for today (the page auto-refreshes every 30s in session).
 # Daily klines and pending outcome scoring are throttled separately so a fast
 # page cadence only re-pulls the single batched live-quote call.
@@ -250,9 +256,7 @@ PICK_HIST_MIN_DAYS = 5
 # days) hurt ranking, so it is off (0) and the win rate is shown as info only.
 PICK_HIST_PP_TO_PTS = 0.0
 PICK_HIST_MAX_ADJ = 8.0
-# 午后弱窗 / 年内无涨停: shown as info only — the pm window flipped sign between
-# halves of the stored buys, and zero-limit-up names showed no edge on either sample.
-PICK_PM_WEAK_PTS = 0.0
+# 年内无涨停: shown as info only — zero-limit-up names showed no edge on either sample.
 PICK_ZT_NONE_PTS = 0.0
 PICK_MAX_ITEMS = 6
 # Review score column: today's rows are re-scored at most this often; during the
@@ -286,6 +290,18 @@ CV_IVOL_HIGH = 4.2
 CV_IVOL_LOW = 2.0
 PICK_CV_IVOL_HIGH_PTS = -3.0
 PICK_CV_IVOL_LOW_PTS = 2.0
+# Float market cap from the prior bar (amount / turnover). Small caps held on
+# both samples (scripts/research_untested_factors.py): stored buys IC -0.16,
+# smallest third +0.8~1.1% same-day excess; ~16k pullback days smallest fifth
+# +0.41% / +2.2pp win rate, the rest flat.
+CV_SMALL_CAP_YI = 80.0
+PICK_CV_SMALL_CAP_PTS = 3.0
+# Watch-only tags (0 points). Open gap ≥2%: stored buys IC -0.19 but no edge on
+# the big sample. Billboard within the prior N sessions: weaker 3-day outcome on
+# both samples (-1.6~-2.3% / -0.35%), yet a penalty did not improve ranking.
+PICK_GAP_WATCH_PCT = 2.0
+PICK_LHB_LOOKBACK_DAYS = 5
+PICK_LHB_CACHE_SEC = 1800.0
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8

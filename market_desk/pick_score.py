@@ -10,18 +10,21 @@ from __future__ import annotations
 from typing import Any
 
 from market_desk.config import (
+    CV_SMALL_CAP_YI,
     PICK_BASE_SCORE,
     PICK_CV_CHIP_HIGH_PTS,
     PICK_CV_IVOL_HIGH_PTS,
     PICK_CV_IVOL_LOW_PTS,
+    PICK_CV_SMALL_CAP_PTS,
     PICK_CV_VOL_FADE_PTS,
     PICK_CV_VOL_SHRINK_PTS,
     PICK_CV_VOL_SPIKE_PTS,
+    PICK_GAP_WATCH_PCT,
     PICK_HIST_MAX_ADJ,
     PICK_HIST_MIN_DAYS,
     PICK_HIST_MIN_N,
     PICK_HIST_PP_TO_PTS,
-    PICK_PM_WEAK_PTS,
+    PICK_LHB_LOOKBACK_DAYS,
     PICK_ZT_NONE_PTS,
 )
 from market_desk.numbers import num
@@ -42,12 +45,6 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     return p if isinstance(p, dict) else {}
 
 
-def _hhmm(row: dict[str, Any]) -> str:
-    """Return ``HH:MM`` from ``signaled_at`` or ``""``."""
-    raw = str(row.get("signaled_at") or "")
-    return raw[11:16] if len(raw) >= 16 else ""
-
-
 def _is_buy(row: dict[str, Any]) -> bool:
     """Return True for stored buy-family signals (manual rows excluded)."""
     from market_desk.review import is_buy_signal
@@ -61,8 +58,6 @@ def history_buckets(row: dict[str, Any], *, live: bool) -> dict[str, str]:
     ``live`` reads the freshly enriched fields (candidate rows); otherwise the
     signal-time payload is used (stored history rows).
     """
-    from market_desk.review import in_pm_weak_window
-
     payload = _payload(row)
     out: dict[str, str] = {}
     if live and (row.get("trend_ok") or row.get("trend_down") or row.get("daily_trend")):
@@ -78,9 +73,6 @@ def history_buckets(row: dict[str, Any], *, live: bool) -> dict[str, str]:
         out["board"] = "off"
     if _is_buy(row):
         out["source"] = str(row.get("signal_type") or "")
-        hhmm = _hhmm(row)
-        if hhmm:
-            out["pm"] = "weak" if in_pm_weak_window(hhmm) else "other"
         fails = payload.get("confirm_fail")
         if fails is not None:
             out["gate"] = "fail" if fails else "clean"
@@ -89,7 +81,7 @@ def history_buckets(row: dict[str, Any], *, live: bool) -> dict[str, str]:
         out["ready"] = "1" if lit else "0"
     cv = row.get("cv") if live else payload.get("cv")
     if isinstance(cv, dict):
-        for key in ("chip_pos", "vol1", "vol3", "ivol"):
+        for key in ("chip_pos", "vol1", "vol3", "ivol", "cap"):
             if cv.get(key):
                 out[key] = str(cv[key])
     return out
@@ -231,6 +223,32 @@ def _cv_factors(
             "ivol", "特质波动", float(pts) + adj,
             f"{text}（近 20 日扣掉创业板指后日波动 {cv.get('ivol20')}%）", note,
         ))
+    if buckets.get("cap") == "small":
+        adj, note = _hist_adj("cap", "small", stats)
+        out.append(_factor(
+            "cap", "流通市值", float(PICK_CV_SMALL_CAP_PTS) + adj,
+            f"小盘（昨日流通市值约 {cv.get('float_cap_yi')} 亿，≤{CV_SMALL_CAP_YI:.0f} 亿）", note,
+        ))
+    return out
+
+
+def _watch_factors(row: dict[str, Any], kind: str) -> list[dict[str, Any]]:
+    """Watch-only tags (0 points): today's open gap and a recent billboard appearance."""
+    out: list[dict[str, Any]] = []
+    if kind == "etf":
+        return out
+    gap = num(row.get("open_gap_pct"))
+    if gap is not None and gap >= float(PICK_GAP_WATCH_PCT):
+        out.append(_factor("gap", "开盘", 0.0, f"高开 +{gap:.1f}%（观察项，不计分：高开后回踩的票三日偏弱，样本待确认）"))
+    lhb = row.get("lhb_recent") if isinstance(row.get("lhb_recent"), dict) else None
+    if lhb:
+        day = str(lhb.get("date") or "")[5:10]
+        net = num(lhb.get("net_yi"))
+        net_txt = f"，净买 {net:+.2f} 亿" if net is not None else ""
+        out.append(_factor(
+            "lhb", "龙虎榜", 0.0,
+            f"近 {int(PICK_LHB_LOOKBACK_DAYS)} 日上榜（{day}{net_txt}）· 观察项，不计分：上榜后回踩三日偏弱",
+        ))
     return out
 
 
@@ -262,10 +280,6 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
         adj, note = _hist_adj("source", src, stats)
         factors.append(_factor("source", "信号来源", adj, SOURCE_LABELS.get(src, src), note))
 
-    if buckets.get("pm") == "weak":
-        adj, note = _hist_adj("pm", "weak", stats)
-        factors.append(_factor("pm", "出信号时段", float(PICK_PM_WEAK_PTS) + adj, "午后弱窗（13:00–14:00）", note))
-
     gate = buckets.get("gate")
     if gate == "fail":
         adj, note = _hist_adj("gate", "fail", stats)
@@ -296,6 +310,7 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
         factors.append(_factor("mafan", "均线", 5, "均线粘连后向上发散"))
 
     factors.extend(_cv_factors(row, buckets, stats))
+    factors.extend(_watch_factors(row, kind))
 
     total = float(PICK_BASE_SCORE) + sum(float(f["points"]) for f in factors)
     score = int(round(max(0.0, min(100.0, total))))

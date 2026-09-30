@@ -274,7 +274,7 @@ def save_board_daily(trade_date: str, rows: list[dict[str, Any]]) -> None:
 
 
 def save_fund_flow_daily(trade_date: str, rows: list[dict[str, Any]]) -> int:
-    """Upsert one trade day's board money-flow prints for local week/month sums."""
+    """Upsert one trade day's post-close board money-flow rows (research snapshot, not read by the UI)."""
     day = str(trade_date or "")[:10]
     if not day or not rows:
         return 0

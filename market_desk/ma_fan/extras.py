@@ -84,7 +84,7 @@ def pick_for_hit(
     from market_desk.pick_score import build_history_stats, score_pick
 
     close = hit.get("close")
-    cv = build_cv(bars, float(close), mkt) if bars and close else None
+    cv = build_cv(bars, float(close), mkt, code=hit.get("code")) if bars and close else None
     row = {
         "code": hit.get("code"),
         "name": hit.get("name"),
