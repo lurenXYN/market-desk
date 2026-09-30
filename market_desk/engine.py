@@ -1863,7 +1863,12 @@ class DeskEngine:
         self, rows: list[dict[str, Any]], today: str
     ) -> list[dict[str, Any]]:
         """Attach live quote, trend, board fit, holders, zt count, ma-fan and cv for scoring."""
-        from market_desk.chip_volume import bars_before_many, build_cv
+        from market_desk.chip_volume import (
+            add_ivol,
+            bars_before_many,
+            build_cv,
+            index_returns_before,
+        )
         from market_desk.ma_fan import enrich_signals_with_ma_fan
         from market_desk.review import (
             enrich_signals_with_boards,
@@ -1905,19 +1910,25 @@ class DeskEngine:
                         return {}
                     return await bars_before_many(client, stock_codes, today)
 
+                async def _cv_mkt() -> dict[str, float]:
+                    if not stock_codes:
+                        return {}
+                    return await index_returns_before(client, today)
+
                 results = await asyncio.gather(
                     fetch_quotes(client, all_codes),
                     _trends(),
                     _zt(),
                     _holders(),
                     _cv_bars(),
+                    _cv_mkt(),
                     return_exceptions=True,
                 )
-                quotes, trends, zt_map, holders, cv_bars = [
+                quotes, trends, zt_map, holders, cv_bars, cv_mkt = [
                     r if isinstance(r, dict) else {} for r in results
                 ]
         except Exception:
-            cv_bars = {}
+            cv_bars, cv_mkt = {}, {}
             log.exception("pick score enrich failed")
         for r in rows:
             q = quotes.get(str(r["code"])) or {}
@@ -1944,10 +1955,14 @@ class DeskEngine:
         for r in rows:
             stored_today = isinstance(r.get("cv"), dict) and str(r.get("trade_date") or "")[:10] == today
             bars = cv_bars.get(str(r["code"]))
-            if stored_today or not bars:
+            if not bars:
+                continue
+            if stored_today:
+                r["cv"] = dict(r["cv"])
+                add_ivol(r["cv"], bars, cv_mkt)
                 continue
             price = num(r.get("plan_price")) or num(r.get("price")) or num(r.get("live_last"))
-            r["cv"] = build_cv(bars, price)
+            r["cv"] = build_cv(bars, price, cv_mkt)
         return rows
 
     async def build_review_scores(self, view_date: str | None = None) -> dict[str, Any]:

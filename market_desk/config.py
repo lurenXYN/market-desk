@@ -267,6 +267,17 @@ PICK_CV_CHIP_HIGH_PTS = -2.0
 PICK_CV_VOL_SHRINK_PTS = 0.0
 PICK_CV_VOL_SPIKE_PTS = 0.0
 PICK_CV_VOL_FADE_PTS = -2.0
+# Idiosyncratic volatility: std of (stock pct - ChiNext index pct) over the 20
+# days before the signal. The one borrowed factor that held on both the ~15k
+# pullback days (IC -0.07, t -5; top 20% win rate ~-2pp, bottom 20% ~+2pp) and
+# the stored buys (scripts/research_regime_factors.py).
+CV_IVOL_INDEX = "sz399006"
+CV_IVOL_WINDOW = 20
+CV_IVOL_MIN_DAYS = 15
+CV_IVOL_HIGH = 4.2
+CV_IVOL_LOW = 2.0
+PICK_CV_IVOL_HIGH_PTS = -3.0
+PICK_CV_IVOL_LOW_PTS = 2.0
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8

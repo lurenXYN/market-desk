@@ -572,10 +572,13 @@ def part_d(rows: list[dict[str, Any]]) -> None:
     """Score candidate formula variants on all days, both halves and the walk-forward days."""
     days = sorted({r["trade_date"] for r in rows})
     idx = {d: i for i, d in enumerate(days)}
-    names = ("PICK_HIST_PP_TO_PTS", "PICK_CV_CHIP_HIGH_PTS", "PICK_CV_VOL_FADE_PTS")
+    names = ("PICK_HIST_PP_TO_PTS", "PICK_CV_CHIP_HIGH_PTS", "PICK_CV_VOL_FADE_PTS",
+             "PICK_CV_IVOL_HIGH_PTS", "PICK_CV_IVOL_LOW_PTS")
     orig = {n: getattr(ps, n) for n in names}
     variants: dict[str, tuple[dict[str, float], float, bool]] = {
         "现行": ({}, 0.0, True),
+        "现行但不计特质波动": ({"PICK_CV_IVOL_HIGH_PTS": 0.0, "PICK_CV_IVOL_LOW_PTS": 0.0}, 0.0, True),
+        "特质波动加倍(−6/+4)": ({"PICK_CV_IVOL_HIGH_PTS": -6.0, "PICK_CV_IVOL_LOW_PTS": 4.0}, 0.0, True),
         "去历史微调": ({"PICK_HIST_PP_TO_PTS": 0.0}, 0.0, True),
         "v2 去微调+筹码/连缩量−2+涨停≥3不加": (
             {"PICK_HIST_PP_TO_PTS": 0.0, "PICK_CV_CHIP_HIGH_PTS": -2.0, "PICK_CV_VOL_FADE_PTS": -2.0}, 0.0, False),

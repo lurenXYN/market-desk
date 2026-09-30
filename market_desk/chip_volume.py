@@ -18,6 +18,11 @@ from market_desk.config import (
     CV_CHIP_MIN_BARS,
     CV_CHIP_WINDOW,
     CV_FETCH_CONCURRENCY,
+    CV_IVOL_HIGH,
+    CV_IVOL_INDEX,
+    CV_IVOL_LOW,
+    CV_IVOL_MIN_DAYS,
+    CV_IVOL_WINDOW,
     HTTP_HEADERS,
 )
 from market_desk.numbers import num
@@ -28,6 +33,8 @@ log = logging.getLogger(__name__)
 # code -> (trade_date, bars before that date)
 _BARS_CACHE: dict[str, tuple[str, list[dict[str, Any]]]] = {}
 _BARS_CACHE_MAX = 800
+# trade_date -> {date: index pct} for days before trade_date
+_INDEX_CACHE: dict[str, dict[str, float]] = {}
 
 
 async def fetch_bars_with_turnover(
@@ -94,6 +101,60 @@ async def bars_before_many(
             for key in [k for k, v in _BARS_CACHE.items() if v[0] != day]:
                 _BARS_CACHE.pop(key, None)
     return {c: list(_BARS_CACHE[c][1]) for c in uniq if (_BARS_CACHE.get(c) or ("", []))[0] == day}
+
+
+async def index_returns_before(
+    client: httpx.AsyncClient, trade_date: str, sym: str = CV_IVOL_INDEX
+) -> dict[str, float]:
+    """Return ``{date: pct}`` of the market index for days before ``trade_date`` (cached per day)."""
+    day = str(trade_date or "")[:10]
+    hit = _INDEX_CACHE.get(day)
+    if hit is not None:
+        return hit
+    url = (
+        "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+        f"?param={sym},day,,,{int(CV_IVOL_WINDOW) + 15},qfq"
+    )
+    try:
+        resp = await client.get(
+            url, headers={**HTTP_HEADERS, "Referer": "https://gu.qq.com/"}, timeout=8.0
+        )
+        resp.raise_for_status()
+        node = ((resp.json().get("data") or {}).get(sym)) or {}
+    except Exception as exc:
+        log.debug("cv index %s failed: %r", sym, exc)
+        return {}
+    out: dict[str, float] = {}
+    prev: float | None = None
+    for row in node.get("qfqday") or node.get("day") or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 3:
+            continue
+        close = num(row[2])
+        date = str(row[0])[:10]
+        if close is None:
+            continue
+        if prev and date < day:
+            out[date] = (float(close) / prev - 1.0) * 100.0
+        prev = float(close)
+    if out:
+        _INDEX_CACHE.clear()
+        _INDEX_CACHE[day] = out
+    return out
+
+
+def ivol_profile(bars: list[dict[str, Any]], mkt: dict[str, float] | None) -> float | None:
+    """Std of daily (stock pct − index pct) over the last ``CV_IVOL_WINDOW`` bars."""
+    if not mkt:
+        return None
+    resid = [
+        float(b["pct"]) - mkt[b["date"]]
+        for b in bars[-int(CV_IVOL_WINDOW):]
+        if b.get("pct") is not None and b.get("date") in mkt
+    ]
+    if len(resid) < int(CV_IVOL_MIN_DAYS):
+        return None
+    m = sum(resid) / len(resid)
+    return round((sum((x - m) ** 2 for x in resid) / (len(resid) - 1)) ** 0.5, 2)
 
 
 def chip_profile(bars: list[dict[str, Any]], price: float) -> dict[str, float] | None:
@@ -215,11 +276,16 @@ def classify(cv: dict[str, Any]) -> dict[str, str]:
     t3 = num(cv.get("vol_trend3"))
     if t3 is not None:
         out["vol3"] = "fade" if t3 < 0.8 else "normal"
+    iv = num(cv.get("ivol20"))
+    if iv is not None:
+        out["ivol"] = "high" if iv >= float(CV_IVOL_HIGH) else ("low" if iv <= float(CV_IVOL_LOW) else "mid")
     return out
 
 
-def build_cv(bars: list[dict[str, Any]], price: float | None) -> dict[str, Any] | None:
-    """Combine chip + volume context for one code at ``price`` (bars end the prior day)."""
+def build_cv(
+    bars: list[dict[str, Any]], price: float | None, mkt: dict[str, float] | None = None
+) -> dict[str, Any] | None:
+    """Combine chip, volume and idiosyncratic-volatility context (bars end the prior day)."""
     if not bars:
         return None
     out: dict[str, Any] = {"as_of": bars[-1].get("date")}
@@ -229,10 +295,25 @@ def build_cv(bars: list[dict[str, Any]], price: float | None) -> dict[str, Any] 
     vol = volume_profile(bars)
     if vol:
         out.update(vol)
+    iv = ivol_profile(bars, mkt)
+    if iv is not None:
+        out["ivol20"] = iv
     if len(out) == 1:
         return None
     out.update(classify(out))
     return out
+
+
+def add_ivol(cv: dict[str, Any], bars: list[dict[str, Any]], mkt: dict[str, float] | None) -> bool:
+    """Fill ``ivol20`` / ``ivol`` onto an existing cv dict in place; return True when added."""
+    if cv.get("ivol20") is not None:
+        return False
+    iv = ivol_profile(bars, mkt)
+    if iv is None:
+        return False
+    cv["ivol20"] = iv
+    cv.update({k: v for k, v in classify(cv).items() if k == "ivol"})
+    return True
 
 
 def cv_tags(cv: dict[str, Any] | None) -> list[dict[str, str]]:
@@ -266,6 +347,23 @@ def cv_tags(cv: dict[str, Any] | None) -> list[dict[str, str]]:
             "tone": "warn",
             "title": f"前一日量比 {vr}，巨量后容易分歧，别追高；仅作提示，不计分。",
         })
+    if cv.get("ivol") == "high":
+        tags.append({
+            "k": "ivol_high",
+            "label": "股性躁",
+            "tone": "warn",
+            "title": (
+                f"近 20 日扣掉创业板指后的日波动 {cv.get('ivol20')}%（≥{CV_IVOL_HIGH}）；"
+                "波动大的票回踩买入后三日胜率偏低，挂计划价、仓位轻一点。"
+            ),
+        })
+    elif cv.get("ivol") == "low":
+        tags.append({
+            "k": "ivol_low",
+            "label": "走势稳",
+            "tone": "good",
+            "title": f"近 20 日扣掉创业板指后的日波动 {cv.get('ivol20')}%（≤{CV_IVOL_LOW}），回踩买入胜率略高。",
+        })
     if cv.get("vol3") == "fade":
         tags.append({
             "k": "vol_fade",
@@ -292,12 +390,15 @@ async def attach_cv(
     ]
     if not todo:
         return 0
-    bars_by = await bars_before_many(client, [str(it["code"]) for it in todo], trade_date)
+    bars_by, mkt = await asyncio.gather(
+        bars_before_many(client, [str(it["code"]) for it in todo], trade_date),
+        index_returns_before(client, trade_date),
+    )
     n = 0
     for it in todo:
         bars = bars_by.get(str(it["code"]).zfill(6))
         price = next((num(it.get(k)) for k in price_keys if num(it.get(k))), None)
-        cv = build_cv(bars or [], price)
+        cv = build_cv(bars or [], price, mkt)
         if cv:
             it["cv"] = cv
             n += 1

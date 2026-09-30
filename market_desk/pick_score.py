@@ -12,6 +12,8 @@ from typing import Any
 from market_desk.config import (
     PICK_BASE_SCORE,
     PICK_CV_CHIP_HIGH_PTS,
+    PICK_CV_IVOL_HIGH_PTS,
+    PICK_CV_IVOL_LOW_PTS,
     PICK_CV_VOL_FADE_PTS,
     PICK_CV_VOL_SHRINK_PTS,
     PICK_CV_VOL_SPIKE_PTS,
@@ -84,7 +86,7 @@ def history_buckets(row: dict[str, Any], *, live: bool) -> dict[str, str]:
         out["ready"] = "1" if int(row.get("ready") or 0) else "0"
     cv = row.get("cv") if live else payload.get("cv")
     if isinstance(cv, dict):
-        for key in ("chip_pos", "vol1", "vol3"):
+        for key in ("chip_pos", "vol1", "vol3", "ivol"):
             if cv.get(key):
                 out[key] = str(cv[key])
     return out
@@ -209,6 +211,16 @@ def _cv_factors(
         out.append(_factor(
             "vol3", "量能趋势", float(PICK_CV_VOL_FADE_PTS) + adj,
             f"近 3 日连续缩量（{cv.get('vol_trend3')} 倍）", note,
+        ))
+    ivol = buckets.get("ivol")
+    if ivol in ("high", "low"):
+        adj, note = _hist_adj("ivol", ivol, stats)
+        pts, text = (
+            (PICK_CV_IVOL_HIGH_PTS, "股性躁") if ivol == "high" else (PICK_CV_IVOL_LOW_PTS, "走势稳")
+        )
+        out.append(_factor(
+            "ivol", "特质波动", float(pts) + adj,
+            f"{text}（近 20 日扣掉创业板指后日波动 {cv.get('ivol20')}%）", note,
         ))
     return out
 

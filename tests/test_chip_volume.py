@@ -50,6 +50,38 @@ def test_build_cv_tags_high_chip():
     assert "chip_high" in keys
 
 
+def test_ivol_profile_classify_and_tags():
+    bars = _bars(30)
+    for i, b in enumerate(bars):
+        b["pct"] = 6.0 if i % 2 else -6.0
+    mkt = {b["date"]: 0.0 for b in bars}
+    cv = cvm.build_cv(bars, 10.0, mkt)
+    assert cv["ivol20"] > 6 and cv["ivol"] == "high"
+    assert "ivol_high" in [t["k"] for t in cvm.cv_tags(cv)]
+    calm = {b["date"]: float(b["pct"]) for b in bars}
+    assert cvm.ivol_profile(bars, calm) == 0.0
+    assert cvm.ivol_profile(bars, {}) is None
+    assert cvm.ivol_profile(bars[:10], mkt) is None
+
+
+def test_add_ivol_fills_stored_cv_once():
+    bars = _bars(30)
+    mkt = {b["date"]: 0.0 for b in bars}
+    cv = {"chip_pos": "ok"}
+    assert cvm.add_ivol(cv, bars, mkt) and cv["ivol"] == "low" and cv["ivol20"] == 0.0
+    assert not cvm.add_ivol(cv, bars, mkt)
+
+
+def test_pick_score_uses_ivol_factor():
+    base = {"code": "600001", "kind": "stock", "manual": True}
+    empty = build_history_stats([])
+    hot = score_pick({**base, "cv": {"ivol": "high", "ivol20": 5.1}}, empty)
+    calm = score_pick({**base, "cv": {"ivol": "low", "ivol20": 1.5}}, empty)
+    mid = score_pick({**base, "cv": {"ivol": "mid", "ivol20": 3.0}}, empty)
+    assert hot["score"] == 57 and calm["score"] == 62 and mid["score"] == 60
+    assert not any(f["key"] == "ivol" for f in mid["factors"])
+
+
 def test_bars_before_many_excludes_signal_day(monkeypatch):
     cvm._BARS_CACHE.clear()
     calls: list[str] = []

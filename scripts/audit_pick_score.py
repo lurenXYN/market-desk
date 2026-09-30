@@ -94,6 +94,39 @@ def zt_ytd(bars: list[dict[str, Any]], day: str) -> int | None:
     return sum(1 for b in prior if (b.get("pct") or 0) >= 9.8)
 
 
+INDEX_CACHE = Path(tempfile.gettempdir()) / "md-opt-index-cache.json"
+_MKT: dict[str, float] = {}
+
+
+def index_pct(sym: str = cfg.CV_IVOL_INDEX) -> dict[str, float]:
+    """Daily pct of the ivol index over ~2 years (temp-dir cache shared with research scripts)."""
+    if _MKT:
+        return _MKT
+    cache: dict[str, Any] = {}
+    if INDEX_CACHE.exists():
+        try:
+            cache = json.loads(INDEX_CACHE.read_text(encoding="utf-8"))
+        except Exception:
+            cache = {}
+    if not cache.get(sym):
+        import httpx
+
+        url = f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={sym},day,,,500,qfq"
+        try:
+            node = (httpx.get(url, timeout=10.0).json().get("data") or {}).get(sym) or {}
+            rows = node.get("qfqday") or node.get("day") or []
+            cache[sym] = [{"date": str(p[0])[:10], "close": af._f(p[2])} for p in rows if len(p) >= 3]
+            INDEX_CACHE.write_text(json.dumps(cache), encoding="utf-8")
+        except Exception:
+            return {}
+    prev = None
+    for b in cache.get(sym) or []:
+        if b.get("close") and prev:
+            _MKT[b["date"]] = (b["close"] / prev - 1.0) * 100.0
+        prev = b.get("close") or prev
+    return _MKT
+
+
 def candidate(row: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str, Any]:
     """Rebuild the live-shaped candidate row score_pick expects, as of the signal day."""
     p = row["payload"]
@@ -115,7 +148,7 @@ def candidate(row: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str, Any]
     }
     if cand["kind"] != "etf":
         cand["zt_ytd"] = zt_ytd(bars, row["trade_date"])
-        cv = build_cv(before[-130:], row["entry"]) if before and row["entry"] else None
+        cv = build_cv(before[-130:], row["entry"], index_pct()) if before and row["entry"] else None
         if cv:
             cand["cv"] = cv
             p["cv"] = cv
