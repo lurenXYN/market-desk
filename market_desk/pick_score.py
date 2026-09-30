@@ -22,6 +22,7 @@ from market_desk.config import (
     PICK_HIST_MIN_N,
     PICK_HIST_PP_TO_PTS,
     PICK_PM_WEAK_PTS,
+    PICK_ZT_NONE_PTS,
 )
 from market_desk.numbers import num
 
@@ -83,7 +84,9 @@ def history_buckets(row: dict[str, Any], *, live: bool) -> dict[str, str]:
         fails = payload.get("confirm_fail")
         if fails is not None:
             out["gate"] = "fail" if fails else "clean"
-        out["ready"] = "1" if int(row.get("ready") or 0) else "0"
+        # ``ready`` is overwritten on every refresh; ever_ready / first_ready_at mean "lit at least once".
+        lit = payload.get("ever_ready") or payload.get("first_ready_at") or int(row.get("ready") or 0)
+        out["ready"] = "1" if lit else "0"
     cv = row.get("cv") if live else payload.get("cv")
     if isinstance(cv, dict):
         for key in ("chip_pos", "vol1", "vol3", "ivol"):
@@ -280,7 +283,7 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
 
     zt = row.get("zt_ytd")
     if kind != "etf" and zt is not None and int(zt) == 0:
-        factors.append(_factor("zt", "股性", -4, "年内无涨停"))
+        factors.append(_factor("zt", "股性", float(PICK_ZT_NONE_PTS), "年内无涨停"))
 
     chg = num(row.get("holder_chg_pct"))
     if chg is not None:

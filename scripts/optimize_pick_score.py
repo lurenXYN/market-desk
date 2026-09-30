@@ -573,21 +573,21 @@ def part_d(rows: list[dict[str, Any]]) -> None:
     days = sorted({r["trade_date"] for r in rows})
     idx = {d: i for i, d in enumerate(days)}
     names = ("PICK_HIST_PP_TO_PTS", "PICK_CV_CHIP_HIGH_PTS", "PICK_CV_VOL_FADE_PTS",
-             "PICK_CV_IVOL_HIGH_PTS", "PICK_CV_IVOL_LOW_PTS")
+             "PICK_CV_IVOL_HIGH_PTS", "PICK_CV_IVOL_LOW_PTS", "PICK_PM_WEAK_PTS")
     orig = {n: getattr(ps, n) for n in names}
+    # (config patch, extra points when daily trend is up, drop the "no limit-up this year" −4)
     variants: dict[str, tuple[dict[str, float], float, bool]] = {
-        "现行": ({}, 0.0, True),
-        "现行但不计特质波动": ({"PICK_CV_IVOL_HIGH_PTS": 0.0, "PICK_CV_IVOL_LOW_PTS": 0.0}, 0.0, True),
-        "特质波动加倍(−6/+4)": ({"PICK_CV_IVOL_HIGH_PTS": -6.0, "PICK_CV_IVOL_LOW_PTS": 4.0}, 0.0, True),
-        "去历史微调": ({"PICK_HIST_PP_TO_PTS": 0.0}, 0.0, True),
-        "v2 去微调+筹码/连缩量−2+涨停≥3不加": (
-            {"PICK_HIST_PP_TO_PTS": 0.0, "PICK_CV_CHIP_HIGH_PTS": -2.0, "PICK_CV_VOL_FADE_PTS": -2.0}, 0.0, False),
-        "v2 + 日线上升−3": (
-            {"PICK_HIST_PP_TO_PTS": 0.0, "PICK_CV_CHIP_HIGH_PTS": -2.0, "PICK_CV_VOL_FADE_PTS": -2.0}, -3.0, False),
+        "现行": ({}, 0.0, False),
+        "无涨停不扣": ({}, 0.0, True),
+        "无涨停不扣+连缩量−3": ({"PICK_CV_VOL_FADE_PTS": -3.0}, 0.0, True),
+        "无涨停不扣+连缩量−3+午后−3": ({"PICK_CV_VOL_FADE_PTS": -3.0, "PICK_PM_WEAK_PTS": -3.0}, 0.0, True),
+        "筹码偏高/连缩量/股性躁都−5": (
+            {"PICK_CV_CHIP_HIGH_PTS": -5.0, "PICK_CV_VOL_FADE_PTS": -5.0, "PICK_CV_IVOL_HIGH_PTS": -5.0}, 0.0, False),
+        "走势稳不加分": ({"PICK_CV_IVOL_LOW_PTS": 0.0}, 0.0, False),
     }
-    print("\n######## D. 候选公式（样本内 16 天，警惕过拟合；后 8 天为前推可比日）")
+    print("\n######## D. 候选公式（样本内，警惕过拟合）")
     half = days[len(days) // 2]
-    for name, (patch, trend_pts, zt_bonus) in variants.items():
+    for name, (patch, trend_pts, drop_zt) in variants.items():
         for n in names:
             setattr(ps, n, patch.get(n, orig[n]))
         sc = []
@@ -595,8 +595,8 @@ def part_d(rows: list[dict[str, Any]]) -> None:
             known = [h for h in rows if idx[h["trade_date"]] <= idx[r["trade_date"]] - LAG_DAYS]
             res = score_pick(r["cand"], build_history_stats(known))
             s = float(res["score"])
-            if not zt_bonus and any(f["key"] == "zt" and f["points"] > 0 for f in res["factors"]):
-                s -= next(f["points"] for f in res["factors"] if f["key"] == "zt")
+            if drop_zt:
+                s -= sum(float(f["points"]) for f in res["factors"] if f["key"] == "zt")
             if r["payload"].get("trend_ok"):
                 s += trend_pts
             sc.append({"day": r["trade_date"], "d3": float(r["outcome_day3_pct"]), "s": s})
@@ -690,6 +690,120 @@ def part_h(rows: list[dict[str, Any]], cache: dict[str, Any]) -> None:
     print(f"  {eval_oos(out, 'with_pos', sorted({s['day'] for s in out}))}")
 
 
+def part_r(rows: list[dict[str, Any]]) -> None:
+    """Ready-gate audit: last-refresh ``ready`` vs ``payload.ever_ready``, against same-day peers."""
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_day.setdefault(r["trade_date"], []).append(r)
+    day_m = {d: mean([float(x["outcome_day3_pct"]) for x in v]) for d, v in by_day.items()}
+    day_w = {d: sum(1 for x in v if float(x["outcome_day3_pct"]) > 0) / len(v) for d, v in by_day.items()}
+
+    def line(lab: str, sub: list[dict[str, Any]]) -> None:
+        if not sub:
+            print(f"  {lab:<30}{0:>5}")
+            return
+        d3 = [float(r["outcome_day3_pct"]) for r in sub]
+        d1 = [af._f(r["outcome_day1_pct"]) for r in sub if af._f(r["outcome_day1_pct"]) is not None]
+        ex = mean([float(r["outcome_day3_pct"]) - day_m[r["trade_date"]] for r in sub])
+        wex = mean([(1.0 if float(r["outcome_day3_pct"]) > 0 else 0.0) - day_w[r["trade_date"]] for r in sub])
+        w3 = af.day_balanced([{"day": r["trade_date"], "d3": float(r["outcome_day3_pct"])} for r in sub], lambda s: s["d3"] > 0)
+        print(f"  {lab:<30}{len(sub):>5}{len({r['trade_date'] for r in sub}):>4}{w3:>8.1f}{100 * wex:>+9.1f}"
+              f"{mean(d3):>8.2f}{ex:>+8.2f}{(mean(d1) or 0):>8.2f}")
+
+    print("\n######## R. 可买入（ready）")
+    print(f"  {'口径':<30}{'n':>5}{'天':>4}{'胜率3':>8}{'同日胜率差':>9}{'均d3%':>8}{'同日超额':>8}{'均d1%':>8}")
+    ready_last = [r for r in rows if int(r.get("ready") or 0)]
+    ever = [r for r in rows if r["payload"].get("ever_ready") or r["payload"].get("first_ready_at")]
+    line("最后一次刷新仍可买（打分口径）", ready_last)
+    line("亮过可买（ever_ready）", ever)
+    line("亮过但后来熄灭", [r for r in ever if not int(r.get("ready") or 0)])
+    line("从未亮过", [r for r in rows if r not in ever and not int(r.get("ready") or 0)])
+    line("全部", rows)
+    print("\n  按信号类型（亮过可买）：")
+    for st in sorted({r["signal_type"] for r in ever}):
+        line(f"  {st}", [r for r in ever if r["signal_type"] == st])
+    print("\n  按日期（亮过可买 vs 当天全部）：")
+    for d in sorted({r["trade_date"] for r in ever}):
+        sub = [r for r in ever if r["trade_date"] == d]
+        wins = sum(1 for r in sub if float(r["outcome_day3_pct"]) > 0)
+        print(f"    {d}  亮过 {len(sub):>3} 只 胜 {wins:>2} · 均d3 {mean([float(r['outcome_day3_pct']) for r in sub]):+6.2f}%"
+              f" · 当天全部 {len(by_day[d]):>3} 只 均d3 {day_m[d]:+6.2f}% 胜率 {100 * day_w[d]:.0f}%")
+    print("\n  亮过可买的首次亮起时刻分布（按小时）：")
+    hours: dict[str, list[dict[str, Any]]] = {}
+    for r in ever:
+        at = str(r["payload"].get("first_ready_at") or r.get("signaled_at") or "")
+        hours.setdefault(at[11:13] or "?", []).append(r)
+    for h, sub in sorted(hours.items()):
+        line(f"  {h} 点", sub)
+
+
+def part_r2(rows: list[dict[str, Any]], cache: dict[str, Any]) -> None:
+    """Ready deep-dive: buy-now vs wait-price entry, and each gate reason vs same-day peers."""
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_day.setdefault(r["trade_date"], []).append(r)
+    day_m = {d: mean([float(x["outcome_day3_pct"]) for x in v]) for d, v in by_day.items()}
+    day_w = {d: sum(1 for x in v if float(x["outcome_day3_pct"]) > 0) / len(v) for d, v in by_day.items()}
+
+    def stat(sub: list[dict[str, Any]]) -> str:
+        ex = mean([float(r["outcome_day3_pct"]) - day_m[r["trade_date"]] for r in sub])
+        wex = mean([(1.0 if float(r["outcome_day3_pct"]) > 0 else 0.0) - day_w[r["trade_date"]] for r in sub])
+        return f"{len(sub):>5}{len({r['trade_date'] for r in sub}):>4}{100 * wex:>+9.1f}{ex:>+9.2f}"
+
+    ever = [r for r in rows if r["payload"].get("ever_ready") or r["payload"].get("first_ready_at")]
+    print("\n######## R2. 可买入深挖")
+    print("  [A] 亮过可买的票：按计划价（亮起时现价）买 vs 当天回踩到等回踩价再买")
+    got = []
+    for r in ever:
+        p = r["payload"]
+        plan = af._f(p.get("plan_price")) or af._f(r["price"])
+        wait = af._f(p.get("wait_price"))
+        bars = (cache.get(r["code"]) or {}).get("bars") or []
+        day0 = next((b for b in bars if b["date"] == r["trade_date"]), None)
+        if not (plan and wait and day0 and day0.get("low")):
+            continue
+        close3 = plan * (1.0 + float(r["outcome_day3_pct"]) / 100.0)
+        touched = day0["low"] <= wait
+        got.append({
+            "gap": (plan / wait - 1.0) * 100.0, "touched": touched,
+            "d3_plan": float(r["outcome_day3_pct"]),
+            "d3_wait": (close3 / wait - 1.0) * 100.0 if touched else None,
+        })
+    if got:
+        t = [g for g in got if g["touched"]]
+        print(f"    {len(got)} 只有等回踩价：计划价平均高于等回踩价 {mean([g['gap'] for g in got]):+.2f}%；"
+              f"当天回踩到等回踩价 {len(t)}/{len(got)}")
+        if t:
+            print(f"    回踩到的那些：按计划价买均d3 {mean([g['d3_plan'] for g in t]):+.2f}%（胜 {sum(g['d3_plan'] > 0 for g in t)}/{len(t)}）"
+                  f" · 按等回踩价买均d3 {mean([g['d3_wait'] for g in t]):+.2f}%（胜 {sum(g['d3_wait'] > 0 for g in t)}/{len(t)}）")
+    same = [r for r in rows if af._f(r["payload"].get("plan_price")) and af._f(r["payload"].get("wait_price"))]
+    eq = [r for r in same if abs(af._f(r["payload"]["plan_price"]) - af._f(r["payload"]["wait_price"])) < 1e-6]
+    print(f"    全部买点里计划价=等回踩价（盯回踩口径）的 {len(eq)}/{len(same)} 条")
+
+    print("\n  [B] 每个闸门/软条件：被它卡过的买点 vs 同日其他买点（后续表现好 = 这条可能卡错了）")
+    print(f"    {'条件':<28}{'n':>5}{'天':>4}{'同日胜率差':>9}{'同日超额':>9}")
+    acc: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        p = r["payload"]
+        reasons = set()
+        for key, tag in (("confirm_fail_hist", "闸门"), ("confirm_soft", "软"), ("final_fail", "最终")):
+            for x in p.get(key) or []:
+                reasons.add(f"{tag}:{str(x).strip()[:14]}")
+        m = p.get("minute") if isinstance(p.get("minute"), dict) else {}
+        for x in m.get("fails") or []:
+            reasons.add(f"分时:{str(x).strip()[:14]}")
+        for flag, tag in (("block_ready", "block_ready"), ("fly_warn", "fly_warn"), ("size_cap_block", "仓位上限"),
+                          ("ready_relaxed", "放宽ready"), ("near_entry", "near_entry"), ("probe_ok", "probe_ok")):
+            if p.get(flag):
+                reasons.add(f"标记:{tag}")
+        for x in reasons:
+            acc.setdefault(x, []).append(r)
+    for k, sub in sorted(acc.items(), key=lambda kv: -len(kv[1])):
+        if len(sub) >= 8:
+            print(f"    {k:<28}{stat(sub)}")
+    print(f"    {'亮过可买':<28}{stat(ever)}")
+
+
 def main() -> None:
     refresh = "--refresh" in sys.argv
     rows = [r for r in aps.load_rows() if r["entry"]]
@@ -699,6 +813,16 @@ def main() -> None:
         r["cand"] = aps.candidate(r, (cache.get(r["code"]) or {}).get("bars") or [])
     if "--pos" in sys.argv:
         part_h(rows, cache)
+        return
+    if "--ready" in sys.argv:
+        part_r(rows)
+        part_r2(rows, cache)
+        from market_desk.review import build_ready_monitor
+
+        mon = build_ready_monitor(rows)
+        print(f"\n  [复盘看板·可买入监控] {mon['note']}")
+        for d in mon["by_day"]:
+            print(f"    {d}")
         return
     universe = asyncio.run(fetch_universe(codes, refresh))
     part_a(universe)

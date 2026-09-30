@@ -6,6 +6,7 @@ import unittest
 
 from market_desk.review import (
     _dragon_hide_from_review,
+    build_ready_monitor,
     is_buy_signal,
     is_sell_signal,
     score_signal_with_closes,
@@ -289,6 +290,56 @@ class ReviewTests(unittest.TestCase):
         assert out is not None
         self.assertTrue(out.get("outcome_pending"))
         self.assertIsNone(out.get("outcome_label"))
+
+
+def _mon_row(day: str, d3: float | None, *, lit: bool = False, st: str = "buy") -> dict:
+    payload = {"ever_ready": True} if lit else {}
+    return {"trade_date": day, "signal_type": st, "outcome_day3_pct": d3, "ready": 0, "payload": payload}
+
+
+class ReadyMonitorTests(unittest.TestCase):
+    def test_same_day_baseline_and_bad_tone(self) -> None:
+        rows = []
+        for i in range(10):
+            day = f"2026-09-{i + 1:02d}"
+            rows += [_mon_row(day, -3.0, lit=True), _mon_row(day, 2.0), _mon_row(day, 1.0)]
+        out = build_ready_monitor(rows, days=20)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["n"], 10)
+        self.assertEqual(out["lit_days"], 10)
+        self.assertEqual(out["peer_n"], 20)
+        self.assertEqual(out["win3"], 0.0)
+        # Lit −3 vs day mean 0 → −3; win 0 vs day win 2/3 → −66.7pp.
+        self.assertAlmostEqual(out["excess"], -3.0)
+        self.assertAlmostEqual(out["win_diff"], -66.7)
+        self.assertEqual(out["tone"], "bad")
+        self.assertIn("偏弱", out["note"])
+
+    def test_window_keeps_latest_days_and_ignores_sells_unscored(self) -> None:
+        rows = [
+            _mon_row("2026-09-01", 5.0, lit=True),
+            _mon_row("2026-09-01", -5.0),
+            _mon_row("2026-09-02", 1.0, lit=True),
+            _mon_row("2026-09-02", 1.0),
+            _mon_row("2026-09-02", None, lit=True),
+            _mon_row("2026-09-02", 9.0, lit=True, st="sell"),
+        ]
+        out = build_ready_monitor(rows, days=1)
+        self.assertEqual(out["days"], 1)
+        self.assertEqual(out["n"], 1)
+        self.assertEqual(out["excess"], 0.0)
+        self.assertEqual(out["tone"], "low")
+        self.assertIn("样本不足", out["note"])
+
+    def test_last_refresh_ready_counts_as_lit(self) -> None:
+        rows = [{"trade_date": "2026-09-01", "signal_type": "buy", "outcome_day3_pct": 1.0, "ready": 1}]
+        out = build_ready_monitor(rows)
+        self.assertEqual(out["n"], 1)
+
+    def test_empty_sample(self) -> None:
+        out = build_ready_monitor([_mon_row("2026-09-01", 1.0)])
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["tone"], "low")
 
 
 if __name__ == "__main__":

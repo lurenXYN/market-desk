@@ -733,9 +733,18 @@ function paintReview(payload) {
   const hintHtml = hints.length
     ? (`<ul class="tune-hints">` + hints.map((h) => `<li>${h}</li>`).join("") + `</ul>`)
     : "";
-  document.getElementById("revPhase").innerHTML = (boardHtml || ph.length || kh.length || dh.length || th.length || gates.length || sellLine || wbLine || hints.length)
+  const rm = sum.ready_monitor || {};
+  const rmTitle = (rm.by_day || []).map((d) =>
+    `${d.date} 亮${d.n}只 胜${d.win} 均${d.d3}% · 当日全部${d.day_n}只 均${d.day_d3}%`
+  ).join("\n");
+  const readyLine = rm.note
+    ? (`<div class="ready-mon rm-${escAttr(rm.tone || "low")}" style="margin-top:4px" title="${escAttr(rmTitle)}">`
+      + `<button type="button" class="q" data-term="可买入监控">?</button> 可买入监控 ${escAttr(rm.note)}</div>`)
+    : "";
+  document.getElementById("revPhase").innerHTML = (boardHtml || ph.length || kh.length || dh.length || th.length || gates.length || sellLine || wbLine || hints.length || readyLine)
     ? (`<div class="hd">命中率看板（跨日）<button type="button" class="q" data-term="命中率看板">?</button></div>`
       + (hintHtml ? `<div class="hd" style="margin-top:4px">调参建议</div>${hintHtml}` : "")
+      + readyLine
       + boardHtml
       + (ph.length
         ? `<div style="margin-top:6px">相位 ${ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · ")}</div>`

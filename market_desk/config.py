@@ -227,6 +227,11 @@ OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
 # the live-vs-plan premium that marks a buy row as chasing.
 REVIEW_PM_WEAK_WINDOW = ("13:00", "14:00")
 REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
+# Ready-gate monitor on the review board (display only): lit buys vs same-day
+# peers over the most recent scored trade days. Below MIN_N no verdict is shown.
+REVIEW_READY_MONITOR_DAYS = 20
+REVIEW_READY_MONITOR_MIN_N = 8
+REVIEW_READY_MONITOR_EXCESS_PCT = 1.0
 # Review payload cache for today (the page auto-refreshes every 30s in session).
 # Daily klines and pending outcome scoring are throttled separately so a fast
 # page cadence only re-pulls the single batched live-quote call.
@@ -245,7 +250,10 @@ PICK_HIST_MIN_DAYS = 5
 # days) hurt ranking, so it is off (0) and the win rate is shown as info only.
 PICK_HIST_PP_TO_PTS = 0.0
 PICK_HIST_MAX_ADJ = 8.0
-PICK_PM_WEAK_PTS = -6.0
+# 午后弱窗 / 年内无涨停: shown as info only — the pm window flipped sign between
+# halves of the stored buys, and zero-limit-up names showed no edge on either sample.
+PICK_PM_WEAK_PTS = 0.0
+PICK_ZT_NONE_PTS = 0.0
 PICK_MAX_ITEMS = 6
 # Review score column: today's rows are re-scored at most this often; during the
 # session a background pass runs every REVIEW_SCORE_BG_SEC so the first score

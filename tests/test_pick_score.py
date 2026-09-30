@@ -119,7 +119,8 @@ def test_manual_row_skips_plan_and_signal_factors():
     res = score_pick(manual, st)
     keys = {f["key"] for f in res["factors"]}
     assert keys == {"zt"}
-    assert res["score"] == 60 - 4 and res["source_label"] == "手输"
+    zt = next(f for f in res["factors"] if f["key"] == "zt")
+    assert zt["points"] == 0.0 and res["score"] == 60 and res["source_label"] == "手输"
 
 
 def test_rank_verdict_names_top_close_gap_and_drops():

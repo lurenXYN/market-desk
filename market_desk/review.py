@@ -3044,6 +3044,106 @@ def build_pm_weak_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"window": _agg(inside), "rest": _agg(outside)}
 
 
+def _ever_ready(row: dict[str, Any]) -> bool:
+    """Return True when the buy lit the ready flag at any refresh that day."""
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    return bool(payload.get("ever_ready") or payload.get("first_ready_at") or int(row.get("ready") or 0))
+
+
+def build_ready_monitor(
+    rows: list[dict[str, Any]],
+    *,
+    days: int | None = None,
+) -> dict[str, Any]:
+    """Compare ever-ready buys against all scored buys of the same trade day.
+
+    Paper 3-day outcomes over the most recent ``days`` scored trade dates.
+    Same-day baselining removes the market-day effect, which otherwise dominates
+    any raw ready-vs-not comparison. Display only; never gates signals.
+
+    Args:
+        rows: Signal rows (any order); non-buy or unscored rows are ignored.
+        days: Rolling window in scored trade dates (defaults to config).
+
+    Returns:
+        Dict with ``ok``, sample sizes, ``win_diff`` (pp), ``excess`` (%),
+        ``tone`` (good | bad | mid | low), a one-line ``note`` and ``by_day``.
+    """
+    from market_desk.config import (
+        REVIEW_READY_MONITOR_DAYS,
+        REVIEW_READY_MONITOR_EXCESS_PCT,
+        REVIEW_READY_MONITOR_MIN_N,
+    )
+
+    window = int(days or REVIEW_READY_MONITOR_DAYS)
+    by_day: dict[str, list[tuple[float, bool]]] = {}
+    for r in rows or []:
+        if not is_buy_signal(r.get("signal_type")):
+            continue
+        d3 = num(r.get("outcome_day3_pct"))
+        day = str(r.get("trade_date") or "")
+        if d3 is None or not day:
+            continue
+        by_day.setdefault(day, []).append((float(d3), _ever_ready(r)))
+    picked = sorted(by_day)[-window:]
+    lit_d3: list[float] = []
+    ex: list[float] = []
+    wex: list[float] = []
+    peer_n = 0
+    day_rows: list[dict[str, Any]] = []
+    for day in picked:
+        items = by_day[day]
+        day_mean = sum(v for v, _ in items) / len(items)
+        day_win = sum(1 for v, _ in items if v > 0) / len(items)
+        lit = [v for v, on in items if on]
+        peer_n += len(items) - len(lit)
+        if not lit:
+            continue
+        for v in lit:
+            lit_d3.append(v)
+            ex.append(v - day_mean)
+            wex.append((1.0 if v > 0 else 0.0) - day_win)
+        day_rows.append({
+            "date": day,
+            "n": len(lit),
+            "win": sum(1 for v in lit if v > 0),
+            "d3": round(sum(lit) / len(lit), 2),
+            "day_n": len(items),
+            "day_d3": round(day_mean, 2),
+        })
+    n = len(lit_d3)
+    out: dict[str, Any] = {
+        "ok": n > 0,
+        "days": len(picked),
+        "n": n,
+        "lit_days": len(day_rows),
+        "peer_n": peer_n,
+        "win3": round(100.0 * sum(1 for v in lit_d3 if v > 0) / n, 1) if n else None,
+        "d3": round(sum(lit_d3) / n, 2) if n else None,
+        "win_diff": round(100.0 * sum(wex) / n, 1) if n else None,
+        "excess": round(sum(ex) / n, 2) if n else None,
+        "by_day": day_rows[-10:],
+    }
+    if not n:
+        out.update(tone="low", note=f"近 {len(picked)} 个有三日结果的交易日没有亮过可买的买点")
+        return out
+    head = (
+        f"近 {len(picked)} 日亮过可买 {n} 只（{len(day_rows)} 天）"
+        f" · 同日胜率差 {out['win_diff']:+.1f}pp · 同日超额 {out['excess']:+.2f}%"
+    )
+    thr = float(REVIEW_READY_MONITOR_EXCESS_PCT)
+    if n < int(REVIEW_READY_MONITOR_MIN_N):
+        tone, verdict = "low", "样本不足，先看不下结论"
+    elif out["excess"] <= -thr and out["win_diff"] < 0:
+        tone, verdict = "bad", "偏弱：亮灯后买没跑赢同日其他买点"
+    elif out["excess"] >= thr and out["win_diff"] > 0:
+        tone, verdict = "good", "有效：亮灯后买跑赢同日其他买点"
+    else:
+        tone, verdict = "mid", "持平：和同日其他买点差不多"
+    out.update(tone=tone, note=f"{head} · {verdict}")
+    return out
+
+
 def build_review_session_hint(
     day_rows: list[dict[str, Any]],
     *,
@@ -3561,9 +3661,19 @@ def build_review_payload(
     }
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
     try:
-        pm_stats = build_pm_weak_stats(load_signals(limit=800))
+        wide_rows = load_signals(limit=2500)
+    except Exception:
+        wide_rows = []
+    try:
+        pm_stats = build_pm_weak_stats(wide_rows[:800])
     except Exception:
         pm_stats = None
+    try:
+        summary["ready_monitor"] = build_ready_monitor(
+            [r for r in wide_rows if not _dragon_hide_from_review(r)]
+        )
+    except Exception:
+        summary["ready_monitor"] = {"ok": False, "tone": "low", "note": "可买入监控暂不可用"}
     summary["session_hint"] = build_review_session_hint(
         day_rows, is_today=day == calendar_today, stats=pm_stats
     )
