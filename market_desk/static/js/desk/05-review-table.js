@@ -382,7 +382,8 @@ function revCellHtml(col, r, ctx) {
     if (!it) return revScores.loading ? `<span class="meta">…</span>` : `<span class="meta">—</span>`;
     const tip = revScores.live ? "实时打分，点开看每项加减" : "信号当时的打分，点开看每项加减";
     return `<button type="button" class="rev-score-btn ${pickScoreClass(it.grade)}" data-id="${escAttr(String(r.id))}" title="${tip}">`
-      + `<b>${it.score}</b><small>${escAttr(it.grade || "")}</small></button>`;
+      + `<b>${it.score}</b><small>${escAttr(it.grade || "")}</small></button>`
+      + (revScores.live ? pickPosHtml(it.position) : "");
   }
   if (col === "code") return r.code || "";
   if (col === "price") return `${r.price ?? "—"}${ctx.devHtml}`;

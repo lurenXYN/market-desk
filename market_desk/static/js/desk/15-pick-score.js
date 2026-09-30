@@ -26,6 +26,11 @@ function pickFactorsHtml(factors) {
   }).join("") || `<li class="meta">没有可比的加减分项</li>`;
 }
 
+function pickPosHtml(pos) {
+  if (!pos || !pos.label) return "";
+  return `<span class="pick-pos pos-${escAttr(pos.tone || "mid")}" title="${escAttr(pos.detail || "")}（买点位置，不计分）">${escAttr(pos.label)}</span>`;
+}
+
 function revTopPicksHtml(viewDate, isToday) {
   if (revScores.day !== viewDate || !(revScores.top || []).length) return "";
   const lab = isToday ? "今日高分" : "当日高分（信号时）";
@@ -88,6 +93,7 @@ function showScorePop(anchor, id) {
   pop.innerHTML = `<div class="hd"><span><b>${escAttr(it.name || it.code || "")}</b> <span class="meta">${escAttr(it.code || "")}</span></span>`
     + `<span class="score ${pickScoreClass(it.grade)}">${it.score}</span></div>`
     + `<div class="meta">${escAttr(it.grade || "")} · ${when}${first}</div>`
+    + (it.position ? `<div class="meta">买点位置 ${pickPosHtml(it.position)} ${escAttr(it.position.detail || "")}（不计分）</div>` : "")
     + `<ul>${pickFactorsHtml(it.factors)}</ul>`
     + `<div class="meta">基础分 60，按上面各项加减后截到 0–100；≥75 优先、60–74 可以考虑、45–59 谨慎、&lt;45 放弃。`
     + (revScores.live ? `历史胜率参考近 ${revScores.history_n || 0} 条已打分买点${base}（仅参考，不计分）。` : "")
@@ -137,7 +143,7 @@ function paintPickResult(d) {
     return `<div class="rev-pick-card${i === 0 ? " top" : ""}">`
       + `<div class="hd"><span><b>${escAttr(it.name || it.code)}</b> <span class="meta">${escAttr(it.code || "")} · ${escAttr(it.source_label || "")}</span></span>`
       + `<span class="score ${pickScoreClass(it.grade)}">${it.score}</span></div>`
-      + `<div class="meta">${escAttr(it.grade)}${px ? " · " + escAttr(px) : ""}${escAttr(plan)}</div>`
+      + `<div class="meta">${escAttr(it.grade)}${px ? " · " + escAttr(px) : ""}${escAttr(plan)} ${pickPosHtml(it.position)}</div>`
       + `<ul>${rows}</ul></div>`;
   }).join("");
   const base = d.base_win3 == null ? "" : `，整体三日胜率 ${d.base_win3}%`;

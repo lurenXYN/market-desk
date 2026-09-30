@@ -119,3 +119,15 @@ def test_upsert_keeps_first_cv(monkeypatch, tmp_path):
     row = desk_db.load_signals_for_date("2026-09-29")[0]
     assert row["payload"]["cv"] == {"chip_pos": "high"}
     assert row["payload"]["pct"] == 1.0
+
+
+def test_upsert_keeps_first_live_price(monkeypatch, tmp_path):
+    monkeypatch.setattr(desk_db, "DB_PATH", tmp_path / "desk.db")
+    monkeypatch.setattr(desk_db, "DATA_DIR", tmp_path)
+    desk_db.init_db()
+    base = {"trade_date": "2026-09-30", "signaled_at": "2026-09-30 10:00:00", "signal_type": "buy",
+            "code": "600001", "name": "A", "kind": "stock", "price": 10.0, "ready": 0, "payload": {}}
+    desk_db.upsert_signal({**base, "last": 10.1})
+    desk_db.upsert_signal({**base, "last": 10.6})
+    row = desk_db.load_signals_for_date("2026-09-30")[0]
+    assert row["payload"]["first_last"] == 10.1 and row["last"] == 10.6

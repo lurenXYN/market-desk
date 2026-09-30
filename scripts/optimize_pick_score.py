@@ -608,6 +608,88 @@ def part_d(rows: list[dict[str, Any]]) -> None:
         setattr(ps, n, orig[n])
 
 
+def part_h(rows: list[dict[str, Any]], cache: dict[str, Any]) -> None:
+    """Position-vs-plan factor: accuracy without it, and a proxy reading from the last-seen price.
+
+    The live price at signal time is not stored; ``signals.last`` is the price at the
+    signal's last refresh, so the position read here is a proxy, not what the desk saw first.
+    """
+    import sqlite3
+
+    from market_desk.pick_score import _position_status
+    from market_desk.review import enrich_signals_with_live_marks
+
+    legacy_pts = {"stop": -25.0, "chase": -20.0, "band": 10.0, "below": 8.0, "near": 0.0}
+
+    def _position_factor(item: dict[str, Any]) -> dict[str, Any] | None:
+        """Old (pre 2026-09-30) position points, for comparison only."""
+        st = _position_status(item)
+        if not st:
+            return None
+        if st["kind"] == "above":
+            pts = -min(15.0, 4.0 + 2.0 * float(item.get("above_plan_pct") or 0.0))
+        else:
+            pts = legacy_pts[st["kind"]]
+        return {"points": pts, "detail": st["detail"]}
+
+    conn = sqlite3.connect(f"file:{aps.DB}?mode=ro", uri=True)
+    last_by = {int(i): af._f(v) for i, v in conn.execute("SELECT id, last FROM signals")}
+    conn.close()
+    empty = build_history_stats([])
+    out = []
+    for r in rows:
+        bars = (cache.get(r["code"]) or {}).get("bars") or []
+        day0 = next((b for b in bars if b["date"] == r["trade_date"]), None)
+        plan = af._f(r["payload"].get("plan_price")) or af._f(r["price"])
+        base = score_pick(r["cand"], empty)
+        last = last_by.get(int(r["id"]))
+        pos = None
+        if last and plan:
+            item = enrich_signals_with_live_marks(
+                [{"code": r["code"], "signal_type": r["signal_type"], "price": plan, "payload": r["payload"]}],
+                {r["code"]: {"price": last}},
+            )[0]
+            pos = _position_factor(item)
+        pts = float(pos["points"]) if pos else 0.0
+        out.append({
+            "day": r["trade_date"], "d3": float(r["outcome_day3_pct"]),
+            "no_pos": float(base["score"]),
+            "with_pos": max(0.0, min(100.0, float(base["score"]) + pts)),
+            "pos_pts": pts if pos else None,
+            "pos_label": (pos or {}).get("detail", "无"),
+            "touched": bool(day0 and day0.get("low") is not None and plan and day0["low"] <= plan),
+        })
+    print("\n######## H. 买点位置")
+    print("  [不计买点位置（此前所有离线回测都是这个口径）] 各档三日胜率：")
+    aps.band_table([{**s, "d1": None} for s in out], "no_pos")
+    print(f"  {eval_oos(out, 'no_pos', sorted({s['day'] for s in out}))}")
+
+    def bucket(p: float | None) -> str:
+        if p is None:
+            return "无数据"
+        if p <= -20:
+            return "过不追/到止损(≤−20)"
+        if p < 0:
+            return "高于计划价(−4~−15)"
+        if p == 0:
+            return "略高于计划价(0)"
+        return "回踩带/低于计划价(+8/+10)"
+
+    print("\n  [近似：按信号最后一次出现时的价格判断位置]")
+    print(f"  {'位置':<24}{'n':>5}{'当天回踩到计划价':>12}{'三日胜率':>9}{'回踩到的三日胜率':>12}{'均d3%':>8}")
+    acc: dict[str, list[dict[str, Any]]] = {}
+    for s in out:
+        acc.setdefault(bucket(s["pos_pts"]), []).append(s)
+    for k, sub in sorted(acc.items()):
+        hit = [s for s in sub if s["touched"]]
+        w_all = af.day_balanced(sub, lambda s: s["d3"] > 0)
+        w_hit = af.day_balanced(hit, lambda s: s["d3"] > 0) if hit else None
+        print(f"  {k:<24}{len(sub):>5}{100 * len(hit) / len(sub):>11.0f}%{fmt(w_all, '8.1f')}%{fmt(w_hit, '11.1f')}%{mean([s['d3'] for s in sub]):>8.2f}")
+    print("\n  [计入近似买点位置] 各档三日胜率：")
+    aps.band_table([{**s, "d1": None} for s in out], "with_pos")
+    print(f"  {eval_oos(out, 'with_pos', sorted({s['day'] for s in out}))}")
+
+
 def main() -> None:
     refresh = "--refresh" in sys.argv
     rows = [r for r in aps.load_rows() if r["entry"]]
@@ -615,6 +697,9 @@ def main() -> None:
     cache = asyncio.run(af.fetch_all(codes, refresh=refresh, need_flow=False))
     for r in rows:
         r["cand"] = aps.candidate(r, (cache.get(r["code"]) or {}).get("bars") or [])
+    if "--pos" in sys.argv:
+        part_h(rows, cache)
+        return
     universe = asyncio.run(fetch_universe(codes, refresh))
     part_a(universe)
     part_b(rows, cache)

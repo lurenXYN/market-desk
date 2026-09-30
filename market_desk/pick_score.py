@@ -161,8 +161,13 @@ def _factor(key: str, label: str, points: float, detail: str, hist: str = "") ->
     }
 
 
-def _position_factor(row: dict[str, Any]) -> dict[str, Any] | None:
-    """Score where the live price sits against the plan band."""
+def _position_status(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Describe where the live price sits against the plan band (execution status, not scored).
+
+    Kept out of the score: it says whether the buy is actionable right now, not
+    whether the stock is a good pick, and its points used to swamp every other factor.
+    Returns ``{kind, label, tone, detail}`` or None for manual rows / missing prices.
+    """
     flags = list(row.get("price_flags") or [])
     last = num(row.get("live_last"))
     plan = num(row.get("price"))
@@ -170,17 +175,18 @@ def _position_factor(row: dict[str, Any]) -> dict[str, Any] | None:
         return None
     above = num(row.get("above_plan_pct"))
     if "stop_hit" in flags:
-        return _factor("pos", "买点位置", -25, "现价已到止损带")
+        return {"kind": "stop", "label": "到止损", "tone": "bad", "detail": "现价已到止损带，今天不买"}
     if "chase_hit" in flags:
-        return _factor("pos", "买点位置", -20, "已过不追价")
+        return {"kind": "chase", "label": "过不追", "tone": "bad", "detail": "已过不追价，放弃"}
     if above is not None:
-        pts = -min(15.0, 4.0 + 2.0 * above)
-        return _factor("pos", "买点位置", pts, f"高于计划价 +{above:.1f}%，等回踩")
+        return {"kind": "above", "label": f"等回踩 +{above:.1f}%", "tone": "warn",
+                "detail": f"高于计划价 +{above:.1f}%，挂计划价等回踩"}
     if "in_band" in flags or "near_wait" in flags:
-        return _factor("pos", "买点位置", 10, "在回踩带 / 建议价附近")
+        return {"kind": "band", "label": "回踩带", "tone": "good", "detail": "在回踩带 / 建议价附近，可挂单"}
     if last <= plan:
-        return _factor("pos", "买点位置", 8, f"低于计划价（现 {last} / 计划 {plan}）")
-    return _factor("pos", "买点位置", 0, "略高于计划价（<1%）")
+        return {"kind": "below", "label": "低于计划价", "tone": "good",
+                "detail": f"低于计划价（现 {last} / 计划 {plan}），先看站稳"}
+    return {"kind": "near", "label": "贴近计划价", "tone": "mid", "detail": "略高于计划价（<1%）"}
 
 
 def _cv_factors(
@@ -231,9 +237,7 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     buckets = history_buckets(row, live=True)
     kind = str(row.get("kind") or "stock")
 
-    pos = _position_factor(row)
-    if pos:
-        factors.append(pos)
+    pos = _position_status(row)
 
     # Trend / board / ready carry no rule points: the 2026-09 audit found their
     # classic direction reversed on stored pullback buys; only the (optional) history nudge applies.
@@ -313,7 +317,9 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
         "score": score,
         "grade": grade,
         "factors": factors,
-        "waiting": bool(pos and pos["key"] == "pos" and "等回踩" in pos["detail"]),
+        "position": pos,
+        "waiting": bool(pos and pos["kind"] == "above"),
+        "blocked": bool(pos and pos["kind"] in ("stop", "chase")),
     }
 
 
@@ -323,7 +329,7 @@ def pick_top(items: dict[str, dict[str, Any]], limit: int = 5) -> list[dict[str,
     for sid, it in (items or {}).items():
         code = str(it.get("code") or "")
         score = it.get("score")
-        if not code or score is None or int(score) < 60:
+        if not code or score is None or int(score) < 60 or it.get("blocked"):
             continue
         if code not in best or int(score) > int(best[code]["score"]):
             best[code] = {
@@ -343,15 +349,22 @@ def rank_picks(rows: list[dict[str, Any]], history: list[dict[str, Any]] | None)
     items.sort(key=lambda it: (-int(it["score"]), str(it["code"] or "")))
     verdict = ""
     if items:
-        top = items[0]
+        open_items = [it for it in items if not it["blocked"]] or items
+        top = open_items[0]
         bits = [f"优先 {top['name']}（{top['score']} 分）"]
-        if top["waiting"]:
+        if top["blocked"]:
+            bits[0] += f"，但{top['position']['detail']}"
+        elif top["waiting"]:
             bits[0] += "，但现价高于计划价，挂计划价等回踩"
-        if len(items) > 1:
-            gap = int(top["score"]) - int(items[1]["score"])
+        rest = [it for it in open_items if it is not top]
+        if rest:
+            gap = int(top["score"]) - int(rest[0]["score"])
             if gap <= 3:
-                bits.append(f"与 {items[1]['name']} 只差 {gap} 分，差距不大，可按仓位分开或只选一个更贴主线的")
-        drops = [it["name"] for it in items if it["grade"] == "放弃"]
+                bits.append(f"与 {rest[0]['name']} 只差 {gap} 分，差距不大，可按仓位分开或只选一个更贴主线的")
+        blocked = [it["name"] for it in items if it["blocked"] and it is not top]
+        if blocked:
+            bits.append("今天不宜买（过不追/到止损）：" + "、".join(str(d) for d in blocked))
+        drops = [it["name"] for it in items if it["grade"] == "放弃" and not it["blocked"]]
         if drops:
             bits.append("建议放弃：" + "、".join(str(d) for d in drops))
         verdict = "；".join(bits)

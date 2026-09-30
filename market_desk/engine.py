@@ -2022,6 +2022,9 @@ class DeskEngine:
                     "grade": s["grade"],
                     "factors": s["factors"],
                     "waiting": s["waiting"],
+                    "position": s["position"],
+                    "blocked": s["blocked"],
+                    "live_last": r.get("live_last"),
                     "at": at,
                 }
                 first = _stored(r)
@@ -2030,7 +2033,7 @@ class DeskEngine:
                 else:
                     fresh[int(r["id"])] = (
                         "pick0",
-                        {k: item[k] for k in ("score", "grade", "factors", "at")},
+                        {k: item[k] for k in ("score", "grade", "factors", "position", "live_last", "at")},
                     )
                 items[str(r["id"])] = item
             if fresh:

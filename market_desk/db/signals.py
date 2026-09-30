@@ -74,6 +74,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
         # Chip / volume context is signal-time evidence: first capture wins.
         if isinstance(old_payload.get("cv"), dict):
             merged["cv"] = old_payload["cv"]
+        # Live price when the signal first fired (``last`` itself is overwritten on refresh).
+        if not existing:
+            merged["first_last"] = row.get("last")
+        elif "first_last" in old_payload:
+            merged["first_last"] = old_payload["first_last"]
 
         # Gate evolution: keep first_ready / fail history across same-day upserts.
         ready_now = 1 if row.get("ready") else 0

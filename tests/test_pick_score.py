@@ -77,16 +77,30 @@ def test_history_nudge_capped_and_ignored_when_thin(monkeypatch):
     assert trend_thin["points"] == 0.0 and "样本少不计" in trend_thin["hist"]
 
 
-def test_position_factor_prefers_band_over_chasing():
+def test_position_is_status_not_scored():
     st = build_history_stats([])
     band = score_pick(_cand("600001", price_flags=["in_band"], live_last=10.05), st)
-    chase = score_pick(
+    above = score_pick(
         _cand("600002", price_flags=["above_plan"], live_last=10.25, above_plan_pct=2.5), st
     )
-    assert band["score"] == 70
-    pos = next(f for f in chase["factors"] if f["key"] == "pos")
-    assert pos["points"] == -9.0 and chase["waiting"]
-    assert band["score"] > chase["score"]
+    stop = score_pick(_cand("600003", price_flags=["stop_hit"], live_last=9.5), st)
+    assert band["score"] == above["score"] == stop["score"] == 60
+    assert not any(f["key"] == "pos" for f in band["factors"] + above["factors"])
+    assert band["position"]["kind"] == "band" and band["position"]["tone"] == "good"
+    assert above["position"]["label"] == "等回踩 +2.5%" and above["waiting"] and not above["blocked"]
+    assert stop["blocked"] and stop["position"]["kind"] == "stop"
+
+
+def test_blocked_top_is_skipped_in_verdict_and_top_list():
+    st_rows = [
+        _cand("600001", price_flags=["chase_hit"], ma_fan=True),
+        _cand("600002", price_flags=["in_band"]),
+    ]
+    res = rank_picks(st_rows, [])
+    assert res["items"][0]["code"] == "600001"
+    assert res["verdict"].startswith("优先 票02") and "今天不宜买（过不追/到止损）：票01" in res["verdict"]
+    items = {str(i): {"code": it["code"], "score": 70, "blocked": it["blocked"]} for i, it in enumerate(res["items"])}
+    assert [t["code"] for t in pick_score.pick_top(items)] == ["600002"]
 
 
 def test_manual_row_skips_plan_and_signal_factors():
@@ -114,6 +128,6 @@ def test_rank_verdict_names_top_close_gap_and_drops():
     bad = _cand("600003", price_flags=["chase_hit"], trend_down=True, daily_trend="下降", live_pct=9.8)
     res = rank_picks([good, bad, close], [])
     assert [it["code"] for it in res["items"]] == ["600002", "600001", "600003"]
-    assert res["items"][2]["grade"] == "放弃"
+    assert res["items"][2]["score"] == 48 and res["items"][2]["blocked"]
     assert "优先 票02" in res["verdict"] and "只差 5 分" not in res["verdict"]
-    assert "建议放弃：票03" in res["verdict"]
+    assert "今天不宜买（过不追/到止损）：票03" in res["verdict"]

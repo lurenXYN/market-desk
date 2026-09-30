@@ -2093,6 +2093,14 @@ th { color: var(--muted); font-weight: 600; }
 .rev-score-btn.g-hi b { color: #86efac; }
 .rev-score-btn.g-lo b { color: #fbbf24; }
 .rev-score-btn.g-drop b { color: var(--muted); }
+.pick-pos {
+  display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 3px;
+  font-size: 11px; line-height: 16px; white-space: nowrap; border: 1px solid var(--border, #334155);
+}
+.pick-pos.pos-good { color: #86efac; border-color: #14532d; }
+.pick-pos.pos-warn { color: #fbbf24; border-color: #78350f; }
+.pick-pos.pos-bad { color: #fca5a5; border-color: #7f1d1d; }
+.pick-pos.pos-mid { color: var(--muted); }
 .rev-top-picks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
 .rev-top-picks .lab { margin-right: 2px; }
 .rev-top-pick {
