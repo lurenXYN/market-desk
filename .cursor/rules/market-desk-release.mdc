@@ -1,0 +1,17 @@
+---
+description: market-desk release and sync policy
+globs: **/*
+alwaysApply: false
+---
+
+# market-desk 发布与同步规范
+
+## 仓库关系与推送约定
+
+- **源码开发**：在 `mydemo/go-learning` 仓库的 `apps/market-desk` 路径下进行本地验证与测试；
+- **独立仓库**：`D:\Source\Repos\market-desk` 映射远端 GitHub 仓库 `https://github.com/lurenXYN/market-desk.git`；
+- **硬纪律**：
+  1. `go-learning` 仓库严禁执行 `git push`（仅作本地分支备份）；
+  2. 每次完成功能后，使用 robocopy 或同步脚本将变更同步到独立仓 `D:\Source\Repos\market-desk`；
+  3. 排除 `.venv`、`__pycache__`、`data`、`.git` 等文件；
+  4. 提交独立仓并直接推送至 `origin main`。

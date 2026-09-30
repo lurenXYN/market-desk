@@ -14,6 +14,38 @@
 
 ---
 
+## [v1.6.0] - 2026-09-30
+
+### 【背景与动机（为什么做 · Why）】
+* **彻底根除“盈利扛到大亏”的人性弱点**：持仓一旦出现可观浮盈（个股 $\ge +2.5\%$，ETF $\ge +1.5\%$），若盘中遭遇冲高回落，缺乏一道冷酷的保本硬防线，极易演变为成本下方的被动深套甚至严重亏损；
+* **防范跟风踏空式踩踏**：个股走势高度依附于板块整体情绪。当所属板块的核心龙头开板/天地板暴跌跳水，或板块内出现多家跟风股集体闪崩跌停时，即便持仓标的此时仍微利或抗跌，往往也难逃补跌命运，急需抢在第一波踩踏前抢先手减仓；
+* **动静结合的波动率自适应出场**：机械使用固定比例（如无论弹性大小统一使用 2.0% 回撤）易导致高贝塔主升浪过早被震仓洗出，或低贝塔宽基/大盘中军回撤过大而未能及时锁定利润，需要根据真实振幅与波动率动态自适应出场带宽；
+* **开盘决策与分时量价精确化**：开盘 09:30–09:45 期间避免浅破开盘价的盲目杀跌，联动分时均价（VWAP）与放量特征进行精准决策。
+
+### 【改动详情（做了什么 · What）】
+* **Added & Enhanced（新增与功能升级）**：
+  * **持仓动态保本防守盾（Break-even Shield）**：
+    * 新增配置 `SELL_BREAKEVEN_TRIGGER_PNL = 2.5`、`SELL_BREAKEVEN_BUFFER_PCT = 0.3`、`SELL_BREAKEVEN_ETF_TRIGGER_PNL = 1.5`；
+    * 在 `verdict._sell_item` 止损层前置引入保本防守判定：历史浮盈触达门槛后，现价回落至成本 $+0.3\%$（覆盖印花税与规费）时，冷酷触发 `exit_mode="clear"`、`urgency="stop"`、`role_label="保本防守清仓"`，彻底锁定本金安全。
+  * **板块退潮崩塌先兆预警与联动减仓（Sector De-sync & Crack Alert）**：
+    * 新增配置 `SELL_SECTOR_CRACK_ENABLED = True`、`SELL_SECTOR_CRACK_DRAGON_BLOW_DROP = -2.5`、`SELL_SECTOR_CRACK_DIVERGENT_DOWN_N = 2`、`SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT = -6.0`；
+    * 盘中监测所属板块核心龙头炸板回落（回撤 $\ge 2.5\%$ 或转负）以及板块成分池内出现 $\ge 2$ 只个股大幅跳水（跌幅 $\le -6.0\%$）时，触发 `exit_mode="half"`、`urgency="trim"`、`role_label="板块塌陷先减"`，提示先手减半防踩踏。
+  * **自适应 ATR / 真实波动率动态出场（Trailing ATR Exit）**：
+    * 新增配置 `SELL_ATR_EXIT_ENABLED = True`、`SELL_ATR_HIGH_BETA_AMP = 6.0`、`SELL_ATR_LOW_BETA_AMP = 2.5`、`SELL_ATR_HIGH_BETA_MULT = 1.25`、`SELL_ATR_LOW_BETA_MULT = 0.82`；
+    * 在 `_exit_band_params` 中引入振幅自适应因子：对日内振幅 $\ge 6.0\%$ 的高贝塔品种按 1.25x 放大冲高回落与止盈容忍空间，标记为「高波动ATR」；对振幅 $\le 2.5\%$ 的低贝塔品种按 0.82x 紧缩止损和回撤线，标记为「低波动ATR」；
+    * 卡片出场参数字典中增加 `atr_band_mode`（`high_beta` / `low_beta` / `normal`），全流程打通至交易作战台。
+  * **卖出开盘决策算法分时深化**：
+    * 确认并完备开盘浅破缓冲（`SELL_OPEN_SHALLOW_BREAK_PCT = 0.8`）、分时破开盘、破分时 VWAP 均价线和量能跳水分析。
+* **Tests（单元测试）**：
+  * 在 `test_sell_exit.py` 中新增 `test_breakeven_shield_triggers_clear`、`test_sector_crack_front_run_trim`、`test_atr_adaptive_bands`，全覆盖阶段一核心出场逻辑。
+
+### 【实战影响与验证（效果如何 · Impact）】
+* 全量单元测试（含新增测试）全部验证通过，代码格式与类型注解零错误；
+* 交易员在实盘交易中获得了全天候的防守底线（保本盾杜绝浮盈变巨亏，板块塌陷先手减半避开系统性通杀）；
+* 波动率自适应让龙头标的能够扛住主升途中的正常分时洗盘，同时严控中军与 ETF 的回撤幅度。
+
+---
+
 ## [v1.5.0] - 2026-09-30
 
 ### 【背景与动机（为什么做 · Why）】

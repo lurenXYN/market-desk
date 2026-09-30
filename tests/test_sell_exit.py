@@ -234,3 +234,132 @@ def test_sell_fly_board_counts() -> None:
 
 def test_trade_fee_constant_present() -> None:
     assert TRADE_FEE_CNY == 5.0
+
+
+def test_breakeven_shield_triggers_clear() -> None:
+    """Verify break-even defense shield clears position when peaked profit retraces near cost."""
+    # Buy at 10.0, peaked at 10.3 (+3.0%, above 2.5% threshold), now retraced to 10.02 (below cost + 0.3% = 10.03)
+    row = {
+        "id": 1,
+        "code": "600000",
+        "name": "浦发银行",
+        "buy_price": 10.0,
+        "last": 10.02,
+        "high": 10.05,
+        "peak_price": 10.30,
+        "qty": 500,
+        "last_buy_date": "2026-09-10",
+    }
+    v = {"sell_themes": [], "segment": {}}
+    item = _sell_item(row, v, "震荡", trade_date="2026-09-17")
+    assert item is not None
+    assert item["ready"] is True
+    assert item["exit_mode"] == "clear"
+    assert item["urgency"] == "stop"
+    assert item["role_label"] == "保本防守清仓"
+    assert "保本线" in item["reason"]
+
+    # If peak never reached +2.5% (e.g. peaked at 10.15 = +1.5%), it should not trigger breakeven shield
+    row_unpeaked = {
+        "id": 2,
+        "code": "600000",
+        "name": "浦发银行",
+        "buy_price": 10.0,
+        "last": 10.02,
+        "high": 10.05,
+        "peak_price": 10.15,
+        "qty": 500,
+        "last_buy_date": "2026-09-10",
+    }
+    item_unpeaked = _sell_item(row_unpeaked, v, "震荡", trade_date="2026-09-17")
+    assert item_unpeaked is not None
+    assert item_unpeaked["role_label"] != "保本防守清仓"
+
+
+def test_sector_crack_front_run_trim() -> None:
+    """Verify sector crack alert triggers half trim when dragon pulls back or multiple members dive."""
+    # Leader pulls back hard (e.g. 5.0%)
+    row = {
+        "id": 3,
+        "code": "000001",
+        "name": "平安银行",
+        "buy_price": 10.0,
+        "last": 10.05,
+        "high": 10.10,
+        "qty": 500,
+        "last_buy_date": "2026-09-10",
+        "entry_board": "银行",
+    }
+    v = {
+        "sell_themes": [
+            {
+                "name": "银行",
+                "leader_pullback": 5.5,
+                "pool": [{"pct": -1.0}],
+            }
+        ],
+        "segment": {},
+    }
+    item = _sell_item(row, v, "震荡", trade_date="2026-09-17")
+    assert item is not None
+    assert item["ready"] is True
+    assert item["exit_mode"] == "half"
+    assert item["role_label"] == "板块塌陷先减"
+    assert "龙头炸板回撤" in item["reason"]
+
+    # Multiple members dive (>= 2 members drop <= -6%)
+    v2 = {
+        "sell_themes": [
+            {
+                "name": "银行",
+                "leader_pullback": 1.0,
+                "pool": [{"pct": -6.5}, {"pct": -7.2}],
+            }
+        ],
+        "segment": {},
+    }
+    item2 = _sell_item(row, v2, "震荡", trade_date="2026-09-17")
+    assert item2 is not None
+    assert item2["ready"] is True
+    assert item2["exit_mode"] == "half"
+    assert item2["role_label"] == "板块塌陷先减"
+    assert "跳水" in item2["reason"]
+
+
+def test_atr_adaptive_bands() -> None:
+    """Verify ATR adaptive exit scaling based on intraday amplitude."""
+    from market_desk.verdict import _exit_band_params
+
+    # High beta / amplitude >= 6.0% -> expands pullback bands
+    band_high = _exit_band_params(
+        etf=False,
+        on_mainline=False,
+        ending=False,
+        main_status="none",
+        life_stage="",
+        phase="震荡",
+        soft_exit=False,
+        trend={},
+        carrier_falling=False,
+        amplitude=7.5,
+    )
+    assert band_high["atr_band_mode"] == "high_beta"
+    assert "高波动ATR" in band_high["mode_zh"]
+
+    # Low beta / amplitude <= 2.5% -> tightens pullback bands
+    band_low = _exit_band_params(
+        etf=False,
+        on_mainline=False,
+        ending=False,
+        main_status="none",
+        life_stage="",
+        phase="震荡",
+        soft_exit=False,
+        trend={},
+        carrier_falling=False,
+        amplitude=1.8,
+    )
+    assert band_low["atr_band_mode"] == "low_beta"
+    assert "低波动ATR" in band_low["mode_zh"]
+    assert band_low["pb_light"] < band_high["pb_light"]
+

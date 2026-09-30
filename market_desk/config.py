@@ -707,3 +707,25 @@ WHITEBOX_LR = 0.35
 WHITEBOX_MAX_ITERS = 250
 WHITEBOX_WEEK_SPLIT = 0.45   # newer fraction reserved for "current" vs older fit
 WHITEBOX_SCORE_SCALE = 4.0   # raw contribution → soft mainline/candidate points
+
+# ---------------------------------------------------------------------------
+# Stage 1: Defense & Exit Reinforcement
+# ---------------------------------------------------------------------------
+# 1. Break-even Defense Shield
+SELL_BREAKEVEN_TRIGGER_PNL = 2.5       # Hold peak gain (%) to arm break-even shield
+SELL_BREAKEVEN_BUFFER_PCT = 0.3        # Cushion above cost price (covers fee & slip)
+SELL_BREAKEVEN_ETF_TRIGGER_PNL = 1.5   # Trigger gain for ETF
+
+# 2. Sector De-sync & Crack Alert
+SELL_SECTOR_CRACK_ENABLED = True
+SELL_SECTOR_CRACK_DRAGON_BLOW_DROP = -2.5   # Dragon failed limit-up or dropped from peak
+SELL_SECTOR_CRACK_DIVERGENT_DOWN_N = 2      # >= N members diving hard
+SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT = -6.0 # Member diving threshold (%)
+
+# 3. Trailing ATR Adaptive Exit
+SELL_ATR_EXIT_ENABLED = True
+SELL_ATR_HIGH_BETA_AMP = 6.0           # Daily amplitude >= 6% -> high beta leader
+SELL_ATR_LOW_BETA_AMP = 2.5            # Daily amplitude <= 2.5% -> low beta / broad ETF
+SELL_ATR_HIGH_BETA_MULT = 1.25         # Widen stop and pullback thresholds
+SELL_ATR_LOW_BETA_MULT = 0.82          # Tighten stop and pullback thresholds
+

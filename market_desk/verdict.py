@@ -5268,6 +5268,7 @@ def _exit_band_params(
     sell_bias: dict[str, Any] | None = None,
     rel_strong: bool = False,
     segment_key: str | None = None,
+    amplitude: float | None = None,
 ) -> dict[str, Any]:
     """Pick stop / pullback / take-profit bands from multi-module context.
 
@@ -5280,8 +5281,18 @@ def _exit_band_params(
     Optional ``sell_bias`` from review sell outcomes scales pb/take/pocket.
     ``rel_strong`` (day green / beats index) blocks panic-alone tight bands.
     Session ``segment_key`` soft-widens open / soft-tightens afternoon.
+    ``amplitude`` adjusts ATR-based exit bandwidth for high/low beta assets.
     """
-    from market_desk.config import SELL_BAND_ETF, SELL_BAND_STOCK, SELL_UPTREND_BAND_MULT
+    from market_desk.config import (
+        SELL_ATR_EXIT_ENABLED,
+        SELL_ATR_HIGH_BETA_AMP,
+        SELL_ATR_HIGH_BETA_MULT,
+        SELL_ATR_LOW_BETA_AMP,
+        SELL_ATR_LOW_BETA_MULT,
+        SELL_BAND_ETF,
+        SELL_BAND_STOCK,
+        SELL_UPTREND_BAND_MULT,
+    )
 
     trend = trend or {}
     daily_up = bool(trend.get("up")) and not bool(trend.get("down"))
@@ -5369,6 +5380,23 @@ def _exit_band_params(
             seg_info["mfe"] = mfe_info
     except Exception:
         seg_info = {}
+    atr_band_mode = "normal"
+    if SELL_ATR_EXIT_ENABLED and amplitude is not None and amplitude > 0:
+        if amplitude >= float(SELL_ATR_HIGH_BETA_AMP):
+            atr_band_mode = "high_beta"
+            atr_mult = float(SELL_ATR_HIGH_BETA_MULT)
+            for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+                band[key] = float(band[key]) * atr_mult
+            band["pnl_stop"] = float(band["pnl_stop"]) * 1.15
+            mode_zh = f"{mode_zh}·高波动ATR"
+        elif amplitude <= float(SELL_ATR_LOW_BETA_AMP):
+            atr_band_mode = "low_beta"
+            atr_mult = float(SELL_ATR_LOW_BETA_MULT)
+            for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+                band[key] = float(band[key]) * atr_mult
+            band["pnl_stop"] = float(band["pnl_stop"]) * 0.85
+            mode_zh = f"{mode_zh}·低波动ATR"
+    band["atr_band_mode"] = atr_band_mode
     band["mode"] = mode
     band["mode_zh"] = mode_zh
     band["daily_up"] = daily_up
@@ -5817,6 +5845,13 @@ def _sell_item(
     theme_label = str(theme_ctx.get("name") or "")
     theme_role = str(theme_ctx.get("role") or "")
 
+    amp_val = None
+    try:
+        if high not in (None, 0) and low not in (None, 0) and buy > 0:
+            amp_val = (float(high) - float(low)) / buy * 100.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        amp_val = None
+
     band = _exit_band_params(
         etf=etf,
         on_mainline=on_mainline,
@@ -5830,6 +5865,7 @@ def _sell_item(
         sell_bias=sell_bias,
         rel_strong=rel_strong or panic_rel_strong,
         segment_key=str((verdict.get("segment") or {}).get("key") or ""),
+        amplitude=amp_val,
     )
     # Similar-day sell urgency + theme fund outflow: nudge soft floors earlier.
     sell_gate = str((similar or {}).get("sell_gate") or "")
@@ -5909,9 +5945,36 @@ def _sell_item(
         take_deep_pnl = min(take_deep_pnl, 5.0 if not etf else 3.5)
         pocket_pnl = min(pocket_pnl, 6.0 if not etf else 4.0)
 
+    # 1. Break-even Defense Shield: once peaked > +2.5% (ETF > +1.5%),
+    # falling back to cost+0.3% triggers breakeven stop to prevent profits turning into big losses.
+    from market_desk.config import (
+        SELL_BREAKEVEN_BUFFER_PCT,
+        SELL_BREAKEVEN_ETF_TRIGGER_PNL,
+        SELL_BREAKEVEN_TRIGGER_PNL,
+    )
+
+    be_trigger_pnl = float(SELL_BREAKEVEN_ETF_TRIGGER_PNL if etf else SELL_BREAKEVEN_TRIGGER_PNL)
+    peaked_enough = hold_peak >= buy * (1.0 + be_trigger_pnl / 100.0)
+    be_stop_px = buy * (1.0 + float(SELL_BREAKEVEN_BUFFER_PCT) / 100.0)
+    breakeven_triggered = False
+    if not t1_locked and peaked_enough and last is not None and float(last) <= be_stop_px:
+        # Armed break-even stop
+        breakeven_triggered = True
+
     if last is None:
         role_label = "待行情"
         reason_parts.append("尚无现价，先不判卖点")
+    elif breakeven_triggered:
+        urgency = "stop"
+        ready = True
+        exit_mode = "clear"
+        role_label = "保本防守清仓"
+        sell_price = float(last)
+        sell_pct = 100
+        reason_parts.append(
+            f"浮盈冲高回落触及保本线 {be_stop_px:.{digits}f}（+{float(SELL_BREAKEVEN_BUFFER_PCT):.1f}%覆盖规费），"
+            f"锁定本金杜绝盈利变大亏"
+        )
     elif float(last) <= stop or (pnl_pct is not None and pnl_pct <= pnl_stop):
         deep_pnl = pnl_pct is not None and pnl_pct <= pnl_stop
         # Soften on MA20 hold unless day-once trend is clearly down (do not require trend.up).
@@ -6170,6 +6233,67 @@ def _sell_item(
             sell_price = float(last)
             sell_pct = 50
             reason_parts.append(f"生命周期偏衰退且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
+
+    # 2. Sector De-sync & Crack Alert: Dragon blow-off or multiple members diving
+    # prompts a half-trim to front-run sector collapse cascades.
+    from market_desk.config import (
+        SELL_SECTOR_CRACK_DIVERGENT_DOWN_N,
+        SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT,
+        SELL_SECTOR_CRACK_DRAGON_BLOW_DROP,
+        SELL_SECTOR_CRACK_ENABLED,
+    )
+
+    sector_crack = False
+    sector_crack_reason = ""
+    if (
+        SELL_SECTOR_CRACK_ENABLED
+        and not ready
+        and not t1_locked
+        and theme_label
+        and last is not None
+        and not rel_strong
+    ):
+        matched_theme = None
+        for t in verdict.get("sell_themes") or []:
+            if str(t.get("name") or "") == theme_label:
+                matched_theme = t
+                break
+        if matched_theme:
+            # Check dragon blow-off (e.g. leader failed / dropped hard from high)
+            ld_pct = matched_theme.get("leader_pct")
+            ld_pb = matched_theme.get("leader_pullback")
+            if ld_pb is not None and float(ld_pb) >= abs(float(SELL_SECTOR_CRACK_DRAGON_BLOW_DROP)):
+                sector_crack = True
+                sector_crack_reason = f"板块核心龙头炸板回撤 {float(ld_pb):.1f}%"
+            elif ld_pct is not None and float(ld_pct) <= float(SELL_SECTOR_CRACK_DRAGON_BLOW_DROP):
+                # Leader in the negative
+                if matched_theme.get("leader_boards") and int(matched_theme.get("leader_boards") or 0) >= 2:
+                    sector_crack = True
+                    sector_crack_reason = f"板块连板核心走弱（涨跌幅 {float(ld_pct):.1f}%）"
+
+            # Check multiple members diving
+            pool = matched_theme.get("pool") or matched_theme.get("members") or []
+            diving_n = 0
+            for m in pool:
+                m_pct = m.get("pct")
+                if m_pct is not None and float(m_pct) <= float(SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT):
+                    diving_n += 1
+            if diving_n >= int(SELL_SECTOR_CRACK_DIVERGENT_DOWN_N):
+                sector_crack = True
+                sector_crack_reason = (
+                    f"板块内有 {diving_n} 只个股跌幅≥{abs(float(SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT)):.0f}%跳水"
+                )
+
+    if sector_crack and not ready:
+        urgency = "trim"
+        ready = True
+        exit_mode = "half"
+        role_label = "板块塌陷先减"
+        sell_price = float(last)
+        sell_pct = 50
+        reason_parts.append(
+            f"所属板块「{theme_label}」出现退潮崩塌先兆（{sector_crack_reason}），先手减半防踩踏"
+        )
     # Overnight gap-fade: prior-day bag opens strong then fails from open.
     # On sell-theme: skip when still strong (carrier / tip / daily up); weak members
     # may still half-trim. Hard stops are unaffected (this branch only runs if !ready).
@@ -6467,6 +6591,7 @@ def _sell_item(
         "ma20": None if not trend else trend.get("ma20"),
         "band_mode": band["mode"],
         "band_mode_zh": band["mode_zh"],
+        "atr_band_mode": band.get("atr_band_mode", "normal"),
         "stop_pct": stop_pct,
         "pb_light": round(pb_light, 2),
         "pb_deep": round(pb_deep, 2),
