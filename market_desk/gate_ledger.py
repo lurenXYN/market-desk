@@ -29,6 +29,9 @@ _ROW_FLAGS: tuple[tuple[str, str, int], ...] = (
     ("fly_warn", "飞刀提示", -1),
     ("size_cap_block", "仓位上限", -1),
     ("trend_down", "日线向下", -1),
+    ("touched_plan", "触价过", 1),
+    # Shadow rule (never gates live cards): touched plan, then reclaimed minute avg.
+    ("shadow_reclaim_at", "影·触价站回均价", 1),
 )
 
 _NUM_RE = re.compile(r"[×x]?[-+]?\d+(?:\.\d+)?%?")

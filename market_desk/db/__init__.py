@@ -109,6 +109,7 @@ from market_desk.db.signals import (  # noqa: F401
     load_signals,
     load_signals_for_code,
     load_signals_for_date,
+    find_buy_signal_any,
     find_signal,
     sync_sell_fill_from_trim,
     list_signal_trade_dates,

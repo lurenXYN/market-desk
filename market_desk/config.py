@@ -226,6 +226,9 @@ OUTCOME_STANDARDS = ("classic", "same_day_plan", "filled")
 # Review-page hint only (never gates signals): the live-vs-plan premium that
 # marks a buy row as chasing.
 REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
+# Book fill ≥ this % above the buy plan → chase warning on record + review chase-cost.
+CHASE_WARN_PCT = 1.5
+CHASE_COST_DAYS = 20
 # Ready-gate monitor on the review board (display only): lit buys vs same-day
 # peers over the most recent scored trade days. Below MIN_N no verdict is shown.
 REVIEW_READY_MONITOR_DAYS = 20
@@ -238,6 +241,9 @@ GATE_LEDGER_DAYS = 20
 GATE_LEDGER_MIN_N = 8
 GATE_LEDGER_MIN_DAYS = 3
 GATE_LEDGER_EDGE_PCT = 0.8
+# Post-close fund-flow research snapshot: per-kind board count for the full pull
+# (the hot path only keeps the top-80 inflow boards).
+EOD_FUND_FLOW_LIMIT = 500
 # Review payload cache for today (the page auto-refreshes every 30s in session).
 # Daily klines and pending outcome scoring are throttled separately so a fast
 # page cadence only re-pulls the single batched live-quote call.

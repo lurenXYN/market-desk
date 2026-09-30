@@ -476,8 +476,17 @@ document.getElementById("posForm").addEventListener("submit", async (ev) => {
     if (typeof _posDiaryAt !== "undefined") _posDiaryAt = 0;
     if (typeof _posCalAt !== "undefined") _posCalAt = 0;
     applyMain("pos");
-    if (d.matched_signal && d.matched_signal.matched) {
-      pushPageToast("已匹配买信号", `${payload.code} 已标复盘已交易`);
+    const ms = d.matched_signal || null;
+    const ch = ms && ms.chase;
+    if (ch && ch.warn) {
+      pushPageToast(
+        "追价提醒",
+        `${payload.code} 成交 ${ch.fill} 高于计划价 ${ch.plan}（+${Number(ch.pct).toFixed(2)}%）` +
+          `，超过 ${ch.warn_pct}% 线；下次按计划价挂单`,
+      );
+    } else if (ms && ms.matched) {
+      const tail = ch ? `（相对计划价 ${ch.pct >= 0 ? "+" : ""}${Number(ch.pct).toFixed(2)}%）` : "";
+      pushPageToast("已匹配买信号", `${payload.code} 已标复盘已交易${tail}`);
     }
   } catch (e) {
     alert("记账失败");

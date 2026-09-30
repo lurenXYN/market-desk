@@ -38,7 +38,6 @@ from market_desk.db import (
     load_session_segments,
     load_signals_for_date,
     load_trend_overrides,
-    load_unscored_signals,
     load_watchlist,
     purge_stale_closed_positions,
     save_auction,
@@ -446,6 +445,7 @@ class DeskEngine:
                         except Exception:
                             log.exception("eod breadth guard failed")
                         try:
+                            await self._refetch_eod_fund_flow(today)
                             self._save_eod_fund_flow(today)
                         except Exception:
                             log.exception("eod fund flow snapshot failed")
@@ -1575,20 +1575,12 @@ class DeskEngine:
             cached["trends_ready"] = False
             return cached
 
-        from market_desk.review import outcome_is_final
+        from market_desk.review import load_pending_outcomes
 
         since = (datetime.now(CN_TZ) - timedelta(days=12)).strftime("%Y-%m-%d")
         # Outcomes persist to DB, so scoring more often than the heavy cadence adds nothing.
         run_scoring = now_m - self._review_scored_at >= float(REVIEW_HEAVY_REFRESH_SEC)
-        pending = (
-            [
-                r
-                for r in load_unscored_signals(today, limit=240, labeled_since=since)
-                if not outcome_is_final(r)
-            ][:80]
-            if run_scoring
-            else []
-        )
+        pending = load_pending_outcomes(today, since=since, cap=80) if run_scoring else []
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
         day_rows: list[dict[str, Any]] = []
@@ -2141,6 +2133,29 @@ class DeskEngine:
             trend=trend,
             user_id=user_id,
         )
+
+    async def _refetch_eod_fund_flow(self, day: str) -> int:
+        """Replace the hot-path day flow (top-80 inflow) with a fuller post-close pull.
+
+        Keeps the hot-path rows when the full pull returns fewer rows (e.g. clist
+        paused and only the Sina fallback answers). Returns rows now held.
+        """
+        from market_desk.config import EOD_FUND_FLOW_LIMIT
+
+        errors: list[str] = []
+        lim = int(EOD_FUND_FLOW_LIMIT)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            ind, con = await asyncio.gather(
+                _safe(fetch_board_fund_flow, client, "industry", lim, "day", errors=errors, label="eod-flow-hy"),
+                _safe(fetch_board_fund_flow, client, "concept", lim, "day", errors=errors, label="eod-flow-gn"),
+            )
+        fresh = self._day_flow_fresh
+        held = len(fresh[1]) + len(fresh[2]) if fresh and fresh[0] == day else 0
+        full = len(ind or []) + len(con or [])
+        if full > held:
+            self._day_flow_fresh = (day, list(ind or []), list(con or []))
+            return full
+        return held
 
     def _save_eod_fund_flow(self, day: str) -> int:
         """Persist the post-close day board flow once per trade date; return rows written.

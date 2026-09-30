@@ -11,7 +11,7 @@ from market_desk.db import (
     add_exec_diary,
     add_position,
     delete_position,
-    find_signal,
+    find_buy_signal_any,
     load_exec_diary,
     load_positions,
     sync_sell_fill_from_trim,
@@ -156,23 +156,24 @@ def _try_match_buy_signal(
         from datetime import datetime
 
         day = datetime.now().strftime("%Y-%m-%d")
-    row = find_signal(day, normalize_code(code), "buy")
+    row = find_buy_signal_any(day, normalize_code(code))
     if not row:
         return None
     sid = int(row.get("id") or 0)
     if sid <= 0:
         return None
+    chase = _chase_info(row, fill_price)
     # Skip if this user already marked traded.
     try:
         from market_desk.db import load_signal_user_meta_map
 
         um = (load_signal_user_meta_map(int(user_id)) or {}).get(sid) or {}
         if int(um.get("traded") or 0):
-            return {"id": sid, "matched": False, "reason": "already_traded"}
+            return {"id": sid, "matched": False, "reason": "already_traded", "chase": chase}
     except Exception:
         pass
     if int(row.get("traded") or 0) and int(row.get("owner_user_id") or 0) == int(user_id):
-        return {"id": sid, "matched": False, "reason": "already_traded"}
+        return {"id": sid, "matched": False, "reason": "already_traded", "chase": chase}
     ok = update_signal_meta(
         sid,
         traded=1,
@@ -195,6 +196,29 @@ def _try_match_buy_signal(
         "trade_date": day,
         "fill_price": float(fill_price),
         "fill_qty": int(fill_qty),
+        "signal_type": row.get("signal_type"),
+        "chase": chase,
+    }
+
+
+def _chase_info(row: dict[str, Any], fill_price: float) -> dict[str, Any] | None:
+    """Compare a book fill with the matched signal's plan price.
+
+    Returns ``{plan, fill, pct, warn, warn_pct}`` or None without a plan price.
+    """
+    from market_desk.config import CHASE_WARN_PCT
+    from market_desk.review import chase_pct, signal_plan_price
+
+    plan = signal_plan_price(row)
+    pct = chase_pct(plan, fill_price)
+    if pct is None:
+        return None
+    return {
+        "plan": round(float(plan), 3),
+        "fill": round(float(fill_price), 3),
+        "pct": pct,
+        "warn": pct >= float(CHASE_WARN_PCT),
+        "warn_pct": float(CHASE_WARN_PCT),
     }
 
 

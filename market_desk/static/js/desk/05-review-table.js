@@ -262,6 +262,37 @@ function paintGateLedger(gl) {
     + `<th>三日胜率</th><th>三日均值</th><th>差值</th><th>结论</th></tr></thead>`
     + `<tbody>${body}</tbody></table>`;
 }
+
+/**
+ * Render the viewer's chase cost: buy fills vs plan price (display only).
+ * @param {object} cc - summary.chase_cost from /api/review.
+ */
+function paintChaseCost(cc) {
+  const box = document.getElementById("revChaseCost");
+  if (!box) return;
+  const items = (cc && cc.items) || [];
+  if (!cc || !cc.ok || !items.length) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  const fmt = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const warn = Number(cc.warn_pct || 1.5);
+  const body = items.map((it) => {
+    const tone = it.chase >= warn ? "bad" : it.chase >= 0.5 ? "mid" : "good";
+    return `<tr class="gl-${tone}">`
+      + `<td>${escAttr(it.trade_date)}</td><td>${escAttr(it.name || it.code)}</td>`
+      + `<td class="num">${it.plan}</td><td class="num">${it.fill}</td>`
+      + `<td class="num">${fmt(it.chase)}</td></tr>`;
+  }).join("");
+  const cost = cc.cost_d3 == null ? "" : ` · 三日少赚 ${Number(cc.cost_d3).toFixed(2)} 个点（${cc.cost_n} 笔已出结果）`;
+  box.hidden = false;
+  box.innerHTML =
+    `<div class="hd">追价成本<button type="button" class="q" data-term="追价成本">?</button> · `
+    + `${escAttr(cc.note || "")} · 中位 ${fmt(cc.median)}${escAttr(cost)}</div>`
+    + `<table class="gl-tbl"><thead><tr><th>日期</th><th>标的</th><th>计划价</th>`
+    + `<th>成交价</th><th>追价</th></tr></thead><tbody>${body}</tbody></table>`;
+}
 function closeOpenFillEditors() {
   document.querySelectorAll("#revBody .rev-fill-ed").forEach((ed) => {
     const cell = ed.closest("td");
@@ -693,6 +724,7 @@ function paintReview(payload) {
     }
   }
   paintGateLedger(sum.gate_ledger || {});
+  paintChaseCost(sum.chase_cost || {});
   const chip = (lab, rate, n, lowN) =>
     `<div class="hit-chip${lowN ? " low-n" : ""}" title="${lowN ? "样本不足 n<8，灰显参考" : ""}"><div class="lab">${lab}</div>`
     + `<div class="rate ${rateCls(rate)}">${rate == null ? "—" : (rate + "%")}</div>`

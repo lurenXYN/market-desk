@@ -59,3 +59,22 @@ def test_apply_outcomes_refreshes_partial_horizon(monkeypatch):
     written.clear()
     assert rv.apply_outcomes([final_row], packed) == 0
     assert written == []
+
+
+def test_pending_outcomes_not_starved_by_final_rows(monkeypatch):
+    final = [
+        {"id": i, "trade_date": "2026-09-18", "outcome_label": "平淡",
+         "outcome_checked_at": "2026-09-23 15:30:00"}
+        for i in range(300)
+    ]
+    fresh = [{"id": 1000 + i, "trade_date": "2026-09-29", "outcome_label": None} for i in range(5)]
+    seen: dict = {}
+
+    def fake_load(before, limit=80, *, labeled_since=None):
+        seen["limit"] = limit
+        return (final + fresh)[:limit]
+
+    monkeypatch.setattr(rv, "load_unscored_signals", fake_load)
+    out = rv.load_pending_outcomes("2026-09-30", since="2026-09-18", cap=80)
+    assert [r["id"] for r in out] == [1000, 1001, 1002, 1003, 1004]
+    assert seen["limit"] >= len(final) + len(fresh)

@@ -9,6 +9,47 @@ from typing import Any
 from market_desk.db.core import _connect
 
 
+def _merge_shadow_reclaim(
+    merged: dict[str, Any],
+    old: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    last: Any,
+    at: str,
+) -> None:
+    """Track the shadow rule "touched plan, then reclaimed the minute average".
+
+    Display / research only: ``touched_plan`` sticks once the card reached its
+    entry band (``near_entry`` or last ≤ plan price); ``shadow_reclaim_at`` / ``_px`` record the first refresh after
+    that where the live price was back at or above the minute average line.
+    """
+    touched = bool(old.get("touched_plan") or incoming.get("near_entry"))
+    if not touched:
+        try:
+            touched = 0 < float(last) <= float(incoming.get("plan_price"))
+        except (TypeError, ValueError):
+            touched = False
+    if touched:
+        merged["touched_plan"] = True
+    if old.get("shadow_reclaim_at"):
+        merged["shadow_reclaim_at"] = old.get("shadow_reclaim_at")
+        merged["shadow_reclaim_px"] = old.get("shadow_reclaim_px")
+        return
+    merged.pop("shadow_reclaim_at", None)
+    merged.pop("shadow_reclaim_px", None)
+    if not touched:
+        return
+    minute = incoming.get("minute") if isinstance(incoming.get("minute"), dict) else {}
+    try:
+        px = float(last)
+        ma = float(minute.get("ma"))
+    except (TypeError, ValueError):
+        return
+    if px > 0 and ma > 0 and px >= ma:
+        merged["shadow_reclaim_at"] = at or None
+        merged["shadow_reclaim_px"] = round(px, 4)
+
+
 def upsert_signal(row: dict[str, Any]) -> None:
     """Insert or refresh a same-day signal keyed by date + code + type + owner.
 
@@ -96,6 +137,7 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 merged["ever_ready"] = True
             if old_payload.get("first_ready_at"):
                 merged["first_ready_at"] = old_payload.get("first_ready_at")
+        _merge_shadow_reclaim(merged, old_payload, incoming, last=row.get("last"), at=signaled)
         new_fails = [
             str(x).strip()
             for x in (incoming.get("confirm_fail") or [])
@@ -315,6 +357,35 @@ def find_signal(
         ).fetchone()
     rows = _decode_signal_rows([row] if row else [])
     return rows[0] if rows else None
+
+
+_BUY_MATCH_ORDER = ("buy", "buy_dragon", "buy_side", "buy_link", "buy_indep", "buy_trial")
+
+
+def find_buy_signal_any(trade_date: str, code: str) -> dict[str, Any] | None:
+    """Return the same-day buy-family signal for code, main desk first.
+
+    Order: ``buy`` → dragon → side → link → independent → watch trial.
+    """
+    day = str(trade_date or "").strip()[:10]
+    c = str(code or "").strip().zfill(6)
+    if not day or len(c) != 6 or not c.isdigit():
+        return None
+    marks = ",".join("?" for _ in _BUY_MATCH_ORDER)
+    with _connect() as conn:
+        rows = conn.execute(
+            _SIGNAL_SELECT
+            + f"""
+            WHERE trade_date = ? AND code = ? AND signal_type IN ({marks})
+            """,
+            (day, c, *_BUY_MATCH_ORDER),
+        ).fetchall()
+    decoded = _decode_signal_rows(list(rows))
+    if not decoded:
+        return None
+    rank = {t: i for i, t in enumerate(_BUY_MATCH_ORDER)}
+    decoded.sort(key=lambda r: (rank.get(str(r.get("signal_type") or ""), 99), str(r.get("signaled_at") or "")))
+    return decoded[0]
 
 
 def sync_sell_fill_from_trim(

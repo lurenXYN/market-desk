@@ -21,6 +21,7 @@ from market_desk.db import (
     load_signals,
     load_signals_for_code,
     load_signals_for_date,
+    load_unscored_signals,
     mark_signal_outcome,
     apply_signal_user_meta,
     filter_signals_for_viewer,
@@ -3007,6 +3008,98 @@ def _above_plan_pct(
     return round(pct, 2)
 
 
+def signal_plan_price(row: dict[str, Any]) -> float | None:
+    """Return the locked buy plan price (payload plan_price, else row price)."""
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    plan = num(row.get("plan_price") if row.get("plan_price") is not None else payload.get("plan_price"))
+    if plan is None:
+        plan = num(row.get("price"))
+    return plan if plan is not None and plan > 0 else None
+
+
+def chase_pct(plan: Any, fill: Any) -> float | None:
+    """Return fill vs plan in percent (positive = paid above plan), or None."""
+    p, f = num(plan), num(fill)
+    if p is None or f is None or p <= 0 or f <= 0:
+        return None
+    return round((f / p - 1.0) * 100.0, 2)
+
+
+def build_chase_cost(
+    rows: list[dict[str, Any]],
+    *,
+    days: int | None = None,
+) -> dict[str, Any]:
+    """Summarize how far the user's buy fills sat above the plan price.
+
+    Uses rows already overlaid with the viewer's ``signal_user_meta`` (traded +
+    fill_price). ``cost_d3`` is the D+3 gap between plan-based and fill-based
+    returns, i.e. what the chase cost in percentage points.
+    """
+    from market_desk.config import CHASE_COST_DAYS, CHASE_WARN_PCT
+
+    n_days = int(days or CHASE_COST_DAYS)
+    fills: list[dict[str, Any]] = []
+    for r in rows or []:
+        if not is_buy_signal(r.get("signal_type")) or not int(r.get("traded") or 0):
+            continue
+        plan = signal_plan_price(r)
+        fill = num(r.get("fill_price"))
+        pct = chase_pct(plan, fill)
+        if pct is None:
+            continue
+        fills.append({"row": r, "plan": plan, "fill": fill, "chase": pct})
+    day_keys = sorted({str(x["row"].get("trade_date") or "")[:10] for x in fills}, reverse=True)[:n_days]
+    keep = set(day_keys)
+    fills = [x for x in fills if str(x["row"].get("trade_date") or "")[:10] in keep]
+    if not fills:
+        return {"ok": False, "n": 0, "items": [], "note": "暂无带成交价的买入记录"}
+    chases = sorted(x["chase"] for x in fills)
+    mid = len(chases) // 2
+    median = chases[mid] if len(chases) % 2 else (chases[mid - 1] + chases[mid]) / 2.0
+    warn = float(CHASE_WARN_PCT)
+    costs: list[float] = []
+    for x in fills:
+        d3 = num(x["row"].get("outcome_day3_pct"))
+        if d3 is None:
+            continue
+        plan_d3 = ((1.0 + d3 / 100.0) * (float(x["fill"]) / float(x["plan"])) - 1.0) * 100.0
+        costs.append(plan_d3 - d3)
+    items = sorted(
+        fills,
+        key=lambda x: (str(x["row"].get("trade_date") or ""), x["chase"]),
+        reverse=True,
+    )[:12]
+    mean = sum(chases) / len(chases)
+    n_warn = sum(1 for c in chases if c >= warn)
+    return {
+        "ok": True,
+        "n": len(chases),
+        "days": len(day_keys),
+        "mean": round(mean, 2),
+        "median": round(median, 2),
+        "warn_pct": warn,
+        "n_warn": n_warn,
+        "cost_d3": round(sum(costs) / len(costs), 2) if costs else None,
+        "cost_n": len(costs),
+        "tone": "bad" if mean >= warn else ("mid" if mean >= 0.5 else "good"),
+        "items": [
+            {
+                "trade_date": str(x["row"].get("trade_date") or "")[:10],
+                "code": x["row"].get("code"),
+                "name": x["row"].get("name"),
+                "signal_type": x["row"].get("signal_type"),
+                "plan": round(float(x["plan"]), 3),
+                "fill": round(float(x["fill"]), 3),
+                "chase": x["chase"],
+            }
+            for x in items
+        ],
+        "note": f"近 {len(day_keys)} 个交易日 {len(chases)} 笔成交：平均高于计划价 {mean:+.2f}%，"
+        f"≥{warn:g}% 的 {n_warn} 笔",
+    }
+
+
 def _ever_ready(row: dict[str, Any]) -> bool:
     """Return True when the buy lit the ready flag at any refresh that day."""
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
@@ -3621,6 +3714,10 @@ def build_review_payload(
         )
     except Exception:
         summary["gate_ledger"] = {"ok": False, "rows": [], "note": "闸门账本暂不可用"}
+    try:
+        summary["chase_cost"] = build_chase_cost(apply_signal_user_meta(wide_rows, user_id))
+    except Exception:
+        summary["chase_cost"] = {"ok": False, "n": 0, "items": [], "note": "追价成本暂不可用"}
     summary["session_hint"] = build_review_session_hint(day_rows, is_today=day == calendar_today)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     try:
@@ -3732,6 +3829,21 @@ def outcome_final_date(trade_date: str, sessions: int = OUTCOME_HORIZON_SESSIONS
             if n >= sessions:
                 return d.isoformat()
     return ""
+
+
+def load_pending_outcomes(today: str, *, since: str, cap: int = 80) -> list[dict[str, Any]]:
+    """Return up to ``cap`` signals whose outcome still needs (re)scoring.
+
+    Final rows are dropped before capping; with a small SQL limit the settled
+    rows inside the open-horizon window crowded out the newest trade day.
+
+    Args:
+        today: Only rows before this trade date are eligible.
+        since: Labeled rows from this date on are re-checked until final.
+        cap: Maximum rows handed to one scoring pass.
+    """
+    rows = load_unscored_signals(today, limit=5000, labeled_since=since)
+    return [r for r in rows if not outcome_is_final(r)][: int(cap)]
 
 
 def outcome_is_final(row: dict[str, Any]) -> bool:
