@@ -296,7 +296,19 @@ market-desk/
 │   ├── engine.py             # 刷新循环与板块 enrichment
 │   ├── sentiment.py          # 温度 / 相位 / 板块状态
 │   ├── mainline.py           # 主线挑选与 ETF 映射
-│   ├── verdict.py            # 结论、买卖建议、仓位估值
+│   ├── verdict/              # 结论、买卖建议、仓位估值；`from market_desk.verdict import X` 照旧可用
+│   │   ├── buy.py            # build_verdict 主线裁决、ready 对齐、作战台闸门摘要
+│   │   ├── scoring.py        # 候选股、个股打分、风险仓位、仓位上限闸门
+│   │   ├── progress.py       # 买点进度、回踩标记、分时确认、将飞窗口、日线趋势
+│   │   ├── gates.py          # 大盘闸门、竞价桥接、换防保护、复盘/相似日偏置
+│   │   ├── branches.py       # 支线 / 联动分支推荐
+│   │   ├── desk.py           # 自选试探、龙头、独立人气、自选作战计划
+│   │   ├── sell.py           # 单仓卖点：止损、保本盾、止盈分层、板块塌陷
+│   │   ├── bands.py          # 出场带宽（主升/退潮/标准 + ATR 自适应）
+│   │   ├── tags.py           # 卖出标签、下一步动作、持仓提示合并
+│   │   ├── sell_advice.py    # 卖出建议汇总与买卖冲突调和
+│   │   ├── positions.py      # 持仓盯市、当日盈亏、风险总览、快照差异
+│   │   └── common.py         # 价格/格式化/确认标记等共享小工具
 │   ├── eastmoney.py / tencent.py
 │   ├── quotes_fallback.py    # 东财列表被拦时：主板行情改走腾讯（代码表来自新浪 / 库存）
 │   ├── board_fallback.py     # 东财板块被拦时：热点板块 / 当日资金流 / 成分股改走新浪

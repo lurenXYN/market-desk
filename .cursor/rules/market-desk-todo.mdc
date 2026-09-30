@@ -15,3 +15,4 @@ Before planning or implementing work:
 5. **Data compat**: any schema / scoring / enum change must keep existing `desk.db` workable (see `.cursor/rules/market-desk-data-compat.mdc`).
 6. **版本更新记录 (CHANGELOG)**：每次功能更新或优化后，必须在 `CHANGELOG.md` 中追加条目，严格写明「为什么做（Why · 痛点与动机）」与「做了什么（What · 改动详情）」以及「实盘影响」，并保持 `TODO.md` 同步。
 7. **分支与发布规约**：在独立仓 `main` 分支上开发或同步后，执行测试并通过，再 commit 并推送到 GitHub 远端 `https://github.com/lurenXYN/market-desk.git`。
+8. **文件体量**：单个源码文件控制在约 1,300 行以内；超出时按 `TODO.md`「工程：大文件拆分」的做法拆成包并保持原导入路径。`verdict` 已是包（`market_desk/verdict/`），新增逻辑放进对应子模块，不要再堆回一个文件。
