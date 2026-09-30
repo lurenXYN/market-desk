@@ -321,7 +321,7 @@ ETF_WAIT_GAP = 0.9955   # ~0.45% below last
 STOCK_WAIT_GAP = 0.9915  # ~0.85% below last
 # Relative band around suggested buy for「回踩到位」.
 ETF_NEAR_ENTRY_UP = 0.0045   # was 0.55%; tighter tip band
-STOCK_NEAR_ENTRY_UP = 0.0055  # was 0.85%
+STOCK_NEAR_ENTRY_UP = 0.015  # ±1.5% symmetric entry buffer band
 ETF_NEAR_ENTRY_DOWN = 0.010
 STOCK_NEAR_ENTRY_DOWN = 0.015
 # Hero action must not re-upgrade to 可买入 when these algo_notes fired.
@@ -578,7 +578,9 @@ INDEPENDENT_POP_MAX = 5
 INDEPENDENT_POP_LOW_DAYS = 5
 INDEPENDENT_POP_NEAR_LOW_PCT = 3.5       # engine 5-day low band (was 2.0; too empty)
 INDEPENDENT_POP_NEAR_DAY_LOW_PCT = 3.5   # session low pre-filter
-INDEPENDENT_POP_PCT_MAX = 5.0            # |pct| soft window (not chase / not collapse)
+INDEPENDENT_POP_PCT_MAX = 7.0            # soft window max pct (+7.0% upper bound)
+INDEPENDENT_POP_PCT_MIN = -3.0           # soft window min pct (-3.0% lower bound)
+INDEPENDENT_POP_MIN_AMOUNT = 2.5e8       # 2.5 亿元流动性底线 (优先成交活跃核心)
 INDEPENDENT_POP_KEEP_DAY_LOW_IF_5D_MISS = True  # soft: keep day-low when 5d fails
 # Absolute floor + turnover floors by market-cap bucket (亿元 / %).
 STOCK_MV_HARD_MIN_YI = 100.0          # below → always drop
@@ -599,7 +601,21 @@ THEME_REP_SETTLE_PCT_MIN = 1.5
 THEME_REP_ADJ_MIN = -12.0
 THEME_REP_ADJ_MAX = 8.0         # room for sticky persist bonus
 # Bump when compute_rep_adj / outcome weights / settle rules change.
-THEME_REP_FORMULA_VERSION = 3
+# v4: relative to the market-wide persist base rate, holiday / pseudo-board rows dropped.
+THEME_REP_FORMULA_VERSION = 4
+THEME_REP_BASE_WINDOW = 80      # recent graded outcomes (all themes) for the base persist rate
+THEME_REP_BASE_DEFAULT = 0.30   # base rate when the window is thin
+THEME_REP_BASE_MIN_N = 20
+THEME_REP_PRIOR_N = 4.0         # pseudo-samples pulling a theme toward the base rate
+THEME_REP_REL_SCALE = 25.0      # (shrunk theme rate − base) * scale → auto_adj
+# Style / flow / index buckets are not themes: no reputation, no mainline pick.
+PSEUDO_BOARD_KEYWORDS: tuple[str, ...] = (
+    "热股", "题材股", "QFII", "重仓", "百元股", "低价股", "破发", "破净", "次新",
+    "最近多板", "昨日", "连板", "首板", "涨停", "融资融券", "沪股通", "深股通",
+    "MSCI", "标普", "富时", "券商金股", "反转股", "预盈", "预增", "预亏", "送转",
+    "转债标的", "壳资源", "AH股", "B股", "HS300", "上证50", "上证180", "上证380",
+    "中证500", "深成500", "创业板综", "茅指数", "宁组合", "微盘", "机构重仓", "证金",
+)
 THEME_SIM_PEER_MIN = 0.45       # show peers above this
 # Soft board-linkage buys: similar peer cards when mainline has no ready / overheated.
 BOARD_LINK_SIM_MIN = 0.45       # reuse peer floor; raise to be stricter

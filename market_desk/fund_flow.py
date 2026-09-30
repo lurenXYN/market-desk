@@ -13,6 +13,7 @@ PERIODS: tuple[tuple[str, str, str, str], ...] = (
     ("em_day", "今日", "api", "东财今日主力净流入（每次刷新重拉）"),
     ("em_5d", "近5日", "api", "东财近5日累计（打开资金页补齐）"),
     ("em_10d", "近10日", "api", "东财近10日累计（打开资金页补齐）"),
+    ("db_cum", "收盘沉淀", "sqlite", "本地数据库收盘大资金多日累计沉淀榜"),
 )
 
 
@@ -24,12 +25,7 @@ def build_fund_flow_board(
     stored_rows: list[dict[str, Any]] | None = None,
     top_n: int = 15,
 ) -> dict[str, Any]:
-    """Assemble East Money period boards and sticky-leader compare.
-
-    ``stored_dates`` / ``stored_rows`` are accepted for call-site compatibility
-    but ignored (local SQLite accumulation was removed).
-    """
-    del stored_dates, stored_rows
+    """Assemble East Money period boards and multi-day local SQLite fund accumulation."""
     day = str(trade_date or "")[:10]
     packed: dict[str, Any] = {}
 
@@ -48,6 +44,62 @@ def build_fund_flow_board(
             top_n=top_n,
             extra={"dates": [day] if pid == "em_day" else [], "day_n": 1 if pid == "em_day" else None},
         )
+
+    if stored_rows and stored_dates:
+        by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for r in stored_rows:
+            k = (str(r.get("kind") or "industry"), str(r.get("name") or ""))
+            if not k[1]:
+                continue
+            cur = by_key.get(k)
+            if not cur:
+                cur = {
+                    "kind": k[0],
+                    "name": k[1],
+                    "bk": r.get("bk") or "",
+                    "main_net": 0.0,
+                    "super_net": 0.0,
+                    "large_net": 0.0,
+                    "pct_sum": 0.0,
+                    "count": 0,
+                    "leader_name": r.get("leader_name") or "",
+                    "leader_code": r.get("leader_code") or "",
+                }
+                by_key[k] = cur
+            try:
+                cur["main_net"] += float(r.get("main_net") or 0.0)
+                cur["super_net"] += float(r.get("super_net") or 0.0)
+                cur["large_net"] += float(r.get("large_net") or 0.0)
+                cur["pct_sum"] += float(r.get("pct") or 0.0)
+                cur["count"] += 1
+            except (TypeError, ValueError):
+                pass
+        db_ind: list[dict[str, Any]] = []
+        db_con: list[dict[str, Any]] = []
+        for (kind, name), item in by_key.items():
+            row_dict = {
+                "name": name,
+                "bk": item["bk"],
+                "main_net": round(item["main_net"], 2),
+                "super_net": round(item["super_net"], 2),
+                "large_net": round(item["large_net"], 2),
+                "pct": round(item["pct_sum"] / max(1, item["count"]), 2),
+                "leader_name": item["leader_name"],
+                "leader_code": item["leader_code"],
+            }
+            if kind == "industry":
+                db_ind.append(row_dict)
+            else:
+                db_con.append(row_dict)
+        if db_ind or db_con:
+            pid = "db_cum"
+            packed[pid] = _pack_period(
+                pid,
+                industry=db_ind,
+                concept=db_con,
+                top_n=top_n,
+                extra={"dates": list(stored_dates), "day_n": len(stored_dates)},
+            )
 
     return {
         "ok": any(

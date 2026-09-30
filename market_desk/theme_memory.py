@@ -24,12 +24,10 @@ from market_desk.config import (
     THEME_REP_DECAY,
     THEME_REP_EXTREME_RATE,
     THEME_REP_MIN_SAMPLES,
-    THEME_REP_NEWEST_TIP,
     THEME_REP_RATE_SCALE,
     THEME_REP_SETTLE_MAX,
     THEME_REP_SETTLE_PCT_MIN,
     THEME_REP_SETTLE_ZT_MIN,
-    THEME_REP_STREAK_BONUS,
     THEME_REP_THIN_FEED_MULT,
     THEME_REP_THIN_N,
     THEME_SIM_INHERIT,
@@ -41,8 +39,15 @@ from market_desk.config import (
     THEME_TOP_OVERLAP_WEIGHT,
     THEME_WEIGHTED_MEMBER_WEIGHT,
 )
+from market_desk.config import (
+    THEME_REP_BASE_DEFAULT,
+    THEME_REP_BASE_MIN_N,
+    THEME_REP_BASE_WINDOW,
+    THEME_REP_PRIOR_N,
+    THEME_REP_REL_SCALE,
+)
 from market_desk.filters import normalize_code
-from market_desk.mainline import same_theme, theme_key
+from market_desk.mainline import is_pseudo_board, same_theme, theme_key
 
 
 def _member_rows(board: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -374,11 +379,11 @@ def label_for_rep(fade_n: float, persist_n: float, adj: float) -> str:
         return "样本不足"
     if n < float(THEME_REP_MIN_SAMPLES):
         return "观察中"
-    if adj <= -5:
+    if adj <= -4:
         return "易一日游"
     if adj <= -2:
         return "偏一日游"
-    if adj >= 4:
+    if adj >= 3.5:
         return "偏粘"
     if adj >= 1.5:
         return "偏续热"
@@ -423,12 +428,17 @@ def attach_board_affinity(
         board["theme"] = theme
         board["similar_peers"] = peers[:4]
 
-        own = rep.get(theme) or {}
+        pseudo = is_pseudo_board(name) or is_pseudo_board(theme)
+        own = {} if pseudo else (rep.get(theme) or {})
+        if pseudo:
+            peers_for_inherit: list[dict[str, Any]] = []
+        else:
+            peers_for_inherit = [p for p in peers if not is_pseudo_board(p.get("name"))]
         own_adj = float(own.get("score_adj") or 0)
         auto_adj = float(own.get("auto_adj") if own.get("auto_adj") is not None else own_adj)
         manual_adj = float(own.get("manual_adj") or 0)
         inherit = 0.0
-        for peer in peers[:3]:
+        for peer in peers_for_inherit[:3]:
             sim = float(peer.get("sim") or 0)
             pt = str(peer.get("theme") or "")
             if not pt or pt == theme:
@@ -588,6 +598,8 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
     day = str(trade_date or "")[:10]
     if not day:
         return {"ok": False, "reason": "no-date"}
+    if not _session_day(day):
+        return {"ok": True, "settled": 0, "reason": "non-trading-day"}
     hist = load_daily(8)
     prior_day = None
     for row in hist:
@@ -608,6 +620,8 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
     today_boards = load_board_rows_for_date(day)
     prior_stats = theme_stats_from_boards(prior_boards)
     today_stats = theme_stats_from_boards(today_boards)
+    # Sina fallback renames boards; a theme missing today is then not evidence of a fade.
+    degraded = _sina_share(today_boards) >= 0.2 or _sina_share(prior_boards) >= 0.2
 
     prior_ml = ""
     for row in hist:
@@ -626,8 +640,10 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
     settle_max = int(THEME_REP_SETTLE_MAX)
     zt_floor = int(THEME_REP_SETTLE_ZT_MIN)
     pct_floor = float(THEME_REP_SETTLE_PCT_MIN)
+    if ml_theme and is_pseudo_board(ml_theme):
+        focus.clear()
     for theme, st in ranked:
-        if theme in focus:
+        if theme in focus or is_pseudo_board(theme):
             continue
         if int(st.get("zt_n") or 0) < zt_floor and float(st.get("pct") or 0) < pct_floor:
             continue
@@ -640,6 +656,8 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
     persists = 0
     for theme in focus:
         if not theme or theme in already:
+            continue
+        if degraded and theme not in today_stats:
             continue
         outcome = classify_theme_next_day(
             prior_stats.get(theme),
@@ -676,14 +694,87 @@ def settle_theme_reputation(trade_date: str) -> dict[str, Any]:
         "persists": persists,
         "mainline": prior_ml or None,
         "focus_n": len(focus),
+        "degraded": degraded,
     }
 
 
-def _refresh_theme_rep_from_outcomes(theme: str, limit: int = 12) -> None:
-    """Rebuild one theme's reputation with time decay on older outcomes."""
+def _session_day(day: str | None) -> bool:
+    """Return False only for dates the exchange calendar marks closed."""
+    try:
+        from market_desk.calendar import is_trading_day
+
+        return bool(is_trading_day(str(day or "")[:10]))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _sina_share(rows: list[dict[str, Any]] | None) -> float:
+    """Return the share of board rows that came from the Sina fallback."""
+    items = list(rows or [])
+    if not items:
+        return 0.0
+    return sum(1 for r in items if str(r.get("bk") or "").startswith("SINA:")) / float(len(items))
+
+
+def _usable_outcome(row: dict[str, Any]) -> bool:
+    """True for graded outcomes between two real sessions on a real theme."""
+    return (
+        str(row.get("outcome") or "") in ("fade", "persist")
+        and _session_day(row.get("trade_date"))
+        and _session_day(row.get("next_date"))
+        and not is_pseudo_board(row.get("theme_key"))
+    )
+
+
+def theme_base_persist_rate(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Return the market-wide next-day persist rate over recent graded outcomes.
+
+    Rotation regimes fade nearly every theme; reputation must be measured
+    against this base, otherwise it only taxes every board by the same amount.
+    """
+    if rows is None:
+        from market_desk.db import load_recent_theme_outcomes
+
+        rows = load_recent_theme_outcomes(limit=int(THEME_REP_BASE_WINDOW) * 2)
+    usable = [r for r in rows if _usable_outcome(r)][: int(THEME_REP_BASE_WINDOW)]
+    n = len(usable)
+    if n < int(THEME_REP_BASE_MIN_N):
+        return {"rate": float(THEME_REP_BASE_DEFAULT), "n": n, "default": True}
+    p = sum(1 for r in usable if r.get("outcome") == "persist") / float(n)
+    return {"rate": round(min(0.7, max(0.1, p)), 4), "n": n, "default": False}
+
+
+def compute_rep_adj_relative(fade_w: float, persist_w: float, base_rate: float) -> float:
+    """Map a theme's shrunk persist rate vs the market base rate into an adj.
+
+    ``shrunk = (persist_w + k·base) / (fade_w + persist_w + k)`` with
+    ``k = THEME_REP_PRIOR_N``; thin samples therefore stay near zero.
+    """
+    f = max(0.0, float(fade_w))
+    p = max(0.0, float(persist_w))
+    k = max(0.0, float(THEME_REP_PRIOR_N))
+    base = min(0.9, max(0.05, float(base_rate)))
+    if f + p <= 0:
+        return 0.0
+    shrunk = (p + k * base) / (f + p + k)
+    adj = (shrunk - base) * float(THEME_REP_REL_SCALE)
+    return max(float(THEME_REP_ADJ_MIN), min(float(THEME_REP_ADJ_MAX), round(adj, 2)))
+
+
+def _refresh_theme_rep_from_outcomes(
+    theme: str,
+    limit: int = 12,
+    *,
+    base_rate: float | None = None,
+) -> None:
+    """Rebuild one theme's reputation relative to the market base persist rate.
+
+    Holiday-linked and pseudo-board outcomes are ignored; newer outcomes weigh
+    more (``THEME_REP_DECAY``) and heat changes scale each event.
+    """
     from market_desk.db import load_theme_outcomes_for_theme, upsert_theme_reputation
 
-    rows = load_theme_outcomes_for_theme(theme, limit=limit)
+    rows = [r for r in load_theme_outcomes_for_theme(theme, limit=limit * 2) if _usable_outcome(r)][:limit]
     fade_w = 0.0
     persist_w = 0.0
     raw_fade = 0
@@ -697,38 +788,8 @@ def _refresh_theme_rep_from_outcomes(theme: str, limit: int = 12) -> None:
         elif r.get("outcome") == "persist":
             persist_w += w
             raw_persist += 1
-    streak_side = ""
-    streak = 0
-    for r in rows:
-        oc = str(r.get("outcome") or "")
-        if oc not in ("fade", "persist"):
-            break
-        if not streak_side:
-            streak_side = oc
-            streak = 1
-            continue
-        if oc == streak_side:
-            streak += 1
-        else:
-            break
-    streak_bonus = 0.0
-    if streak >= 2 and streak_side in ("fade", "persist"):
-        mag = float(THEME_REP_STREAK_BONUS)
-        if streak >= 3:
-            mag *= 1.4
-        streak_bonus = mag if streak_side == "persist" else -mag
-    # Newest tip: small push from the latest graded day (independent of streak).
-    if rows:
-        newest = str(rows[0].get("outcome") or "")
-        tip = float(THEME_REP_NEWEST_TIP)
-        if newest == "persist":
-            streak_bonus += tip
-        elif newest == "fade":
-            streak_bonus -= tip
-    sample_w = fade_w + persist_w
-    adj = compute_rep_adj(
-        fade_w, persist_w, sample_n=sample_w, streak_bonus=streak_bonus
-    )
+    base = float(base_rate) if base_rate is not None else float(theme_base_persist_rate()["rate"])
+    adj = 0.0 if is_pseudo_board(theme) else compute_rep_adj_relative(fade_w, persist_w, base)
     last_fade = next((r.get("next_date") for r in rows if r.get("outcome") == "fade"), None)
     last_persist = next((r.get("next_date") for r in rows if r.get("outcome") == "persist"), None)
     upsert_theme_reputation(
@@ -789,8 +850,9 @@ def rebuild_all_theme_reputation(
             themes.add(str(t).strip())
 
     rebuilt = 0
+    base = float(theme_base_persist_rate()["rate"])
     for theme in sorted(themes):
-        _refresh_theme_rep_from_outcomes(theme, limit=limit_per_theme)
+        _refresh_theme_rep_from_outcomes(theme, limit=limit_per_theme, base_rate=base)
         rebuilt += 1
     save_setting(key, ver)
     return {

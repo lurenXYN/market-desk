@@ -243,6 +243,9 @@ def classify_lifecycle(
     pct = float(board.get("pct") or 0)
     zt_n = int(board.get("zt_n") or 0)
     hist = list(board.get("hist") or [])
+    # Sina fallback codes without matched history would all read as fresh ignitions.
+    if not hist and str(board.get("bk") or "").startswith("SINA:"):
+        return None
     flags = _flag_map(board)
     bias = bias or {}
 

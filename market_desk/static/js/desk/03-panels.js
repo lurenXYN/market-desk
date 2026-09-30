@@ -287,6 +287,11 @@ function paintElliott(d) {
       ? `<span>Top1 <b>${primary.title}</b>（${primary.fit ?? "—"}）`
         + (primary.subwave ? ` · 子浪 <b>${primary.subwave}</b>` : "")
         + `</span>`
+      : "")
+    + (box.next_turn_countdown != null && box.next_turn_date
+      ? (box.next_turn_countdown <= 3
+        ? `<span class="badge warn" style="background:#451a03;color:#fbbf24;border:1px solid #d97706;padding:2px 8px;border-radius:4px;font-weight:600">⚡ 斐波变盘窗临近：距 ${box.next_turn_date} 还剩 ${box.next_turn_countdown} 个交易日</span>`
+        : `<span class="badge" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;padding:2px 8px;border-radius:4px">⏱ 下一斐波变盘窗：${box.next_turn_date}（${box.next_turn_countdown} 日后）</span>`)
       : "");
   const rows = box.scenarios || [];
   if (!rows.length) {

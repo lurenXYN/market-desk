@@ -110,11 +110,22 @@ def signal_gate_keys(row: dict[str, Any]) -> list[tuple[str, str, int]]:
         text = str(flag).strip()
         if text:
             _add(f"软·{text[:12]}", "row", -1)
+    stage = _STAGE_FLAGS.get(str(payload.get("board_stage") or ""))
+    if stage:
+        _add(stage[0], "row", stage[1])
     for note in payload.get("market_gates") or []:
         key = normalize_gate_note(note)
         if key:
             _add(f"市·{key}", "market", -1)
     return out
+
+
+# Lifecycle of the signal's own board at the time it fired (shadow, display only).
+_STAGE_FLAGS: dict[str, tuple[str, int]] = {
+    "ongoing": ("板块·主升", 1),
+    "starting": ("板块·萌芽", 1),
+    "ending": ("板块·衰退", -1),
+}
 
 
 def _mean(values: list[float]) -> float | None:

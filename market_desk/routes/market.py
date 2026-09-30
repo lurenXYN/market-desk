@@ -1,4 +1,4 @@
-"""Desk snapshot, fund flow, health, board export, charts and theme overrides."""
+"""Desk snapshot, fund flow, health, board export, charts and theme reputation."""
 
 from __future__ import annotations
 
@@ -7,13 +7,12 @@ import asyncio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from market_desk.auth import is_guest
 from market_desk.db import load_signals
 from market_desk.deps import (
     current_admin_required,
-    current_member_required,
     current_user_required,
 )
 from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
@@ -23,13 +22,6 @@ from market_desk.glossary import GLOSSARY
 from market_desk.trend import classify_daily_trend
 
 router = APIRouter()
-
-
-class TrendOverrideIn(BaseModel):
-    """Manual daily-trend judgment for one recommended stock."""
-
-    code: str
-    verdict: str = Field(description="up or down")
 
 
 class ThemeRepIn(BaseModel):
@@ -236,21 +228,6 @@ def theme_chain(
     rows = load_theme_outcomes_for_theme(key, limit=limit)
     timeline = list(reversed(rows))
     return {"ok": True, "theme_key": key, "n": len(timeline), "items": timeline}
-
-
-@router.post("/api/trend-override")
-def trend_override(
-    body: TrendOverrideIn, user: dict = Depends(current_member_required)
-) -> dict:
-    """Accept a manual up/down trend judgment on the battle desk."""
-    del user
-    code = normalize_code(body.code)
-    if len(code) != 6 or not code.isdigit():
-        raise HTTPException(400, "code must be a 6-digit ticker")
-    flag = (body.verdict or "").strip().lower()
-    if flag not in ("up", "down"):
-        raise HTTPException(400, "verdict must be up or down")
-    return engine.apply_trend_override(code, flag)
 
 
 @router.post("/api/theme-reputation")

@@ -117,6 +117,8 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["cv"] = old_payload["cv"]
         if isinstance(old_payload.get("market_gates"), list):
             merged["market_gates"] = old_payload["market_gates"]
+        if old_payload.get("board_stage"):
+            merged["board_stage"] = old_payload["board_stage"]
         # Live price when the signal first fired (``last`` itself is overwritten on refresh).
         if not existing:
             merged["first_last"] = row.get("last")

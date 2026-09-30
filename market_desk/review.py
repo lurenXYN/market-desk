@@ -495,6 +495,26 @@ def is_pre_match_stamp(stamp: str | None) -> bool:
     return s[11:16] < PRE_MATCH_END_HHMM
 
 
+def board_stage_lookup(snapshot: dict[str, Any] | None) -> dict[str, str]:
+    """Map board name → lifecycle stage key from the snapshot's frozen lifecycle."""
+    snap = snapshot or {}
+    life = snap.get("mainline_lifecycle") if isinstance(snap.get("mainline_lifecycle"), dict) else {}
+    out: dict[str, str] = {}
+    for col in ("starting", "ongoing", "ending"):
+        for row in life.get(col) or []:
+            name = str((row or {}).get("name") or "").strip()
+            if name:
+                out.setdefault(name, col)
+    stage_map = life.get("stage_map") if isinstance(life.get("stage_map"), dict) else {}
+    if stage_map:
+        for card in list(snap.get("hot_boards") or []) + list(snap.get("pin_boards") or []):
+            name = str((card or {}).get("name") or "").strip()
+            stage = stage_map.get(str((card or {}).get("bk") or ""))
+            if name and stage:
+                out.setdefault(name, str(stage))
+    return out
+
+
 def record_session_signals(snapshot: dict[str, Any]) -> int:
     """Persist buy/sell recommendations for the current session. Return insert/update count.
 
@@ -543,6 +563,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     from market_desk.gate_ledger import normalize_gate_notes
 
     market_gates = normalize_gate_notes(verdict.get("algo_notes"))
+    stage_by_name = board_stage_lookup(snapshot)
     n = 0
 
     def _log_buy_items(
@@ -612,6 +633,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "ready": 1 if item.get("ready") else 0,
                     "payload": {
                         "desk_source": desk_source,
+                        "board_stage": stage_by_name.get(
+                            source_board or (board_names[0] if board_names else "") or mainline
+                        )
+                        or "none",
                         "source_board": source_board or None,
                         "role_label": item.get("role_label"),
                         "plan_price": plan if plan is not None else price,

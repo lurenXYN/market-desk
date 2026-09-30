@@ -1,0 +1,39 @@
+---
+description: market-desk — schema/formula changes must keep old SQLite data compatible
+globs: **/*
+alwaysApply: false
+---
+
+# market-desk 老数据兼容（硬要求）
+
+每次改持久化结构、计分公式、枚举含义、默认字段时，必须先想清楚：**现网 / 本地已有 `data/desk.db` 怎么办**。禁止假设「空库重装」。
+
+## 必须做
+
+1. **真相源优先**：能从事件表 / 原始流水重算的（如 `theme_day_outcome` → `auto_adj`），不要只改展示分、丢掉历史。
+2. **可加不可瞎改**：SQLite 用 `ALTER TABLE … ADD COLUMN` + 合理默认；旧行要有回填或「缺省=旧行为」。
+3. **用户标注要留**：`manual_*`、手填成交、仓位备注、`trade_adj` 等，重算自动分时用 `preserve_manual` / 等价逻辑，**不得静默清零**。
+4. **版本戳迁移**：公式或语义变了 → `config` 里 bump 版本常量 + `settings`（或等价）记已迁移版本；**启动或首轮 settle 时**按版本一次性重算/回填，幂等可重复跑。
+5. **文档**：`glossary`（或相关注释）写清「旧数据如何升级」；必要时 `TODO.md` Done 一行带「兼容」。
+
+## 禁止
+
+- 只改内存公式、不写迁移，让旧库分数/字段语义错乱
+- `DROP TABLE` / 清空用户仓位·信号·手调来「省事」
+- 用新枚举覆盖旧值却不映射（旧 JSON / 旧 `signal_type` 读挂）
+
+## 速查示例（题材信誉 v2）
+
+| 层 | 处理 |
+|----|------|
+| `theme_day_outcome` | 保留，作重算输入 |
+| `auto_adj` | 启动按 `THEME_REP_FORMULA_VERSION` 重算 |
+| `manual_adj` / `trade_adj` | 保留，再合成 `score_adj` |
+
+参考：`theme_memory.rebuild_all_theme_reputation`、`engine.start` 迁移调用。
+
+## Agent 自检（改完再交付）
+
+- [ ] 旧库不跑迁移能否启动？跑一次迁移是否幂等？
+- [ ] 手调 / 仓位 / 成交注解还在吗？
+- [ ] 独立仓推送前，glossary/版本常量是否已对齐？

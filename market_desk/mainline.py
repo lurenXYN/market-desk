@@ -21,6 +21,7 @@ from market_desk.config import (
     MAINLINE_ZT_TAIL_START,
     MAINLINE_ZT_TAIL_UNIT,
     MAINLINE_ZT_UNIT,
+    PSEUDO_BOARD_KEYWORDS,
 )
 from market_desk.filters import is_main_board
 from market_desk.settings import setting
@@ -273,22 +274,66 @@ def switch_margin_need(
     }
 
 
+def is_pseudo_board(name: str | None) -> bool:
+    """Return True for style / flow / index buckets that are not real themes."""
+    text = str(name or "").strip()
+    return bool(text) and any(k in text for k in PSEUDO_BOARD_KEYWORDS)
+
+
+def mainline_pool(hot: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return mainline candidates: real themes, industries first.
+
+    Concepts join the pool when the strongest industry is thin (fewer than
+    ``concept_join_zt`` limit-ups) so a 1–2 seal niche industry cannot beat a
+    broad concept theme only because of its board kind.
+    """
+    boards = [b for b in (hot or []) if not is_pseudo_board(b.get("name"))] or list(hot or [])
+    industries = [b for b in boards if b.get("kind") == "industry"]
+    if not industries:
+        return boards
+    join_zt = int(setting("concept_join_zt", 3) or 0)
+    best_ind = max(int(b.get("zt_n") or 0) for b in industries)
+    if join_zt > 0 and best_ind < join_zt:
+        return boards
+    return industries
+
+
+def _since_age(since: str | None, now_text: str | None) -> float | None:
+    """Return seconds between two wall-clock stamps, or None."""
+    from datetime import datetime as _dt
+
+    try:
+        a = _dt.strptime(str(since or "")[:19], "%Y-%m-%d %H:%M:%S")
+        b = _dt.strptime(str(now_text or "")[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return (b - a).total_seconds()
+
+
 def pick_mainline(
     hot: list[dict[str, Any]] | None,
     sticky_name: str | None = None,
     margin: float | None = None,
     *,
     sticky_held_seconds: float | None = None,
+    challenger_prev: dict[str, Any] | None = None,
+    confirm_seconds: float = 0.0,
+    now_text: str | None = None,
+    state_out: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Choose the live mainline from hot industry cards, then concepts.
 
     When ``sticky_name`` is still in the pool, keep it unless the raw leader's
     score beats it by ``margin`` (hysteresis against board-score flicker).
     Same-theme challengers (煤炭↔动力煤) and hold-window flips need a larger gap.
+
+    With ``confirm_seconds`` > 0, a cross-theme challenger that clears the gap
+    must keep clearing it for that long (tracked via ``challenger_prev`` →
+    ``state_out["challenger"]``) unless the incumbent is already fading.
     """
-    boards = list(hot or [])
-    industries = [b for b in boards if b.get("kind") == "industry"]
-    pool = industries or boards
+    pool = mainline_pool(hot)
+    if state_out is not None:
+        state_out["challenger"] = None
     if not pool:
         return None
     leader = max(pool, key=mainline_score)
@@ -317,8 +362,26 @@ def pick_mainline(
     need = float(meta["need"])
     lead_s = mainline_score(leader)
     hold_s = mainline_score(incumbent)
-    if lead_s >= hold_s + need:
+    if lead_s < hold_s + need:
+        return incumbent
+    if confirm_seconds <= 0 or meta.get("inc_ending") or not now_text:
         return leader
+    lead_name = str(leader.get("name") or "")
+    prev = challenger_prev or {}
+    prev_name = str(prev.get("name") or "")
+    since = str(prev.get("since") or "")
+    if not (prev_name and (prev_name == lead_name or same_theme(prev_name, lead_name))):
+        since = str(now_text)
+    age = _since_age(since, now_text)
+    if age is not None and age >= float(confirm_seconds):
+        return leader
+    if state_out is not None:
+        state_out["challenger"] = {
+            "name": lead_name,
+            "since": since,
+            "gap": round(lead_s - hold_s, 1),
+            "need": round(need, 1),
+        }
     return incumbent
 
 
@@ -345,9 +408,7 @@ def pick_side_mainline(
     )
     if gap_limit <= 0:
         return None
-    boards = list(hot or [])
-    industries = [b for b in boards if b.get("kind") == "industry"]
-    pool = industries or boards
+    pool = mainline_pool(hot)
     if len(pool) < 2:
         return None
     main_score = mainline_score(main)
@@ -435,11 +496,12 @@ def explain_mainline(
     sticky_name: str | None = None,
     sticky_held_seconds: float | None = None,
     margin: float | None = None,
+    pending: dict[str, Any] | None = None,
+    confirm_seconds: float = 0.0,
+    now_text: str | None = None,
 ) -> dict[str, Any]:
     """Explain why the live mainline is kept or switched (for the desk strip)."""
-    boards = list(hot or [])
-    industries = [b for b in boards if b.get("kind") == "industry"]
-    pool = industries or boards
+    pool = mainline_pool(hot)
     chosen = chosen or {}
     name = str(chosen.get("name") or "").strip()
     sticky = (sticky_name or "").strip()
@@ -481,7 +543,13 @@ def explain_mainline(
             fade_bit = "·衰退降门槛" if meta.get("fade_mult_applied") else ""
             if meta.get("theme_fade_skip"):
                 fade_bit += "·同主题不×2"
-        if same and lead_name and lead_name != sticky:
+        if pending and pending.get("name"):
+            waited = _since_age(pending.get("since"), now_text) or 0.0
+            reason = (
+                f"换防待确认：挑战者 {pending.get('name')} 分差 {pending.get('gap')} "
+                f"≥ 需 {pending.get('need')}，已领先 {int(waited)}s / {int(confirm_seconds)}s"
+            )
+        elif same and lead_name and lead_name != sticky:
             reason = (
                 f"同主题粘滞：挑战者 {lead_name} 分差 {gap if gap is not None else '—'} "
                 f"< 需 {effective_need}{fade_bit}"

@@ -9,6 +9,7 @@ from market_desk.leaders import (
     _near_day_low,
     board_surge_fresh,
     build_independent_pullback_candidates,
+    check_pullback_qualification,
     pick_emotion_dragon,
     stock_liquidity_ok,
     within_n_day_low,
@@ -49,6 +50,30 @@ class LeadersTests(unittest.TestCase):
         self.assertFalse(_independent_vs_board({"pct": 0.6}, 0.5))
         self.assertTrue(_independent_vs_board({"pct": 1.5}, 0.5))
 
+    def test_pullback_qualification(self) -> None:
+        # 1. Healthy intraday pullback from day high (e.g. high=10.5, price=10.2 -> ~2.8% retracement)
+        ok1, tag1 = check_pullback_qualification(
+            {"price": 10.2, "high": 10.5, "low": 10.0, "open": 10.1, "pct": 1.0}
+        )
+        self.assertTrue(ok1)
+        self.assertIn("日高回踩", tag1)
+
+        # 2. Near session low probe
+        ok2, tag2 = check_pullback_qualification(
+            {"price": 10.05, "high": 10.8, "low": 10.0, "open": 10.3, "pct": -0.5},
+            max_near_day_low=3.5,
+        )
+        self.assertTrue(ok2)
+        self.assertIn("近低承接", tag2)
+
+        # 3. Resilient divergence when parent board drops significantly
+        ok3, tag3 = check_pullback_qualification(
+            {"price": 10.2, "high": 10.3, "low": 10.0, "open": 10.0, "pct": 2.0},
+            board_pct=-1.5,
+        )
+        self.assertTrue(ok3)
+        self.assertIn("逆势承接", tag3)
+
     def test_independent_prefers_diverge_then_near_low_fallback(self) -> None:
         board = {
             "name": "主线甲",
@@ -83,10 +108,22 @@ class LeadersTests(unittest.TestCase):
                     "pct": 1.0,
                     "price": 15.0,
                     "low": 14.0,
-                    "high": 15.2,
+                    "high": 15.05,
+                    "open": 14.2,
                     "mv_yi": 250,
                     "turnover": 4.0,
-                    "amount": 8e8,
+                    "amount": 8e8,  # Picked as mid-army dragon -> skipped
+                },
+                {
+                    "code": "600004",
+                    "name": "小微丁",
+                    "pct": 1.0,
+                    "price": 8.05,
+                    "low": 8.0,
+                    "high": 8.2,
+                    "mv_yi": 150,
+                    "turnover": 4.0,
+                    "amount": 1e8,  # Below INDEPENDENT_POP_MIN_AMOUNT (2.5e8) -> skipped
                 },
             ],
         }
@@ -95,6 +132,7 @@ class LeadersTests(unittest.TestCase):
         self.assertIn("600001", codes)
         self.assertIn("600002", codes)
         self.assertNotIn("600003", codes)
+        self.assertNotIn("600004", codes)
         by_code = {r["code"]: r for r in rows}
         self.assertTrue(by_code["600001"].get("indep_path"))
         self.assertFalse(by_code["600002"].get("indep_path"))
@@ -112,10 +150,11 @@ class LeadersTests(unittest.TestCase):
                     "pct": 4.0,
                     "price": 12.0,
                     "low": 10.0,
-                    "high": 12.2,
+                    "high": 12.05,
+                    "open": 10.2,
                     "mv_yi": 200,
                     "turnover": 4.0,
-                    "amount": 2e8,
+                    "amount": 1e8,  # Below INDEPENDENT_POP_MIN_AMOUNT (2.5e8)
                 }
             ],
         }
@@ -141,6 +180,7 @@ class LeadersTests(unittest.TestCase):
                     "price": 10.1,
                     "low": 10.0,
                     "high": 10.5,
+                    "open": 10.05,
                     "mv_yi": 220,
                     "turnover": 3.5,
                     "amount": 4e8,
@@ -169,6 +209,7 @@ class LeadersTests(unittest.TestCase):
                     "price": 8.05,
                     "low": 8.0,
                     "high": 8.3,
+                    "open": 8.02,
                     "mv_yi": 180,
                     "turnover": 3.2,
                     "amount": 3e8,
@@ -240,6 +281,45 @@ class LeadersTests(unittest.TestCase):
         assert hit is not None
         self.assertEqual(hit["code"], "600002")
         self.assertIn("为何是中军龙", str(hit.get("dragon_why") or ""))
+
+    def test_watch_trial_recommend_diff_and_discipline(self) -> None:
+        from market_desk.verdict import build_watch_trial_recommend
+
+        watchlist = [
+            {
+                "code": "600519",
+                "name": "贵州茅台",
+                "last": 1500.0,
+                "suggest_price": 1500.0,
+                "stop_price": 1450.0,
+                "chase_price": 1530.0,
+                "observe_status": "可试探",
+                "observe_note": "贴近建议买点(精准吻合)且作战台未锁买",
+            },
+            {
+                "code": "512880",
+                "name": "证券ETF",
+                "last": 1.010,
+                "suggest_price": 1.000,
+                "stop_price": 0.980,
+                "chase_price": 1.030,
+                "observe_status": "可试探",
+                "observe_note": "贴近建议买点(+1.0%)且作战台未锁买",
+            },
+        ]
+        rec = build_watch_trial_recommend(watchlist)
+        self.assertIsNotNone(rec)
+        assert rec is not None
+        self.assertEqual(len(rec["items"]), 2)
+        item0 = rec["items"][0]
+        self.assertEqual(item0["code"], "600519")
+        self.assertIn("精准贴合买点", item0["reason"])
+        self.assertIn("维持0.75倍轻仓纪律", item0["reason"])
+
+        item1 = rec["items"][1]
+        self.assertEqual(item1["code"], "512880")
+        self.assertIn("距建议买点高+1.0%", item1["reason"])
+        self.assertIn("维持0.75倍轻仓纪律", item1["reason"])
 
 
 if __name__ == "__main__":

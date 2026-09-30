@@ -244,7 +244,20 @@ python -m unittest discover -s tests -v
 ### 9d. 大盘波浪情景（观察）
 
 大盘页对**上证指数**做艾略特波浪多假设：上升推动 1–5、调整 A/B/C、下跌推动 1–5、三角/复合。  
-每条给契合度、后市路径、否决位与变盘时间/结构点位；**不改**作战台买卖结论。日线约 320 根（~1年+）按交易日缓存。
+每条给契合度、后市路径、否决位与变盘时间/结构点位；首选假设提供「斐波变盘窗倒计时」警示徽章；**不改**作战台买卖结论。日线约 320 根（~1年+）按交易日缓存。
+
+### 9e. 资金流与本地收盘沉淀
+
+资金页提供即时主力资金榜与「收盘沉淀」榜。系统每日 15:05 全量抓取并沉淀板块资金流日表（`fund_flow_daily`），资金页可直接拉取本地数据库近多日收盘累计净流入，洞察大资金沉淀路径。
+
+### 9f. 独立人气回踩与自选可试探（观察副卡）
+
+- **独立人气回踩**：筛选主板非 ST 成分，涨跌幅 -3% ~ +7%，成交额 ≥ 2.5 亿；捕捉离日高 1.8%~5.5% 的健康回踩或逆势抗跌承接标的。独立行情优先，不改顶栏买入结论。
+- **自选可试探**：同步观察页标记为「可试探」的自选标的，清晰提示与建议买点的价差及偏离度，严格遵守 0.75 倍轻仓纪律。
+
+### 9g. 信号回测体系（客观标尺）
+
+提供基于历史信号库与日K线撮合的独立回测引擎与页面，计算不同买入来源、相位与持有周期的胜率、盈亏比与净收益，为客观评估与迭代买入纪律提供数据支撑。
 
 ### 10. 竞价基调
 
@@ -279,7 +292,7 @@ market-desk/
 ├── tests/                    # unittest（filters / leaders / review）
 ├── market_desk/
 │   ├── app.py                # FastAPI 入口：lifespan、静态挂载、注册路由
-│   ├── routes/               # 按页签/功能拆的 APIRouter（auth / market / review / positions / settings / lists / reports / ops / ma_fan / backtest / pages）
+│   ├── routes/               # 按页签/功能拆的 APIRouter（auth / market / review / positions / settings / lists / reports / ops / ma_fan / pages）
 │   ├── engine.py             # 刷新循环与板块 enrichment
 │   ├── sentiment.py          # 温度 / 相位 / 板块状态
 │   ├── mainline.py           # 主线挑选与 ETF 映射
@@ -288,7 +301,7 @@ market-desk/
 │   ├── quotes_fallback.py    # 东财列表被拦时：主板行情改走腾讯（代码表来自新浪 / 库存）
 │   ├── board_fallback.py     # 东财板块被拦时：热点板块 / 当日资金流 / 成分股改走新浪
 │   ├── seeds/em_boards.json  # 东财板块 BK 代码表（名称 → BK），让新浪同名板块沿用 BK
-│   ├── db/                   # SQLite，按业务拆（core / schema / users / market / positions / signals / state / lists / backup / backtest …）；`from market_desk.db import X` 照旧可用
+│   ├── db/                   # SQLite，按业务拆（core / schema / users / market / positions / signals / state / lists / backup …）；`from market_desk.db import X` 照旧可用
 │   ├── ma_fan/               # 均线发散：pattern 形态打分 / job 限速进度缓存 / sources 数据源 / context 主线复盘联动 / scan 扫描流程
 │   ├── assets.py             # 把 static/js/desk/*.js 按文件名顺序拼成 /assets/desk.js（ETag 缓存）
 │   ├── logs.py               # 滚动文件日志 data/logs/market-desk.log

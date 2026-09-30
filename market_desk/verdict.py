@@ -68,11 +68,22 @@ def build_verdict(
             sticky_margin = float(sticky_bias["margin"])
     except Exception:
         sticky_bias = {}
+    now_text = (now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    # Yesterday's sticky must yield at once on a new session; only intraday flips wait.
+    same_day_sticky = bool(sticky_since_prev) and sticky_since_prev[:10] == now_text[:10]
+    confirm_s = float(setting("switch_confirm_seconds", 600) or 0) if same_day_sticky else 0.0
+    ml_state: dict[str, Any] = {}
     main = pick_mainline(
         hot,
         sticky_name=sticky,
         margin=sticky_margin,
         sticky_held_seconds=sticky_held,
+        challenger_prev=prev_ml.get("challenger") if isinstance(prev_ml.get("challenger"), dict) else None,
+        confirm_seconds=confirm_s,
+        now_text=now_text,
+        state_out=ml_state,
     ) or {}
     board_name = main.get("name") or ""
     ml_why = explain_mainline(
@@ -81,6 +92,9 @@ def build_verdict(
         sticky_name=sticky,
         margin=sticky_margin,
         sticky_held_seconds=sticky_held,
+        pending=ml_state.get("challenger"),
+        confirm_seconds=confirm_s,
+        now_text=now_text,
     )
     if sticky_bias.get("ok") and sticky_bias.get("note"):
         # Defer algo note until algo_notes exists below.
@@ -572,6 +586,7 @@ def build_verdict(
             "leader_boards": main.get("leader_boards"),
             "lifecycle": life_stage,
             "sticky_since": sticky_since,
+            "challenger": ml_state.get("challenger"),
             "theme": theme_key(board_name),
             "score": ml_why.get("score"),
             "why": ml_why,
@@ -1295,6 +1310,17 @@ def _build_side_branch(
     stocks = _stock_candidates(side, zt, zb, boards=hot) if allow_stocks else []
     # Always observation path: wait prices only, never ready.
     rec = _build_recommend("观察回踩", side, vehicle, bounce, stocks, bans)
+    if setting("side_require_member", True):
+        members = {
+            normalize_code(m.get("code") if isinstance(m, dict) else m)
+            for m in side.get("pool") or side.get("members") or []
+        }
+        members.discard("")
+        rec["items"] = [
+            it
+            for it in rec.get("items") or []
+            if (it.get("kind") or "stock") == "etf" or normalize_code(it.get("code")) in members
+        ]
     for item in rec.get("items") or []:
         item["ready"] = False
         _demote_buy_to_wait(item)
@@ -1964,6 +1990,24 @@ def build_watch_trial_recommend(
         buy = suggest if suggest not in (None, "") else last
         kind = "etf" if etf else "stock"
         note = str(row.get("observe_note") or "靠近建议价且作战台未锁买")
+
+        diff_str = ""
+        try:
+            lf = float(last) if last not in (None, "") else None
+            sf = float(suggest) if suggest not in (None, "") else None
+            if lf is not None and sf is not None and sf > 0:
+                diff_pct = (lf - sf) / sf * 100.0
+                diff_val = lf - sf
+                if abs(diff_pct) < 0.1:
+                    diff_str = "现价精准贴合买点"
+                elif diff_pct > 0:
+                    diff_str = f"距建议买点高{diff_pct:+.1f}%(+{diff_val:.{digits}f}元)"
+                else:
+                    diff_str = f"距建议买点低{abs(diff_pct):.1f}%({diff_val:.{digits}f}元)"
+        except (TypeError, ValueError):
+            pass
+
+        reason_parts = [p for p in (note, diff_str, "维持0.75倍轻仓纪律", "不改顶栏主线") if p]
         items.append(
             {
                 "kind": kind,
@@ -1982,7 +2026,7 @@ def build_watch_trial_recommend(
                 "chase_price": _px(chase, digits),
                 "ready": False,
                 "watch_trial": True,
-                "reason": f"{note}；小仓试探，不改顶栏结论",
+                "reason": "；".join(reason_parts),
                 "qty": 100,
             }
         )
@@ -1997,8 +2041,8 @@ def build_watch_trial_recommend(
         "watch_trial": True,
         "items": items,
         "size_note": (
-            f"观察页「可试探」同步副卡；建议再×{float(WATCH_TRIAL_SIZE_MULT):g}，"
-            "不改 sticky 主线 / 顶栏"
+            f"观察页「可试探」同步副卡；严格执行×{float(WATCH_TRIAL_SIZE_MULT):g}轻仓试探纪律，"
+            "不改 sticky 主线与顶栏方向"
         ),
     }
     trial_adapt = dict(adapt or {})
@@ -2108,16 +2152,23 @@ def build_dragon_recommend(
 ) -> dict[str, Any] | None:
     """Build one desk dragon row covering sticky + side + link boards.
 
-    Mainline dragons may arm ready after gates; side/link dragons stay observe-only.
+    Side/link dragons are included only with setting ``dragon_side_link`` and
+    stay observe-only. Mainline dragons arm ready only with
+    ``dragon_ready_enabled``; otherwise the row is observation only.
     Codes already used on a higher-priority board are skipped (main > side > link).
     """
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for scope, board, surge, observe in (
-        ("main", main, surge_fresh, False),
-        ("side", side_board, side_surge, True),
-        ("link", link_board, link_surge, True),
-    ):
+    main_observe = not bool(setting("dragon_ready_enabled", False))
+    scopes_in: list[tuple[str, dict[str, Any] | None, bool, bool]] = [
+        ("main", main, surge_fresh, main_observe),
+    ]
+    if setting("dragon_side_link", False):
+        scopes_in += [
+            ("side", side_board, side_surge, True),
+            ("link", link_board, link_surge, True),
+        ]
+    for scope, board, surge, observe in scopes_in:
         chunk = _dragon_items_for_board(
             board,
             zt,
@@ -2137,7 +2188,8 @@ def build_dragon_recommend(
     scopes = sorted({str(x.get("dragon_scope") or "main") for x in items})
     tip = (
         "情绪龙=涨停高度梯队（连板→封单→成交）；中军龙=成分成交额+市值核心（可不涨停）。"
-        "情绪看确认异动，中军看趋势回踩；主线可到位，支线/联动只观察。"
+        "情绪看确认异动，中军看趋势回踩。"
+        + ("主线龙头可到位。" if not main_observe else "龙头排默认只观察、不亮灯。")
     )
     if surge_fresh or side_surge or link_surge:
         tip += " 暴起当日该板龙头只观察。"
@@ -3556,7 +3608,6 @@ def apply_stock_daily_trends(
     recommend: dict[str, Any] | None,
     closes_by_code: dict[str, list[float]],
     fetch_ok_by_code: dict[str, bool] | None = None,
-    overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Attach daily-trend labels, nudge scores, and soft/hard ready gates.
 
@@ -3564,7 +3615,6 @@ def apply_stock_daily_trends(
     ETF: clear up +bonus; clear down gates ready; sideways score-only (no gate).
     Missing/thin kline → ``trend_pending`` visible, no ready gate / score nudge.
     """
-    del overrides  # Manual overrides removed; trend is informational + ready gate.
     from market_desk.config import (
         STOCK_TREND_DOWN_PENALTY,
         STOCK_TREND_SIDEWAYS_PENALTY,

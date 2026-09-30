@@ -1,4 +1,4 @@
-"""Global settings, session segments, mainline switches and trend overrides."""
+"""Global settings, session segments, mainline switches."""
 
 from __future__ import annotations
 
@@ -146,10 +146,8 @@ def try_add_mainline_switch(row: dict[str, Any], min_seconds: int = 300) -> bool
         ).fetchone()
         if last:
             age = _switch_age_seconds(last["switched_at"], switched_at)
-            flip = (
-                (last["from_name"] or "") == to_name
-                and (last["to_name"] or "") == from_name
-            )
+            # Any return to the prior origin (incl. X→X after unlogged sibling hops) is a flip.
+            flip = (last["from_name"] or "") == to_name
             if age is not None and age < int(min_seconds):
                 if flip:
                     conn.execute(
@@ -249,43 +247,3 @@ def load_recent_mainline_switch_stats(days: int = 8) -> dict[str, Any]:
     }
 
 
-def upsert_trend_override(trade_date: str, code: str, verdict: str) -> dict[str, Any]:
-    """Save a manual up/down trend judgment for one ticker on a trade date."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    code = str(code or "").zfill(6)
-    verdict = "up" if verdict == "up" else "down"
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO trend_override(trade_date, code, verdict, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(trade_date, code) DO UPDATE SET
-                verdict = excluded.verdict,
-                updated_at = excluded.updated_at
-            """,
-            (trade_date, code, verdict, now),
-        )
-        conn.commit()
-    return {"trade_date": trade_date, "code": code, "verdict": verdict, "updated_at": now}
-
-
-def load_trend_overrides(trade_date: str) -> dict[str, str]:
-    """Return manual trend judgments keyed by code for a trade date."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT code, verdict FROM trend_override WHERE trade_date = ?",
-            (trade_date,),
-        ).fetchall()
-    return {str(r["code"]).zfill(6): str(r["verdict"]) for r in rows}
-
-
-def delete_trend_override(trade_date: str, code: str) -> bool:
-    """Remove a manual trend judgment."""
-    code = str(code or "").zfill(6)
-    with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM trend_override WHERE trade_date = ? AND code = ?",
-            (trade_date, code),
-        )
-        conn.commit()
-        return cur.rowcount > 0

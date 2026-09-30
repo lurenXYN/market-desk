@@ -500,6 +500,22 @@ def load_theme_outcomes_for_theme(theme_key: str, limit: int = 12) -> list[dict[
     return [dict(r) for r in rows]
 
 
+def load_recent_theme_outcomes(limit: int = 160) -> list[dict[str, Any]]:
+    """Return newest-first outcomes across all themes (base-rate window)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT trade_date, next_date, theme_key, outcome, mainline,
+                   zt_n, next_zt_n, pct, next_pct, updated_at
+            FROM theme_day_outcome
+            ORDER BY next_date DESC, theme_key
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_theme_outcome_keys() -> list[str]:
     """Return distinct theme keys that have at least one day outcome."""
     with _connect() as conn:

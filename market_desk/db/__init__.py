@@ -74,6 +74,7 @@ from market_desk.db.reputation import (  # noqa: F401
     record_theme_day_outcome,
     load_theme_day_outcomes,
     load_theme_outcomes_for_theme,
+    load_recent_theme_outcomes,
     list_theme_outcome_keys,
 )
 from market_desk.db.positions import (  # noqa: F401
@@ -135,9 +136,6 @@ from market_desk.db.state import (  # noqa: F401
     _switch_age_seconds,
     load_mainline_switches,
     load_recent_mainline_switch_stats,
-    upsert_trend_override,
-    load_trend_overrides,
-    delete_trend_override,
 )
 from market_desk.db.lists import (  # noqa: F401
     add_watchlist,

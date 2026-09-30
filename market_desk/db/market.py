@@ -9,6 +9,19 @@ from typing import Any
 from market_desk.db.core import _connect
 
 
+def _session_day(day: str | None) -> bool:
+    """Return False only for dates the exchange calendar marks closed."""
+    text = str(day or "")[:10]
+    if not text:
+        return False
+    try:
+        from market_desk.calendar import is_trading_day
+
+        return bool(is_trading_day(text))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) -> None:
     """Upsert today's compact daily row used by the history table.
 
@@ -19,6 +32,8 @@ def save_daily(trade_date: str, payload: dict[str, Any], *, merge: bool = True) 
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     day = str(trade_date or "")[:10]
+    if not _session_day(day):
+        return
     data = dict(payload or {})
     with _connect() as conn:
         if merge and day:
@@ -162,12 +177,13 @@ def sanitize_daily_row(row: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def load_daily(limit: int = 14) -> list[dict[str, Any]]:
-    """Return recent daily snapshots, newest first."""
+    """Return recent daily snapshots, newest first (closed-calendar days skipped)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT trade_date, payload FROM daily_snapshot ORDER BY trade_date DESC LIMIT ?",
-            (limit,),
+            (int(limit) + 4,),
         ).fetchall()
+    rows = [r for r in rows if _session_day(r["trade_date"])][: int(limit)]
     out: list[dict[str, Any]] = []
     dirty: list[tuple[str, dict[str, Any]]] = []
     for row in rows:
@@ -239,7 +255,7 @@ def load_auction(trade_date: str) -> dict[str, Any] | None:
 
 def save_board_daily(trade_date: str, rows: list[dict[str, Any]]) -> None:
     """Upsert today's compact sector rows used for concentration history."""
-    if not rows:
+    if not rows or not _session_day(trade_date):
         return
     with _connect() as conn:
         conn.executemany(
@@ -397,7 +413,7 @@ def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[
             """,
             (before_date, window),
         ).fetchall()
-        dates = [str(r["trade_date"]) for r in date_rows]
+        dates = [str(r["trade_date"]) for r in date_rows if _session_day(r["trade_date"])]
         if not dates:
             return {}
         placeholders = ",".join("?" for _ in dates)
@@ -414,9 +430,50 @@ def load_board_hist_map(before_date: str, days: int = 8) -> dict[str, list[dict[
     for row in rows:
         item = dict(row)
         out.setdefault(item["bk"], []).append(item)
+    _merge_name_aliases(out)
     for bk, series in list(out.items()):
         out[bk] = series[-days:]
     return out
+
+
+_ALIAS_SUFFIX = ("概念股", "概念", "板块", "行业", "指数", "Ⅲ", "Ⅱ")
+
+
+def board_alias_name(name: str | None) -> str:
+    """Normalize a board name so East Money and Sina fallback rows can meet."""
+    text = str(name or "").strip()
+    changed = True
+    while changed and text:
+        changed = False
+        for suf in _ALIAS_SUFFIX:
+            if text.endswith(suf) and len(text) > len(suf) + 1:
+                text = text[: -len(suf)]
+                changed = True
+    return text
+
+
+def _merge_name_aliases(series_map: dict[str, list[dict[str, Any]]]) -> None:
+    """Fill each board's missing days from same-alias boards (East Money first).
+
+    Sina fallback days write ``SINA:*`` codes; without this, one theme splits
+    into two short histories and lifecycle reads it as a fresh ignition.
+    """
+    groups: dict[str, list[str]] = {}
+    for bk, series in series_map.items():
+        alias = board_alias_name(series[-1].get("name") if series else "")
+        if alias:
+            groups.setdefault(alias, []).append(bk)
+    for bks in groups.values():
+        if len(bks) < 2:
+            continue
+        by_day: dict[str, dict[str, Any]] = {}
+        for bk in sorted(bks, key=lambda b: (str(b).startswith("SINA"), str(b))):
+            for row in series_map[bk]:
+                by_day.setdefault(str(row.get("trade_date") or ""), row)
+        for bk in bks:
+            own = {str(r.get("trade_date") or ""): r for r in series_map[bk]}
+            merged = [own.get(d) or dict(by_day[d], bk=bk) for d in sorted(by_day)]
+            series_map[bk] = merged
 
 
 def load_board_rows_for_date(trade_date: str) -> list[dict[str, Any]]:

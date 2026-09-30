@@ -464,6 +464,66 @@ def _near_day_low(member: dict[str, Any], *, max_pct: float = 2.0) -> bool:
     return (price - low) / low * 100.0 <= max_pct
 
 
+def check_pullback_qualification(
+    member: dict[str, Any],
+    board_pct: float | None = None,
+    *,
+    max_near_day_low: float = 3.5,
+) -> tuple[bool, str]:
+    """Evaluate whether an intraday stock exhibits a healthy pullback or resilient holding.
+
+    Args:
+        member: Stock snapshot dictionary containing price, high, low, open, and pct.
+        board_pct: Current percentage change of the parent board, or None if unavailable.
+        max_near_day_low: Maximum percentage deviation from session low to qualify as near-low.
+
+    Returns:
+        A tuple of (qualified, reason_tag), where qualified is True if any health
+        pullback or support criterion is satisfied, and reason_tag describes the pattern.
+    """
+    try:
+        price = float(member.get("price") or member.get("last") or 0)
+        high = float(member.get("high") or 0)
+        low = float(member.get("low") or 0)
+        open_px = float(member.get("open") or 0)
+        pct = float(member.get("pct") or 0)
+    except (TypeError, ValueError):
+        return False, ""
+
+    if price <= 0:
+        return False, ""
+
+    # 1. Resilient divergence when parent board drops significantly (priority: divergence)
+    if board_pct is not None:
+        try:
+            bp = float(board_pct)
+        except (TypeError, ValueError):
+            bp = 0.0
+        if bp <= -1.0 and pct >= 0.0:
+            if high > 0:
+                pb = (high - price) / high * 100.0
+                if pb <= 4.5:
+                    return True, f"逆势承接(vs板{bp:+.1f}%)"
+            else:
+                return True, f"逆势承接(vs板{bp:+.1f}%)"
+
+    # 2. Healthy intraday pullback from day high (1.8% ~ 5.5% retracement without breaking structure)
+    if high > 0 and price < high:
+        pb_from_high = (high - price) / high * 100.0
+        if 1.8 <= pb_from_high <= 5.5:
+            # Must not collapse below session open by more than 1.5%
+            if open_px <= 0 or price >= open_px * 0.985:
+                return True, f"日高回踩{pb_from_high:.1f}%"
+
+    # 3. Near session low probe / support
+    if low > 0 and price >= low:
+        near_low_pct = (price - low) / low * 100.0
+        if near_low_pct <= max_near_day_low:
+            return True, f"近低承接({near_low_pct:.1f}%)"
+
+    return False, ""
+
+
 def _independent_vs_board(member: dict[str, Any], board_pct: float | None) -> bool:
     """Rough independence: stock path diverges from board pct."""
     try:
@@ -499,13 +559,17 @@ def build_independent_pullback_candidates(
     5-day lows and zt_ytd afterward.
     """
     from market_desk.config import (
+        INDEPENDENT_POP_MIN_AMOUNT,
         INDEPENDENT_POP_NEAR_DAY_LOW_PCT,
         INDEPENDENT_POP_PCT_MAX,
+        INDEPENDENT_POP_PCT_MIN,
     )
 
     skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
     pct_max = float(INDEPENDENT_POP_PCT_MAX)
+    pct_min = float(INDEPENDENT_POP_PCT_MIN)
     near_day = float(INDEPENDENT_POP_NEAR_DAY_LOW_PCT)
+    min_amount = float(INDEPENDENT_POP_MIN_AMOUNT)
     # Soft priority: main first, then side, then link.
     scopes: list[tuple[str, dict[str, Any] | None, float]] = [
         ("main", main, 1.0),
@@ -560,14 +624,19 @@ def build_independent_pullback_candidates(
                 turnover = None
             if not stock_liquidity_ok(mv, turnover, sealed=False):
                 continue
-            if pct > pct_max or pct < -pct_max:
-                continue
-            if not _near_day_low(member, max_pct=near_day):
+            if pct > pct_max or pct < pct_min:
                 continue
             try:
                 amount = float(member.get("amount") or 0)
             except (TypeError, ValueError):
                 amount = 0.0
+            if min_amount > 0 and amount > 0 and amount < min_amount:
+                continue
+            qualified, pb_tag = check_pullback_qualification(
+                member, board_pct=board_pct, max_near_day_low=near_day
+            )
+            if not qualified:
+                continue
             try:
                 high = float(member.get("high") or 0)
                 price = float(member.get("price") or 0)
@@ -588,7 +657,7 @@ def build_independent_pullback_candidates(
             if indep:
                 item["indep_path"] = True
                 item["reason"] = (
-                    f"{scope_label}「{board_name}」板内独立行情·近低回踩"
+                    f"{scope_label}「{board_name}」板内独立行情·{pb_tag}"
                     f"（vs板 {_fmt_board(board_pct)}，个股 {pct:+.1f}%）"
                 )
                 indep_scored.append((score + 1.5, item))
@@ -596,7 +665,7 @@ def build_independent_pullback_candidates(
                 item["indep_path"] = False
                 item["reason"] = (
                     f"{scope_label}「{board_name}」板内近低观察·板内同步"
-                    f"（vs板 {_fmt_board(board_pct)}，个股 {pct:+.1f}%）"
+                    f"（{pb_tag}，vs板 {_fmt_board(board_pct)}，个股 {pct:+.1f}%）"
                 )
                 near_scored.append((score, item))
 

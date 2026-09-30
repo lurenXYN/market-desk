@@ -73,8 +73,6 @@ def _advice_snapshot_for_code(
             rec.get("items") or [],
             (snap.get("side_recommend") or {}).get("items") or [],
             (snap.get("link_recommend") or {}).get("items") or [],
-            (snap.get("trial_recommend") or {}).get("items") or [],
-            (snap.get("indep_recommend") or {}).get("items") or [],
         ):
             for it in bucket:
                 if isinstance(it, dict) and normalize_code(it.get("code")) == code_n:

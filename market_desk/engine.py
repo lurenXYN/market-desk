@@ -37,7 +37,6 @@ from market_desk.db import (
     load_mainline_switches,
     load_session_segments,
     load_signals_for_date,
-    load_trend_overrides,
     load_watchlist,
     purge_stale_closed_positions,
     save_auction,
@@ -820,7 +819,7 @@ class DeskEngine:
                     client, verdict, trade_date_dash
                 )
                 # Soft ETF maps block_ready on the vehicle only; stocks may arm.
-                # Holders / watch-trial enrich run after first snapshot publish (Phase A).
+                # Holders enrich runs after first snapshot publish (Phase A).
                 seg_v = verdict.get("segment") or {}
                 bridge = verdict.get("auction_open_bridge") or {}
                 block_arm = (
@@ -2223,9 +2222,15 @@ class DeskEngine:
                     "concept": list(flow_con_m or []),
                 },
             }
+            from market_desk.db import list_fund_flow_dates, load_fund_flow_for_dates
+
+            stored_dates = list_fund_flow_dates(trade_date_dash, limit=5)
+            stored_rows = load_fund_flow_for_dates(stored_dates) if stored_dates else []
             fund_flow = build_fund_flow_board(
                 api_raw,
                 trade_date=trade_date_dash,
+                stored_dates=stored_dates,
+                stored_rows=stored_rows,
             )
             fund_flow["api_raw"] = api_raw
             fund_flow["full_ready"] = True
@@ -2591,13 +2596,12 @@ class DeskEngine:
         closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
             client, codes, trade_date
         )
-        overrides = load_trend_overrides(trade_date)
         verdict["recommend"] = apply_stock_daily_trends(
-            rec, closes_by_code, fetch_ok_by_code, overrides
+            rec, closes_by_code, fetch_ok_by_code
         )
         if side_rec.get("items"):
             verdict["side_recommend"] = apply_stock_daily_trends(
-                side_rec, closes_by_code, fetch_ok_by_code, overrides
+                side_rec, closes_by_code, fetch_ok_by_code
             )
             # Side branch stays observation-only even if trend looks up.
             for item in (verdict["side_recommend"].get("items") or []):
@@ -2607,7 +2611,7 @@ class DeskEngine:
             verdict["side_recommend"]["buy"] = False
         if link_rec.get("items"):
             verdict["link_recommend"] = apply_stock_daily_trends(
-                link_rec, closes_by_code, fetch_ok_by_code, overrides
+                link_rec, closes_by_code, fetch_ok_by_code
             )
             for item in (verdict["link_recommend"].get("items") or []):
                 item["ready"] = False
@@ -2617,11 +2621,11 @@ class DeskEngine:
             verdict["link_recommend"]["buy"] = False
         if dragon_rec.get("items"):
             verdict["dragon_recommend"] = apply_stock_daily_trends(
-                dragon_rec, closes_by_code, fetch_ok_by_code, overrides
+                dragon_rec, closes_by_code, fetch_ok_by_code
             )
         if indep_rec.get("items"):
             verdict["independent_recommend"] = apply_stock_daily_trends(
-                indep_rec, closes_by_code, fetch_ok_by_code, overrides
+                indep_rec, closes_by_code, fetch_ok_by_code
             )
             for item in (verdict["independent_recommend"].get("items") or []):
                 item["ready"] = False
@@ -2800,31 +2804,6 @@ class DeskEngine:
             box["text"] = f"独立人气回踩 · {len(kept)}只"
             verdict["independent_recommend"] = box
 
-    async def _apply_watch_trial_trends(
-        self,
-        client: httpx.AsyncClient,
-        watch_trial: dict[str, Any],
-        trade_date: str,
-    ) -> None:
-        """Attach daily trends onto watchlist trial desk cards."""
-        codes = [
-            str(x.get("code") or "")
-            for x in (watch_trial.get("items") or [])
-            if x.get("kind") in ("stock", "etf") and x.get("code")
-        ]
-        codes = list(dict.fromkeys(codes))
-        if not codes:
-            return
-        closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
-            client, codes, trade_date
-        )
-        overrides = load_trend_overrides(trade_date)
-        updated = apply_stock_daily_trends(
-            watch_trial, closes_by_code, fetch_ok_by_code, overrides
-        )
-        watch_trial.clear()
-        watch_trial.update(updated)
-
     async def _apply_recommend_holders(
         self,
         client: httpx.AsyncClient,
@@ -2972,14 +2951,12 @@ class DeskEngine:
         closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
             client, codes, trade_date
         )
-        overrides = load_trend_overrides(trade_date)
         for board in boards:
             soft = bool(board.get("etf_soft"))
             buy = apply_stock_daily_trends(
                 board.get("buy") or {},
                 closes_by_code,
                 fetch_ok_by_code,
-                overrides,
             )
             board["buy"] = mark_pullback_entries(buy, observe_only=soft)
 
@@ -3115,65 +3092,6 @@ class DeskEngine:
             series = list(packed.get(code) or [])
             if series:
                 self._minute_cache[code] = (now_ts, series)
-
-    def apply_trend_override(self, code: str, verdict_flag: str) -> dict[str, Any]:
-        """Persist a manual trend judgment and refresh recommend cards in-memory."""
-        from market_desk.db import upsert_trend_override
-        from market_desk.filters import normalize_code
-
-        trade_date = self.snapshot.get("trade_date") or datetime.now(CN_TZ).strftime("%Y-%m-%d")
-        c = normalize_code(code)
-        row = upsert_trend_override(trade_date, c, verdict_flag)
-        rec = ((self.snapshot.get("verdict") or {}).get("recommend")) or {}
-        items = list(rec.get("items") or [])
-        if items:
-            overrides = load_trend_overrides(trade_date)
-            # Re-apply using cached closes when available.
-            closes_by_code: dict[str, list[float]] = {}
-            fetch_ok_by_code: dict[str, bool] = {}
-            for item in items:
-                if item.get("kind") != "stock":
-                    continue
-                code_i = normalize_code(item.get("code"))
-                if code_i in self._kline_cache:
-                    closes_by_code[code_i] = list(self._kline_cache.get(code_i) or [])
-                    fetch_ok_by_code[code_i] = bool(
-                        self._kline_ok.get(code_i, bool(closes_by_code[code_i]))
-                    )
-                else:
-                    closes_by_code[code_i] = []
-                    fetch_ok_by_code[code_i] = False
-            new_rec = apply_stock_daily_trends(
-                rec, closes_by_code, fetch_ok_by_code, overrides
-            )
-            if self.snapshot.get("verdict"):
-                self.snapshot["verdict"]["recommend"] = mark_pullback_entries(new_rec)
-                self.snapshot["verdict"] = reconfirm_recommend_ready(
-                    self.snapshot["verdict"]
-                )
-                self.snapshot["verdict"] = align_action_with_ready(self.snapshot["verdict"])
-                vv = self.snapshot["verdict"]
-                bridge = vv.get("auction_open_bridge") or {}
-                seg_v = vv.get("segment") or {}
-                block_arm = (
-                    bool(seg_v.get("open_mute"))
-                    or bool(vv.get("auction_only"))
-                    or bool(bridge.get("revoke_probe"))
-                )
-                vv["recommend"] = finalize_recommend_buy_ux(
-                    vv.get("recommend"),
-                    block_arm=block_arm,
-                    allow_probe=True,
-                )
-                self.snapshot["desk_gate_summary"] = build_desk_gate_summary(
-                    vv,
-                    phase=self.snapshot.get("phase"),
-                )
-            try:
-                record_session_signals(self.snapshot)
-            except Exception:
-                log.exception("signal record after trend override failed")
-        return {"ok": True, "override": row, "recommend": ((self.snapshot.get("verdict") or {}).get("recommend"))}
 
     def apply_theme_manual_adj(
         self,
@@ -3962,17 +3880,19 @@ def _annotate_watchlist_observe(
                 up = sug_f * (1.0 + float(STOCK_NEAR_ENTRY_UP))
                 down = sug_f * (1.0 - float(STOCK_NEAR_ENTRY_DOWN))
                 near = down <= last_f <= up
+                diff_pct = (last_f - sug_f) / sug_f * 100.0
+                diff_desc = "精准吻合" if abs(diff_pct) < 0.1 else f"{diff_pct:+.1f}%"
                 if near:
                     if desk_buyable:
-                        status, tone, note = "可试探", "green", "靠近建议价且作战台未锁买"
+                        status, tone, note = "可试探", "green", f"贴近建议买点({diff_desc})且作战台未锁买"
                     elif gate_locked or action in ("观望", "观察回踩", "观察"):
-                        status, tone, note = "到位·闸门未开", "amber", "价带到位，但市场闸门未开"
+                        status, tone, note = "到位·闸门未开", "amber", f"价位到位({diff_desc})，但市场闸门未开"
                     else:
-                        status, tone, note = "回踩到位", "amber", "靠近建议价，仍需对照作战台"
+                        status, tone, note = "回踩到位", "amber", f"贴近建议买点({diff_desc})，仍需对照作战台"
                 elif last_f < down:
-                    status, tone, note = "等回踩", "slate", "现价低于建议带，继续等"
+                    status, tone, note = "等回踩", "slate", f"低于建议带({diff_pct:.1f}%)，继续等"
                 elif last_f > up:
-                    status, tone, note = "偏高", "slate", "高于建议带，勿追"
+                    status, tone, note = "偏高", "slate", f"高于建议带({diff_pct:+.1f}%)，勿追"
             elif not sug_f:
                 status, tone, note = "观察中", "slate", "未设建议价，仅盯行情"
         item["observe_status"] = status

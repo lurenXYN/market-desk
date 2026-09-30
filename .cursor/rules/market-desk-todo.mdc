@@ -1,0 +1,17 @@
+---
+description: market-desk — scan TODO.md before answering or coding
+globs: **/*
+alwaysApply: false
+---
+
+# market-desk session bootstrap
+
+Before planning or implementing work:
+
+1. Read `TODO.md` (Open / Done / Won’t do) and `CHANGELOG.md`.
+2. Prefer picking an **Open** item unless the user asks for something else.
+3. When finishing a backlog item, mark it done in `TODO.md` and note what shipped in one line.
+4. Soft-scoring philosophy: nudge size/score/bands; avoid new hard buy bans unless the user explicitly asks.
+5. **Data compat**: any schema / scoring / enum change must keep existing `desk.db` workable (see `.cursor/rules/market-desk-data-compat.mdc`).
+6. **版本更新记录 (CHANGELOG)**：每次功能更新或优化后，必须在 `CHANGELOG.md` 中追加条目，严格写明「为什么做（Why · 痛点与动机）」与「做了什么（What · 改动详情）」以及「实盘影响」，并保持 `TODO.md` 同步。
+7. **分支与发布规约**：在独立仓 `main` 分支上开发或同步后，执行测试并通过，再 commit 并推送到 GitHub 远端 `https://github.com/lurenXYN/market-desk.git`。

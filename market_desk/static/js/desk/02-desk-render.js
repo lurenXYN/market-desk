@@ -567,11 +567,11 @@ function render(d) {
       indepBox.hidden = false;
       document.getElementById("indepline").textContent = "暂无独立人气回踩";
       document.getElementById("indepmeta").textContent =
-        "主线/支线/联动成分暂无「近低 + 年内涨停」合格票";
+        "主线/支线/联动成分暂无「健康回踩 / 抗跌承接（额≥2.5亿）」合格票";
       const inn = document.getElementById("indepNote");
       if (inn) inn.textContent = "";
       document.getElementById("indepItems").innerHTML =
-        `<div class="meta">排除双龙/卡位后，三线板内近低（优先独立发散）才进此池</div>`;
+        `<div class="meta">排除双龙/卡位后，三线板内抗跌承接或日高健康回踩（优先独立发散）才进此池</div>`;
     } else {
       indepBox.hidden = true;
       document.getElementById("indepItems").innerHTML = "";

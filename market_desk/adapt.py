@@ -1027,7 +1027,7 @@ def build_pullback_sweet(
 def build_desk_source_size_bias(
     desk_hits: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    """Soft-damp link/trial card size when their review hit-rate lags mainline.
+    """Soft-damp link card size when its review hit-rate lags mainline.
 
     Does not touch sticky mainline buys; only BOARD_LINK / WATCH_TRIAL multipliers.
     """

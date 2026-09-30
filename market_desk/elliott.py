@@ -216,12 +216,21 @@ def build_elliott_scenarios(
         else:
             row["subwaves"] = None
     primary = top[0] if top else None
+    next_turn: dict[str, Any] | None = None
+    if primary and primary.get("turns"):
+        for t in primary.get("turns") or []:
+            if isinstance(t, dict) and t.get("bars_ahead") and int(t.get("bars_ahead") or 0) > 0:
+                next_turn = t
+                break
     return {
         "ok": True,
         "standalone": True,
         "index_name": index_name,
         "index_code": index_code,
         "last": round(last, 2),
+        "next_turn_date": next_turn.get("date") if next_turn else None,
+        "next_turn_countdown": int(next_turn.get("bars_ahead") or 0) if next_turn else None,
+        "next_turn_conf": next_turn.get("conf") if next_turn else None,
         "bars": len(series),
         "bar_from": series[0].get("date") or "",
         "bar_to": series[-1].get("date") or "",
