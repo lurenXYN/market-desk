@@ -55,6 +55,7 @@ from market_desk.sentiment import (
     kpi_bars,
     score_temperature,
 )
+from market_desk.radar import apply_crowding_gate
 from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
 from market_desk.verdict import (
     align_action_with_ready,
@@ -418,6 +419,11 @@ class RefreshMixin:
             etf_codes = _board_etf_codes(hot_cards + pin_cards + fav_cards)
             pos_codes = [c for c in (self._book_quotes or {}) if c]
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                try:
+                    await self._sample_auction_tape(client, now, trade_date, yesterday_zt)
+                    self._auction_alpha_map(trade_date, now, auction)
+                except Exception:
+                    log.exception("auction alpha step failed")
                 await self._resolve_daily_closes(
                     client, list(dict.fromkeys(etf_codes + pos_codes)), trade_date_dash
                 )
@@ -575,6 +581,18 @@ class RefreshMixin:
                     )
                 verdict = reconfirm_recommend_ready(verdict, metrics)
                 verdict = apply_size_cap_gate(verdict, positions)
+                try:
+                    crowd = self._radar_crowding(
+                        boards, indices, now=now, trade_date_dash=trade_date_dash
+                    )
+                    verdict = apply_crowding_gate(
+                        verdict,
+                        crowd,
+                        cards=list(hot_cards) + list(pin_cards) + list(fav_cards),
+                        phase=phase,
+                    )
+                except Exception:
+                    log.exception("crowding gate failed")
                 aligned = align_action_with_ready(verdict)
                 verdict.clear()
                 verdict.update(aligned)
@@ -627,6 +645,17 @@ class RefreshMixin:
                 verdict["watch_trial_recommend"] = watch_trial
                 await self._filter_stock_recommends_by_zt_ytd(
                     client, verdict, trade_date_dash
+                )
+                radar = await self._radar_payload(
+                    client,
+                    verdict,
+                    boards=boards,
+                    indices=indices,
+                    cards=list(hot_cards) + list(pin_cards) + list(fav_cards),
+                    zt=zt,
+                    now=now,
+                    trade_date_dash=trade_date_dash,
+                    phase=phase,
                 )
                 pos_trends = self._cached_trends_for(pos_codes)
                 positions = attach_position_daily_trends(positions, pos_trends)
@@ -693,9 +722,11 @@ class RefreshMixin:
                         boards=list(hot_cards) + list(pin_cards) + list(fav_cards),
                         now=now,
                         trading_day=is_trading_day(now),
+                        alpha=self._alpha_codes_for(trade_date),
                     ),
                     "etfs": etfs,
                     "indices": indices,
+                    "radar": radar,
                     "emotion_wave": build_emotion_wave(
                         phase=phase,
                         temperature=temperature,

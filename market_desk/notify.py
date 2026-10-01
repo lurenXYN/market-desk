@@ -67,6 +67,10 @@ def build_toast_alerts(
             f"主线 {cur_ml or '—'} · 相位 {cur_phase or '—'} · 阶段 {life_zh}\n"
             f"{name} {code} 建议买 {px}"
         ).strip()
+        if primary.get("absorb_unconfirmed"):
+            title = f"{title} ⚠承接未确认"
+            warn = str(primary.get("absorb_warn") or "承接未确认：宜小仓或等主买确认")
+            body = f"⚠ {warn}\n{body}"
         if size:
             body = f"{body}\n{str(size)[:80]}"
         alerts.append(
@@ -105,6 +109,7 @@ def build_toast_alerts(
         )
 
     alerts.extend(build_fly_window_alerts(previous, current))
+    alerts.extend(build_radar_alerts(previous, current))
 
     prev_ready = {
         k for k, _, _ in build_sell_ready_alerts((previous.get("sell_advice") or {}).get("items"))
@@ -190,6 +195,56 @@ def build_fly_window_alerts(
     return alerts
 
 
+def build_radar_alerts(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Edge-fire crowding bans and the broad-ETF rescue pulse from the ``radar`` payload."""
+    prev_r = (previous or {}).get("radar") or {}
+    cur_r = current.get("radar") or {}
+    alerts: list[tuple[str, str, str]] = []
+    prev_c = prev_r.get("crowding") or {}
+    prev_modes = dict(prev_c.get("modes") or {})
+    for name in prev_c.get("extreme") or []:
+        prev_modes.setdefault(name, "hard")
+    crowd = cur_r.get("crowding") or {}
+    modes = crowd.get("modes") or {}
+    touched = set(crowd.get("banned") or []) | set(crowd.get("soft") or [])
+    ml = (((current.get("verdict") or {}).get("mainline") or {}).get("name")) or ""
+    shares = crowd.get("shares") or {}
+    for name in crowd.get("extreme") or []:
+        mode = modes.get(name, "hard")
+        if not name or prev_modes.get(name) == mode or (prev_modes.get(name) == "hard" and mode == "soft"):
+            continue
+        if name != ml and name not in touched:
+            continue
+        share = shares.get(name)
+        tail = f" 成交占比 {share}%" if share is not None else ""
+        if mode == "hard":
+            why = "、".join((crowd.get("confirm") or {}).get(name) or [])
+            title = f"【极端拥挤·禁开】{name}"
+            body = f"{name}{tail} · {why or '见高潮'} · 警惕主升鱼尾，高潮禁开新仓（只减不开）"
+        else:
+            title = f"【极端拥挤·半仓】{name}"
+            body = f"{name}{tail} · 未见高潮确认 · 只做完全确认的 ready，仓位减半"
+        alerts.append((f"crowd:{mode}:{name}", title, body))
+    prev_p = prev_r.get("etf_pulse") or {}
+    cur_p = cur_r.get("etf_pulse") or {}
+    if cur_p.get("event") and not prev_p.get("event"):
+        hint = str(cur_p.get("phase_hint") or "")
+        body = f"{cur_p.get('event_at') or ''} {cur_p.get('label') or ''}".strip()
+        if hint:
+            body = f"{body}\n{hint}"
+        alerts.append(
+            (
+                f"pulse:rescue:{current.get('trade_date') or ''}",
+                "【宽基托底脉冲】",
+                body or "核心宽基 ETF 同时放量拉升",
+            )
+        )
+    return alerts
+
+
 def toast_priority(key: str) -> int:
     """Return sort rank for one toast key (lower = more urgent)."""
     k = str(key or "")
@@ -203,11 +258,11 @@ def toast_priority(key: str) -> int:
         return 2
     if k.startswith("band:chase:") or k.startswith("wl:chase:"):
         return 3
-    if k.startswith("exit:"):
+    if k.startswith(("exit:", "crowd:")):
         return 4
     if k.startswith("mainline:"):
         return 5
-    if k.startswith("phase:"):
+    if k.startswith(("phase:", "pulse:")):
         return 6
     return 9
 
@@ -221,7 +276,7 @@ def is_level_toast(key: str) -> bool:
 def is_decision_toast(key: str) -> bool:
     """Return True for verdict / phase / mainline decision toasts (not sells)."""
     k = str(key or "")
-    return k.startswith(("buy:", "fly:", "exit:", "mainline:", "phase:"))
+    return k.startswith(("buy:", "fly:", "exit:", "mainline:", "phase:", "crowd:", "pulse:"))
 
 
 def is_risk_toast(key: str) -> bool:
@@ -364,7 +419,9 @@ def is_serverchan_alert(key: str) -> bool:
         return False
     if not SERVERCHAN_EVENT_PUSH:
         return k.startswith(("eod:", "morning:"))
-    return k.startswith(("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:"))
+    return k.startswith(
+        ("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:", "crowd:", "pulse:")
+    )
 
 
 def is_serverchan_must_sell(key: str) -> bool:

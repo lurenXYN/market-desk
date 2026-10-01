@@ -20,7 +20,9 @@ function renderDeskBoxes(d, v) {
   box.className = "buybox " + (buyMode ? "on" : (watchMode ? "watch" : "off"));
   document.getElementById("buyline").textContent = rec.text || rec.title || "暂不买入";
   const riskMeta = rec.risk_meta || {};
-  document.getElementById("buymeta").textContent = rec.size_note || "";
+  const buymeta = document.getElementById("buymeta");
+  buymeta.textContent = rec.size_note || "";
+  buymeta.classList.toggle("absorb-warn", !!(rec.absorb_unconfirmed || []).length);
   if (riskMeta.account_equity) {
     document.getElementById("buystop").textContent =
       (rec.stop || "")

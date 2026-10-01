@@ -97,6 +97,40 @@ html, body {
   border-color: #f97316; color: #fed7aa; background: #431407;
   animation: flyBlink 1.2s ease-in-out infinite;
 }
+.op-tag.absorb-warn {
+  border-color: #ef4444; color: #fecaca; background: #3b0d0d;
+  animation: flyBlink 1.2s ease-in-out infinite;
+}
+.radar-strip {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin: 0 0 10px; padding: 6px 10px;
+  border: 1px solid #2a3a52; border-radius: 8px;
+  background: #0d1522;
+}
+.radar-strip[hidden] { display: none !important; }
+.radar-strip.crowd-alert { border-color: #ef4444; background: #1f0b0b; }
+.radar-strip .lab {
+  font-size: 11px; color: var(--muted); letter-spacing: 0.08em; margin-right: 2px;
+}
+.radar-chip {
+  display: inline-flex; align-items: center;
+  padding: 3px 8px; border-radius: 6px;
+  font-size: 12px; font-weight: 700;
+  border: 1px solid #334155; color: #cbd5e1; background: #111a2a;
+}
+.radar-chip.meta { font-weight: 500; color: var(--muted); }
+.radar-chip.crowd-x {
+  font-size: 14px; font-weight: 800;
+  border-color: #ef4444; color: #fecaca; background: #3b0d0d;
+  animation: flyBlink 1.2s ease-in-out infinite;
+}
+.radar-chip.crowd-xs {
+  font-size: 13px; font-weight: 800;
+  border-color: #ef4444; color: #fecaca; background: #2a0f0f;
+}
+.radar-chip.crowd-w { border-color: #d97706; color: #fde68a; background: #2a1c06; }
+.radar-chip.pulse-on { border-color: #22c55e; color: #bbf7d0; background: #0b2414; }
+.radar-chip.narr { border-color: #6366f1; color: #c7d2fe; background: #14163a; border-style: dashed; }
 @keyframes flyBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.72; }

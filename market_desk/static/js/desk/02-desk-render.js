@@ -1,6 +1,7 @@
 function render(d) {
   const v = d.verdict || {};
   renderDeskHead(d, v);
+  renderDeskRadar(d);
   renderDeskBrief(d, v);
   renderDeskBoxes(d, v);
   renderDeskInsights(d, v);
@@ -31,9 +32,16 @@ function renderDeskHead(d, v) {
     const hasHalf = items.some((it) => it.ready_relaxed);
     const hasFull = items.some((it) => it.ready && !it.ready_relaxed);
     const hasProbe = items.some((it) => it.probe_ok);
+    const unconfirmed = items.filter((it) => it.ready && it.absorb_unconfirmed);
     if (hasFly) bits.push(`<span class="op-tag fly">将飞·半仓</span>`);
     if (hasFull) bits.push(`<span class="op-tag">可买·满</span>`);
     else if (hasHalf) bits.push(`<span class="op-tag half">可买·半</span>`);
+    if (unconfirmed.length) {
+      const tip = unconfirmed.map((it) => `${it.name || it.code}：${it.absorb_warn || ""}`).join("\n");
+      bits.push(
+        `<span class="op-tag absorb-warn" title="${tip.replace(/"/g, "&quot;")}">⚠ 承接未确认·${unconfirmed.length}</span>`
+      );
+    }
     if (hasProbe && !hasHalf && !hasFull) bits.push(`<span class="op-tag probe">可试探</span>`);
     else if (hasProbe && (hasHalf || hasFull)) bits.push(`<span class="op-tag probe">另有试探</span>`);
     const stale = d.ready_cross_day || {};

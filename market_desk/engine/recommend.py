@@ -502,11 +502,19 @@ class RecommendMixin:
                 if series:
                     self._minute_cache[code] = (now_ts, series)
                 minutes_by_code[code] = series
+        now = datetime.now(CN_TZ)
+        quotes_by_code = await self._micro_quotes(client, codes)
         for board in boards:
             if board.get("etf_soft"):
                 continue
             soft = bool(board.get("etf_soft"))
-            buy = apply_minute_confirmations(board.get("buy") or {}, minutes_by_code)
+            buy = self._apply_micro_gates(
+                apply_minute_confirmations(board.get("buy") or {}, minutes_by_code),
+                minutes_by_code=minutes_by_code,
+                quotes_by_code=quotes_by_code,
+                now=now,
+                trade_date=now.strftime("%Y%m%d"),
+            )
             board["buy"] = mark_pullback_entries(buy, observe_only=soft)
 
     async def _apply_recommend_minutes(
@@ -560,10 +568,23 @@ class RecommendMixin:
                 if series:
                     self._minute_cache[code] = (now_ts, series)
                 minutes_by_code[code] = series
-        verdict["recommend"] = apply_minute_confirmations(rec, minutes_by_code)
+        now = datetime.now(CN_TZ)
+        trade_date = now.strftime("%Y%m%d")
+        quotes_by_code = await self._micro_quotes(client, codes)
+        verdict["recommend"] = self._apply_micro_gates(
+            apply_minute_confirmations(rec, minutes_by_code),
+            minutes_by_code=minutes_by_code,
+            quotes_by_code=quotes_by_code,
+            now=now,
+            trade_date=trade_date,
+        )
         if dragon.get("items"):
-            verdict["dragon_recommend"] = apply_minute_confirmations(
-                dragon, minutes_by_code
+            verdict["dragon_recommend"] = self._apply_micro_gates(
+                apply_minute_confirmations(dragon, minutes_by_code),
+                minutes_by_code=minutes_by_code,
+                quotes_by_code=quotes_by_code,
+                now=now,
+                trade_date=trade_date,
             )
 
     async def _prefetch_position_minutes(

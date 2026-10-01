@@ -556,7 +556,9 @@ function paintAuctionStrategy(d) {
       return `<tr>
             <td>${tickerHtml(it.name, it.code)}</td>
             <td class="${(it.open_pct || 0) >= 0 ? "up" : "down"}">${openPct}</td>
-            <td>${it.open_type || "—"}</td>
+            <td>${it.open_type || "—"}${it.alpha_tag === "trap" || it.alpha_tag === "strong"
+              ? ` <span class="micro-chip ${it.alpha_tag === "trap" ? "bad" : "ok"}" title="${(it.alpha_reasons || []).join("；")}">${it.alpha_label || ""}</span>`
+              : ""}</td>
             <td class="down">${seal}</td>
             <td class="${advCls}">${adv}</td>
             <td>${it.judge || "—"}</td>

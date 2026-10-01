@@ -453,6 +453,24 @@ th.rev-sort .sort-ind { color: var(--muted); font-size: 10px; margin-left: 2px; 
   border-color: #f97316;
   box-shadow: inset 3px 0 0 #f97316, 0 0 0 1px rgba(249, 115, 22, 0.35);
 }
+.entry-badge-warn {
+  border-color: #ef4444; color: #fecaca; background: #3b0d0d;
+  animation: flyBlink 1.2s ease-in-out infinite;
+}
+.rec-card.absorb-unconfirmed {
+  border-color: #ef4444;
+  box-shadow: inset 4px 0 0 #ef4444, 0 0 0 1px rgba(239, 68, 68, 0.4);
+}
+.rec-absorb-alert {
+  margin: 6px 0; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid #ef4444; background: #3b0d0d; color: #fecaca;
+  font-size: 13px; line-height: 1.45;
+}
+.rec-absorb-alert b { color: #fca5a5; font-size: 14px; margin-right: 4px; }
+.buymeta.absorb-warn {
+  color: #fecaca; font-weight: 700;
+  border-left: 3px solid #ef4444; padding-left: 8px;
+}
 .buybox .buyline {
   font-size: 16px; font-weight: 750; margin: 4px 0 6px;
 }

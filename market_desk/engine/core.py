@@ -23,6 +23,8 @@ from market_desk.engine.recommend import RecommendMixin
 from market_desk.engine.review_build import ReviewMixin
 from market_desk.engine.eod import EodMixin
 from market_desk.engine.refresh import RefreshMixin
+from market_desk.engine.micro import MicroMixin
+from market_desk.engine.radar import RadarMixin
 
 try:
     from zoneinfo import ZoneInfo
@@ -35,7 +37,16 @@ except Exception:  # pragma: no cover - Windows without tzdata
 log = logging.getLogger("market_desk")
 
 
-class DeskEngine(AlertsMixin, CardsMixin, RecommendMixin, ReviewMixin, EodMixin, RefreshMixin):
+class DeskEngine(
+    AlertsMixin,
+    CardsMixin,
+    RecommendMixin,
+    ReviewMixin,
+    EodMixin,
+    RefreshMixin,
+    MicroMixin,
+    RadarMixin,
+):
     """Hold the latest snapshot and refresh it in the background."""
 
     def __init__(self) -> None:
@@ -339,6 +350,7 @@ class DeskEngine(AlertsMixin, CardsMixin, RecommendMixin, ReviewMixin, EodMixin,
                 "theme_memory",
                 "ready_cross_day",
                 "health",
+                "radar",
             ),
             "market": (
                 "metrics",
@@ -354,6 +366,7 @@ class DeskEngine(AlertsMixin, CardsMixin, RecommendMixin, ReviewMixin, EodMixin,
                 "similar_days",
                 "events",
                 "theme_memory",
+                "radar",
             ),
             "funds": ("fund_flow",),
             "watch": ("watch", "watchlist", "stock_blacklist"),

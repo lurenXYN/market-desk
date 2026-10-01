@@ -335,6 +335,7 @@ BUY_DEMOTE_LOCK_NOTES = (
     "大面闸门",
     # similar-day cool is size-only now (not an action demote lock)
     "开盘静音",
+    "极端拥挤禁开",
     "竞价观望",
     "竞价弱开闸门",
     "竞价强开防追",
@@ -360,6 +361,98 @@ SWITCH_SELL_GRACE_SECONDS = 45 * 60  # 45 minutes (within 30–60 band)
 AUCTION_OPEN_BRIDGE_MINUTES = 15
 AUCTION_OPEN_STRONG_MEDIAN = 2.0
 AUCTION_OPEN_WEAK_HS300 = -0.3
+
+# Opening Auction Alpha: 09:20–09:25 non-cancellable tape per candidate code.
+AUCTION_ALPHA_TAPE_START = 920          # HHMM; first sample kept (cancel window closed)
+AUCTION_ALPHA_TAPE_END = 926            # HHMM; stop sampling after the 09:25 print settles
+AUCTION_ALPHA_MIN_SAMPLES = 3           # fewer tape points → no verdict (soft unknown)
+AUCTION_ALPHA_CANDIDATE_CAP = 40        # codes sampled per auction refresh
+AUCTION_ALPHA_GAP_MIN = 1.0             # % open needed before a "trap" can fire
+AUCTION_ALPHA_FADE_PCT = 1.2            # pp give-back from the 09:20+ tape peak → fade
+AUCTION_ALPHA_SLOPE_FADE = -0.20        # pp/min regression slope → fading grab
+AUCTION_ALPHA_YZT_EXPECT = 2.0          # % open expected after yesterday's limit-up
+AUCTION_ALPHA_MISS_PP = 2.0             # open below expectation by this → "不及预期"
+AUCTION_ALPHA_BEAT_PP = 2.5             # open above peer baseline by this → beat
+AUCTION_ALPHA_PEER_WEAK = 0.5           # peer median ≤ this → sector divergent/weak
+AUCTION_ALPHA_PEER_SPREAD = 2.0         # peer open stdev ≥ this → divergent
+AUCTION_ALPHA_VOL_RATIO_MIN = 1.5       # 量比 at 09:25 confirming a real grab
+AUCTION_ALPHA_PEER_MIN = 3              # group needs this many sampled peers
+AUCTION_ALPHA_TRAP_SIZE_MULT = 0.7      # trap after the open window: soft shrink
+AUCTION_ALPHA_TRAP_SOFT_UNTIL = 1030    # HHMM; trap soft shrink stops after this
+
+# Volume Absorption at the buy band (minute tick-rule + outer/inner volume).
+ABSORB_LOOKBACK = 20                    # minute bars for the tick-rule buy share
+ABSORB_MIN_BARS = 10                    # fewer bars with volume → unknown (soft)
+ABSORB_BUY_SHARE_OK = 0.50              # tick-rule active-buy share that confirms
+ABSORB_BUY_SHARE_FAIL = 0.42            # below this with a falling VWAP → no absorption
+ABSORB_OUTER_FAIL = 0.42                # day outer/(outer+inner) below this backs a fail
+ABSORB_VWAP_SLOPE_FAIL = -0.015         # %/min VWAP slope considered "rolling over"
+ABSORB_VWAP_BARS = 15                   # bars spanned by the VWAP slope
+
+# Dynamic slippage / impact cost from the five-level book.
+SLIP_SPREAD_WARN_BPS = 25.0             # (ask1-bid1)/mid
+SLIP_SPREAD_THIN_BPS = 60.0
+SLIP_IMPACT_WARN_BPS = 20.0             # walked-book avg fill vs mid
+SLIP_IMPACT_THIN_BPS = 50.0
+SLIP_DEPTH_TAKE_MAX = 0.5               # planned qty ≤ this share of 5-level ask depth
+SLIP_DENSITY_MIN_STOCK = 3e5            # 元 per session minute; below → thin warn
+SLIP_DENSITY_MIN_ETF = 2e5
+SLIP_WARN_SIZE_MULT = 0.75
+SLIP_THIN_SIZE_MULT = 0.5
+
+# Crowding Index: board turnover / whole-market turnover (沪+深 index amounts).
+CROWD_ABS_EXTREME_PCT = 12.0            # industry share ≥ this → extreme (hard no-new-open)
+CROWD_ABS_WARN_PCT = 9.0                # industry share ≥ this → warn (soft size)
+CROWD_REL_EXTREME_MULT = 2.0            # share ≥ 20d median × this AND ≥ 60d peak → extreme
+CROWD_REL_WARN_MULT = 1.6               # share ≥ 20d median × this → warn
+CROWD_REL_FLOOR_INDUSTRY = 5.0          # relative rules need at least this share (%)
+CROWD_REL_FLOOR_CONCEPT = 8.0           # concepts overlap heavily → higher floor, relative only
+CROWD_HIST_MIN_DAYS = 10                # relative rules need this many history days
+CROWD_MIN_SESSION_MIN = 15              # skip the noisy first minutes after 09:30
+CROWD_MIN_MARKET_YI = 300.0             # market turnover floor (亿) before judging
+CROWD_WARN_SIZE_MULT = 0.8
+CROWD_SAVE_EVERY_SEC = 300              # intraday history upsert cadence
+CROWD_BAN_FLAG = "极端拥挤·高潮禁开新仓"
+# East Money industry boards are a 3-level SW-style tree; level-1 parents (电子 ≈ 25%)
+# naturally exceed the absolute bands, so they are judged against their own history only.
+CROWD_ABS_EXEMPT = frozenset({
+    "农林牧渔", "基础化工", "钢铁", "有色金属", "电子", "汽车", "家用电器", "食品饮料",
+    "纺织服饰", "轻工制造", "医药生物", "公用事业", "交通运输", "房地产", "商贸零售",
+    "社会服务", "银行", "非银金融", "综合", "建筑材料", "建筑装饰", "电力设备",
+    "机械设备", "国防军工", "计算机", "传媒", "通信", "煤炭", "石油石化", "环保", "美容护理",
+})
+# Extreme alone → strong soft; extreme + any confirmation below → hard ban.
+CROWD_EXTREME_SOFT_MULT = 0.5           # fully confirmed ready keeps half size
+CROWD_SOFT_FLAG = "极端拥挤·半仓"
+CROWD_CONFIRM_FLAGS = ("滞涨", "A杀", "天地", "退潮")  # board cycle flags that confirm a climax / ebb
+CROWD_CONFIRM_ZB_MIN = 2                # broken limit-ups needed …
+CROWD_CONFIRM_ZB_RATIO = 0.4            # … and their share of touched limit-ups
+
+# Broad-ETF liquidity pulse (300 / 500 / 1000 / 50 / 科创 / 创业板 core ETFs).
+BROAD_ETF_PULSE = [
+    ("510300", "沪深300ETF"),
+    ("510500", "中证500ETF"),
+    ("512100", "中证1000ETF"),
+    ("510050", "上证50ETF"),
+    ("588000", "科创50ETF"),
+    ("159915", "创业板ETF"),
+]
+ETF_PULSE_WINDOW = 3                    # minutes summed per pulse window
+ETF_PULSE_VOL_RATIO = 4.0               # window volume vs same-minute baseline median
+ETF_PULSE_PX_MIN = 0.3                  # % price lift across the window
+ETF_PULSE_WEAK_INDEX = -0.8             # 沪深300 pct at/below → weak tape
+ETF_PULSE_DIP_PCT = 1.0                 # or ETF sat ≥ this % below prev close before the lift
+ETF_PULSE_MIN_COUNT = 2                 # rescue pulses within the lookback → market event
+ETF_PULSE_LOOKBACK_MIN = 10
+ETF_PULSE_FETCH_SEC = 60                # minute refetch cadence per ETF
+
+# Narrative graph (shadow mode): cross-industry clusters of limit-up names.
+NARR_EXTRA_CONCEPTS = 20                # extra top-pct concept boards whose members are fetched
+NARR_FETCH_EVERY_SEC = 300
+NARR_MIN_SHARED = 2                     # limit-ups a concept needs to join the graph
+NARR_EDGE_JACCARD = 0.3                 # concept-concept edge threshold
+NARR_MIN_ZT = 4                         # cluster limit-ups to be a candidate
+NARR_MIN_INDUSTRIES = 2                 # distinct industries → cross-industry narrative
 
 # Ready / structure gates (centralized; was scattered magic numbers).
 ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可买入

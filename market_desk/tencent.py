@@ -36,6 +36,7 @@ async def fetch_indices(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         if len(fields) < 33:
             continue
         code = str(fields[2]).zfill(6)
+        amount_wan = num(fields[37]) if len(fields) > 37 else None
         by_code[code] = {
             "code": code,
             "name": str(fields[1] or ""),
@@ -45,6 +46,8 @@ async def fetch_indices(client: httpx.AsyncClient) -> list[dict[str, Any]]:
             "high": num(fields[33]) if len(fields) > 33 else None,
             "low": num(fields[34]) if len(fields) > 34 else None,
             "prev": num(fields[4]),
+            # 万元 → 元; 上证指数 + 深证成指 amounts sum to whole-market turnover.
+            "amount": None if amount_wan is None else float(amount_wan) * 1e4,
         }
     out: list[dict[str, Any]] = []
     for _sym, code, name in INDEX_WATCH:
@@ -104,6 +107,7 @@ async def fetch_quotes(
         amount_wan = num(fields[37]) if len(fields) > 37 else None
         turnover = num(fields[38]) if len(fields) > 38 else None
         out[code] = {
+            **_book_fields(fields),
             "code": code,
             "name": str(fields[1] or ""),
             "price": num(fields[3]),
@@ -118,6 +122,44 @@ async def fetch_quotes(
             "turnover": turnover,
         }
     return out
+
+
+def _book_fields(fields: list[str]) -> dict[str, Any]:
+    """Parse Tencent order-flow fields from one ``~``-split quote row.
+
+    Layout: ~7 outer (active-buy) volume, ~8 inner (active-sell) volume, ~9..18
+    five bid (price, volume) pairs, ~19..28 five ask pairs, ~30 quote clock,
+    ~49 volume ratio (量比). Volumes are in lots (手). Missing or zero levels are
+    dropped so callers can treat an empty side as "no book" (sealed / halted).
+
+    Args:
+        fields: Raw quote fields split on ``~``.
+
+    Returns:
+        A dict with ``outer_vol``, ``inner_vol``, ``bids``, ``asks``,
+        ``quote_time`` and ``vol_ratio``; absent values are ``None`` / ``[]``.
+    """
+
+    def _side(start: int) -> list[list[float]]:
+        levels: list[list[float]] = []
+        for i in range(start, start + 10, 2):
+            if len(fields) <= i + 1:
+                break
+            px = num(fields[i])
+            vol = num(fields[i + 1])
+            if px is None or vol is None or px <= 0 or vol <= 0:
+                continue
+            levels.append([float(px), float(vol)])
+        return levels
+
+    return {
+        "outer_vol": num(fields[7]) if len(fields) > 7 else None,
+        "inner_vol": num(fields[8]) if len(fields) > 8 else None,
+        "bids": _side(9),
+        "asks": _side(19),
+        "quote_time": str(fields[30] or "") if len(fields) > 30 else "",
+        "vol_ratio": num(fields[49]) if len(fields) > 49 else None,
+    }
 
 
 async def fetch_daily_bars(

@@ -160,6 +160,16 @@ from market_desk.db.backup import (  # noqa: F401
     import_user_backup_payload,
     import_backup_payload,
 )
+from market_desk.db.radar import (  # noqa: F401
+    load_board_crowding_history,
+    load_crowd_shadow,
+    load_etf_pulse,
+    load_narrative_shadow,
+    save_board_crowding,
+    save_crowd_shadow,
+    save_etf_pulse,
+    upsert_narrative_shadow,
+)
 from market_desk.db.backtest import (  # noqa: F401
     BACKTEST_RUN_KEEP_DEFAULT,
     _FILL_CORE_KEYS,

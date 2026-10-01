@@ -544,6 +544,10 @@ def _gate_bucket(flag: str) -> str:
         return "日线"
     if text.startswith("分时") or "分时" in text:
         return "分时"
+    if text.startswith("竞价"):
+        return "竞价"
+    if "承接" in text:
+        return "承接"
     if "薄确认" in text or "跨板块" in text:
         return "薄确认/共振"
     if "总仓" in text or "相位上限" in text:

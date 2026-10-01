@@ -20,6 +20,7 @@ def build_auction_strategy(
     boards: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
     trading_day: bool = True,
+    alpha: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build tiered yesterday-ZT auction cards for the dedicated tab.
 
@@ -28,7 +29,9 @@ def build_auction_strategy(
 
     ``boards`` (hot/pin/…) supplies theme tags via constituent pools. Shareholder
     counts and YTD limit-up counts are attached later by the engine enrich pass.
+    ``alpha`` (09:20–09:25 tape verdicts keyed by code) adds trap / strong tags.
     """
+    alpha = alpha or {}
     del zb_today  # Reserved for broken-seal context in a later pass.
     clock = now or datetime.now()
     seg = session_segment(clock)
@@ -124,6 +127,9 @@ def build_auction_strategy(
                 "tier": tier,
                 "score": score,
                 "price": num(q.get("price")),
+                "alpha_tag": (alpha.get(code) or {}).get("tag"),
+                "alpha_label": (alpha.get(code) or {}).get("label"),
+                "alpha_reasons": list((alpha.get(code) or {}).get("reasons") or []),
             }
         )
 

@@ -120,6 +120,41 @@ const dragonItemsHtml = (items) => {
       + `</div>`;
   }).join("");
 };
+/**
+ * Render the order-flow microstructure line for a buy card.
+ * Shows the auction-alpha badge, active-buy absorption share / VWAP slope and
+ * the walked-book impact cost; returns "" when no micro data is attached.
+ */
+const microLineHtml = (it) => {
+  const bits = [];
+  const alpha = it.auction_alpha || {};
+  if (alpha.tag === "strong") {
+    bits.push(`<span class="micro-chip ok" title="${(alpha.reasons || []).join("；")}">${alpha.label || "竞价超预期抢筹"}</span>`);
+  } else if (alpha.tag === "trap") {
+    bits.push(`<span class="micro-chip bad" title="${(alpha.reasons || []).join("；")}">${alpha.label || "竞价诱多闸门"}</span>`);
+  }
+  const ab = it.absorption || {};
+  if (ab.buy_share != null || ab.outer_share != null) {
+    const share = ab.buy_share != null ? ab.buy_share : ab.outer_share;
+    const cls = ab.ok === true ? "ok" : (ab.ok === false ? "bad" : "soft");
+    const slope = ab.vwap_slope != null ? ` · 均价${ab.vwap_slope >= 0 ? "+" : ""}${Number(ab.vwap_slope).toFixed(3)}%/分` : "";
+    const outer = ab.outer_share != null ? `外盘占比 ${(ab.outer_share * 100).toFixed(0)}%` : "";
+    bits.push(`<span class="micro-chip ${cls}" title="${[ab.label || "", outer].filter(Boolean).join(" · ")}">主买 ${(share * 100).toFixed(0)}%${slope}</span>`);
+  }
+  const sl = it.slippage || {};
+  if (sl.impact_bps != null) {
+    const cls = sl.level === "thin" ? "bad" : (sl.level === "warn" ? "soft" : "ok");
+    const tip = [
+      sl.spread_bps != null ? `点差 ${sl.spread_bps}bp` : "",
+      sl.depth_amount != null ? `卖五档 ${(sl.depth_amount / 1e4).toFixed(0)}万` : "",
+      sl.take_share != null ? `吃单占比 ${(sl.take_share * 100).toFixed(0)}%` : "",
+      (sl.flags || []).join("、"),
+    ].filter(Boolean).join(" · ");
+    bits.push(`<span class="micro-chip ${cls}" title="${tip}">冲击 ${sl.impact_bps}bp</span>`);
+  }
+  return bits.length ? `<div class="rec-micro">${bits.join("")}</div>` : "";
+};
+
 const recCard = (it) => {
   const kind = it.kind || "stock";
   const wait = !it.ready;
@@ -190,12 +225,21 @@ const recCard = (it) => {
     probe ? "probe-ok" : "",
     near && !wait ? "near-entry" : (near ? "near-touch" : ""),
     it.fly_warn ? "fly-warn" : "",
+    !wait && it.absorb_unconfirmed ? "absorb-unconfirmed" : "",
   ].filter(Boolean).join(" ");
   const relaxed = !!it.ready_relaxed;
   const fly = !!it.fly_warn;
+  const absorbWarn = !wait && !!it.absorb_unconfirmed;
+  const absorbBanner = absorbWarn
+    ? `<div class="rec-absorb-alert"><b>⚠ 承接未确认</b> <button type="button" class="q" data-term="主动买盘承接">?</button>`
+      + `<span>${String(it.absorb_warn || "ready 仅凭形态，宜小仓或等主买确认").replace(/^承接未确认/, "")}</span></div>`
+    : "";
   const entryBadge = (() => {
     if (fly) {
       return `<span class="entry-badge entry-badge-fly" title="${it.fly_note || "半仓试探窗口，再等可能飞"}">将飞·半仓</span>`;
+    }
+    if (absorbWarn) {
+      return `<span class="entry-badge entry-badge-warn" title="${it.absorb_warn || ""}">可买·承接未确认</span>`;
     }
     if (!wait && relaxed) {
       return `<span class="entry-badge entry-badge-probe" title="价带放松：未到不追半仓 ready">可买·半</span>`;
@@ -234,6 +278,7 @@ const recCard = (it) => {
   const gateHtml = gateBits.length
     ? `<div class="rec-gate">${gateBits.map((g) => `<span class="gate-chip">${g}</span>`).join("")}</div>`
     : "";
+  const microHtml = microLineHtml(it);
   const bp = it.buy_progress || {};
   const bpSteps = (bp.steps || []).map((s) => {
     let cls = "bp-step";
@@ -253,6 +298,7 @@ const recCard = (it) => {
   return `<article class="${cardCls}">
         <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
+        ${absorbBanner}
         ${trendHtml}
         ${(() => {
       if (kind === "etf") return "";
@@ -274,6 +320,7 @@ const recCard = (it) => {
     })()}
         ${progressHtml}
         ${gateHtml}
+        ${microHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>
           <div class="buy"><div class="lab">${!wait ? "建议买·到位" : (probe ? "建议买·试探" : "建议买")}</div><div class="val">${fmtPx(buy, kind)}</div></div>

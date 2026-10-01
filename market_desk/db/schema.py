@@ -148,6 +148,67 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS board_crowding (
+                trade_date TEXT NOT NULL,
+                name TEXT NOT NULL,
+                kind TEXT,
+                share REAL,
+                turnover REAL,
+                market_turnover REAL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (trade_date, name)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS etf_pulse_log (
+                trade_date TEXT NOT NULL,
+                at TEXT NOT NULL,
+                code TEXT NOT NULL,
+                kind TEXT,
+                ratio REAL,
+                px_move REAL,
+                payload TEXT,
+                PRIMARY KEY (trade_date, at, code)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS narrative_shadow (
+                trade_date TEXT NOT NULL,
+                label TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                peak_zt INTEGER,
+                industries INTEGER,
+                concepts TEXT,
+                mainline_at_first TEXT,
+                became_mainline_at TEXT,
+                PRIMARY KEY (trade_date, label)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crowd_shadow (
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT,
+                board TEXT,
+                box TEXT,
+                mode TEXT,
+                was_ready INTEGER,
+                price REAL,
+                share REAL,
+                at TEXT NOT NULL,
+                PRIMARY KEY (trade_date, code)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS fund_flow_daily (
                 trade_date TEXT NOT NULL,
                 bk TEXT NOT NULL,
