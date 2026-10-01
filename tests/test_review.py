@@ -280,7 +280,7 @@ class ReviewTests(unittest.TestCase):
         highs = [39.7, 39.99]
         cn = timezone(timedelta(hours=8))
         with patch(
-            "market_desk.review._cn_now",
+            "market_desk.review.outcome._cn_now",
             return_value=datetime(2026, 9, 23, 9, 34, tzinfo=cn),
         ):
             out = score_signal_with_closes(

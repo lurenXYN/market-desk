@@ -81,7 +81,7 @@ chmod +x start.sh deploy/install-systemd.sh
 ## 技术栈
 
 - 后端：FastAPI + uvicorn + httpx + SQLite
-- 前端：单页 `market_desk/static/index.html` + 样式 `static/css/desk.css` + 页面脚本 `static/js/desk/*.js`（服务端合并为 `/assets/desk.js`）+ 复盘助手 `/static/js/md-review.js`
+- 前端：单页 `market_desk/static/index.html` + 样式 `static/css/desk/*.css`（服务端合并为 `/assets/desk.css`）+ 页面脚本 `static/js/desk/*.js`（服务端合并为 `/assets/desk.js`）+ 复盘助手 `/static/js/md-review.js`
 - 行情：东财涨停/板块/成分，腾讯 ETF 与持仓报价；**日线趋势**优先腾讯前复权日K（东财历史常断连时回退新浪）
 
 ### 本地单测
@@ -293,7 +293,26 @@ market-desk/
 ├── market_desk/
 │   ├── app.py                # FastAPI 入口：lifespan、静态挂载、注册路由
 │   ├── routes/               # 按页签/功能拆的 APIRouter（auth / market / review / positions / settings / lists / reports / ops / ma_fan / pages）
-│   ├── engine.py             # 刷新循环与板块 enrichment
+│   ├── engine/               # 刷新循环；`DeskEngine` 由各 mixin 组装，`from market_desk.engine import engine` 照旧可用
+│   │   ├── core.py           # DeskEngine 主类（启动/持仓同步/按用户切快照）+ 进程单例 engine
+│   │   ├── refresh.py        # 后台轮询 _loop 与整轮 refresh 组装
+│   │   ├── recommend.py      # 推荐增强：日线趋势、筹码、分时确认、昨日涨停过滤、独立人气精修
+│   │   ├── review_build.py   # 复盘页载荷：信号、趋势、选股评分、代码历史、年内涨停
+│   │   ├── eod.py            # 收盘作业：宽度补录、一页纸、早报推送、资金流、指数日线、艾略特
+│   │   ├── cards.py          # 热点 / 置顶 / 自选 / 生命周期旁路 / 冰点板块卡片
+│   │   ├── alerts.py         # 运维告警、toast 发送、个人卖出推送
+│   │   ├── boards.py / watch.py / health.py / util.py  # 模块级工具：板块增强、盯盘池、健康条、时钟与并发
+│   ├── review/               # 信号落库与复盘；`from market_desk.review import X` 照旧可用
+│   │   ├── signals.py        # 信号类型、实时 tick、板块查找与补全
+│   │   ├── record.py         # 盘中买卖信号落库
+│   │   ├── outcome.py        # 前向结果打分、落定时点、结果回写
+│   │   ├── exec_score.py / digest.py   # 成交执行评分；当日摘要与周执行板
+│   │   ├── hit_rates.py      # 命中率对照、错过买点、调参提示、闸门击杀
+│   │   ├── bias.py           # 卖出复盘偏置、卖飞板、买入闸门偏置（带缓存）
+│   │   ├── alerts.py         # 价位触达、追价成本、ready 监控、复盘时段提示
+│   │   └── payload.py        # 实时标注、代码历史、复盘页载荷
+│   ├── adapt/                # 自适应软反馈（context / gates / sizing / sell_learn / tune / bundle）
+│   ├── elliott/              # 大盘艾略特多情景（catalog / pivots / indicators / fit / timing / chart / board）
 │   ├── sentiment.py          # 温度 / 相位 / 板块状态
 │   ├── mainline.py           # 主线挑选与 ETF 映射
 │   ├── verdict/              # 结论、买卖建议、仓位估值；`from market_desk.verdict import X` 照旧可用
@@ -309,20 +328,21 @@ market-desk/
 │   │   ├── sell_advice.py    # 卖出建议汇总与买卖冲突调和
 │   │   ├── positions.py      # 持仓盯市、当日盈亏、风险总览、快照差异
 │   │   └── common.py         # 价格/格式化/确认标记等共享小工具
-│   ├── eastmoney.py / tencent.py
+│   ├── eastmoney/            # 东财客户端：client 退避与翻页 / quotes 行情与涨停池 / boards 板块与资金流 / bars 日线 / minute 分时 / meta 元数据与股东 / status 运行状态
+│   ├── tencent.py
 │   ├── quotes_fallback.py    # 东财列表被拦时：主板行情改走腾讯（代码表来自新浪 / 库存）
 │   ├── board_fallback.py     # 东财板块被拦时：热点板块 / 当日资金流 / 成分股改走新浪
 │   ├── seeds/em_boards.json  # 东财板块 BK 代码表（名称 → BK），让新浪同名板块沿用 BK
 │   ├── db/                   # SQLite，按业务拆（core / schema / users / market / positions / signals / state / lists / backup …）；`from market_desk.db import X` 照旧可用
 │   ├── ma_fan/               # 均线发散：pattern 形态打分 / job 限速进度缓存 / sources 数据源 / context 主线复盘联动 / scan 扫描流程
-│   ├── assets.py             # 把 static/js/desk/*.js 按文件名顺序拼成 /assets/desk.js（ETag 缓存）
+│   ├── assets.py             # 把 static/js/desk/*.js、static/css/desk/*.css 按文件名顺序拼成 /assets/desk.js、/assets/desk.css（ETag 缓存）
 │   ├── logs.py               # 滚动文件日志 data/logs/market-desk.log
 │   ├── config.py
 │   └── static/
 │       ├── index.html        # 作战台 UI（仅结构）
-│       ├── css/desk.css      # 全部样式
+│       ├── css/desk/NN-*.css # 样式按区域拆分，编号即层叠顺序（经 /assets/desk.css 合并为一个样式表）
 │       └── js/
-│           ├── desk/NN-*.js  # 页面脚本按页签拆分，编号即加载顺序（经 /assets/desk.js 合并为一个脚本）
+│           ├── desk/NN-*.js  # 页面脚本按页签拆分，编号即加载顺序（经 /assets/desk.js 合并为一个脚本；02x 为作战台 render 分段，05x 为复盘表）
 │           └── md-review.js  # 复盘来源/图窗描述助手
 └── data/                     # 本地库（gitignore）
 ```

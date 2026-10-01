@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import market_desk.engine as engine_mod
+import market_desk.engine.eod as engine_mod
 from market_desk.engine import DeskEngine
 
 

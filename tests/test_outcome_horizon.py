@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import market_desk.review as rv
+import market_desk.review.outcome as rv
 
 
 def _sig(**kw):

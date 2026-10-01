@@ -30,6 +30,18 @@ def desk_js(request: Request) -> Response:
     return Response(body, media_type="application/javascript; charset=utf-8", headers=headers)
 
 
+@router.get("/assets/desk.css")
+def desk_css(request: Request) -> Response:
+    """Serve ``static/css/desk/*.css`` concatenated in cascade order as one stylesheet."""
+    from market_desk.assets import desk_css_bundle
+
+    body, etag = desk_css_bundle()
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="text/css; charset=utf-8", headers=headers)
+
+
 @router.get("/favicon.ico")
 def favicon() -> FileResponse:
     """Serve the tab icon (browsers request this at site root)."""

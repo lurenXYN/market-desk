@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import market_desk.board_fallback as board_fallback
-import market_desk.engine as engine_mod
+import market_desk.engine.cards as engine_mod
 import market_desk.lifecycle as lc
 from market_desk.engine import DeskEngine
 

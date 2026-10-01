@@ -14,6 +14,35 @@
 
 ---
 
+## [v1.6.2] - 2026-10-01
+
+### 【背景与动机（为什么做 · Why）】
+* `verdict/` 拆分后，其余核心文件仍超出单次读取上限：`engine.py` 4,416 行、`review.py` 3,953 行、`desk.css` 3,081 行、`elliott.py` 1,882 行、`eastmoney.py` 1,738 行、`adapt.py` 1,542 行，前端 `02-desk-render.js`（单个 1,265 行 `render()`）与 `05-review-table.js` 1,191 行；
+* 按 `TODO.md`「工程：大文件拆分」P1~P3 一次做完，统一到「单文件 ≤ 约 1,300 行」。
+
+### 【改动详情（做了什么 · What）】
+* **Refactored（纯物理拆分，零逻辑改动，原导入路径全部保留）**：
+  * `engine.py` → `engine/`：`DeskEngine` 3,300 行单类按职责拆为 6 个 mixin（`refresh` / `recommend` / `review_build` / `eod` / `cards` / `alerts`），`core.py` 保留主类骨架与 `engine` 单例；模块级工具拆为 `boards` / `watch` / `health` / `util`；
+  * `review.py` → `review/`：`signals` / `record` / `outcome` / `exec_score` / `hit_rates` / `digest` / `bias` / `alerts` / `payload`；
+  * `eastmoney.py` → `eastmoney/`：`client` / `quotes` / `boards` / `bars` / `minute` / `meta` / `status`；每组 `global` 可变状态（clist 退避、行情源、板块源、分时源）与其全部读写函数同处一个子模块；
+  * `elliott.py` → `elliott/`：`catalog` / `pivots` / `indicators` / `fit` / `timing` / `chart` / `board`；
+  * `adapt.py` → `adapt/`：`context` / `gates` / `sizing` / `sell_learn` / `tune` / `bundle`；
+  * `static/css/desk.css` → `static/css/desk/01~06-*.css`，新增 `/assets/desk.css` 按文件名顺序合并（ETag 缓存，与 JS 同机制），`index.html` 改引用合并地址；
+  * `02-desk-render.js`：`render(d)` 改为调度 7 个分段函数（`renderDeskHead` / `renderDeskBrief` / `renderDeskBoxes` / `renderDeskInsights` / `renderDeskStatus` / `renderMarketBoards` / `renderPositionsPanel`），分布在 `02` ~ `02g` 文件；`05-review-table.js` 在函数边界切为 `05` ~ `05d` 四个文件。
+* **Changed（仅三处必要手改）**：
+  * `eastmoney.status.clist_runtime_status` 改为按子模块属性读取各源状态（`from ... import` 会拿到过期副本）；
+  * `engine.util._safe` 与 `engine.health._build_health` 在函数内延迟导入 `engine` 单例，避免与 `core` 循环导入。
+* **Fixed（CSS 遗留解析错误）**：原 `desk.css` 2039~2040 行有两行无选择器声明 + 多余 `}`（自首个提交起就存在，为 `.data-banner.ok-soft` 的残留副本，JS 从不使用），浏览器会把紧随其后的 `.rec-actions { display:flex; gap:6px; margin-top:8px }` 当作非法选择器整条丢弃，桌面端推荐卡「记一笔」等按钮因此挤在一起、无间距不等宽；删除孤立两行后该规则生效（移动端本有单独的 `.rec-actions` 规则，不受影响）。
+* **Tests**：6 个测试的 monkeypatch 目标改指到实际查找该名字的子模块（如 `market_desk.engine.eod`、`market_desk.review.outcome`、`market_desk.eastmoney.quotes`）。
+
+### 【实战影响与验证（效果如何 · Impact）】
+* AST 校验：5 个 Python 包共 339 个定义/方法与原文逐字一致（除上述 3 处预期手改）；子模块 pyflakes 零告警，无循环导入；
+* 全量单元测试 286 个全部通过；一轮真实 `engine.refresh()`（东财被拦、走新浪/腾讯回退）返回 `ok=True`；
+* 前端：合并后 JS `node --check` 通过，全局声明仅新增 7 个分段函数、无新增自由变量；`render` 236 条语句各出现一次；CSS 拆分后合并结果去注释与原文件完全一致，修复孤立声明后全表括号配对、无孤立声明；
+* 不涉及数据库结构、计分公式与接口字段，`desk.db` 完全兼容；拆分后最大 Python 模块 901 行（`engine/refresh.py`）。
+
+---
+
 ## [v1.6.1] - 2026-10-01
 
 ### 【背景与动机（为什么做 · Why）】

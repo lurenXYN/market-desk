@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-import market_desk.engine as engine_mod
+import market_desk.engine.review_build as engine_mod
 from market_desk.engine import DeskEngine
 
 BARS = (["2026-09-25", "2026-09-28"], [10.0, 10.2], {"open": [], "high": [], "low": [], "volume": []})

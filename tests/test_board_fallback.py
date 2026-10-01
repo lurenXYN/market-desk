@@ -10,6 +10,8 @@ import pytest
 
 import market_desk.board_fallback as bf
 import market_desk.eastmoney as em
+from market_desk.eastmoney import boards as em_boards
+from market_desk.eastmoney import client as em_client
 
 SINA_INDUSTRY = {
     "new_blhy": "new_blhy,玻璃行业,19,16.5,-0.85,-4.89,574778376,10297458088,sh600293,4.50,3.95,0.17,三峡新材",
@@ -31,17 +33,17 @@ def _fresh(monkeypatch):
     monkeypatch.setattr(bf, "_BOARDS_CACHE", None)
     monkeypatch.setattr(bf, "_FLOW_CACHE", {})
     monkeypatch.setattr(bf, "_MEMBERS_CACHE", {})
-    monkeypatch.setattr(em, "_BOARDS_SOURCE", "eastmoney")
-    monkeypatch.setattr(em, "_BOARDS_CLIST_PAUSE_UNTIL", 0.0)
-    monkeypatch.setattr(em, "_BOARD_MEMBERS_CACHE", {})
-    monkeypatch.setattr(em, "_CLIST_BACKOFF_UNTIL", 0.0)
-    monkeypatch.setattr(em, "_CLIST_FAIL_STREAK", 0)
-    monkeypatch.setattr(em, "_CLIST_HOST_PREF", None)
+    monkeypatch.setattr(em_boards, "_BOARDS_SOURCE", "eastmoney")
+    monkeypatch.setattr(em_boards, "_BOARDS_CLIST_PAUSE_UNTIL", 0.0)
+    monkeypatch.setattr(em_boards, "_BOARD_MEMBERS_CACHE", {})
+    monkeypatch.setattr(em_client, "_CLIST_BACKOFF_UNTIL", 0.0)
+    monkeypatch.setattr(em_client, "_CLIST_FAIL_STREAK", 0)
+    monkeypatch.setattr(em_client, "_CLIST_HOST_PREF", None)
 
     async def _no_sleep(*_a, **_k):
         return None
 
-    monkeypatch.setattr(em.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
 
 def _js(var: str, body: dict) -> bytes:
@@ -113,7 +115,7 @@ def test_blocked_clist_serves_sina_boards_and_pauses_clist() -> None:
     assert glass["pct"] == -4.89 and glass["amount"] == 10297458088
     assert glass["leader_code"] == "600293" and glass["leader_name"] == "三峡新材"
     assert glass["leader_pct"] == 4.5
-    assert em._BOARDS_SOURCE == "sina" and em._BOARDS_CLIST_PAUSE_UNTIL > 0
+    assert em_boards._BOARDS_SOURCE == "sina" and em_boards._BOARDS_CLIST_PAUSE_UNTIL > 0
     status = em.clist_runtime_status()
     assert status["boards_source"] == "sina" and status["boards_pause_sec"] > 0
 
@@ -138,7 +140,7 @@ def test_day_flow_falls_back_to_sina_but_week_does_not() -> None:
 
 
 def test_members_fall_back_to_sina_node_by_name() -> None:
-    em._BOARDS_CLIST_PAUSE_UNTIL = 1e12
+    em_boards._BOARDS_CLIST_PAUSE_UNTIL = 1e12
     handler, hits = _handler(clist=_blocked)
     strong = _run(handler, em.fetch_board_members, "BK1100")
     assert hits["clist"] == 0 and hits["sina_list"] == 2, "BK resolved to gn_hwqc via the Sina list"
@@ -159,12 +161,12 @@ def test_healthy_clist_keeps_eastmoney_and_learns_names() -> None:
                  "f3": 2.0, "f20": 1.0}]
         return httpx.Response(200, json={"rc": 0, "data": {"total": 1, "diff": diff}})
 
-    em._BOARDS_SOURCE = "sina"
+    em_boards._BOARDS_SOURCE = "sina"
     handler, hits = _handler(clist=clist)
     rows = _run(handler, em.fetch_hot_boards)
     assert {r["bk"] for r in rows} == {"BK0900", "BK0901"}
     assert hits["sina_list"] == 0
-    assert em._BOARDS_SOURCE == "eastmoney" and em._BOARDS_CLIST_PAUSE_UNTIL == 0.0
+    assert em_boards._BOARDS_SOURCE == "eastmoney" and em_boards._BOARDS_CLIST_PAUSE_UNTIL == 0.0
     assert bf._em_boards()["新概念"] == ("BK0900", "concept")
     assert bf._em_boards()["新行业"] == ("BK0901", "industry")
 

@@ -1,0 +1,114 @@
+"""East Money public snapshot clients.
+
+Split into submodules; this package re-exports every public and private name
+so ``from market_desk.eastmoney import X`` keeps working unchanged.
+"""
+
+from __future__ import annotations
+
+from market_desk.eastmoney.client import (  # noqa: F401
+    log,
+    _CLIST_HOSTS,
+    _CLIST_HOST_PREF,
+    _CLIST_SEM,
+    _CLIST_FAIL_STREAK,
+    _CLIST_BACKOFF_UNTIL,
+    _CLIST_BACKOFF_SEC,
+    _CLIST_BACKOFF_AFTER,
+    _clist_sem,
+    clist_in_backoff,
+    clist_backoff_remaining,
+    _note_clist_ok,
+    _note_clist_fail,
+    _zt_url,
+    _clist_url,
+    _host_order,
+    _get_json,
+    _get_clist_json,
+    _diff_rows,
+    _fetch_clist_pages,
+)
+from market_desk.eastmoney.quotes import (  # noqa: F401
+    cached_main_quotes,
+    _pool_rows,
+    _map_zt_row,
+    fetch_zt_pool,
+    fetch_zb_pool,
+    fetch_yesterday_zt,
+    _quote_from_diff,
+    _QUOTE_PROBE,
+    _QUOTE_PROBE_EVERY_SEC,
+    _probe_quote_edges,
+    _QUOTES_CLIST_HOSTS,
+    fetch_main_quotes,
+    _main_quotes_from_clist,
+    _MAIN_QUOTES_CACHE,
+    _MAIN_QUOTES_SOURCE,
+    _QUOTES_CLIST_PAUSE_UNTIL,
+    _QUOTES_CLIST_PAUSE_SEC,
+    _QUOTES_CLIST_MIN_ROWS,
+    _MAIN_QUOTES_TTL_SEC,
+    _MAIN_QUOTES_OPEN_TTL_SEC,
+    _MAIN_QUOTES_AUCTION_TTL_SEC,
+    MAIN_QUOTES_BREADTH_MIN,
+)
+from market_desk.eastmoney.boards import (  # noqa: F401
+    _is_junk_board,
+    _board_from_diff,
+    _hot_board_from_flow,
+    _BOARDS_SOURCE,
+    _BOARDS_CLIST_PAUSE_UNTIL,
+    _BOARDS_CLIST_PAUSE_SEC,
+    _boards_clist_paused,
+    fetch_hot_boards,
+    _hot_boards_from_clist,
+    _FLOW_FIELDS,
+    _FLOW_PERIODS,
+    fetch_board_fund_flow,
+    _board_fund_flow_clist,
+    _board_flow_from_diff,
+    fetch_board_members,
+    _board_members_clist,
+    _BOARD_MEMBERS_CACHE,
+    _BOARD_MEMBERS_TTL_SEC,
+)
+from market_desk.eastmoney.bars import (  # noqa: F401
+    _secid,
+    _fetch_daily_bars_eastmoney,
+    fetch_daily_bars,
+    _parse_eastmoney_klines,
+    _fetch_daily_bars_sina,
+    fetch_daily_klines,
+    fetch_daily_closes,
+    fetch_daily_closes_many,
+    fetch_daily_klines_many,
+)
+from market_desk.eastmoney.minute import (  # noqa: F401
+    _parse_minute_trends,
+    fetch_minute_trends,
+    fetch_minute_trends_many,
+    _parse_minute_klines,
+    fetch_minute_bars_for_day,
+    fetch_minute_bars_many_days,
+    _MINUTE_SOURCE,
+    _MINUTE_EM_PAUSE_UNTIL,
+    _MINUTE_EM_PAUSE_SEC,
+    _minute_em_paused,
+    _note_minute_fallback,
+    _fetch_minute_trends_unlocked,
+    _minute_trends_eastmoney,
+    _MINUTE_CONCURRENCY,
+    _MINUTE_SEM,
+    _minute_sem,
+)
+from market_desk.eastmoney.meta import (  # noqa: F401
+    fetch_stock_meta_many,
+    _HOLDER_CACHE,
+    _HOLDER_CACHE_TTL_SEC,
+    _is_equity_code,
+    _map_holder_row,
+    fetch_holder_stats_many,
+)
+from market_desk.eastmoney.status import (  # noqa: F401
+    clist_runtime_status,
+)

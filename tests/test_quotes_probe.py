@@ -9,6 +9,8 @@ import pytest
 
 import market_desk.db as desk_db
 import market_desk.eastmoney as em
+from market_desk.eastmoney import client as em_client
+from market_desk.eastmoney import quotes as em_quotes
 import market_desk.quotes_fallback as qf
 
 
@@ -17,22 +19,22 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(desk_db, "DB_PATH", tmp_path / "desk.db")
     monkeypatch.setattr(desk_db, "DATA_DIR", tmp_path)
     desk_db.init_db()
-    monkeypatch.setattr(em, "_MAIN_QUOTES_CACHE", None)
-    monkeypatch.setattr(em, "_QUOTE_PROBE", (0.0, ""))
-    monkeypatch.setattr(em, "_CLIST_BACKOFF_UNTIL", 0.0)
-    monkeypatch.setattr(em, "_QUOTES_CLIST_PAUSE_UNTIL", 0.0)
-    monkeypatch.setattr(em, "_MAIN_QUOTES_SOURCE", "eastmoney")
+    monkeypatch.setattr(em_quotes, "_MAIN_QUOTES_CACHE", None)
+    monkeypatch.setattr(em_quotes, "_QUOTE_PROBE", (0.0, ""))
+    monkeypatch.setattr(em_client, "_CLIST_BACKOFF_UNTIL", 0.0)
+    monkeypatch.setattr(em_quotes, "_QUOTES_CLIST_PAUSE_UNTIL", 0.0)
+    monkeypatch.setattr(em_quotes, "_MAIN_QUOTES_SOURCE", "eastmoney")
     monkeypatch.setattr(qf, "_UNIVERSE", None)
     monkeypatch.setattr(qf, "SINA_PAGE_DELAY_S", 0.0)
     monkeypatch.setattr(qf, "TENCENT_CHUNK_DELAY_S", 0.0)
     monkeypatch.setattr(qf, "UNIVERSE_MIN_CODES", 3)
     monkeypatch.setattr(qf, "UNIVERSE_FULL_CODES", 4)
-    monkeypatch.setattr(em, "MAIN_QUOTES_BREADTH_MIN", 3)
+    monkeypatch.setattr(em_quotes, "MAIN_QUOTES_BREADTH_MIN", 3)
 
     async def _no_sleep(*_a, **_k):
         return None
 
-    monkeypatch.setattr(em.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
 
 def _tencent_line(code: str, pct: float) -> str:
@@ -88,13 +90,13 @@ def test_blocked_clist_falls_back_to_tencent_and_pauses_clist() -> None:
     row = next(r for r in rows if r["code"] == "600000")
     assert row["pct"] == 1.5 and row["amount"] == 12345 * 1e4 and row["mv_yi"] == 321.5
     assert round(row["open_pct"], 2) == 1.0
-    assert em._MAIN_QUOTES_SOURCE == "tencent" and em._QUOTES_CLIST_PAUSE_UNTIL > 0
-    assert "push2delay=200 rc=0 data=null" in em._QUOTE_PROBE[1]
+    assert em_quotes._MAIN_QUOTES_SOURCE == "tencent" and em_quotes._QUOTES_CLIST_PAUSE_UNTIL > 0
+    assert "push2delay=200 rc=0 data=null" in em_quotes._QUOTE_PROBE[1]
     assert em.clist_runtime_status()["quotes_source"] == "tencent"
     assert (desk_db.load_setting(qf.UNIVERSE_SETTING_KEY) or {}).get("codes") == UNIVERSE
 
     clist_before = hits["clist"]
-    em._MAIN_QUOTES_CACHE = None
+    em_quotes._MAIN_QUOTES_CACHE = None
     qf._UNIVERSE = None
     _fetch(handler)
     assert hits["clist"] == clist_before, "clist must stay paused"
@@ -138,11 +140,11 @@ def test_healthy_clist_seeds_universe_and_skips_fallback(monkeypatch) -> None:
         diff = [{"f12": c, "f14": c, "f2": 10.0, "f3": 1.0, "f17": 10.0, "f18": 9.9} for c in codes]
         return httpx.Response(200, json={"rc": 0, "data": {"total": len(diff), "diff": diff}})
 
-    monkeypatch.setattr(em, "_QUOTES_CLIST_MIN_ROWS", 3)
-    em._MAIN_QUOTES_SOURCE = "tencent"
+    monkeypatch.setattr(em_quotes, "_QUOTES_CLIST_MIN_ROWS", 3)
+    em_quotes._MAIN_QUOTES_SOURCE = "tencent"
     handler, hits = _handler(clist=clist)
     rows = _fetch(handler)
     assert sorted(r["code"] for r in rows) == UNIVERSE
     assert hits["tencent"] == 0 and hits["sina"] == 0
-    assert em._MAIN_QUOTES_SOURCE == "eastmoney" and em._QUOTES_CLIST_PAUSE_UNTIL == 0.0
+    assert em_quotes._MAIN_QUOTES_SOURCE == "eastmoney" and em_quotes._QUOTES_CLIST_PAUSE_UNTIL == 0.0
     assert (desk_db.load_setting(qf.UNIVERSE_SETTING_KEY) or {}).get("codes") == UNIVERSE

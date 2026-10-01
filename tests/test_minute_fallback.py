@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 import market_desk.eastmoney as em
+from market_desk.eastmoney import minute as em_minute
 import market_desk.tencent as tx
 
 TODAY = datetime.now().strftime("%Y%m%d")
@@ -24,9 +25,9 @@ TX_ROWS = [
 
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
-    monkeypatch.setattr(em, "_MINUTE_SOURCE", "eastmoney")
-    monkeypatch.setattr(em, "_MINUTE_EM_PAUSE_UNTIL", 0.0)
-    monkeypatch.setattr(em, "_MINUTE_SEM", None)
+    monkeypatch.setattr(em_minute, "_MINUTE_SOURCE", "eastmoney")
+    monkeypatch.setattr(em_minute, "_MINUTE_EM_PAUSE_UNTIL", 0.0)
+    monkeypatch.setattr(em_minute, "_MINUTE_SEM", None)
     monkeypatch.setattr(tx, "_MINUTE_DAYS_CACHE", {})
 
 
@@ -84,7 +85,7 @@ def test_empty_trends2_falls_back_to_tencent_and_pauses() -> None:
     handler, hits = _handler()
     rows = _run(handler, em.fetch_minute_trends, "600000")
     assert len(rows) == 4 and rows[0]["time"] == f"{TODAY_DASH} 09:30"
-    assert em._MINUTE_SOURCE == "tencent" and em._MINUTE_EM_PAUSE_UNTIL > 0
+    assert em_minute._MINUTE_SOURCE == "tencent" and em_minute._MINUTE_EM_PAUSE_UNTIL > 0
     status = em.clist_runtime_status()
     assert status["minute_source"] == "tencent" and status["minute_pause_sec"] > 0
 
@@ -99,7 +100,7 @@ def test_healthy_trends2_keeps_eastmoney() -> None:
     handler, hits = _handler(em_trends=em_rows)
     rows = _run(handler, em.fetch_minute_trends, "600000")
     assert rows == [{"time": f"{TODAY_DASH} 09:31", "price": 9.04, "avg": 9.02, "volume": 100.0, "amount": 90400.0}]
-    assert hits["tx_minute"] == 0 and em._MINUTE_SOURCE == "eastmoney" and em._MINUTE_EM_PAUSE_UNTIL == 0.0
+    assert hits["tx_minute"] == 0 and em_minute._MINUTE_SOURCE == "eastmoney" and em_minute._MINUTE_EM_PAUSE_UNTIL == 0.0
 
 
 def test_past_day_bars_use_tencent_five_day_feed() -> None:
@@ -107,6 +108,6 @@ def test_past_day_bars_use_tencent_five_day_feed() -> None:
     rows = _run(handler, em.fetch_minute_bars_for_day, "600000", "2026-09-24")
     assert [p["time"] for p in rows] == ["2026-09-24 09:30", "2026-09-24 09:31"]
     assert rows[1]["volume"] == 12450 - 2497
-    assert em._MINUTE_SOURCE == "tencent" and em._MINUTE_EM_PAUSE_UNTIL > 0
+    assert em_minute._MINUTE_SOURCE == "tencent" and em_minute._MINUTE_EM_PAUSE_UNTIL > 0
     assert _run(handler, em.fetch_minute_bars_for_day, "600000", "2026-09-01") == []
     assert hits["tx_days"] == 1, "five-day feed cached per code"

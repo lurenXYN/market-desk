@@ -46,17 +46,14 @@ Agents: **at the start of each session involving this app, read this file before
 
 目标：单文件 ≤ 约 1,300 行，一次可完整读取。做法同 `verdict/`：AST 校验逐字一致 + pyflakes 零告警 + 全量测试。
 
-- [ ] **P1 `engine.py`（4,416 行）→ `engine/` 包** — `DeskEngine` 单类 3,300 行，按 mixin 拆：`refresh.py`（`refresh` 668 行主循环）、`review_build.py`（`build_review` / `_enrich_pick_rows` / `build_review_scores`）、`eod.py`（收盘宽度 / 一页纸 / 早报推送）、`recommend_enrich.py`（推荐趋势 / 昨日涨停过滤 / 独立人气精修 / 竞价策略 / 分时确认 / 筹码）、`notify_toast.py`（toast 与切片快照）；模块级工具拆 `board_enrich.py`（`_enrich_board` 等）、`health.py`（`_build_health` / 事件 / 周期视图）、`watch.py`（自选池装饰）。
-- [ ] **P1 `review.py`（3,955 行）→ `review/` 包** — `signals.py`（记录买卖信号 / 板块与筹码补全）、`outcome.py`（`score_signal_with_closes` / 结果落定）、`exec_score.py`（成交执行评分 / 周执行板）、`hit_rates.py`（来源/主题/相位/品种命中率 / 调参提示 / 闸门击杀）、`sell_bias.py`（卖出复盘偏置 / 卖飞板 / 买入闸门偏置）、`alerts.py`（价位触达 / 追价成本 / ready 监控）、`payload.py`（`build_review_payload` / 实时标注 / 代码历史）。
-- [ ] **P2 `static/css/desk.css`（3,081 行）** — 按页签拆 `css/desk/NN-*.css`，复用 `assets.py` 的按序合并机制（同 JS）。
-- [ ] **P2 `elliott.py`（1,882 行）→ `elliott/`** — `pivots.py`（ZigZag / 结构快照）、`fit.py`（主浪/子浪拟合打分与失效位）、`indicators.py`（EMA/RSI/MACD/背离）、`timing.py`（斐波时间窗 / 变盘点 / 价位）、`chart.py`（图表与浪标）。
-- [ ] **P2 `eastmoney.py`（1,740 行）→ `eastmoney/`** — `http.py`（clist 退避 / 主机轮换 / 取 JSON）、`quotes.py`（主板行情 / 涨停池）、`boards.py`（热点板块 / 资金流 / 成分股）、`bars.py`（日线 / 分钟线 / 新浪回退）、`meta.py`（股票元数据 / 股东户数）。
-- [ ] **P3 `adapt.py`（1,542 行）** — `context.py`（交易情境分桶 / 闸门偏置）、`sizing.py`（仓位热度 / 相位品种 / 执行 / 来源乘数）、`sell_learn.py`（分段卖出 / MFE）、`tune.py`（自动调参与缓存 / `build_adapt_bundle`）。
-- [ ] **P3 前端 `02-desk-render.js`（1,265）/ `05-review-table.js`（1,191）/ `index.html`（1,120）** — JS 按卡片拆成更细编号文件；HTML 暂不拆（结构性模板，收益低）。
+- [x] **P1 `engine.py` → `engine/`**、**`review.py` → `review/`**；**P2 `desk.css` → `css/desk/`**、**`elliott.py` → `elliott/`**、**`eastmoney.py` → `eastmoney/`**；**P3 `adapt.py` → `adapt/`**、**`02-desk-render.js` / `05-review-table.js` 细拆** — 已完成，见 CHANGELOG v1.6.2。*(2026-10-01)*
+- [ ] **`index.html`（1,120 行）** — 结构性模板，收益低，暂不拆。
+- [x] **CSS 遗留孤立声明** — 删除 `04-market.css` 末尾两行无选择器声明与多余 `}`（`.data-banner.ok-soft` 残留副本），被吞掉的 `.rec-actions` 弹性布局恢复生效（桌面端推荐卡按钮等宽 + 6px 间距）。*(2026-10-01)*
 - [ ] **暂不拆** — `glossary.py`（1,266 行纯词条数据）、`backtest.py`（1,116）、`db/positions.py`（1,052）：接近阈值且内聚，等再增长时处理。
 
 ## Done recently (context)
 
+- [x] **核心文件全部拆包（v1.6.2）** — `engine` / `review` / `eastmoney` / `elliott` / `adapt` 五个包 + CSS 6 段 + 作战台 `render()` 7 段 + 复盘表 4 段；339 个定义 AST 逐字一致（仅 3 处必要手改），286 测试通过，真实 refresh 冒烟通过，最大 Python 模块 901 行。*(2026-10-01)*
 - [x] **`verdict.py` 拆分为 `verdict/` 包** — 7,347 行拆为 12 个子模块（最大约 1,250 行），按依赖分层无循环导入；`__init__` 重新导出全部 105 个名字，外部导入零改动；AST 逐字校验 + pyflakes 零告警 + 286 测试通过。*(2026-10-01)*
 
 - [x] **客观纪律与功能巩固** — 彻底清除人工干预的趋势覆盖死代码（坚持系统冷酷客观的纪律）；完整恢复并保留回测引擎（作为调整买入纪律的客观标尺）；大盘艾略特波浪增加「斐波变盘窗口倒计时徽章」；资金流恢复每日收盘全量落库并新增「收盘多日累计沉淀榜」；独立人气回踩升级（涨跌幅放宽至 -3%~+7%、增加 ≥2.5 亿成交底线、增加日高回踩与抗跌承接判定）；自选试探副卡优化买点价差提示并严格维持 0.75 倍轻仓纪律。*(2026-09-30)*
