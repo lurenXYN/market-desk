@@ -1,17 +1,39 @@
 ---
-description: market-desk release and sync policy
+description: market-desk release and multi-environment sync policy
 globs: **/*
-alwaysApply: false
+alwaysApply: true
 ---
 
-# market-desk 发布与同步规范
+# market-desk 发布与多环境同步规范
 
-## 仓库关系与推送约定
+## 真相源
 
-- **源码开发**：在 `mydemo/go-learning` 仓库的 `apps/market-desk` 路径下进行本地验证与测试；
-- **独立仓库**：`D:\Source\Repos\market-desk` 映射远端 GitHub 仓库 `https://github.com/lurenXYN/market-desk.git`；
-- **硬纪律**：
-  1. `go-learning` 仓库严禁执行 `git push`（仅作本地分支备份）；
-  2. 每次完成功能后，使用 robocopy 或同步脚本将变更同步到独立仓 `D:\Source\Repos\market-desk`；
-  3. 排除 `.venv`、`__pycache__`、`data`、`.git` 等文件；
-  4. 提交独立仓并直接推送至 `origin main`。
+- **唯一远端**：GitHub `https://github.com/lurenXYN/market-desk.git`（本仓库）。任何环境开发前先 `git pull`，以远端 `main` 为准。
+- **推送 `main` = 立即部署 VPS**（`.github/workflows/deploy.yml`）。未完成的功能先在分支上提交，测试通过后再合入 `main` 推送。
+
+## 两种开发方式（都合法）
+
+### A. 直接在本仓库开发（其他电脑 / 新环境默认用这个）
+
+1. `git pull origin main`；
+2. 改代码 → `pytest -q` 全量通过（前端改动再对拼接后的 `desk.js` 跑 `node --check`）→ 更新 `TODO.md` / `CHANGELOG.md`；
+3. `git commit` → `git push origin main`（或先推分支，确认后再合入 `main`）。
+
+### B. 主力机：在 `go-learning/apps/market-desk` 开发后同步到本仓库
+
+仅限主力机（存在 `D:\Source\Repos\mydemo\go-learning`）：
+
+0. **同步前先查本仓库是否领先**：`git fetch` 后若 `origin/main` 有别的环境推的新提交，先在本仓库 `git pull`，再把这些改动**反向复制**回 `go-learning/apps/market-desk`（排除 `.venv` `__pycache__` `data` `.git`），在 go-learning 本地提交后再开发；
+1. 在 go-learning 改完并测试；
+2. robocopy 同步到本仓库（排除 `.venv` `__pycache__` `data` `.git` `.pytest_cache`，以及 `*.pyc` `desk.db*`）；
+3. 在本仓库 `git status` 核对 diff 只含本次改动 → commit → `git push origin main`。
+
+> robocopy 默认只要文件不同就覆盖（不论新旧）。跳过第 0 步会把其他环境推上来的改动静默回滚。
+
+## 硬纪律
+
+- `go-learning` 仓库严禁 `git push`（任何 remote、任何分支）。
+- 不提交 `data/`（`desk.db` 含用户密码哈希、ServerChan sendkey、持仓）、`.venv`、`__pycache__`。
+- 开发环境若拷贝了生产 `desk.db`，交易时段运行前先清空各用户 `serverchan_sendkey`，避免与 VPS 重复推送微信。
+- 新环境空库启动：默认管理员 `admin/admin123`（可用 `MARKET_DESK_ADMIN_USER` / `MARKET_DESK_ADMIN_PASSWORD` 覆盖）；依赖历史的功能（相似日、题材信誉、复盘命中率、拥挤度相对口径）会为空，属正常。
+- 网络不同数据源不同：东财被拦时走新浪/腾讯兜底，板块口径会变（东财行业为申万式三级 496 个，新浪 50 个），不是 bug。

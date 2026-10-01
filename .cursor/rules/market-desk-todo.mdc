@@ -8,11 +8,12 @@ alwaysApply: false
 
 Before planning or implementing work:
 
+0. `git pull origin main` first — other environments may have pushed (see `market-desk-release.mdc`).
 1. Read `TODO.md` (Open / Done / Won’t do) and `CHANGELOG.md`.
 2. Prefer picking an **Open** item unless the user asks for something else.
 3. When finishing a backlog item, mark it done in `TODO.md` and note what shipped in one line.
-4. Soft-scoring philosophy: nudge size/score/bands; avoid new hard buy bans unless the user explicitly asks.
+4. Soft-scoring philosophy: nudge size/score/bands; avoid new hard buy bans unless the user explicitly asks (user-approved exceptions are recorded in `CHANGELOG.md`, e.g. v1.8.0 conditional crowding ban).
 5. **Data compat**: any schema / scoring / enum change must keep existing `desk.db` workable (see `.cursor/rules/market-desk-data-compat.mdc`).
 6. **版本更新记录 (CHANGELOG)**：每次功能更新或优化后，必须在 `CHANGELOG.md` 中追加条目，严格写明「为什么做（Why · 痛点与动机）」与「做了什么（What · 改动详情）」以及「实盘影响」，并保持 `TODO.md` 同步。
-7. **分支与发布规约**：在独立仓 `main` 分支上开发或同步后，执行测试并通过，再 commit 并推送到 GitHub 远端 `https://github.com/lurenXYN/market-desk.git`。
+7. **分支与发布规约**：开发或同步后执行全量测试并通过，再 commit 并推送到 GitHub 远端 `https://github.com/lurenXYN/market-desk.git`。推送 `main` 会立即部署 VPS，未完成的功能先推分支。多环境流程见 `market-desk-release.mdc`。
 8. **文件体量**：单个源码文件控制在约 1,300 行以内；超出时按 `TODO.md`「工程：大文件拆分」的做法拆成包并保持原导入路径。`verdict` / `engine` / `review` / `eastmoney` / `elliott` / `adapt` 均已是包，新增逻辑放进对应子模块，不要再堆回一个文件；`DeskEngine` 新方法放进对应 mixin。样式在 `static/css/desk/NN-*.css`、脚本在 `static/js/desk/NN-*.js`，编号即加载/层叠顺序。拆包时被 `global` 重新绑定的模块状态必须与其全部读写函数同处一个子模块；测试 monkeypatch 要指向实际查找该名字的子模块。
