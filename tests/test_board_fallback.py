@@ -36,6 +36,11 @@ def _fresh(monkeypatch):
     monkeypatch.setattr(em_boards, "_BOARDS_SOURCE", "eastmoney")
     monkeypatch.setattr(em_boards, "_BOARDS_CLIST_PAUSE_UNTIL", 0.0)
     monkeypatch.setattr(em_boards, "_BOARD_MEMBERS_CACHE", {})
+    monkeypatch.setattr(em_boards, "_BOARDS_RESTORE_OK", 0)
+    monkeypatch.setattr(em_boards, "_BOARDS_FAIL_STREAK", 0)
+    monkeypatch.setattr(em_boards, "_BOARDS_SWITCH_DAY", "")
+    monkeypatch.setattr(em_boards, "_BOARDS_SWITCH_LOG", [])
+    monkeypatch.setattr(em_boards, "in_decision_window", lambda now=None: False)
     monkeypatch.setattr(em_client, "_CLIST_BACKOFF_UNTIL", 0.0)
     monkeypatch.setattr(em_client, "_CLIST_FAIL_STREAK", 0)
     monkeypatch.setattr(em_client, "_CLIST_HOST_PREF", None)
@@ -163,10 +168,13 @@ def test_healthy_clist_keeps_eastmoney_and_learns_names() -> None:
 
     em_boards._BOARDS_SOURCE = "sina"
     handler, hits = _handler(clist=clist)
+    first = _run(handler, em.fetch_hot_boards)
+    assert hits["sina_list"] == 2 and all(r["bk"] != "BK0900" for r in first), "1st success keeps Sina"
+    assert em_boards._BOARDS_SOURCE == "sina" and em_boards._BOARDS_RESTORE_OK == 1
     rows = _run(handler, em.fetch_hot_boards)
     assert {r["bk"] for r in rows} == {"BK0900", "BK0901"}
-    assert hits["sina_list"] == 0
     assert em_boards._BOARDS_SOURCE == "eastmoney" and em_boards._BOARDS_CLIST_PAUSE_UNTIL == 0.0
+    assert em.boards_switch_stats()["switches"] == 1
     assert bf._em_boards()["新概念"] == ("BK0900", "concept")
     assert bf._em_boards()["新行业"] == ("BK0901", "industry")
 

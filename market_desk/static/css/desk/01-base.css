@@ -131,6 +131,7 @@ html, body {
 .radar-chip.crowd-w { border-color: #d97706; color: #fde68a; background: #2a1c06; }
 .radar-chip.pulse-on { border-color: #22c55e; color: #bbf7d0; background: #0b2414; }
 .radar-chip.narr { border-color: #6366f1; color: #c7d2fe; background: #14163a; border-style: dashed; }
+.radar-chip.src-damp { border-color: #0ea5e9; color: #bae6fd; background: #082032; }
 @keyframes flyBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.72; }

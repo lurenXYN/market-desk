@@ -56,6 +56,24 @@ function renderDeskRadar(d) {
       + `${c.first_seen ? " 首见" + c.first_seen : ""}</span>`
     );
   });
+  const src = d.boards_source || {};
+  const srcZh = (s) => (s === "sina" ? "新浪" : s === "eastmoney" ? "东财" : s || "—");
+  if (src.damping) {
+    const tip = `板块数据源 ${srcZh(src.shift_from)} → ${srcZh(src.source)}\n减震期内：主线切换不记账；买入/主线/拥挤提醒暂停，结束后买卖信号仍成立才补推`;
+    bits.push(
+      `<span class="radar-chip src-damp" title="${attr(tip)}">源切换减震 ${src.damp_left || 0}s</span>`
+    );
+  } else if (src.source === "sina" || (src.switches || 0) > 0) {
+    const flips = (src.log || []).map((r) => `${r.at} → ${srcZh(r.to)}`).join("\n");
+    const al = src.alias_learn || {};
+    const learn = al.learned_at
+      ? `\n别名自学 ${al.learned_at}：一对一 ${al.auto || 0} · 近似 ${al.approx || 0} · 待审 ${al.candidate || 0}`
+      : (al.em_cov != null ? `\n别名自学中：东财成分覆盖 ${Math.round((al.em_cov || 0) * 100)}%` : "");
+    const tip = `${src.locked ? "盘中锁定新浪：午休 / 收盘后再探测东财（连续 2 次成功才切回）\n" : ""}今日切换 ${src.switches || 0} 次${flips ? "\n" + flips : ""}${learn}`;
+    bits.push(
+      `<span class="radar-chip meta" title="${attr(tip)}">板块源·${srcZh(src.source)}${src.locked ? "(锁定)" : ""}${src.switches ? " 切" + src.switches : ""}</span>`
+    );
+  }
   const stats = narr.stats || {};
   if (bits.length && stats.days) {
     const lead = stats.median_lead_min != null ? `中位提前 ${stats.median_lead_min} 分` : "尚无命中";

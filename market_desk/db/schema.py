@@ -209,6 +209,34 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS board_members_snap (
+                source TEXT NOT NULL,
+                key TEXT NOT NULL,
+                name TEXT,
+                kind TEXT,
+                codes TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                at TEXT NOT NULL,
+                PRIMARY KEY (source, key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS board_alias_learned (
+                sina_name TEXT PRIMARY KEY,
+                sina_kind TEXT,
+                bk TEXT NOT NULL,
+                em_name TEXT,
+                em_kind TEXT,
+                jaccard REAL,
+                status TEXT NOT NULL,
+                at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS fund_flow_daily (
                 trade_date TEXT NOT NULL,
                 bk TEXT NOT NULL,

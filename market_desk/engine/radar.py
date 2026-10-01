@@ -75,7 +75,9 @@ class RadarMixin:
             self._crowd_hist = (trade_date_dash, hist)
         history = (self._crowd_hist or ("", {}))[1]
         market = market_turnover(indices)
-        crowd = compute_crowding(boards, market, history, now=now)
+        # Approx-aliased old Sina industries are far broader than their EM name.
+        rows = [b for b in boards or [] if not b.get("alias_approx")]
+        crowd = compute_crowding(rows, market, history, now=now)
         if crowd.get("ok") and is_trading_day(now):
             mono = time.monotonic()
             if mono - self._crowd_saved_at >= float(CROWD_SAVE_EVERY_SEC):

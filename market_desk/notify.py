@@ -120,6 +120,35 @@ def build_toast_alerts(
     return alerts
 
 
+def build_damped_toast_alerts(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+    *,
+    damping: bool = False,
+    replay_base: dict[str, Any] | None = None,
+) -> list[tuple[str, str, str]]:
+    """Diff snapshots while a board-source flip is being damped.
+
+    During ``damping`` board-derived edges (buy / fly / exit / mainline / crowd)
+    are dropped: a universe swap fakes them. On the first round after the window,
+    buy / fly / exit are re-diffed against ``replay_base`` (last pre-flip snapshot)
+    so a real signal that survived the whole window still fires once; mainline
+    and crowd renames are never replayed.
+    """
+    from market_desk.config import SOURCE_SHIFT_DAMP_PREFIXES, SOURCE_SHIFT_REPLAY_PREFIXES
+
+    alerts = list(build_toast_alerts(previous, current))
+    if damping:
+        return [a for a in alerts if not a[0].startswith(SOURCE_SHIFT_DAMP_PREFIXES)]
+    if replay_base:
+        seen = {a[0] for a in alerts}
+        for alert in build_toast_alerts(replay_base, current):
+            if alert[0].startswith(SOURCE_SHIFT_REPLAY_PREFIXES) and alert[0] not in seen:
+                alerts.append(alert)
+                seen.add(alert[0])
+    return alerts
+
+
 def build_sell_ready_alerts(
     items: list[dict[str, Any]] | None,
 ) -> list[tuple[str, str, str]]:

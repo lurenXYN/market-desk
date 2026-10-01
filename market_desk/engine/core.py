@@ -25,6 +25,8 @@ from market_desk.engine.eod import EodMixin
 from market_desk.engine.refresh import RefreshMixin
 from market_desk.engine.micro import MicroMixin
 from market_desk.engine.radar import RadarMixin
+from market_desk.engine.source_guard import SourceGuardMixin
+from market_desk.engine.alias_learn import AliasLearnMixin
 
 try:
     from zoneinfo import ZoneInfo
@@ -46,6 +48,8 @@ class DeskEngine(
     RefreshMixin,
     MicroMixin,
     RadarMixin,
+    SourceGuardMixin,
+    AliasLearnMixin,
 ):
     """Hold the latest snapshot and refresh it in the background."""
 
@@ -98,6 +102,17 @@ class DeskEngine(
         self._ops_latch_date: str | None = None
         self._ops_latched: set[str] = set()
         self._pending_ops_alerts: list[tuple[str, str, str]] = []
+        # Board-source flip guard (SourceGuardMixin).
+        self._src_last = ""
+        self._src_shift_from = ""
+        self._src_damp_until = 0.0
+        self._src_damp_base: dict[str, Any] | None = None
+        self._src_probe_at = 0.0
+        # Sina → East Money alias self-learning (AliasLearnMixin).
+        self._alias_tick_at = 0.0
+        self._alias_em_backoff_until = 0.0
+        self._alias_learned_day = ""
+        self._alias_progress: dict[str, Any] = {}
 
     def _note_source(self, label: str, *, ok: bool = False, timeout: bool = False) -> None:
         """Increment one source outcome counter for the data-health strip."""
@@ -140,6 +155,10 @@ class DeskEngine(
                 )
         except Exception:
             log.exception("theme reputation formula migration failed")
+        try:
+            log.info("learned board aliases applied: %s", self._load_learned_aliases())
+        except Exception:
+            log.exception("learned board alias load failed")
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -351,6 +370,7 @@ class DeskEngine(
                 "ready_cross_day",
                 "health",
                 "radar",
+                "boards_source",
             ),
             "market": (
                 "metrics",

@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import asyncio
 import logging
 import time
 import httpx
 from market_desk import board_fallback
-from market_desk.config import CONCEPT_JUNK_KEYWORDS, CONSTITUENT_TOP
+from market_desk.calendar import is_trading_day
+from market_desk.config import (
+    BOARDS_DEGRADE_STREAK,
+    BOARDS_PROBE_RETRY_SEC,
+    BOARDS_RESTORE_STREAK,
+    CONCEPT_JUNK_KEYWORDS,
+    CONSTITUENT_TOP,
+)
 from market_desk.filters import is_main_board, normalize_code
 from market_desk.numbers import num
 
@@ -16,6 +24,13 @@ from market_desk.eastmoney.client import _diff_rows, _fetch_clist_pages, _get_cl
 from market_desk.eastmoney.quotes import _QUOTES_CLIST_HOSTS
 
 log = logging.getLogger("market_desk.eastmoney")
+
+try:
+    from zoneinfo import ZoneInfo
+
+    _CN_TZ = ZoneInfo("Asia/Shanghai")
+except Exception:  # pragma: no cover - Windows without tzdata
+    _CN_TZ = timezone(timedelta(hours=8))
 
 
 def _is_junk_board(name: str) -> bool:
@@ -70,25 +85,106 @@ _BOARDS_CLIST_PAUSE_UNTIL = 0.0
 
 _BOARDS_CLIST_PAUSE_SEC = 600.0
 
+# Consecutive successful EM probes while still serving Sina (restore gate).
+_BOARDS_RESTORE_OK = 0
+# Consecutive in-session EM failures while still on East Money (degrade gate).
+_BOARDS_FAIL_STREAK = 0
+# Today's source flips: [{"at": "HH:MM:SS", "to": "sina|eastmoney", "why": str}].
+_BOARDS_SWITCH_DAY = ""
+_BOARDS_SWITCH_LOG: list[dict[str, Any]] = []
+
+
+def _cn_now() -> datetime:
+    return datetime.now(_CN_TZ)
+
+
+def in_decision_window(now: datetime | None = None) -> bool:
+    """Return True inside continuous trading (09:30–11:30, 13:00–15:00) on a trading day.
+
+    Board-source flips are only allowed outside this window, except for the
+    unavoidable East Money → Sina degrade when East Money stops answering.
+    """
+    cur = now or _cn_now()
+    if not is_trading_day(cur):
+        return False
+    minutes = cur.hour * 60 + cur.minute
+    return (9 * 60 + 30 <= minutes < 11 * 60 + 30) or (13 * 60 <= minutes < 15 * 60)
+
 
 def _boards_clist_paused() -> bool:
-    return time.time() < _BOARDS_CLIST_PAUSE_UNTIL
+    """Return True when board / flow / member calls must skip East Money.
+
+    Besides the timed pause, a Sina-degraded source stays locked for the rest
+    of the half-session so boards, members and flow come from one universe.
+    """
+    if time.time() < _BOARDS_CLIST_PAUSE_UNTIL:
+        return True
+    return _BOARDS_SOURCE == "sina" and in_decision_window()
+
+
+def _set_boards_source(source: str, why: str) -> None:
+    """Switch the board source and append the flip to today's switch log."""
+    global _BOARDS_SOURCE, _BOARDS_SWITCH_DAY, _BOARDS_SWITCH_LOG
+    if source == _BOARDS_SOURCE:
+        return
+    now = _cn_now()
+    day = now.strftime("%Y-%m-%d")
+    if day != _BOARDS_SWITCH_DAY:
+        _BOARDS_SWITCH_DAY = day
+        _BOARDS_SWITCH_LOG = []
+    _BOARDS_SWITCH_LOG.append({"at": now.strftime("%H:%M:%S"), "to": source, "why": why})
+    _BOARDS_SWITCH_LOG = _BOARDS_SWITCH_LOG[-40:]
+    log.warning(
+        "boards source %s -> %s (%s) · flips today=%s",
+        _BOARDS_SOURCE, source, why, len(_BOARDS_SWITCH_LOG),
+    )
+    _BOARDS_SOURCE = source
+
+
+def boards_switch_stats() -> dict[str, Any]:
+    """Return today's board-source flip count and the most recent flips."""
+    day = _cn_now().strftime("%Y-%m-%d")
+    rows = list(_BOARDS_SWITCH_LOG) if _BOARDS_SWITCH_DAY == day else []
+    return {
+        "source": _BOARDS_SOURCE,
+        "switches": len(rows),
+        "log": rows[-6:],
+        "restore_ok": int(_BOARDS_RESTORE_OK),
+        "locked": _BOARDS_SOURCE == "sina" and in_decision_window(),
+    }
 
 
 async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch concept gainers and the full industry universe.
 
     Uses ``bypass_backoff`` so quote-edge cooldowns do not wipe board cards.
-    When East Money returns nothing (blocked IP), board clist calls are paused
-    for ``_BOARDS_CLIST_PAUSE_SEC`` and boards come from Sina instead.
+    When East Money returns nothing (blocked IP), boards come from Sina and the
+    source stays on Sina until the next break; there East Money is re-probed and
+    only restored after ``BOARDS_RESTORE_STREAK`` consecutive successes.
     """
-    global _BOARDS_SOURCE, _BOARDS_CLIST_PAUSE_UNTIL
+    global _BOARDS_CLIST_PAUSE_UNTIL, _BOARDS_RESTORE_OK, _BOARDS_FAIL_STREAK
     if not _boards_clist_paused():
         out = await _hot_boards_from_clist(client)
         if out:
-            _BOARDS_SOURCE = "eastmoney"
-            return out
-        _BOARDS_CLIST_PAUSE_UNTIL = time.time() + _BOARDS_CLIST_PAUSE_SEC
+            _BOARDS_FAIL_STREAK = 0
+            if _BOARDS_SOURCE != "sina":
+                return out
+            _BOARDS_RESTORE_OK += 1
+            if _BOARDS_RESTORE_OK >= int(BOARDS_RESTORE_STREAK):
+                _BOARDS_RESTORE_OK = 0
+                _set_boards_source("eastmoney", "restored")
+                return out
+        else:
+            _BOARDS_RESTORE_OK = 0
+            in_window = in_decision_window()
+            if _BOARDS_SOURCE != "sina" and in_window:
+                _BOARDS_FAIL_STREAK += 1
+                if _BOARDS_FAIL_STREAK < int(BOARDS_DEGRADE_STREAK):
+                    # One blip: empty boards make refresh reuse last round's cards.
+                    return []
+            _BOARDS_FAIL_STREAK = 0
+            pause = _BOARDS_CLIST_PAUSE_SEC if in_window else float(BOARDS_PROBE_RETRY_SEC)
+            _BOARDS_CLIST_PAUSE_UNTIL = time.time() + pause
     try:
         rows = await board_fallback.fetch_hot_boards_sina(client)
     except Exception as exc:
@@ -96,8 +192,20 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         return []
     if _BOARDS_SOURCE != "sina":
         log.warning("hot boards via Sina fallback (%s rows)", len(rows))
-    _BOARDS_SOURCE = "sina"
+    _set_boards_source("sina", "clist empty")
     return rows
+
+
+async def probe_boards_source(client: httpx.AsyncClient) -> str:
+    """Re-probe East Money boards during a break while the source is Sina.
+
+    Called from the idle refresh loop at lunch so the afternoon session can
+    open on East Money instead of staying locked on Sina until the close.
+    """
+    if _BOARDS_SOURCE != "sina" or _boards_clist_paused():
+        return _BOARDS_SOURCE
+    await fetch_hot_boards(client)
+    return _BOARDS_SOURCE
 
 
 async def _hot_boards_from_clist(client: httpx.AsyncClient) -> list[dict[str, Any]]:
@@ -326,6 +434,22 @@ async def fetch_board_members(
     if members:
         _BOARD_MEMBERS_CACHE[key] = (now, members)
     return [dict(row) for row in members]
+
+
+async def fetch_board_codes_em(client: httpx.AsyncClient, bk: str) -> list[str]:
+    """Return every constituent code of one East Money board (alias overlap learning).
+
+    Returns [] when board clist is paused / locked on Sina or the call fails.
+    """
+    if not str(bk or "").upper().startswith("BK") or _boards_clist_paused():
+        return []
+    try:
+        rows = await _fetch_clist_pages(
+            client, f"b:{bk}", pz=100, max_pages=12, page_sleep=0.2, bypass_backoff=True
+        )
+    except Exception:
+        return []
+    return list(dict.fromkeys(c for c in (normalize_code(r.get("f12")) for r in rows) if c))
 
 
 async def _board_members_clist(

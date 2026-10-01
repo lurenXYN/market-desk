@@ -155,10 +155,25 @@ def _build_health(
             tips.append(
                 f"主板行情走腾讯备用源（东财列表被拦，{int(clist.get('quotes_pause_sec') or 0)}s 后重试东财）"
             )
+        sw = clist.get("boards_switches") if isinstance(clist.get("boards_switches"), dict) else {}
+        flips = int(sw.get("switches") or 0)
         if clist.get("boards_source") == "sina":
-            tips.append(
-                f"板块走新浪备用源（东财板块被拦，{int(clist.get('boards_pause_sec') or 0)}s 后重试东财）"
-            )
+            if sw.get("locked"):
+                tips.append("板块走新浪备用源（盘中锁定，午休/收盘后再探测东财）")
+            else:
+                tips.append(
+                    f"板块走新浪备用源（东财板块被拦，{int(clist.get('boards_pause_sec') or 0)}s 后重试东财）"
+                )
+        al = clist.get("boards_alias") if isinstance(clist.get("boards_alias"), dict) else {}
+        if clist.get("boards_source") == "sina" and al.get("total"):
+            mapped = int(al.get("exact") or 0) + int(al.get("alias") or 0) + int(al.get("approx") or 0)
+            tail = f"（近似 {al.get('approx')}）" if al.get("approx") else ""
+            tips.append(f"新浪板块映射东财 {mapped}/{al.get('total')}{tail}")
+        if flips >= 3:
+            tips.append(f"板块数据源今日切换 {flips} 次（主线/提醒已减震）")
+            score -= 3
+        elif flips:
+            tips.append(f"板块数据源今日切换 {flips} 次")
         if clist.get("minute_source") == "tencent":
             tips.append(
                 f"分时走腾讯备用源（东财分时拉空，{int(clist.get('minute_pause_sec') or 0)}s 后重试东财）"

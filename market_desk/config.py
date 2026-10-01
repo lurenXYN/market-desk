@@ -454,6 +454,27 @@ NARR_EDGE_JACCARD = 0.3                 # concept-concept edge threshold
 NARR_MIN_ZT = 4                         # cluster limit-ups to be a candidate
 NARR_MIN_INDUSTRIES = 2                 # distinct industries → cross-industry narrative
 
+# Board source stickiness: once degraded to Sina inside a half-session, stay
+# there until the next break (lunch / pre-open / after close) and only switch
+# back to East Money after consecutive successful probes.
+BOARDS_RESTORE_STREAK = 2               # consecutive EM successes needed to switch back
+BOARDS_DEGRADE_STREAK = 2               # in-session EM failures before degrading (1st → reuse last cards)
+BOARDS_PROBE_RETRY_SEC = 120.0          # break-time retry cadence after a failed EM probe
+BOARDS_LUNCH_PROBE_SEC = 120.0          # lunch-break probe cadence (refresh loop is idle then)
+SOURCE_SHIFT_DAMP_SEC = 180.0           # after a source flip: no board-edge toasts / switch records
+SOURCE_SHIFT_DAMP_PREFIXES = ("buy:", "fly:", "exit:", "mainline:", "crowd:")
+SOURCE_SHIFT_REPLAY_PREFIXES = ("buy:", "fly:", "exit:")  # re-diffed vs pre-flip baseline at window end
+
+# Sina → East Money alias learning (constituent overlap, runtime self-learning).
+ALIAS_AUTO_JACCARD = 0.5                # one-to-one alias, applied
+ALIAS_APPROX_JACCARD = 0.2              # old-style Sina industry → best non-L1 EM industry (approx)
+ALIAS_CANDIDATE_JACCARD = 0.3           # concept match recorded for review only
+ALIAS_MIN_MEMBERS = 5                   # both sides need this many constituents
+ALIAS_SNAP_STALE_DAYS = 14              # refetch a board's constituents after this many days
+ALIAS_EM_COVERAGE_MIN = 0.9             # share of EM boards snapped before learning runs
+ALIAS_LEARN_SINA_PER_TICK = 8           # idle-loop budget: Sina boards per tick
+ALIAS_LEARN_EM_PER_TICK = 10            # idle-loop budget: East Money boards per tick
+
 # Ready / structure gates (centralized; was scattered magic numbers).
 ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可买入
 STOCK_WEAK_VS_ETF_PCT = 1.5        # stock pct must not lag mapped ETF by more than this

@@ -11,6 +11,7 @@ from market_desk.mainline import (
     etf_spec_for_name,
     etf_spec_soft_fallback,
     explain_mainline,
+    mainline_pool,
     match_mainline_etf,
     pick_mainline,
     theme_key,
@@ -63,8 +64,14 @@ def build_verdict(
     auction: dict[str, Any] | None = None,
     similar: dict[str, Any] | None = None,
     zb: list[dict[str, Any]] | None = None,
+    source_damping: bool = False,
 ) -> dict[str, Any]:
-    """Announce the live mainline and a matching vehicle, without a fixed ticker."""
+    """Announce the live mainline and a matching vehicle, without a fixed ticker.
+
+    With ``source_damping`` (board source just flipped), a sticky mainline that
+    vanished only because the board universe changed is treated as a rename:
+    ``sticky_since`` carries over and ``mainline.source_remap`` names the old board.
+    """
     prev_ml = ((prev or {}).get("verdict") or {}).get("mainline") or {}
     sticky = prev_ml.get("name")
     sticky_held: float | None = None
@@ -120,7 +127,11 @@ def build_verdict(
     if sticky_bias.get("ok") and sticky_bias.get("note"):
         # Defer algo note until algo_notes exists below.
         pass
-    if board_name and sticky and board_name == sticky and sticky_since_prev:
+    source_remap = ""
+    if source_damping and sticky and board_name and board_name != sticky:
+        if not any((b.get("name") or "") == sticky for b in mainline_pool(hot)):
+            source_remap = str(sticky)
+    if board_name and sticky and (board_name == sticky or source_remap) and sticky_since_prev:
         sticky_since = sticky_since_prev
     else:
         sticky_since = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -131,6 +142,8 @@ def build_verdict(
     algo_notes: list[str] = []
     if sticky_bias.get("ok") and sticky_bias.get("note"):
         algo_notes.append(str(sticky_bias["note"]))
+    if source_remap:
+        algo_notes.append(f"数据源切换·主线映射={source_remap}→{board_name}")
     if board_name and not etf:
         # Soft fallback: nearest mapped industry ETF so the desk still has a vehicle path.
         soft = etf_spec_soft_fallback(board_name)
@@ -607,6 +620,7 @@ def build_verdict(
             "leader_boards": main.get("leader_boards"),
             "lifecycle": life_stage,
             "sticky_since": sticky_since,
+            "source_remap": source_remap or None,
             "challenger": ml_state.get("challenger"),
             "theme": theme_key(board_name),
             "score": ml_why.get("score"),

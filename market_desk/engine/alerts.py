@@ -10,7 +10,7 @@ from market_desk.calendar import is_trading_day
 from market_desk.settings import setting
 from market_desk.review import build_price_touch_alerts
 from market_desk.notify import (
-    build_toast_alerts,
+    build_damped_toast_alerts,
     filter_alerts_for_policy,
     is_buy_quiet_window,
     is_pre_match_window,
@@ -102,8 +102,15 @@ class AlertsMixin:
         self,
         previous: dict[str, Any] | None,
         current: dict[str, Any],
+        *,
+        damping: bool = False,
+        replay_base: dict[str, Any] | None = None,
     ) -> None:
-        """Fire page feed + optional Windows toasts for important transitions."""
+        """Fire page feed + optional Windows toasts for important transitions.
+
+        ``damping`` / ``replay_base`` come from the board-source guard; see
+        ``build_damped_toast_alerts``.
+        """
         if not self._toast_armed:
             self._toast_armed = True
             # Still drain ops alerts on first armed round so backup fail is not lost.
@@ -118,7 +125,9 @@ class AlertsMixin:
             self._toast_latched.clear()
             self._toast_latch_date = day
         cooldown = int(setting("toast_cooldown", 180))
-        alerts = list(build_toast_alerts(previous, current))
+        alerts = build_damped_toast_alerts(
+            previous, current, damping=damping, replay_base=replay_base
+        )
         try:
             alerts.extend(build_price_touch_alerts(current))
         except Exception:

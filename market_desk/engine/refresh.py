@@ -173,6 +173,9 @@ class RefreshMixin:
                 self.snapshot["live"] = False
                 self.snapshot["polling"] = False
                 self.snapshot["trading_day"] = is_trading_day(now)
+            if not live:
+                await self._maybe_probe_boards(now)
+                await self._maybe_learn_aliases(now)
             if ma_fan_due:
                 try:
                     from market_desk.ma_fan import next_due_ma_fan_slice
@@ -218,6 +221,7 @@ class RefreshMixin:
                 yesterday_zt = yesterday_zt or []
                 self._day_flow_fresh = (trade_date_dash, list(flow_ind_d or []), list(flow_con_d or []))
                 prev_snap = self.snapshot or {}
+                src_state, src_replay = self._track_boards_source(now, prev_snap)
                 prev_flow = prev_snap.get("fund_flow") or {}
                 prev_periods = (prev_flow.get("api_raw") or {}) if isinstance(prev_flow, dict) else {}
                 # Sticky day flow: do not blank funds tab when clist cooldown returns [].
@@ -493,6 +497,7 @@ class RefreshMixin:
                     auction=auction,
                     similar=similar,
                     zb=zb,
+                    source_damping=bool(src_state.get("damping")),
                 )
                 # Refresh similar with live sticky mainline when available.
                 ml_name = str(((verdict.get("mainline") or {}).get("name")) or "")
@@ -668,6 +673,7 @@ class RefreshMixin:
                         phase,
                         temperature,
                         prev,
+                        source_damping=bool(src_state.get("damping")),
                     )
                 except Exception:
                     log.exception("session context persist failed")
@@ -727,6 +733,7 @@ class RefreshMixin:
                     "etfs": etfs,
                     "indices": indices,
                     "radar": radar,
+                    "boards_source": src_state,
                     "emotion_wave": build_emotion_wave(
                         phase=phase,
                         temperature=temperature,
@@ -840,7 +847,12 @@ class RefreshMixin:
                     self._maybe_ops_health_alert(payload)
                 except Exception:
                     log.exception("ops health alert failed")
-                self._emit_toasts(prev, payload)
+                self._emit_toasts(
+                    prev,
+                    payload,
+                    damping=bool(src_state.get("damping")),
+                    replay_base=src_replay,
+                )
                 try:
                     record_session_signals(payload)
                 except Exception:
@@ -893,8 +905,14 @@ class RefreshMixin:
         phase: str,
         temperature: int,
         previous: dict[str, Any] | None,
+        *,
+        source_damping: bool = False,
     ) -> None:
-        """Save segment conclusions and append mainline switch events."""
+        """Save segment conclusions and append mainline switch events.
+
+        No switch is recorded while a board-source flip is damped: the name
+        change is a universe swap, and a record would arm the switch guard.
+        """
         seg = verdict.get("segment") or session_segment(datetime.now(CN_TZ))
         if seg.get("key") in SEGMENT_ORDER:
             upsert_session_segment(
@@ -912,7 +930,7 @@ class RefreshMixin:
             (((previous or {}).get("verdict") or {}).get("mainline") or {}).get("name")
             or ""
         ).strip()
-        if cur_name and prev_name and cur_name != prev_name:
+        if cur_name and prev_name and cur_name != prev_name and not source_damping:
             # Sibling boards in the same theme are sticky continuity, not a switch event.
             from market_desk.mainline import same_theme
 

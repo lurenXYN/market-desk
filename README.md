@@ -303,6 +303,8 @@ market-desk/
 │   │   ├── alerts.py         # 运维告警、toast 发送、个人卖出推送
 │   │   ├── micro.py          # 微观闸门编排：09:20–09:25 竞价采样与 09:26 锁定、买卡五档行情
 │   │   ├── radar.py          # 阶段三雷达编排：拥挤度历史缓存与落库、宽基 ETF 分时基线、图谱概念成分补拉与影子记录
+│   │   ├── source_guard.py   # 板块数据源切换减震窗口（主线改名延续 / 提醒暂压与补推）+ 午休东财探测
+│   │   ├── alias_learn.py    # 盘后/休市自学新浪→东财别名：两边成分股快照（限额 + 东财被封退避）→ 重合度匹配
 │   │   ├── boards.py / watch.py / health.py / util.py  # 模块级工具：板块增强、盯盘池、健康条、时钟与并发
 │   ├── review/               # 信号落库与复盘；`from market_desk.review import X` 照旧可用
 │   │   ├── signals.py        # 信号类型、实时 tick、板块查找与补全
@@ -336,7 +338,9 @@ market-desk/
 │   ├── tencent.py            # 腾讯行情（含外内盘、五档、量比）、日线、分时
 │   ├── quotes_fallback.py    # 东财列表被拦时：主板行情改走腾讯（代码表来自新浪 / 库存）
 │   ├── board_fallback.py     # 东财板块被拦时：热点板块 / 当日资金流 / 成分股改走新浪
+│   ├── board_alias.py        # 新浪→东财板块别名：同名 / 种子别名 / 规范化名 / 成分重合度自学 + 属性板块黑名单
 │   ├── seeds/em_boards.json  # 东财板块 BK 代码表（名称 → BK），让新浪同名板块沿用 BK
+│   ├── seeds/sina_em_alias.json  # 人工核对的新浪→东财一对一别名 + 属性/地域板块黑名单
 │   ├── db/                   # SQLite，按业务拆（core / schema / users / market / positions / signals / state / lists / backup / radar …）；`from market_desk.db import X` 照旧可用
 │   ├── ma_fan/               # 均线发散：pattern 形态打分 / job 限速进度缓存 / sources 数据源 / context 主线复盘联动 / scan 扫描流程
 │   ├── assets.py             # 把 static/js/desk/*.js、static/css/desk/*.css 按文件名顺序拼成 /assets/desk.js、/assets/desk.css（ETag 缓存）

@@ -88,7 +88,7 @@ function renderMarketBoards(d, v) {
     return `<article class="board tone-${b.tone || "slate"} ${statusClass(b.status)}${favOn ? " is-fav" : ""}">
           <div class="hd">
             <div>
-              <h3>${prefix}${b.name}</h3>
+              <h3${b.sina_name ? ` title="新浪「${String(b.sina_name).replace(/"/g, "&quot;")}」→ 东财${b.alias_approx ? "（近似映射，不计拥挤度）" : ""}"` : ""}>${prefix}${b.name}${b.alias_approx ? "≈" : ""}</h3>
               <div class="meta">${b.headline || b.status || "观察"}${bk ? ` · ${bk}` : ""}</div>
             </div>
             <div>

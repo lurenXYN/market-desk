@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from market_desk.board_alias import is_blocked_sina, resolve_sina_board
 from market_desk.config import CONCEPT_JUNK_KEYWORDS, CONSTITUENT_TOP, HTTP_HEADERS
 from market_desk.filters import is_main_board, normalize_code
 from market_desk.numbers import num
@@ -52,6 +53,8 @@ _NODE_BY_NAME: dict[str, str] = {}
 _BOARDS_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 _FLOW_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _MEMBERS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+# How the last Sina board list mapped: total / exact / alias / approx / sina / blocked.
+_ALIAS_STATS: dict[str, int] = {}
 
 
 def _is_junk(name: str) -> bool:
@@ -94,10 +97,23 @@ def remember_em_boards(rows: list[dict[str, Any]]) -> None:
 
 def _board_key(name: str, node: str, kind: str) -> tuple[str, str]:
     """Map a Sina board to ``(bk, kind)``, preferring the East Money code."""
-    hit = _em_boards().get(name)
+    hit = resolve_sina_board(name, kind, _em_boards())
+    if hit:
+        return hit["bk"], hit["kind"]
+    return f"{SINA_KEY_PREFIX}{node}", kind
+
+
+def _resolve_identity(name: str, node: str, kind: str) -> dict[str, Any]:
+    """Return ``{bk, name, kind, how, approx}`` for a Sina board (``how`` = sina when unmapped)."""
+    hit = resolve_sina_board(name, kind, _em_boards())
     if hit:
         return hit
-    return f"{SINA_KEY_PREFIX}{node}", kind
+    return {"bk": f"{SINA_KEY_PREFIX}{node}", "name": name, "kind": kind, "how": "sina", "approx": False}
+
+
+def alias_stats() -> dict[str, Any]:
+    """Return how the last Sina board list mapped onto East Money boards."""
+    return dict(_ALIAS_STATS)
 
 
 def _parse_sina_board_js(text: str) -> list[list[str]]:
@@ -118,15 +134,13 @@ def _board_from_sina(parts: list[str], kind: str) -> dict[str, Any] | None:
     if len(parts) < 13:
         return None
     node, name = parts[0].strip(), parts[1].strip()
-    if not node or not name or _is_junk(name):
+    if not node or not name or _is_junk(name) or is_blocked_sina(name):
         return None
-    bk, em_kind = _board_key(name, node, kind)
-    _NODE_BY_KEY[bk.upper()] = node
-    _NODE_BY_NAME[name] = node
-    return {
-        "bk": bk,
-        "name": name,
-        "kind": em_kind,
+    ident = _resolve_identity(name, node, kind)
+    row = {
+        "bk": ident["bk"],
+        "name": ident["name"],
+        "kind": ident["kind"],
         "pct": round(num(parts[5], 0.0) or 0.0, 2),
         "amount": num(parts[7], 0.0) or 0.0,
         "up_count": 0,
@@ -135,18 +149,38 @@ def _board_from_sina(parts: list[str], kind: str) -> dict[str, Any] | None:
         "leader_code": _sina_code(parts[8]),
         "leader_pct": round(num(parts[9], 0.0) or 0.0, 2),
         "source": "sina",
+        "sina_node": node,
+        "sina_kind": kind,
     }
+    if ident["how"] != "exact" and ident["name"] != name:
+        row["sina_name"] = name
+    if ident["how"] not in ("exact", "sina"):
+        row["alias"] = ident["how"]
+    if ident.get("approx"):
+        row["alias_approx"] = True
+    return row
+
+
+def _unalias(board: dict[str, Any]) -> dict[str, Any]:
+    """Drop an alias that lost an East Money board to an earlier Sina board."""
+    out = dict(board)
+    out["bk"] = f"{SINA_KEY_PREFIX}{out['sina_node']}"
+    out["name"] = out.pop("sina_name", None) or out["name"]
+    out["kind"] = out.get("sina_kind") or out["kind"]
+    out.pop("alias", None)
+    out.pop("alias_approx", None)
+    return out
 
 
 async def fetch_hot_boards_sina(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch Sina industry + concept boards in hot-board card shape."""
-    global _BOARDS_CACHE
+    global _BOARDS_CACHE, _ALIAS_STATS
     now = time.time()
     if _BOARDS_CACHE and now - _BOARDS_CACHE[0] < BOARDS_TTL_S:
         return [dict(row) for row in _BOARDS_CACHE[1]]
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    parsed: list[dict[str, Any]] = []
     errs: list[str] = []
+    stats = {"total": 0, "exact": 0, "alias": 0, "approx": 0, "sina": 0, "blocked": 0}
     for kind, url in _SINA_LISTS:
         try:
             resp = await client.get(url, headers=HTTP_HEADERS, timeout=15.0)
@@ -157,31 +191,91 @@ async def fetch_hot_boards_sina(client: httpx.AsyncClient) -> list[dict[str, Any
             continue
         for parts in rows:
             board = _board_from_sina(parts, kind)
-            if board and board["bk"] not in seen:
-                seen.add(board["bk"])
-                out.append(board)
+            if board:
+                parsed.append(board)
+            elif len(parts) > 1 and is_blocked_sina(parts[1].strip()):
+                stats["blocked"] += 1
+    # Stronger identities claim an East Money board first; losers keep their Sina key.
+    rank = {None: 0, "seed": 1, "norm": 1, "learned": 2}
+    order = sorted(
+        range(len(parsed)),
+        key=lambda i: (3 if parsed[i].get("alias_approx") else rank.get(parsed[i].get("alias"), 2), i),
+    )
+    seen: set[str] = set()
+    kept: dict[int, dict[str, Any]] = {}
+    for i in order:
+        board = parsed[i]
+        if board["bk"] in seen and board["bk"] != f"{SINA_KEY_PREFIX}{board['sina_node']}":
+            board = _unalias(board)
+        if board["bk"] in seen:
+            continue
+        seen.add(board["bk"])
+        kept[i] = board
+    out: list[dict[str, Any]] = []
+    for i in sorted(kept):
+        board = kept[i]
+        _NODE_BY_KEY[board["bk"].upper()] = board["sina_node"]
+        _NODE_BY_NAME[board.get("sina_name") or board["name"]] = board["sina_node"]
+        _NODE_BY_NAME.setdefault(board["name"], board["sina_node"])
+        stats["total"] += 1
+        if board.get("alias_approx"):
+            stats["approx"] += 1
+        elif board.get("alias"):
+            stats["alias"] += 1
+        elif board["bk"].startswith(SINA_KEY_PREFIX):
+            stats["sina"] += 1
+        else:
+            stats["exact"] += 1
+        out.append(board)
     if not out:
         raise RuntimeError(f"sina boards empty ({'; '.join(errs) or 'no rows'})")
     _BOARDS_CACHE = (now, out)
+    _ALIAS_STATS = stats
     return [dict(row) for row in out]
+
+
+async def fetch_node_codes_sina(client: httpx.AsyncClient, node: str, *, max_pages: int = 12) -> list[str]:
+    """Return every constituent code of one Sina node (all boards, for alias overlap)."""
+    codes: list[str] = []
+    for page in range(1, max_pages + 1):
+        resp = await client.get(
+            f"{_SINA_API}/Market_Center.getHQNodeData",
+            params={"page": page, "num": 100, "sort": "symbol", "asc": 1, "node": node},
+            headers=HTTP_HEADERS,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        try:
+            rows = resp.json()
+        except ValueError:
+            rows = None
+        if not isinstance(rows, list) or not rows:
+            break
+        for item in rows:
+            code = _sina_code((item or {}).get("code") or (item or {}).get("symbol"))
+            if code:
+                codes.append(code)
+        if len(rows) < 100:
+            break
+    return list(dict.fromkeys(codes))
 
 
 def _flow_from_sina(row: dict[str, Any], kind: str) -> dict[str, Any] | None:
     """Map one Sina board money-flow row into ``_board_flow_from_diff`` shape."""
     node = str(row.get("category") or "")
     name = str(row.get("name") or "")
-    if not node or not name or _is_junk(name):
+    if not node or not name or _is_junk(name) or is_blocked_sina(name):
         return None
-    bk, em_kind = _board_key(name, node, kind)
-    _NODE_BY_KEY.setdefault(bk.upper(), node)
+    ident = _resolve_identity(name, node, kind)
+    _NODE_BY_KEY.setdefault(ident["bk"].upper(), node)
     _NODE_BY_NAME.setdefault(name, node)
     ratio = num(row.get("ratioamount"))
     pct = num(row.get("avg_changeratio"), 0.0) or 0.0
     leader_pct = num(row.get("ts_changeratio"), 0.0) or 0.0
     return {
-        "bk": bk,
-        "name": name,
-        "kind": em_kind,
+        "bk": ident["bk"],
+        "name": ident["name"],
+        "kind": ident["kind"],
         "period": "day",
         "pct": round(pct * 100.0, 2),
         "main_net": num(row.get("netamount")),

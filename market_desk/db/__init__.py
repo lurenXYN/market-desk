@@ -160,6 +160,12 @@ from market_desk.db.backup import (  # noqa: F401
     import_user_backup_payload,
     import_backup_payload,
 )
+from market_desk.db.board_alias import (  # noqa: F401
+    load_board_alias_learned,
+    load_board_members_snap,
+    replace_board_alias_learned,
+    save_board_members_snap,
+)
 from market_desk.db.radar import (  # noqa: F401
     load_board_crowding_history,
     load_crowd_shadow,
