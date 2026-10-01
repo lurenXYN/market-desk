@@ -9,14 +9,13 @@ from datetime import timedelta as _timedelta
 from typing import Any
 import httpx
 from market_desk.eastmoney import (
-    fetch_daily_closes_many,
     fetch_daily_klines_many,
     fetch_holder_stats_many,
     fetch_minute_trends_many,
 )
 from market_desk.filters import normalize_code
 from market_desk.minute_confirm import apply_minute_confirmations
-from market_desk.trend import classify_many
+from market_desk.trend import classify_many, daily_atr_pct
 from market_desk.verdict import apply_stock_daily_trends, mark_pullback_entries
 
 from market_desk.engine.watch import _attach_holders_to_items
@@ -41,12 +40,17 @@ class RecommendMixin:
         codes: list[str],
         trade_date: str,
     ) -> tuple[dict[str, list[float]], dict[str, bool]]:
-        """Resolve daily closes once per code per trade date (shared day cache)."""
+        """Resolve daily closes once per code per trade date (shared day cache).
+
+        The same fetch also yields a completed-session daily ATR% per code
+        (``_kline_atr``) so sell bands can scale on real volatility.
+        """
         day = str(trade_date or "")[:10]
         if day and day != self._kline_day:
             self._kline_day = day
             self._kline_cache.clear()
             self._kline_ok.clear()
+            self._kline_atr.clear()
         uniq = list(
             dict.fromkeys(
                 normalize_code(c) for c in codes if normalize_code(c)
@@ -54,11 +58,21 @@ class RecommendMixin:
         )
         need = [c for c in uniq if c not in self._kline_cache]
         if need:
-            fetched = await fetch_daily_closes_many(client, need, limit=60)
+            fetched = await fetch_daily_klines_many(client, need, limit=60)
+            day_key = day.replace("-", "")
             for code in need:
-                closes = list(fetched.get(code) or [])
+                dates, closes, ohlc = fetched.get(code) or ([], [], {})
+                closes = list(closes or [])
                 self._kline_cache[code] = closes
                 self._kline_ok[code] = bool(closes)
+                highs = list((ohlc or {}).get("high") or [])
+                lows = list((ohlc or {}).get("low") or [])
+                done = len(closes)
+                if done and dates and str(dates[-1]).replace("-", "")[:8] == day_key:
+                    done -= 1
+                self._kline_atr[code] = daily_atr_pct(
+                    highs[:done], lows[:done], closes[:done]
+                )
         closes_by_code = {c: list(self._kline_cache.get(c) or []) for c in uniq}
         ok_by_code = {c: bool(self._kline_ok.get(c, bool(closes_by_code.get(c)))) for c in uniq}
         return closes_by_code, ok_by_code
@@ -73,7 +87,10 @@ class RecommendMixin:
                 continue
             closes[code] = list(self._kline_cache.get(code) or [])
             ok[code] = bool(self._kline_ok.get(code, bool(closes[code])))
-        return classify_many(closes, ok)
+        out = classify_many(closes, ok)
+        for code, trend in out.items():
+            trend["atr_pct"] = self._kline_atr.get(code)
+        return out
 
     async def _apply_recommend_trends(
         self,

@@ -10,17 +10,16 @@ import httpx
 
 from market_desk.calendar import is_trading_day
 from market_desk.config import (
+    ALIAS_EM_BACKOFF_SEC,
     ALIAS_EM_COVERAGE_MIN,
     ALIAS_LEARN_EM_PER_TICK,
     ALIAS_LEARN_SINA_PER_TICK,
+    ALIAS_LEARN_TICK_SEC,
     ALIAS_SNAP_STALE_DAYS,
     CROWD_ABS_EXEMPT,
 )
 
 log = logging.getLogger("market_desk")
-
-_TICK_SEC = 55.0
-_EM_BACKOFF_SEC = 1800.0
 
 
 def _alias_window(now: datetime) -> bool:
@@ -54,7 +53,7 @@ class AliasLearnMixin:
         if not _alias_window(now):
             return
         now_ts = now.timestamp()
-        if now_ts - self._alias_tick_at < _TICK_SEC:
+        if now_ts - self._alias_tick_at < float(ALIAS_LEARN_TICK_SEC):
             return
         self._alias_tick_at = now_ts
         try:
@@ -93,7 +92,7 @@ class AliasLearnMixin:
         """Snapshot East Money boards within budget; back off when East Money is blocked."""
         from market_desk import board_fallback as bf
         from market_desk.db import load_board_members_snap, save_board_members_snap
-        from market_desk.eastmoney import fetch_board_codes_em
+        from market_desk.eastmoney import blocked_families, fetch_board_codes_em
 
         boards = {bk: (name, kind) for name, (bk, kind) in bf._em_boards().items() if name not in CROWD_ABS_EXEMPT}
         snaps = load_board_members_snap("em", with_codes=False)
@@ -102,14 +101,21 @@ class AliasLearnMixin:
         todo = [bk for bk in boards if bk not in fresh]
         if not todo or now.timestamp() < self._alias_em_backoff_until:
             return len(todo)
+        if any(f.endswith("/clist") for f in blocked_families(within_sec=900.0)):
+            self._alias_em_backoff_until = now.timestamp() + float(ALIAS_EM_BACKOFF_SEC)
+            log.info("alias learning: East Money clist blocked, backing off %.0fm", ALIAS_EM_BACKOFF_SEC / 60)
+            return len(todo)
         empties: list[str] = []
         for bk in todo[: int(ALIAS_LEARN_EM_PER_TICK)]:
             codes = await fetch_board_codes_em(client, bk)
             if not codes:
                 empties.append(bk)
                 if len(empties) >= 2:
-                    self._alias_em_backoff_until = now.timestamp() + _EM_BACKOFF_SEC
-                    log.info("alias learning: East Money board members empty, backing off 30m")
+                    self._alias_em_backoff_until = now.timestamp() + float(ALIAS_EM_BACKOFF_SEC)
+                    log.info(
+                        "alias learning: East Money board members empty, backing off %.0fm",
+                        ALIAS_EM_BACKOFF_SEC / 60,
+                    )
                     break
                 continue
             for empty_bk in empties:

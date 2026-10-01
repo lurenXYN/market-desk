@@ -78,6 +78,22 @@ chmod +x start.sh deploy/install-systemd.sh
 - 依赖：Python 3.11+，见 `requirements.txt`（`start.bat` / `start.sh` 会建 `.venv` 并安装）
 - Linux 无 Windows 托盘通知；页面内 toast 仍可用。长期运行用 `deploy/market-desk.service`
 
+### 运维排查接口（管理员登录后浏览器直接打开）
+
+| 接口 | 用途 |
+|---|---|
+| `/api/ops/check` | 一页自检：库完整性、快照新鲜度、东财 clist / 行情源 / 板块源、东财接口可用性、自动备份、新闻雷达 |
+| `/api/ops/em-avail?days=7` | 东财接口可用性时间线（`days` 1–30），判断东财是按时段还是按请求量拦截 |
+| `/api/ops/logs` | 最近运行日志 |
+
+`/api/ops/em-avail` 返回字段：
+
+- `by_hour`：多天数据按钟点（0–23 点）× 接口汇总的成功 / 失败 / 空数据次数与 `fail_rate`。**失败集中在固定钟点 → 有时段规则；各钟点都有、且跟请求量走 → 按 IP 限流**
+- `events`：每个接口「被拦（连续 3 次失败）/ 恢复（首次成功）」的时刻
+- `hourly`：逐天逐小时原始计数（含最后一次错误文本）；`live`：当前进程内各接口状态与今日累计
+- 接口名形如 `push2/clist`（板块 / 行情列表）、`push2his/kline`（日 K）、`push2delay/trends`（分时）、`push2/ulist`、`push2ex`（涨停池）、`datacenter-web`（数据中心 / 龙虎榜）
+- 打开时会先把内存里未落库的计数写入，数据是实时的；历史保留 30 天（表 `em_avail_hourly` / `em_avail_event`）
+
 ## 技术栈
 
 - 后端：FastAPI + uvicorn + httpx + SQLite
@@ -180,6 +196,8 @@ python -m unittest discover -s tests -v
 薄确认主线（确认中且涨停≤2）：个股现买须跨板块≥2 **或**同主题≥1。
 
 复盘闸门归因累计同日 `confirm_fail_hist`；假杀仅计终态仍未 ready 的信号。卖点闭环按 ETF / 个股分桶（n≥10）微调止盈回撤。
+
+闸门净价值审计（复盘页折叠面板，`/api/review/counterfactual`）：只审计出卡后真的到过计划价的买卡，被拦的按计划价模拟成交（次日止损、一字跌停顺延、扣往返 0.25%、持有 3 日），结果按 1/k 分摊给当时全部拦截原因，给出功臣 / 损耗 / 随大盘结论；默认剔除有前视偏差的「早盘推断」档。只显示，不改闸门。
 
 ### 6. 推荐买入价
 
@@ -303,8 +321,9 @@ market-desk/
 │   │   ├── alerts.py         # 运维告警、toast 发送、个人卖出推送
 │   │   ├── micro.py          # 微观闸门编排：09:20–09:25 竞价采样与 09:26 锁定、买卡五档行情
 │   │   ├── radar.py          # 阶段三雷达编排：拥挤度历史缓存与落库、宽基 ETF 分时基线、图谱概念成分补拉与影子记录
-│   │   ├── source_guard.py   # 板块数据源切换减震窗口（主线改名延续 / 提醒暂压与补推）+ 午休东财探测
+│   │   ├── source_guard.py   # 板块数据源切换减震窗口（主线改名延续 / 提醒暂压与补推）+ 午休东财探测 + 东财可用性计数定时落库
 │   │   ├── alias_learn.py    # 盘后/休市自学新浪→东财别名：两边成分股快照（限额 + 东财被封退避）→ 重合度匹配
+│   │   ├── counterfactual.py # 闸门净价值审计编排：读买卡 + 复盘日线缓存 → /api/review/counterfactual（600 秒缓存）
 │   │   ├── boards.py / watch.py / health.py / util.py  # 模块级工具：板块增强、盯盘池、健康条、时钟与并发
 │   ├── review/               # 信号落库与复盘；`from market_desk.review import X` 照旧可用
 │   │   ├── signals.py        # 信号类型、实时 tick、板块查找与补全
@@ -315,6 +334,7 @@ market-desk/
 │   │   ├── bias.py           # 卖出复盘偏置、卖飞板、买入闸门偏置（带缓存）
 │   │   ├── alerts.py         # 价位触达、追价成本、ready 监控、复盘时段提示
 │   │   └── payload.py        # 实时标注、代码历史、复盘页载荷
+│   ├── counterfactual/       # What-If 闸门净价值审计：trace 逐次到价/被拦原因（payload.cf）· sim 计划价模拟成交（止损/一字跌停/成本）· audit 分摊归因与结论
 │   ├── adapt/                # 自适应软反馈（context / gates / sizing / sell_learn / tune / bundle）
 │   ├── elliott/              # 大盘艾略特多情景（catalog / pivots / indicators / fit / timing / chart / board）
 │   ├── sentiment.py          # 温度 / 相位 / 板块状态
@@ -327,12 +347,13 @@ market-desk/
 │   │   ├── branches.py       # 支线 / 联动分支推荐
 │   │   ├── desk.py           # 自选试探、龙头、独立人气、自选作战计划
 │   │   ├── sell.py           # 单仓卖点：止损、保本盾、止盈分层、板块塌陷
-│   │   ├── bands.py          # 出场带宽（主升/退潮/标准 + ATR 自适应）
+│   │   ├── sell_crack.py     # 板块塌陷判定（龙头炸板回撤 / 连板核心转弱 / 成分跳水）
+│   │   ├── bands.py          # 出场带宽（主升/退潮/标准 + 日线 ATR 自适应）
 │   │   ├── tags.py           # 卖出标签、下一步动作、持仓提示合并
 │   │   ├── sell_advice.py    # 卖出建议汇总与买卖冲突调和
 │   │   ├── positions.py      # 持仓盯市、当日盈亏、风险总览、快照差异
 │   │   └── common.py         # 价格/格式化/确认标记等共享小工具
-│   ├── eastmoney/            # 东财客户端：client 退避与翻页 / quotes 行情与涨停池 / boards 板块与资金流 / bars 日线 / minute 分时 / meta 元数据与股东 / status 运行状态
+│   ├── eastmoney/            # 东财客户端：client 退避与翻页 / quotes 行情与涨停池 / boards 板块与资金流 / bars 日线 / minute 分时 / meta 元数据与股东 / status 运行状态 / avail 请求统一出口（push2 节流 + 按小时成败计数 + 被拦/恢复时刻，GET /api/ops/em-avail 查看）
 │   ├── microstructure/       # 订单流微观闸门：auction_alpha 竞价预期差 / absorption 主动买盘承接 / slippage 冲击成本
 │   ├── radar/                # 阶段三雷达：crowding 板块拥挤度（极端硬禁开）/ etf_pulse 宽基托底脉冲（只提示）/ narrative 共振图谱（影子）
 │   ├── tencent.py            # 腾讯行情（含外内盘、五档、量比）、日线、分时
@@ -360,4 +381,4 @@ market-desk/
 - 仓位与日级快照仅存本机 `data/desk.db`
 - 重点变化（可买入、卖出建议、主线切换、相位恐慌/高潮）会打 **Windows 右下角通知**；`config.TOAST_ENABLED` 可关，同键约 180 秒冷却
 - 公开行情可能延迟或限流；盘中刷新过快有被封风险，可按需改 `SESSION_REFRESH_SECONDS`
-- 界面术语旁的 `?` 会弹出含义与近似算法（见 `glossary.py`）
+- 界面术语旁的 `?` 会弹出含义与近似算法（见 `glossary/`：desk / review / session / market 四个子模块，新词条加到主题对应的文件，并在 `static/js/desk/14-glossary-boot.js` 的分组里登记）

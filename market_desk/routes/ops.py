@@ -213,6 +213,21 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
                 ),
             }
         )
+        blocked = clist.get("em_blocked") or []
+        today = clist.get("em_today") or {}
+        ok_n = sum(int(v.get("ok") or 0) for v in today.values())
+        fail_n = sum(int(v.get("fail") or 0) for v in today.values())
+        checks.append(
+            {
+                "id": "em_avail",
+                "title": "东财接口可用性",
+                "level": "warn" if blocked else "ok",
+                "detail": (
+                    ("被拦：" + "、".join(f"{b['family']}@{b['since']}" for b in blocked) + " · " if blocked else "")
+                    + f"今日请求 成功{ok_n}/失败{fail_n} · 按小时明细 GET /api/ops/em-avail"
+                ),
+            }
+        )
     except Exception as exc:
         checks.append(
             {
@@ -287,6 +302,28 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
         "checks": checks,
         "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
         "pid": os.getpid(),
+    }
+
+
+@router.get("/api/ops/em-avail")
+def ops_em_avail(
+    days: int = Query(default=7, ge=1, le=30),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """East Money availability timeline: hourly counters, hour-of-day folding, transitions."""
+    del user
+    from market_desk.db import load_em_avail, summarize_em_avail
+    from market_desk.eastmoney import avail_state
+
+    engine._flush_em_avail(force=True)
+    data = load_em_avail(days)
+    return {
+        "ok": True,
+        "days": days,
+        "live": avail_state(),
+        "by_hour": summarize_em_avail(data["hourly"]),
+        "events": data["events"],
+        "hourly": data["hourly"],
     }
 
 

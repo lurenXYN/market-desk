@@ -61,7 +61,8 @@ function renderDeskRadar(d) {
   if (src.damping) {
     const tip = `板块数据源 ${srcZh(src.shift_from)} → ${srcZh(src.source)}\n减震期内：主线切换不记账；买入/主线/拥挤提醒暂停，结束后买卖信号仍成立才补推`;
     bits.push(
-      `<span class="radar-chip src-damp" title="${attr(tip)}">源切换减震 ${src.damp_left || 0}s</span>`
+      `<span class="radar-chip src-damp" title="${attr(tip)}">源切换减震 ${src.damp_left || 0}s`
+      + `<button type="button" class="q" data-term="板块源减震">?</button></span>`
     );
   } else if (src.source === "sina" || (src.switches || 0) > 0) {
     const flips = (src.log || []).map((r) => `${r.at} → ${srcZh(r.to)}`).join("\n");
@@ -71,7 +72,8 @@ function renderDeskRadar(d) {
       : (al.em_cov != null ? `\n别名自学中：东财成分覆盖 ${Math.round((al.em_cov || 0) * 100)}%` : "");
     const tip = `${src.locked ? "盘中锁定新浪：午休 / 收盘后再探测东财（连续 2 次成功才切回）\n" : ""}今日切换 ${src.switches || 0} 次${flips ? "\n" + flips : ""}${learn}`;
     bits.push(
-      `<span class="radar-chip meta" title="${attr(tip)}">板块源·${srcZh(src.source)}${src.locked ? "(锁定)" : ""}${src.switches ? " 切" + src.switches : ""}</span>`
+      `<span class="radar-chip meta" title="${attr(tip)}">板块源·${srcZh(src.source)}${src.locked ? "(锁定)" : ""}${src.switches ? " 切" + src.switches : ""}`
+      + `<button type="button" class="q" data-term="${src.source === "sina" ? "新浪板块别名" : "板块源减震"}">?</button></span>`
     );
   }
   const stats = narr.stats || {};

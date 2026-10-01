@@ -9,6 +9,7 @@ from market_desk.config import HTTP_HEADERS
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
 
+from market_desk.eastmoney.avail import em_get
 from market_desk.eastmoney.bars import _secid
 
 
@@ -42,7 +43,8 @@ async def fetch_stock_meta_many(
         hosts = ("push2.eastmoney.com", "push2delay.eastmoney.com") * 2
         for attempt, host in enumerate(hosts):
             try:
-                resp = await client.get(
+                resp = await em_get(
+                    client,
                     f"https://{host}/api/qt/ulist.np/get",
                     params=params,
                     headers=HTTP_HEADERS,
@@ -168,7 +170,8 @@ async def fetch_holder_stats_many(
             payload: dict[str, Any] = {}
             for attempt in range(3):
                 try:
-                    resp = await client.get(
+                    resp = await em_get(
+                        client,
                         url,
                         params=params,
                         headers=headers,

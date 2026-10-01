@@ -174,6 +174,10 @@ def _build_health(
             score -= 3
         elif flips:
             tips.append(f"板块数据源今日切换 {flips} 次")
+        blocked = [b for b in (clist.get("em_blocked") or []) if isinstance(b, dict)]
+        if blocked:
+            bits = [f"{b.get('family')}（{b.get('since') or '—'}起）" for b in blocked[:3]]
+            tips.append("东财接口被拦：" + "、".join(bits) + "（多为按 IP 限流，已自动走备用源）")
         if clist.get("minute_source") == "tencent":
             tips.append(
                 f"分时走腾讯备用源（东财分时拉空，{int(clist.get('minute_pause_sec') or 0)}s 后重试东财）"

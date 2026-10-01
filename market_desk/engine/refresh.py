@@ -176,6 +176,7 @@ class RefreshMixin:
             if not live:
                 await self._maybe_probe_boards(now)
                 await self._maybe_learn_aliases(now)
+            self._flush_em_avail(now)
             if ma_fan_due:
                 try:
                     from market_desk.ma_fan import next_due_ma_fan_slice

@@ -74,7 +74,7 @@ from market_desk.eastmoney.boards import (  # noqa: F401
     fetch_board_codes_em,
     _board_members_clist,
     _BOARD_MEMBERS_CACHE,
-    _BOARD_MEMBERS_TTL_SEC,
+    _members_ttl,
 )
 from market_desk.eastmoney.bars import (  # noqa: F401
     _secid,
@@ -115,4 +115,9 @@ from market_desk.eastmoney.meta import (  # noqa: F401
 )
 from market_desk.eastmoney.status import (  # noqa: F401
     clist_runtime_status,
+)
+from market_desk.eastmoney.avail import (  # noqa: F401
+    avail_state,
+    blocked_families,
+    em_get,
 )

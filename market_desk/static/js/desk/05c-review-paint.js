@@ -286,6 +286,19 @@ function paintReview(payload) {
           `${s.label} 回落${s.hit_rate == null ? "—" : s.hit_rate + "%"}/卖飞${s.fly_n || 0}（n=${s.n}）`
         ).join(" · "))
       : "";
+    // avg_saved_d3 > 0 = price fell within 3 sessions after the exit (drawdown avoided).
+    const ruleBit = (s) => {
+      const saved = s.avg_saved_d3 == null ? "—" : `${s.avg_saved_d3 > 0 ? "+" : ""}${s.avg_saved_d3}%`;
+      const dim = (s.n || 0) < 5 ? ' style="opacity:.55"' : "";
+      return `<span${dim}>${s.label} 回落${s.hit_rate == null ? "—" : s.hit_rate + "%"}`
+        + `/卖飞${s.fly_rate == null ? "—" : s.fly_rate + "%"}/三日省${saved}（n=${s.n}）</span>`;
+    };
+    const byRule = fly.by_rule || [];
+    const ruleLine = byRule.length
+      ? `<button type="button" class="q" data-term="卖点类型复盘">?</button> 按卖点类型 ` + byRule.map(ruleBit).join(" · ")
+      : "";
+    const byAtr = fly.by_atr || [];
+    const atrLine = byAtr.length > 1 ? `按波动档 ` + byAtr.map(ruleBit).join(" · ") : "";
     const recentHtml = recent.length
       ? (`<ul class="fly-recent">` + recent.map((r) => {
           const lab = r.outcome_label || "";
@@ -313,6 +326,8 @@ function paintReview(payload) {
       + `<div class="fly-verdict"><b>${fly.verdict || "—"}</b> · <span class="meta">${fly.note || ""}</span></div>`
       + `<div class="fly-chips">${chips}</div>`
       + (srcLine ? `<div class="fly-src">${srcLine}</div>` : "")
+      + (ruleLine ? `<div class="fly-src">${ruleLine}</div>` : "")
+      + (atrLine ? `<div class="fly-src">${atrLine}</div>` : "")
       + recentHtml;
   }
   const type = (document.getElementById("revType") || {}).value || "";

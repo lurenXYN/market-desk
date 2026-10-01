@@ -9,6 +9,8 @@ from market_desk.config import EASTMONEY_UT, HTTP_HEADERS
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
 
+from market_desk.eastmoney.avail import em_get
+
 
 def _secid(code: str) -> str:
     """Map a six-digit code to an East Money secid."""
@@ -49,7 +51,7 @@ async def _fetch_daily_bars_eastmoney(
     for host in hosts:
         url = f"https://{host}{path}"
         try:
-            resp = await client.get(url, headers=HTTP_HEADERS, timeout=6.0)
+            resp = await em_get(client, url, headers=HTTP_HEADERS, timeout=6.0)
             resp.raise_for_status()
             payload = resp.json()
         except Exception:

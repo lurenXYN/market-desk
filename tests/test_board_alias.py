@@ -174,8 +174,10 @@ def test_em_snapshot_backs_off_after_two_empties(monkeypatch, tmp_path) -> None:
         return list(answers[bk])
 
     import market_desk.eastmoney as em
+    from market_desk.engine import alias_learn
 
     monkeypatch.setattr(em, "fetch_board_codes_em", fake_codes)
+    monkeypatch.setattr(alias_learn, "ALIAS_LEARN_EM_PER_TICK", 4)
     g = _Learner()
     now = datetime(2026, 10, 3, 20, 0, 0)
     todo = asyncio.run(g._alias_snap_em(None, now))
@@ -186,3 +188,26 @@ def test_em_snapshot_backs_off_after_two_empties(monkeypatch, tmp_path) -> None:
     assert g._alias_em_backoff_until > now.timestamp(), "two empties in a row → back off"
     assert asyncio.run(g._alias_snap_em(None, now)) == 2
     assert set(desk_db.load_board_members_snap("em", with_codes=False)) == {"BK0001", "BK0002"}
+
+
+def test_em_snapshot_skips_when_clist_recently_blocked(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(desk_db, "DB_PATH", tmp_path / "desk.db")
+    monkeypatch.setattr(desk_db, "DATA_DIR", tmp_path)
+    desk_db.init_db()
+    monkeypatch.setattr(bf, "_EM_BY_NAME", {"甲": ("BK0001", "concept")})
+    calls: list[str] = []
+
+    async def fake_codes(_client, bk):
+        calls.append(bk)
+        return ["000001"]
+
+    import market_desk.eastmoney as em
+    from market_desk.eastmoney import avail
+
+    monkeypatch.setattr(em, "fetch_board_codes_em", fake_codes)
+    for _ in range(3):
+        avail.note("push2/clist", False, "RemoteProtocolError")
+    g = _Learner()
+    now = datetime(2026, 10, 3, 20, 0, 0)
+    assert asyncio.run(g._alias_snap_em(None, now)) == 1
+    assert calls == [] and g._alias_em_backoff_until > now.timestamp(), "blocked edge → no crawl"

@@ -10,11 +10,13 @@ from market_desk.mainline import mainline_score, same_theme
 from market_desk.verdict.common import (
     _fmt_pct,
     _is_etf_code,
+    _lookup_hot_board,
     _pool_codes_from_board,
     _px,
     _theme_entry,
 )
 from market_desk.verdict.bands import _exit_band_params
+from market_desk.verdict.sell_crack import detect_sector_crack
 from market_desk.verdict.branches import _recommend_codes
 from market_desk.verdict.tags import (
     _enrich_sell_next_action,
@@ -72,6 +74,9 @@ def build_sell_themes(
                 rec_codes=_recommend_codes(recommend),
                 score=mainline_score(main) if main else None,
                 main_yi=main.get("main_yi"),
+                board=main
+                if (main.get("pool") or main.get("members"))
+                else _lookup_hot_board(hot, name=primary, bk=main.get("bk")),
             )
         )
 
@@ -89,6 +94,7 @@ def build_sell_themes(
                 rec_codes=_recommend_codes(side_recommend),
                 score=side.get("score"),
                 main_yi=side.get("main_yi"),
+                board=_lookup_hot_board(hot, name=side_name, bk=side.get("bk")),
             )
         )
 
@@ -106,6 +112,7 @@ def build_sell_themes(
                 rec_codes=_recommend_codes(link_recommend),
                 score=link.get("score"),
                 main_yi=link.get("main_yi"),
+                board=_lookup_hot_board(hot, name=link_name, bk=link.get("bk")),
             )
         )
 
@@ -138,6 +145,7 @@ def build_sell_themes(
                 carrier_code=None,
                 score=round(sc, 1),
                 main_yi=board.get("main_yi"),
+                board=board,
             )
         )
 
@@ -461,9 +469,13 @@ def _sell_item(
     theme_role = str(theme_ctx.get("role") or "")
 
     amp_val = None
+    amp_src = "daily"
     try:
-        if high not in (None, 0) and low not in (None, 0) and buy > 0:
+        if trend.get("atr_pct") is not None and float(trend["atr_pct"]) > 0:
+            amp_val = float(trend["atr_pct"])
+        elif high not in (None, 0) and low not in (None, 0) and buy > 0:
             amp_val = (float(high) - float(low)) / buy * 100.0
+            amp_src = "intraday"
     except (TypeError, ValueError, ZeroDivisionError):
         amp_val = None
 
@@ -481,6 +493,7 @@ def _sell_item(
         rel_strong=rel_strong or panic_rel_strong,
         segment_key=str((verdict.get("segment") or {}).get("key") or ""),
         amplitude=amp_val,
+        amplitude_source=amp_src,
     )
     # Similar-day sell urgency + theme fund outflow: nudge soft floors earlier.
     sell_gate = str((similar or {}).get("sell_gate") or "")
@@ -569,28 +582,61 @@ def _sell_item(
     )
 
     be_trigger_pnl = float(SELL_BREAKEVEN_ETF_TRIGGER_PNL if etf else SELL_BREAKEVEN_TRIGGER_PNL)
-    peaked_enough = hold_peak >= buy * (1.0 + be_trigger_pnl / 100.0)
+    be_arm_px = buy * (1.0 + be_trigger_pnl / 100.0)
+    peaked_enough = hold_peak >= be_arm_px
     be_stop_px = buy * (1.0 + float(SELL_BREAKEVEN_BUFFER_PCT) / 100.0)
+    in_stop_band = last is not None and (
+        float(last) <= stop or (pnl_pct is not None and pnl_pct <= pnl_stop)
+    )
     breakeven_triggered = False
-    if not t1_locked and peaked_enough and last is not None and float(last) <= be_stop_px:
-        # Armed break-even stop
+    breakeven_gap = False
+    # Below the stop band the stop branch (MA20 soften / hard clear) owns the exit.
+    if (
+        not t1_locked
+        and peaked_enough
+        and last is not None
+        and float(last) <= be_stop_px
+        and not in_stop_band
+    ):
         breakeven_triggered = True
+        open_px = row.get("open")
+        try:
+            # Gapped through the line on a prior-day peak: the shield never had a fill.
+            breakeven_gap = (
+                open_px not in (None, "", 0)
+                and float(open_px) <= be_stop_px
+                and (high in (None, 0) or float(high) < be_arm_px)
+            )
+        except (TypeError, ValueError):
+            breakeven_gap = False
 
     if last is None:
         role_label = "待行情"
         reason_parts.append("尚无现价，先不判卖点")
+    elif breakeven_triggered and breakeven_gap:
+        urgency = "trim"
+        ready = True
+        exit_mode = "half"
+        role_label = "跳空破保本·先减半"
+        sell_price = float(last)
+        sell_pct = 50
+        reason_parts.append(
+            f"前高浮盈已回吐，今日开盘 {float(row.get('open')):.{digits}f} 直接跳空到保本线 "
+            f"{be_stop_px:.{digits}f} 下方（浮盈 {_fmt_pct(pnl_pct)}），先减半（开盘缓冲窗内看分时再定），余仓交给止损带"
+        )
     elif breakeven_triggered:
         urgency = "stop"
         ready = True
         exit_mode = "clear"
-        role_label = "保本防守清仓"
+        at_cost = float(last) >= buy
+        role_label = "保本防守清仓" if at_cost else "回落防守清仓"
         sell_price = float(last)
         sell_pct = 100
         reason_parts.append(
             f"浮盈冲高回落触及保本线 {be_stop_px:.{digits}f}（+{float(SELL_BREAKEVEN_BUFFER_PCT):.1f}%覆盖规费），"
-            f"锁定本金杜绝盈利变大亏"
+            + ("锁定本金杜绝盈利变大亏" if at_cost else f"现价已在成本下方（{_fmt_pct(pnl_pct)}），清仓防扩大")
         )
-    elif float(last) <= stop or (pnl_pct is not None and pnl_pct <= pnl_stop):
+    elif in_stop_band:
         deep_pnl = pnl_pct is not None and pnl_pct <= pnl_stop
         # Soften on MA20 hold unless day-once trend is clearly down (do not require trend.up).
         above_ma20 = ma20 is not None and float(last) > float(ma20)
@@ -848,16 +894,9 @@ def _sell_item(
             sell_price = float(last)
             sell_pct = 50
             reason_parts.append(f"生命周期偏衰退且浮盈 {_fmt_pct(pnl_pct)}，先减仓防守")
-    # 2. Sector De-sync & Crack Alert: Dragon blow-off or multiple members diving
-    # prompts a half-trim to front-run sector collapse cascades.
-    from market_desk.config import (
-        SELL_SECTOR_CRACK_DIVERGENT_DOWN_N,
-        SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT,
-        SELL_SECTOR_CRACK_DRAGON_BLOW_DROP,
-        SELL_SECTOR_CRACK_ENABLED,
-    )
+    # 2. Sector crack: leader blow-off or members diving → half-trim ahead of a cascade.
+    from market_desk.config import SELL_SECTOR_CRACK_ENABLED
 
-    sector_crack = False
     sector_crack_reason = ""
     if (
         SELL_SECTOR_CRACK_ENABLED
@@ -867,38 +906,13 @@ def _sell_item(
         and last is not None
         and not rel_strong
     ):
-        matched_theme = None
-        for t in verdict.get("sell_themes") or []:
-            if str(t.get("name") or "") == theme_label:
-                matched_theme = t
-                break
-        if matched_theme:
-            # Check dragon blow-off (e.g. leader failed / dropped hard from high)
-            ld_pct = matched_theme.get("leader_pct")
-            ld_pb = matched_theme.get("leader_pullback")
-            if ld_pb is not None and float(ld_pb) >= abs(float(SELL_SECTOR_CRACK_DRAGON_BLOW_DROP)):
-                sector_crack = True
-                sector_crack_reason = f"板块核心龙头炸板回撤 {float(ld_pb):.1f}%"
-            elif ld_pct is not None and float(ld_pct) <= float(SELL_SECTOR_CRACK_DRAGON_BLOW_DROP):
-                # Leader in the negative
-                if matched_theme.get("leader_boards") and int(matched_theme.get("leader_boards") or 0) >= 2:
-                    sector_crack = True
-                    sector_crack_reason = f"板块连板核心走弱（涨跌幅 {float(ld_pct):.1f}%）"
+        matched_theme = next(
+            (t for t in verdict.get("sell_themes") or [] if str(t.get("name") or "") == theme_label),
+            None,
+        )
+        sector_crack_reason = detect_sector_crack(matched_theme, code)
 
-            # Check multiple members diving
-            pool = matched_theme.get("pool") or matched_theme.get("members") or []
-            diving_n = 0
-            for m in pool:
-                m_pct = m.get("pct")
-                if m_pct is not None and float(m_pct) <= float(SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT):
-                    diving_n += 1
-            if diving_n >= int(SELL_SECTOR_CRACK_DIVERGENT_DOWN_N):
-                sector_crack = True
-                sector_crack_reason = (
-                    f"板块内有 {diving_n} 只个股跌幅≥{abs(float(SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT)):.0f}%跳水"
-                )
-
-    if sector_crack and not ready:
+    if sector_crack_reason and not ready:
         urgency = "trim"
         ready = True
         exit_mode = "half"
@@ -1207,6 +1221,8 @@ def _sell_item(
         "band_mode": band["mode"],
         "band_mode_zh": band["mode_zh"],
         "atr_band_mode": band.get("atr_band_mode", "normal"),
+        "atr_amp": band.get("atr_amp"),
+        "atr_source": band.get("atr_source"),
         "stop_pct": stop_pct,
         "pb_light": round(pb_light, 2),
         "pb_deep": round(pb_deep, 2),

@@ -20,6 +20,7 @@ def _exit_band_params(
     rel_strong: bool = False,
     segment_key: str | None = None,
     amplitude: float | None = None,
+    amplitude_source: str = "daily",
 ) -> dict[str, Any]:
     """Pick stop / pullback / take-profit bands from multi-module context.
 
@@ -32,9 +33,13 @@ def _exit_band_params(
     Optional ``sell_bias`` from review sell outcomes scales pb/take/pocket.
     ``rel_strong`` (day green / beats index) blocks panic-alone tight bands.
     Session ``segment_key`` soft-widens open / soft-tightens afternoon.
-    ``amplitude`` adjusts ATR-based exit bandwidth for high/low beta assets.
+    ``amplitude`` (volatility %) adjusts exit bandwidth for high/low beta assets;
+    ``amplitude_source`` is ``daily`` (14-day ATR%, may widen or tighten) or
+    ``intraday`` (today's range, may only widen). ETFs use their own thresholds.
     """
     from market_desk.config import (
+        SELL_ATR_ETF_HIGH_BETA_AMP,
+        SELL_ATR_ETF_LOW_BETA_AMP,
         SELL_ATR_EXIT_ENABLED,
         SELL_ATR_HIGH_BETA_AMP,
         SELL_ATR_HIGH_BETA_MULT,
@@ -132,15 +137,19 @@ def _exit_band_params(
     except Exception:
         seg_info = {}
     atr_band_mode = "normal"
+    daily_src = amplitude_source == "daily"
+    hi_amp = float(SELL_ATR_ETF_HIGH_BETA_AMP if etf else SELL_ATR_HIGH_BETA_AMP)
+    lo_amp = float(SELL_ATR_ETF_LOW_BETA_AMP if etf else SELL_ATR_LOW_BETA_AMP)
     if SELL_ATR_EXIT_ENABLED and amplitude is not None and amplitude > 0:
-        if amplitude >= float(SELL_ATR_HIGH_BETA_AMP):
+        if amplitude >= hi_amp:
             atr_band_mode = "high_beta"
             atr_mult = float(SELL_ATR_HIGH_BETA_MULT)
             for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
                 band[key] = float(band[key]) * atr_mult
             band["pnl_stop"] = float(band["pnl_stop"]) * 1.15
-            mode_zh = f"{mode_zh}·高波动ATR"
-        elif amplitude <= float(SELL_ATR_LOW_BETA_AMP):
+            mode_zh = f"{mode_zh}·{'高波动ATR' if daily_src else '日内高波动'}"
+        # Intraday range only grows through the session, so it may widen but never tighten.
+        elif daily_src and amplitude <= lo_amp:
             atr_band_mode = "low_beta"
             atr_mult = float(SELL_ATR_LOW_BETA_MULT)
             for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
@@ -148,6 +157,8 @@ def _exit_band_params(
             band["pnl_stop"] = float(band["pnl_stop"]) * 0.85
             mode_zh = f"{mode_zh}·低波动ATR"
     band["atr_band_mode"] = atr_band_mode
+    band["atr_amp"] = None if amplitude is None else round(float(amplitude), 2)
+    band["atr_source"] = amplitude_source if amplitude is not None else None
     band["mode"] = mode
     band["mode_zh"] = mode_zh
     band["daily_up"] = daily_up

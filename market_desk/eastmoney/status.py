@@ -6,6 +6,7 @@ from typing import Any
 import time
 
 from market_desk import board_fallback
+from market_desk.eastmoney import avail as _avail
 from market_desk.eastmoney import boards as _boards
 from market_desk.eastmoney import client as _client
 from market_desk.eastmoney import minute as _minute
@@ -19,6 +20,7 @@ def clist_runtime_status() -> dict[str, Any]:
     their owners, so a ``from ... import`` binding would go stale.
     """
     rem = _client.clist_backoff_remaining()
+    states = _avail.avail_state()
     return {
         "host": _client._CLIST_HOST_PREF or _client._CLIST_HOSTS[0],
         "pref": _client._CLIST_HOST_PREF,
@@ -33,4 +35,12 @@ def clist_runtime_status() -> dict[str, Any]:
         "boards_alias": board_fallback.alias_stats(),
         "minute_source": _minute._MINUTE_SOURCE,
         "minute_pause_sec": round(max(0.0, _minute._MINUTE_EM_PAUSE_UNTIL - time.time()), 1),
+        "em_blocked": [
+            {"family": fam, "since": str(states.get(fam, {}).get("since") or "")[11:16]}
+            for fam in _avail.blocked_families(within_sec=900.0)
+        ],
+        "em_today": {
+            fam: {"ok": int(st.get("ok") or 0), "fail": int(st.get("fail") or 0)}
+            for fam, st in states.items()
+        },
     }

@@ -27,6 +27,7 @@ from market_desk.engine.micro import MicroMixin
 from market_desk.engine.radar import RadarMixin
 from market_desk.engine.source_guard import SourceGuardMixin
 from market_desk.engine.alias_learn import AliasLearnMixin
+from market_desk.engine.counterfactual import CounterfactualMixin
 
 try:
     from zoneinfo import ZoneInfo
@@ -50,6 +51,7 @@ class DeskEngine(
     RadarMixin,
     SourceGuardMixin,
     AliasLearnMixin,
+    CounterfactualMixin,
 ):
     """Hold the latest snapshot and refresh it in the background."""
 
@@ -77,6 +79,7 @@ class DeskEngine(
         self._kline_day: str | None = None
         self._kline_cache: dict[str, list[float]] = {}
         self._kline_ok: dict[str, bool] = {}
+        self._kline_atr: dict[str, float | None] = {}
         self._minute_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         # Index OHLCV for Elliott scenarios (once per trade day).
         self._index_bars_day: str | None = None
@@ -90,6 +93,8 @@ class DeskEngine(
         # Review daily klines for outcome compare: code -> (monotonic_ts, packed row)
         self._review_kline_cache: dict[str, tuple[float, Any]] = {}
         self._review_scored_at: float = 0.0
+        # What-If gate audit: (window days, strict) -> (monotonic_ts, payload).
+        self._cf_cache: dict[tuple[int, bool], tuple[float, dict[str, Any]]] = {}
         self._fund_flow_full_at: float = 0.0
         self._fund_flow_lock = asyncio.Lock()
         # (trade_date, industry rows, concept rows) from the last refresh, before the sticky fallback.
@@ -108,6 +113,8 @@ class DeskEngine(
         self._src_damp_until = 0.0
         self._src_damp_base: dict[str, Any] | None = None
         self._src_probe_at = 0.0
+        self._em_avail_flush_at = 0.0
+        self._em_avail_pruned_day = ""
         # Sina → East Money alias self-learning (AliasLearnMixin).
         self._alias_tick_at = 0.0
         self._alias_em_backoff_until = 0.0

@@ -223,6 +223,32 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS em_avail_hourly (
+                day TEXT NOT NULL,
+                hour INTEGER NOT NULL,
+                family TEXT NOT NULL,
+                ok INTEGER NOT NULL DEFAULT 0,
+                fail INTEGER NOT NULL DEFAULT 0,
+                empty INTEGER NOT NULL DEFAULT 0,
+                last_err TEXT DEFAULT '',
+                PRIMARY KEY (day, hour, family)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS em_avail_event (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at TEXT NOT NULL,
+                family TEXT NOT NULL,
+                state TEXT NOT NULL,
+                err TEXT DEFAULT ''
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_em_avail_event_at ON em_avail_event(at)")
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS board_alias_learned (
                 sina_name TEXT PRIMARY KEY,
                 sina_kind TEXT,

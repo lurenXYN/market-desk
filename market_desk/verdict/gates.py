@@ -338,6 +338,7 @@ def inject_switch_from_theme(
         carrier_code=None,
         score=None,
         main_yi=(board or {}).get("main_yi") if board else None,
+        board=board,
     )
     entry["switch_from"] = True
     themes.append(entry)

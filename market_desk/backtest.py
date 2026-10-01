@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from market_desk.counterfactual.sim import is_one_word_limit_down, is_one_word_limit_up
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
 from market_desk.review import (
@@ -28,7 +29,7 @@ MAX_BACKTEST_SPAN_DAYS = 90
 MAX_BACKTEST_ASYNC_SPAN_DAYS = 180
 
 BACKTEST_DISCLAIMER = (
-    "日线 OHLC 回测仍会高估可成交性；已加量能门槛与滑点粗校正，"
+    "日线 OHLC 回测仍会高估可成交性；已加量能门槛、一字涨跌停约束与滑点粗校正（有盘口记录时用实测冲击成本），"
     "仍无法等价实盘。不改真实 traded/fill；命中口径与复盘一致（次日红/三日红）。"
 )
 
@@ -202,6 +203,29 @@ def _liquidity_ok(
     return True, ""
 
 
+def _prev_close(bars_by_day: dict[str, dict[str, float | None]], day: str) -> float | None:
+    """Return the close of the last session strictly before ``day``."""
+    prev_days = sorted(d for d in bars_by_day if d < day)
+    if not prev_days:
+        return None
+    return num((bars_by_day.get(prev_days[-1]) or {}).get("close"))
+
+
+def _row_buy_slip(row: dict[str, Any], default_pct: float, *, explicit: bool) -> tuple[float, str]:
+    """Return (slip %, source) for one buy row.
+
+    The live order-book impact recorded at signal time (``payload.slip_bps``)
+    replaces the flat default; an explicit user slippage always wins.
+    """
+    if explicit:
+        return float(default_pct), "手动"
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    bps = num(payload.get("slip_bps"))
+    if bps is None or bps < 0:
+        return float(default_pct), "默认"
+    return round(min(3.0, float(bps) / 100.0), 3), "盘口"
+
+
 def _apply_buy_slip(fill: float, slip_pct: float) -> float:
     """Worsen a buy fill by ``slip_pct`` percent (e.g. 0.15 → +0.15%)."""
     s = max(0.0, float(slip_pct or 0))
@@ -330,6 +354,7 @@ def simulate_buy_fill(
         days = sorted(d for d in bars_by_day if d >= day0)[: max(1, int(look_ahead) + 1)]
 
     liq_skips = 0
+    limit_skips = 0
     last_liq_note = ""
     for day in days:
         bar = bars_by_day.get(day) or {}
@@ -355,6 +380,9 @@ def simulate_buy_fill(
             continue
         if lo > target:
             continue
+        if is_one_word_limit_up(o, hi, lo, num(bar.get("close")), _prev_close(bars_by_day, day)):
+            limit_skips += 1
+            continue
 
         ok_liq, liq_note = _liquidity_ok(
             bars_by_day, day, vol_min_ratio=vol_min_ratio
@@ -368,10 +396,7 @@ def simulate_buy_fill(
         fill = float(target)
         note = "触达价带"
         gap_filled = False
-        prev_days = sorted(d for d in bars_by_day if d < day)
-        prev_close = None
-        if prev_days:
-            prev_close = num((bars_by_day.get(prev_days[-1]) or {}).get("close"))
+        prev_close = _prev_close(bars_by_day, day)
         gap_th = max(0.0, float(gap_pct or 0))
         if (
             gap_th > 0
@@ -402,6 +427,7 @@ def simulate_buy_fill(
             "mode": mode_s,
             "note": note,
             "liq_skips": liq_skips,
+            "limit_skips": limit_skips,
             "gap_filled": gap_filled,
             "slip_pct": float(slip_pct or 0),
             "fidelity": "daily",
@@ -415,6 +441,7 @@ def simulate_buy_fill(
             "mode": mode_s,
             "note": f"未触达·{last_liq_note}",
             "liq_skips": liq_skips,
+            "limit_skips": limit_skips,
         }
     return {
         "filled": False,
@@ -422,8 +449,9 @@ def simulate_buy_fill(
         "fill_date": None,
         "target": target,
         "mode": mode_s,
-        "note": "未触达",
+        "note": "一字涨停买不进" if limit_skips else "未触达",
         "liq_skips": liq_skips,
+        "limit_skips": limit_skips,
     }
 
 
@@ -488,21 +516,29 @@ def simulate_sell_fill(
 ) -> dict[str, Any] | None:
     """Simulate a sell: take-profit if high ≥ sell, else stop if low ≤ stop.
 
-    Gap-down open through stop fills at open. Slippage worsens exits.
+    Gap-down open through stop fills at open. Slippage worsens exits. A sealed
+    limit-down session (one-字 bar) has no bids, so the exit rolls to the next
+    session (one extra look-ahead day per sealed bar, noted 一字跌停顺延).
     """
     day0 = str(trade_date or "")[:10]
     if not day0 or not bars_by_day:
         return None
-    days = sorted(d for d in bars_by_day if d >= day0)[: max(1, int(look_ahead) + 1)]
-    for day in days:
+    all_days = sorted(d for d in bars_by_day if d >= day0)
+    budget = max(1, int(look_ahead) + 1)
+    limit_skips = 0
+    for day in all_days:
+        if budget <= 0:
+            break
+        budget -= 1
         bar = bars_by_day.get(day) or {}
         o = num(bar.get("open"))
         lo = num(bar.get("low"))
         hi = num(bar.get("high"))
-        prev_days = sorted(d for d in bars_by_day if d < day)
-        prev_close = None
-        if prev_days:
-            prev_close = num((bars_by_day.get(prev_days[-1]) or {}).get("close"))
+        prev_close = _prev_close(bars_by_day, day)
+        if is_one_word_limit_down(o, hi, lo, num(bar.get("close")), prev_close):
+            limit_skips += 1
+            budget += 1
+            continue
         gap_th = max(0.0, float(gap_pct or 0))
 
         # Gap-down through stop at open (worse path).
@@ -522,7 +558,7 @@ def simulate_sell_fill(
                 note = f"缺口低开触止损({gap_down:.1f}%)"
                 if slip_pct and float(slip_pct) > 0:
                     note = f"{note}·滑点-{float(slip_pct):.2f}%"
-                return {
+                return _tag_limit_down({
                     "filled": True,
                     "fill_price": round(fill, 4),
                     "fill_date": day,
@@ -530,7 +566,7 @@ def simulate_sell_fill(
                     "note": note,
                     "gap_filled": True,
                     "slip_pct": float(slip_pct or 0),
-                }
+                }, limit_skips)
 
         # Stop first when both fire the same day (worse case for the plan).
         if stop is not None and lo is not None and lo <= stop:
@@ -542,7 +578,7 @@ def simulate_sell_fill(
             note = "触止损"
             if slip_pct and float(slip_pct) > 0:
                 note = f"{note}·滑点-{float(slip_pct):.2f}%"
-            return {
+            return _tag_limit_down({
                 "filled": True,
                 "fill_price": round(fill, 4),
                 "fill_date": day,
@@ -550,7 +586,7 @@ def simulate_sell_fill(
                 "note": note,
                 "gap_filled": False,
                 "slip_pct": float(slip_pct or 0),
-            }
+            }, limit_skips)
         if sell is not None and hi is not None and hi >= sell:
             fill = float(sell)
             if o is not None and o > sell:
@@ -560,7 +596,7 @@ def simulate_sell_fill(
             note = "触卖价"
             if slip_pct and float(slip_pct) > 0:
                 note = f"{note}·滑点-{float(slip_pct):.2f}%"
-            return {
+            return _tag_limit_down({
                 "filled": True,
                 "fill_price": round(fill, 4),
                 "fill_date": day,
@@ -568,14 +604,22 @@ def simulate_sell_fill(
                 "note": note,
                 "gap_filled": False,
                 "slip_pct": float(slip_pct or 0),
-            }
-    return {
+            }, limit_skips)
+    return _tag_limit_down({
         "filled": False,
         "fill_price": None,
         "fill_date": None,
         "exit_mode": None,
         "note": "未触达",
-    }
+    }, limit_skips)
+
+
+def _tag_limit_down(res: dict[str, Any], limit_skips: int) -> dict[str, Any]:
+    """Attach the sealed limit-down roll count and note suffix to a sell result."""
+    res["limit_skips"] = int(limit_skips)
+    if limit_skips:
+        res["note"] = f"{res.get('note') or ''}·一字跌停顺延{int(limit_skips)}日"
+    return res
 
 
 def _score_after_fill(
@@ -700,6 +744,18 @@ def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
         "unfilled_n": sum(1 for x in items if not x.get("sim_filled")),
         "liq_skip_n": sum(1 for x in items if int(x.get("liq_skips") or 0) > 0),
         "gap_fill_n": sum(1 for x in items if x.get("gap_filled")),
+        "limit_up_skip_n": sum(
+            1 for x in items if x.get("side") == "buy" and int(x.get("limit_skips") or 0) > 0
+        ),
+        "limit_down_roll_n": sum(
+            1 for x in items if x.get("side") == "sell" and int(x.get("limit_skips") or 0) > 0
+        ),
+        "slip_live_n": sum(1 for x in items if x.get("slip_src") == "盘口"),
+        "slip_live_avg": (
+            round(sum(float(x["slip_pct"]) for x in live) / len(live), 3)
+            if (live := [x for x in items if x.get("slip_src") == "盘口"])
+            else None
+        ),
         "sim_exec": sim_exec,
     }
 
@@ -881,6 +937,7 @@ async def run_signal_backtest(
         if is_buy_signal(row.get("signal_type")):
             band = _plan_buy_prices(row)
             mins = minutes_by_key.get((code, day)) if fid == "minute" else None
+            row_slip, slip_src = _row_buy_slip(row, slip, explicit=slip_pct is not None)
             sim = simulate_buy_fill(
                 trade_date=day,
                 bars_by_day=bars,
@@ -889,7 +946,7 @@ async def run_signal_backtest(
                 chase=band["chase"],
                 mode=mode,
                 vol_min_ratio=vol_r,
-                slip_pct=slip,
+                slip_pct=row_slip,
                 gap_pct=gap,
                 minutes=mins,
                 fidelity=fid,
@@ -912,8 +969,11 @@ async def run_signal_backtest(
                 "sim_mode": sim.get("mode") or mode,
                 "note": sim.get("note"),
                 "liq_skips": int(sim.get("liq_skips") or 0),
+                "limit_skips": int(sim.get("limit_skips") or 0),
                 "gap_filled": bool(sim.get("gap_filled")),
                 "fidelity": sim.get("fidelity") or fid,
+                "slip_pct": row_slip,
+                "slip_src": slip_src,
             }
             if sim.get("filled") and sim.get("fill_price") is not None:
                 item["sim_exec"] = _sim_exec_kind(
@@ -960,6 +1020,7 @@ async def run_signal_backtest(
                 "sim_exit_mode": sim.get("exit_mode"),
                 "note": sim.get("note"),
                 "gap_filled": bool(sim.get("gap_filled")),
+                "limit_skips": int(sim.get("limit_skips") or 0),
             }
             if sim.get("filled") and sim.get("fill_price") and sim.get("fill_date"):
                 outcome = _score_after_fill(
@@ -1001,6 +1062,13 @@ async def run_signal_backtest(
         "note": (
             BACKTEST_DISCLAIMER
             + f" 量能≥{vol_r:.0%}中位 · 滑点 {slip:.2f}% · 跳空阈值 {gap:.1f}%。"
+            + (
+                f" 盘口实测滑点 {summary['slip_live_n']} 笔（均 {summary['slip_live_avg']:.2f}%）。"
+                if summary.get("slip_live_n")
+                else ""
+            )
+            + (f" 一字涨停买不进 {summary['limit_up_skip_n']} 笔。" if summary.get("limit_up_skip_n") else "")
+            + (f" 一字跌停顺延 {summary['limit_down_roll_n']} 笔。" if summary.get("limit_down_roll_n") else "")
             + fid_note
         ),
     }

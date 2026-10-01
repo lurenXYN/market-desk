@@ -36,6 +36,8 @@ def _fresh(monkeypatch):
     monkeypatch.setattr(em_boards, "_BOARDS_SOURCE", "eastmoney")
     monkeypatch.setattr(em_boards, "_BOARDS_CLIST_PAUSE_UNTIL", 0.0)
     monkeypatch.setattr(em_boards, "_BOARD_MEMBERS_CACHE", {})
+    monkeypatch.setattr(em_boards, "_INDUSTRY_ROWS_CACHE", None)
+    monkeypatch.setattr(em_boards, "_EM_FLOW_CACHE", {})
     monkeypatch.setattr(em_boards, "_BOARDS_RESTORE_OK", 0)
     monkeypatch.setattr(em_boards, "_BOARDS_FAIL_STREAK", 0)
     monkeypatch.setattr(em_boards, "_BOARDS_SWITCH_DAY", "")

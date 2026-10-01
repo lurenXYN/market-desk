@@ -124,6 +124,17 @@ async def review_trends(
     return await engine.build_review_trends(view_date=date)
 
 
+@router.get("/api/review/counterfactual")
+async def review_counterfactual(
+    days: int = Query(default=20, ge=5, le=60),
+    strict: bool = Query(default=True),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return the What-If gate net-value audit over the last ``days`` signal days."""
+    del user
+    return await engine.build_counterfactual(days=days, strict=strict)
+
+
 @router.get("/api/review/history/{code}")
 async def review_code_history(
     code: str,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import timedelta, timezone
 from typing import Any
@@ -104,6 +105,52 @@ def is_buy_signal(sig_type: Any) -> bool:
 def is_sell_signal(sig_type: Any) -> bool:
     """Return True for sell review signals."""
     return str(sig_type or "").strip().lower() == "sell"
+
+
+# Ordered (keyword, rule) pairs; first hit wins, so specific labels precede generic ones.
+_SELL_RULE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("跳空破保本", "跳空破保本"),
+    ("保本防守", "保本防守"),
+    ("回落防守", "保本防守"),
+    ("板块塌陷", "板块塌陷"),
+    ("站上MA20", "止损带减半"),
+    ("止损", "止损清仓"),
+    ("昨买今弱", "昨买今弱"),
+    ("载体走弱", "载体走弱"),
+    ("退潮兑现", "退潮兑现"),
+    ("衰退", "衰退防守"),
+    ("冲高回落", "冲高回落"),
+    ("落袋", "落袋止盈"),
+    ("换防", "换防护栏"),
+)
+
+
+def sell_rule_of(label: Any) -> str:
+    """Map a sell ``role_label`` (possibly prefixed by open-buffer tips) to its exit rule.
+
+    Args:
+        label: Stored sell ``action`` / ``role_label`` text.
+
+    Returns:
+        Canonical rule name used to bucket sell outcomes, or ``其他`` when no
+        keyword matches.
+    """
+    # Open-buffer prefixes such as 「开盘必卖（止损/清仓…）」 carry rule words in parentheses.
+    text = re.sub(r"[（(][^（()）]*[)）]", "", str(label or ""))
+    for key, rule in _SELL_RULE_KEYWORDS:
+        if key in text:
+            return rule
+    return "其他"
+
+
+def sell_atr_bucket(row: dict[str, Any]) -> str:
+    """Return the volatility band a sell was judged under (``高波动`` / ``低波动`` / ``标准``)."""
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    mode = str(payload.get("atr_band_mode") or "")
+    if not mode:
+        zh = str(payload.get("band_mode_zh") or "")
+        mode = "high_beta" if "高波动" in zh else "low_beta" if "低波动" in zh else "normal"
+    return {"high_beta": "高波动", "low_beta": "低波动"}.get(mode, "标准")
 
 
 def note_quote_ticks(quotes: dict[str, Any] | list[Any] | None) -> None:

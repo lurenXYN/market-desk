@@ -7,6 +7,8 @@ import asyncio
 import logging
 import httpx
 from market_desk.config import EASTMONEY_UT, HTTP_HEADERS, ZT_UT
+from market_desk.eastmoney import avail
+from market_desk.eastmoney.avail import em_get
 
 log = logging.getLogger("market_desk.eastmoney")
 
@@ -117,7 +119,7 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            resp = await client.get(url, headers=HTTP_HEADERS, timeout=25.0)
+            resp = await em_get(client, url, headers=HTTP_HEADERS, timeout=25.0)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
@@ -159,11 +161,13 @@ async def _get_clist_json(
         for attempt in range(2):
             try:
                 async with _clist_sem():
-                    resp = await client.get(url, headers=HTTP_HEADERS, timeout=20.0)
+                    resp = await em_get(client, url, headers=HTTP_HEADERS, timeout=20.0)
                 resp.raise_for_status()
                 data = resp.json()
                 if not isinstance(data, dict):
                     raise RuntimeError("clist non-dict payload")
+                if data.get("data") is None:
+                    avail.note_empty(url)
                 _CLIST_HOST_PREF = h
                 _note_clist_ok()
                 return data, h

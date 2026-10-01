@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from market_desk.counterfactual.trace import block_arm_reasons, trace_now
 from market_desk.db import upsert_signal
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
@@ -14,7 +15,23 @@ from market_desk.review.signals import (
     compare_boards_to_mainline,
     is_pre_match_stamp,
     lookup_code_boards,
+    sell_rule_of,
 )
+
+
+def _slip_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Return the live order-book buy-impact estimate for the payload (empty when unmeasured).
+
+    ``slip_bps`` is the visible-depth average fill vs mid in basis points; the
+    backtest prefers it over the flat default slippage.
+    """
+    slip = item.get("slippage")
+    if not isinstance(slip, dict):
+        return {}
+    bps = num(slip.get("impact_bps"))
+    if bps is None:
+        return {}
+    return {"slip_bps": round(max(0.0, float(bps)), 1), "slip_level": slip.get("level")}
 
 
 def record_session_signals(snapshot: dict[str, Any]) -> int:
@@ -65,6 +82,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     from market_desk.gate_ledger import normalize_gate_notes
 
     market_gates = normalize_gate_notes(verdict.get("algo_notes"))
+    arm_block = block_arm_reasons(verdict)
     stage_by_name = board_stage_lookup(snapshot)
     n = 0
 
@@ -177,6 +195,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "context": trade_ctx or None,
                         "cv": item.get("cv") if isinstance(item.get("cv"), dict) else None,
                         "market_gates": market_gates,
+                        "sell_conflict_block": bool(item.get("sell_conflict_block")),
+                        "crowd_block": bool(item.get("crowd_block")),
+                        "cf_now": trace_now(item, desk_source=desk_source, arm_block=arm_block),
+                        **_slip_fields(item),
                     },
                 }
             )
@@ -281,8 +303,12 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "qty": item.get("qty"),
                     "exit_mode": item.get("exit_mode"),
                     "urgency": item.get("urgency"),
+                    "exit_rule": sell_rule_of(item.get("role_label")),
                     "band_mode": item.get("band_mode"),
                     "band_mode_zh": item.get("band_mode_zh"),
+                    "atr_band_mode": item.get("atr_band_mode"),
+                    "atr_amp": item.get("atr_amp"),
+                    "atr_source": item.get("atr_source"),
                     "daily_trend": item.get("daily_trend"),
                     "board_names": board_cmp["boards"],
                     "vs_mainline": board_cmp["vs_mainline"],

@@ -166,6 +166,12 @@ from market_desk.db.board_alias import (  # noqa: F401
     replace_board_alias_learned,
     save_board_members_snap,
 )
+from market_desk.db.em_avail import (  # noqa: F401
+    load_em_avail,
+    prune_em_avail,
+    save_em_avail,
+    summarize_em_avail,
+)
 from market_desk.db.radar import (  # noqa: F401
     load_board_crowding_history,
     load_crowd_shadow,

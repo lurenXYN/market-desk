@@ -78,6 +78,12 @@
 .gl-tbl tr.gl-bad td:last-child { color: #fca5a5; }
 .gl-tbl tr.gl-mid td:last-child { color: #fbbf24; }
 .gl-tbl tr.gl-low td { color: var(--muted); }
+.cf-audit > summary { cursor: pointer; list-style: revert; }
+.cf-audit .cf-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin: 6px 0; }
+.cf-audit .cf-headline { font-size: 13px; margin: 4px 0 6px; }
+.cf-audit .gl-tbl { margin-bottom: 8px; }
+.cf-audit .cf-gates th:nth-child(n+2):nth-child(-n+8) { text-align: right; }
+.cf-audit .cf-notes { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
 .rev-top-picks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
 .rev-top-picks .lab { margin-right: 2px; }
 .rev-top-pick {

@@ -750,6 +750,16 @@
         <div class="rev-missed" id="revMissed"></div>
         <div class="oc-compare" id="revOcCompare"></div>
         <div class="oc-compare gate-ledger" id="revGateLedger" hidden></div>
+        <details class="oc-compare gate-ledger cf-audit" id="revCfAudit">
+          <summary class="hd">闸门净价值审计（What-If）<button type="button" class="q" data-term="闸门净价值审计">?</button>
+            <span class="meta" id="revCfHead">展开后加载</span></summary>
+          <div class="cf-ctl">
+            窗口 <select id="cfDays"><option value="10">10 日</option><option value="20" selected>20 日</option><option value="40">40 日</option></select>
+            <label title="把「早盘出卡 + 日线最低到价」也算作到价；该档有前视偏差，默认剔除"><input type="checkbox" id="cfLoose"> 含早盘推断</label>
+            <button type="button" id="cfReload">刷新</button>
+          </div>
+          <div id="revCfBody"></div>
+        </details>
         <div class="oc-compare gate-ledger" id="revChaseCost" hidden></div>
         <div class="eod-brief" id="eodBrief">
           <div class="hd">

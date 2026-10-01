@@ -8,6 +8,7 @@ from market_desk.db import load_signals
 from market_desk.settings import setting
 
 from market_desk.review.hit_rates import build_gate_kill_stats
+from market_desk.review.signals import sell_atr_bucket, sell_rule_of
 
 
 def build_sell_review_bias(
@@ -180,13 +181,14 @@ def build_sell_fly_board(
         src = rows if rows is not None else load_signals(limit=240)
     except Exception:
         src = []
-    sells = [
+    scored_all = [
         r
         for r in src
         if str(r.get("signal_type") or "") == "sell"
         and not int(r.get("skipped") or 0)
         and r.get("outcome_label")
     ]
+    sells = list(scored_all)
     if mode == "traded":
         sells = [r for r in sells if int(r.get("traded") or 0)]
     n = len(sells)
@@ -217,6 +219,8 @@ def build_sell_fly_board(
                 for x in grp
                 if (x.get("outcome_label") or "") in ("卖后继续涨", "卖飞")
             )
+            # Sell day3 pct > 0 means price fell after the exit (drawdown avoided).
+            d3 = [float(x["outcome_day3_pct"]) for x in grp if x.get("outcome_day3_pct") is not None]
             out.append(
                 {
                     "label": lab,
@@ -226,6 +230,8 @@ def build_sell_fly_board(
                     "early_n": g_early,
                     "hit_rate": round(100.0 * g_hit / gn, 1) if gn else None,
                     "early_rate": round(100.0 * g_early / gn, 1) if gn else None,
+                    "fly_rate": round(100.0 * g_fly / gn, 1) if gn else None,
+                    "avg_saved_d3": round(sum(d3) / len(d3), 2) if d3 else None,
                 }
             )
         out.sort(key=lambda x: (-(x.get("n") or 0), x.get("label") or ""))
@@ -240,6 +246,12 @@ def build_sell_fly_board(
         lambda r: "ETF" if str(r.get("kind") or "") == "etf" else "个股",
     )
     by_phase = _bucket(sells, lambda r: r.get("phase") or "未标")
+    # Rule quality is judged on every scored sell signal, executed or not.
+    by_rule = _bucket(
+        scored_all,
+        lambda r: (r.get("payload") or {}).get("exit_rule") or sell_rule_of(r.get("action")),
+    )
+    by_atr = _bucket(scored_all, sell_atr_bucket)
 
     early_rows = [
         r
@@ -298,6 +310,9 @@ def build_sell_fly_board(
         "by_source": by_source,
         "by_kind": by_kind,
         "by_phase": by_phase[:6],
+        "by_rule": by_rule,
+        "by_atr": by_atr,
+        "rule_n": len(scored_all),
         "recent_early": recent,
         "hit_mode": mode,
     }

@@ -7,11 +7,16 @@ from typing import Any
 import asyncio
 import logging
 import time
+import zlib
 import httpx
 from market_desk import board_fallback
 from market_desk.calendar import is_trading_day
 from market_desk.config import (
+    BOARD_FLOW_TTL_SEC,
+    BOARD_MEMBERS_TTL_JITTER,
+    BOARD_MEMBERS_TTL_SEC,
     BOARDS_DEGRADE_STREAK,
+    BOARDS_INDUSTRY_TTL_SEC,
     BOARDS_PROBE_RETRY_SEC,
     BOARDS_RESTORE_STREAK,
     CONCEPT_JUNK_KEYWORDS,
@@ -209,8 +214,15 @@ async def probe_boards_source(client: httpx.AsyncClient) -> str:
 
 
 async def _hot_boards_from_clist(client: httpx.AsyncClient) -> list[dict[str, Any]]:
-    """Pull hot boards from East Money clist (gainers, then fund-flow rows)."""
+    """Pull hot boards from East Money clist (gainers, then fund-flow rows).
+
+    Concept gainers are fetched every call; the paged industry universe is reused
+    for ``BOARDS_INDUSTRY_TTL_SEC`` but only while the concept call itself succeeds,
+    so a blocked edge is still noticed on the very next round.
+    """
+    global _INDUSTRY_ROWS_CACHE
     out: list[dict[str, Any]] = []
+    concept_ok = False
     try:
         concept_payload, _host = await _get_clist_json(
             client, "m:90+t:3", pz=80, bypass_backoff=True
@@ -219,26 +231,35 @@ async def _hot_boards_from_clist(client: httpx.AsyncClient) -> list[dict[str, An
             mapped = _board_from_diff(item, "concept")
             if mapped:
                 out.append(mapped)
+        concept_ok = bool(out)
     except Exception:
         pass
-    try:
-        # Prefer delay edge for multi-page industry (same as quotes resilience).
-        industry_rows = await _fetch_clist_pages(
-            client,
-            "m:90+t:2",
-            pz=100,
-            max_pages=5,
-            hosts=list(_QUOTES_CLIST_HOSTS),
-            page_sleep=0.15,
-            allow_partial=True,
-            bypass_backoff=True,
-        )
-        for item in industry_rows:
-            mapped = _board_from_diff(item, "industry")
-            if mapped:
-                out.append(mapped)
-    except Exception:
-        pass
+    cached = _INDUSTRY_ROWS_CACHE
+    if concept_ok and cached and time.time() - cached[0] < float(BOARDS_INDUSTRY_TTL_SEC):
+        out.extend(dict(row) for row in cached[1])
+    else:
+        industry: list[dict[str, Any]] = []
+        try:
+            # Prefer delay edge for multi-page industry (same as quotes resilience).
+            industry_rows = await _fetch_clist_pages(
+                client,
+                "m:90+t:2",
+                pz=100,
+                max_pages=5,
+                hosts=list(_QUOTES_CLIST_HOSTS),
+                page_sleep=0.15,
+                allow_partial=True,
+                bypass_backoff=True,
+            )
+            for item in industry_rows:
+                mapped = _board_from_diff(item, "industry")
+                if mapped:
+                    industry.append(mapped)
+        except Exception:
+            pass
+        if industry:
+            _INDUSTRY_ROWS_CACHE = (time.time(), [dict(row) for row in industry])
+        out.extend(industry)
     if out:
         board_fallback.remember_em_boards(out)
         return out
@@ -314,10 +335,18 @@ async def fetch_board_fund_flow(
 
     Day flow falls back to Sina (net inflow only) when clist is paused or
     returns nothing; week / month have no fallback and may come back empty.
+    Non-empty East Money rows are cached per period (``BOARD_FLOW_TTL_SEC``).
     """
+    key = (kind, int(limit), period)
+    hit = _EM_FLOW_CACHE.get(key)
+    ttl = float(BOARD_FLOW_TTL_SEC.get(period, 60.0))
+    if hit and time.time() - hit[0] < ttl and not _boards_clist_paused():
+        return [dict(row) for row in hit[1]]
     rows = [] if _boards_clist_paused() else await _board_fund_flow_clist(
         client, kind, limit, period
     )
+    if rows:
+        _EM_FLOW_CACHE[key] = (time.time(), [dict(row) for row in rows])
     if rows or period != "day":
         return rows
     try:
@@ -420,7 +449,7 @@ async def fetch_board_members(
     key = f"{str(bk or '').upper()}:{'w' if weakest else 's'}"
     now = time.time()
     hit = _BOARD_MEMBERS_CACHE.get(key)
-    if hit and now - hit[0] < _BOARD_MEMBERS_TTL_SEC:
+    if hit and now - hit[0] < _members_ttl(key):
         return [dict(row) for row in hit[1]]
     members: list[dict[str, Any]] = []
     if str(bk or "").upper().startswith("BK") and not _boards_clist_paused():
@@ -491,7 +520,19 @@ async def _board_members_clist(
     return members
 
 
+def _members_ttl(key: str) -> float:
+    """Per-board cache TTL: base plus a stable 0..jitter offset so refetches stagger."""
+    jitter = int(BOARD_MEMBERS_TTL_JITTER)
+    extra = zlib.crc32(key.encode("utf-8")) % (jitter + 1) if jitter > 0 else 0
+    return float(BOARD_MEMBERS_TTL_SEC) + float(extra)
+
+
 _BOARD_MEMBERS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 
-_BOARD_MEMBERS_TTL_SEC = 90.0
+# Paged East Money industry universe: (fetched_at, mapped rows).
+_INDUSTRY_ROWS_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+
+
+# East Money board fund flow keyed by (kind, limit, period): (fetched_at, rows).
+_EM_FLOW_CACHE: dict[tuple[str, int, str], tuple[float, list[dict[str, Any]]]] = {}

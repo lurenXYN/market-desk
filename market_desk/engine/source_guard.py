@@ -9,7 +9,12 @@ from typing import Any
 import httpx
 
 from market_desk.calendar import is_trading_day
-from market_desk.config import BOARDS_LUNCH_PROBE_SEC, SOURCE_SHIFT_DAMP_SEC
+from market_desk.config import (
+    BOARDS_LUNCH_PROBE_SEC,
+    EM_AVAIL_FLUSH_SEC,
+    EM_AVAIL_KEEP_DAYS,
+    SOURCE_SHIFT_DAMP_SEC,
+)
 
 log = logging.getLogger("market_desk")
 
@@ -84,3 +89,29 @@ class SourceGuardMixin:
             log.info("lunch boards probe -> %s", source)
         except Exception:
             log.exception("lunch boards probe failed")
+
+    def _flush_em_avail(self, now: datetime | None = None, *, force: bool = False) -> int:
+        """Persist pending East Money request counters every ``EM_AVAIL_FLUSH_SEC``.
+
+        Also prunes history older than ``EM_AVAIL_KEEP_DAYS`` once per day.
+        Returns the number of hourly rows written (0 when not due).
+        """
+        from market_desk.db import prune_em_avail, save_em_avail
+        from market_desk.eastmoney.avail import drain
+
+        cur = now or datetime.now()
+        now_ts = cur.timestamp()
+        if not force and now_ts - self._em_avail_flush_at < float(EM_AVAIL_FLUSH_SEC):
+            return 0
+        self._em_avail_flush_at = now_ts
+        rows, events = drain()
+        try:
+            n = save_em_avail(rows, events)
+            day = cur.strftime("%Y-%m-%d")
+            if self._em_avail_pruned_day != day:
+                self._em_avail_pruned_day = day
+                prune_em_avail(int(EM_AVAIL_KEEP_DAYS))
+        except Exception:
+            log.exception("em availability flush failed")
+            return 0
+        return n

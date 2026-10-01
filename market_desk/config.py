@@ -241,6 +241,21 @@ GATE_LEDGER_DAYS = 20
 GATE_LEDGER_MIN_N = 8
 GATE_LEDGER_MIN_DAYS = 3
 GATE_LEDGER_EDGE_PCT = 0.8
+# Counterfactual (What-If) gate net-value audit (display only). Cards whose price
+# came to plan but never lit are filled at plan in simulation: stop from day1
+# (recorded stop, else fallback %), exit at close of day HOLD_DAYS, minus a
+# round-trip cost (fees + stamp + slippage). EDGE splits 真避险 / 误杀 / 平;
+# a gate needs MIN_N effective samples over MIN_DAYS days before a verdict.
+CF_WINDOW_DAYS = 20
+CF_HOLD_DAYS = 3
+CF_ROUNDTRIP_COST_PCT = 0.25
+CF_STOP_FALLBACK_STOCK_PCT = 3.0
+CF_STOP_FALLBACK_ETF_PCT = 1.5
+CF_EDGE_PCT = 1.0
+CF_MIN_N = 5
+CF_MIN_DAYS = 3
+CF_BOOTSTRAP_N = 400
+CF_CACHE_SEC = 600.0
 # Post-close fund-flow research snapshot: per-kind board count for the full pull
 # (the hot path only keeps the top-80 inflow boards).
 EOD_FUND_FLOW_LIMIT = 500
@@ -473,7 +488,19 @@ ALIAS_MIN_MEMBERS = 5                   # both sides need this many constituents
 ALIAS_SNAP_STALE_DAYS = 14              # refetch a board's constituents after this many days
 ALIAS_EM_COVERAGE_MIN = 0.9             # share of EM boards snapped before learning runs
 ALIAS_LEARN_SINA_PER_TICK = 8           # idle-loop budget: Sina boards per tick
-ALIAS_LEARN_EM_PER_TICK = 10            # idle-loop budget: East Money boards per tick
+ALIAS_LEARN_EM_PER_TICK = 3             # idle-loop budget: East Money boards per tick (WAF-friendly)
+ALIAS_LEARN_TICK_SEC = 120.0            # idle-loop cadence of one learning step
+ALIAS_EM_BACKOFF_SEC = 7200.0           # pause East Money snapshots after two empty boards
+
+# East Money request volume (push2 family is rate-limited per IP, not by clock).
+EM_PUSH2_MIN_GAP_SEC = 0.15             # process-wide min spacing between push2* request starts
+EM_BLOCK_AFTER_FAILS = 3                # consecutive failures before an endpoint counts as blocked
+EM_AVAIL_FLUSH_SEC = 300.0              # flush hourly request counters to SQLite this often
+EM_AVAIL_KEEP_DAYS = 30                 # prune availability history older than this
+BOARDS_INDUSTRY_TTL_SEC = 60.0          # reuse the paged industry universe this long (concepts every tick)
+BOARD_FLOW_TTL_SEC = {"day": 60.0, "week": 600.0, "month": 600.0}
+BOARD_MEMBERS_TTL_SEC = 90.0            # constituent cache base TTL
+BOARD_MEMBERS_TTL_JITTER = 45           # + per-board 0..N s so refetches do not burst together
 
 # Ready / structure gates (centralized; was scattered magic numbers).
 ETF_BOUNCE_BUY_MIN = 0.35          # carrier rebound from day low to allow 可买入
@@ -832,14 +859,18 @@ SELL_BREAKEVEN_ETF_TRIGGER_PNL = 1.5   # Trigger gain for ETF
 
 # 2. Sector De-sync & Crack Alert
 SELL_SECTOR_CRACK_ENABLED = True
-SELL_SECTOR_CRACK_DRAGON_BLOW_DROP = -2.5   # Dragon failed limit-up or dropped from peak
-SELL_SECTOR_CRACK_DIVERGENT_DOWN_N = 2      # >= N members diving hard
+SELL_SECTOR_CRACK_DRAGON_BLOW_DROP = -2.5   # Multi-board leader day % at/below this = core weakening
+SELL_SECTOR_CRACK_LEADER_TOUCH_PCT = 7.0    # Leader must have touched >= this intraday to count as 炸板
+SELL_SECTOR_CRACK_LEADER_PULLBACK = 4.0     # Leader high% − now% (pts) >= this = 炸板回撤
+SELL_SECTOR_CRACK_DIVERGENT_DOWN_N = 2      # >= N members diving hard (held name excluded)
 SELL_SECTOR_CRACK_DIVERGENT_DOWN_PCT = -6.0 # Member diving threshold (%)
 
-# 3. Trailing ATR Adaptive Exit
+# 3. Trailing ATR Adaptive Exit (daily 14-bar ATR% preferred; intraday range may only widen)
 SELL_ATR_EXIT_ENABLED = True
-SELL_ATR_HIGH_BETA_AMP = 6.0           # Daily amplitude >= 6% -> high beta leader
-SELL_ATR_LOW_BETA_AMP = 2.5            # Daily amplitude <= 2.5% -> low beta / broad ETF
+SELL_ATR_HIGH_BETA_AMP = 6.0           # Stock ATR% >= 6 -> high beta leader
+SELL_ATR_LOW_BETA_AMP = 2.5            # Stock ATR% <= 2.5 -> low beta
+SELL_ATR_ETF_HIGH_BETA_AMP = 3.0       # ETF bands are already narrower; own thresholds
+SELL_ATR_ETF_LOW_BETA_AMP = 1.0
 SELL_ATR_HIGH_BETA_MULT = 1.25         # Widen stop and pullback thresholds
 SELL_ATR_LOW_BETA_MULT = 0.82          # Tighten stop and pullback thresholds
 

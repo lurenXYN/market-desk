@@ -97,6 +97,49 @@ def trend_score_adj(
     return 0.0
 
 
+def daily_atr_pct(
+    highs: list[float | None] | None,
+    lows: list[float | None] | None,
+    closes: list[float] | None,
+    *,
+    window: int = 14,
+    min_bars: int = 5,
+) -> float | None:
+    """Return the average true range of completed daily bars as % of the last close.
+
+    True range = max(high − low, |high − prev close|, |low − prev close|), so
+    overnight gaps count toward volatility. Bars with missing high/low are skipped.
+
+    Args:
+        highs: Daily highs (oldest → newest), aligned with ``closes``.
+        lows: Daily lows, aligned with ``closes``.
+        closes: Daily closes (completed sessions only; caller drops today's bar).
+        window: Number of most recent true ranges to average.
+        min_bars: Minimum usable true ranges required to return a value.
+
+    Returns:
+        ATR as a percentage of the most recent close, or None when data is thin.
+    """
+    cl = list(closes or [])
+    hi = list(highs or [])
+    lo = list(lows or [])
+    n = min(len(cl), len(hi), len(lo))
+    if n < 2:
+        return None
+    ranges: list[float] = []
+    for i in range(1, n):
+        h, low_px, prev = hi[i], lo[i], cl[i - 1]
+        if h is None or low_px is None or prev is None or prev <= 0:
+            continue
+        h, low_px, prev = float(h), float(low_px), float(prev)
+        ranges.append(max(h - low_px, abs(h - prev), abs(low_px - prev)))
+    ranges = ranges[-max(1, int(window)) :]
+    last = cl[n - 1]
+    if len(ranges) < max(1, int(min_bars)) or not last or float(last) <= 0:
+        return None
+    return round(sum(ranges) / len(ranges) / float(last) * 100.0, 2)
+
+
 def classify_many(
     closes_by_code: dict[str, list[float]],
     fetch_ok_by_code: dict[str, bool] | None = None,

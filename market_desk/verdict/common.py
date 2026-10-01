@@ -32,9 +32,14 @@ def _theme_entry(
     rec_codes: list[str] | None = None,
     score: float | None = None,
     main_yi: float | None = None,
+    board: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build one sell-theme descriptor (buy path never reads this list)."""
-    return {
+    """Build one sell-theme descriptor (buy path never reads this list).
+
+    When the live board card is passed, leader / member intraday marks are
+    attached for the sector crack alert (see ``_crack_fields``).
+    """
+    entry = {
         "name": name,
         "role": role,
         "status": status or "",
@@ -45,6 +50,60 @@ def _theme_entry(
         "score": score,
         "main_yi": main_yi,
     }
+    entry.update(_crack_fields(board))
+    return entry
+
+
+def _crack_fields(board: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract leader and member intraday marks from a live board card.
+
+    Args:
+        board: Enriched hot-board card (``pool`` / ``members`` rows carry
+            ``code``, ``pct``, ``price``, ``high``; ``leader_code`` and
+            ``leader_boards`` come from the limit-up ladder).
+
+    Returns:
+        ``leader_code``, ``leader_pct``, ``leader_high_pct``, ``leader_pullback``
+        (high% − now%, in points), ``leader_boards`` and ``pool`` (``code`` /
+        ``pct`` per member). Empty when no card is available.
+    """
+    if not board:
+        return {}
+    leader_code = normalize_code(board.get("leader_code"))
+    out: dict[str, Any] = {"leader_boards": int(board.get("leader_boards") or 0)}
+    pool: list[dict[str, Any]] = []
+    leader: dict[str, Any] | None = None
+    for m in board.get("pool") or board.get("members") or []:
+        if not isinstance(m, dict):
+            continue
+        code = normalize_code(m.get("code"))
+        pct = _num(m.get("pct"))
+        if not code or pct is None:
+            continue
+        pool.append({"code": code, "pct": round(pct, 2)})
+        if leader_code and code == leader_code and leader is None:
+            leader = m
+    out["pool"] = pool[:40]
+    if leader is not None:
+        pct = _num(leader.get("pct"))
+        price = _num(leader.get("price"))
+        high = _num(leader.get("high"))
+        out["leader_code"] = leader_code
+        out["leader_pct"] = None if pct is None else round(pct, 2)
+        if pct is not None and price and high and price > 0 and pct > -100:
+            prev_close = price / (1.0 + pct / 100.0)
+            high_pct = (high / prev_close - 1.0) * 100.0
+            out["leader_high_pct"] = round(high_pct, 2)
+            out["leader_pullback"] = round(max(0.0, high_pct - pct), 2)
+    return out
+
+
+def _num(raw: Any) -> float | None:
+    """Coerce a quote field to float, returning None for blanks and junk."""
+    try:
+        return None if raw in (None, "", "-") else float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _lookup_hot_board(

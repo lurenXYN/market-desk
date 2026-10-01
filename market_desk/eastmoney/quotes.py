@@ -10,6 +10,7 @@ from market_desk.config import HTTP_HEADERS
 from market_desk.filters import is_main_board, normalize_code
 from market_desk.numbers import num
 
+from market_desk.eastmoney.avail import em_get
 from market_desk.eastmoney.client import (
     _clist_url,
     _fetch_clist_pages,
@@ -164,8 +165,8 @@ async def _probe_quote_edges(client: httpx.AsyncClient) -> str:
     for h in _QUOTES_CLIST_HOSTS:
         tag = h.split(".")[0]
         try:
-            resp = await client.get(
-                _clist_url("m:1+t:2", pz=100, pn=1, host=h), headers=HTTP_HEADERS, timeout=10.0
+            resp = await em_get(
+                client, _clist_url("m:1+t:2", pz=100, pn=1, host=h), headers=HTTP_HEADERS, timeout=10.0
             )
             try:
                 data = resp.json()

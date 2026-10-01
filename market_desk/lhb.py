@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from market_desk.config import HTTP_HEADERS
+from market_desk.eastmoney.avail import em_get
 from market_desk.filters import normalize_code
 from market_desk.lhb_seats import classify_seat, style_brief
 from market_desk.numbers import num
@@ -62,7 +63,7 @@ async def _dc_rows(
     if sort_types:
         params["sortTypes"] = sort_types
     try:
-        resp = await client.get(_DC_URL, params=params, headers=HTTP_HEADERS, timeout=20.0)
+        resp = await em_get(client, _DC_URL, params=params, headers=HTTP_HEADERS, timeout=20.0)
         resp.raise_for_status()
         payload = resp.json()
     except Exception:

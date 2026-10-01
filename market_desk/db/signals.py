@@ -162,6 +162,21 @@ def upsert_signal(row: dict[str, Any]) -> None:
         elif old_payload.get("final_fail") and ready_now:
             # Recovered to ready: keep last gated fail for attribution.
             merged["final_fail"] = old_payload.get("final_fail")
+        if incoming.get("probe_ok") or old_payload.get("ever_probe"):
+            merged["ever_probe"] = True
+        # Live book impact is frozen once the card has lit (fill-time estimate).
+        if old_payload.get("ever_ready") and old_payload.get("slip_bps") is not None:
+            merged["slip_bps"] = old_payload["slip_bps"]
+            merged["slip_level"] = old_payload.get("slip_level")
+        cf_now = merged.pop("cf_now", None)
+        if cf_now is not None or old_payload.get("cf"):
+            from market_desk.counterfactual.trace import merge_trace
+
+            cf = merge_trace(old_payload.get("cf"), cf_now, signaled)
+            if cf:
+                merged["cf"] = cf
+            else:
+                merged.pop("cf", None)
 
         now_payload = json.dumps(merged, ensure_ascii=False)
         conn.execute(
