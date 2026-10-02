@@ -12,6 +12,7 @@ log = logging.getLogger("market_desk.notify")
 COOLDOWN_STOP_SEC = 60.0
 COOLDOWN_ENTRY_SEC = 600.0
 COOLDOWN_CHASE_SEC = 300.0
+COOLDOWN_DECLINE_SEC = 3600.0  # status / lifecycle can flicker around the threshold
 
 
 def notify_windows(title: str, body: str) -> bool:
@@ -98,6 +99,10 @@ def build_toast_alerts(
             )
         )
 
+    decline = _mainline_decline_alert(prev_v, cur_v, cur_ml=cur_ml, prev_ml=prev_ml)
+    if decline:
+        alerts.append(decline)
+
     if cur_phase in ("恐慌", "高潮") and cur_phase != prev_phase:
         temp = current.get("temperature")
         alerts.append(
@@ -118,6 +123,42 @@ def build_toast_alerts(
         if alert[0] not in prev_ready:
             alerts.append(alert)
     return alerts
+
+
+def _mainline_fading(mainline: dict[str, Any]) -> list[str]:
+    """Return the reasons a mainline counts as fading (lifecycle ending / status 退潮)."""
+    why: list[str] = []
+    if str(mainline.get("lifecycle") or "") == "ending":
+        why.append("生命周期转衰退")
+    if str(mainline.get("status") or "") == "退潮":
+        why.append("板块转退潮")
+    return why
+
+
+def _mainline_decline_alert(
+    prev_v: dict[str, Any],
+    cur_v: dict[str, Any],
+    *,
+    cur_ml: str,
+    prev_ml: str,
+) -> tuple[str, str, str] | None:
+    """Edge-fire ``decline:{ml}`` when the same mainline turns fading between two rounds.
+
+    A mainline switch is reported by ``mainline:`` instead, so only an unchanged
+    name qualifies.
+    """
+    if not cur_ml or cur_ml != prev_ml:
+        return None
+    if _mainline_fading(prev_v.get("mainline") or {}):
+        return None
+    why = _mainline_fading(cur_v.get("mainline") or {})
+    if not why:
+        return None
+    return (
+        f"decline:{cur_ml}",
+        "【主线衰退】" + cur_ml,
+        f"主线 {cur_ml} · {'、'.join(why)} · 不开新仓，持仓按卖点减",
+    )
 
 
 def build_damped_toast_alerts(
@@ -287,7 +328,7 @@ def toast_priority(key: str) -> int:
         return 2
     if k.startswith("band:chase:") or k.startswith("wl:chase:"):
         return 3
-    if k.startswith(("exit:", "crowd:")):
+    if k.startswith(("exit:", "crowd:", "decline:")):
         return 4
     if k.startswith("mainline:"):
         return 5
@@ -305,7 +346,9 @@ def is_level_toast(key: str) -> bool:
 def is_decision_toast(key: str) -> bool:
     """Return True for verdict / phase / mainline decision toasts (not sells)."""
     k = str(key or "")
-    return k.startswith(("buy:", "fly:", "exit:", "mainline:", "phase:", "crowd:", "pulse:"))
+    return k.startswith(
+        ("buy:", "fly:", "exit:", "mainline:", "phase:", "crowd:", "pulse:", "decline:")
+    )
 
 
 def is_risk_toast(key: str) -> bool:
@@ -328,6 +371,8 @@ def cooldown_for_key(key: str, decision_cooldown: float) -> float:
         return COOLDOWN_ENTRY_SEC
     if k.startswith(("band:chase:", "wl:chase:")):
         return COOLDOWN_CHASE_SEC
+    if k.startswith("decline:"):
+        return max(float(decision_cooldown), COOLDOWN_DECLINE_SEC)
     return float(decision_cooldown)
 
 
@@ -699,6 +744,37 @@ def is_sell_push_window(now: datetime, *, trading_day: bool) -> bool:
         return False
     m = now.hour * 60 + now.minute
     return (9 * 60 + 25 <= m <= 11 * 60 + 30) or (13 * 60 <= m < 15 * 60)
+
+
+def build_alert_feed(snap: dict[str, Any] | None, *, now: datetime) -> dict[str, Any]:
+    """Build the compact cross-tab feed the page uses for sound alerts.
+
+    ``toasts`` mirrors the shared toast feed; ``stops`` lists the viewer's own ready
+    stop-type sell cards, only inside matched trading time so stale quotes on a
+    closed market never alarm.
+    """
+    snap = snap or {}
+    toasts = [
+        {"ts": t.get("ts"), "key": t.get("key"), "title": t.get("title")}
+        for t in (snap.get("recent_toasts") or [])[:12]
+        if isinstance(t, dict) and t.get("key")
+    ]
+    stops: list[dict[str, Any]] = []
+    if is_sell_push_window(now, trading_day=bool(snap.get("trading_day", True))):
+        for item in (snap.get("sell_advice") or {}).get("items") or []:
+            if not item.get("ready") or str(item.get("urgency") or "") != "stop":
+                continue
+            stops.append(
+                {
+                    "code": item.get("code"),
+                    "name": item.get("name"),
+                    "role_label": item.get("role_label"),
+                    "exit_mode": item.get("exit_mode"),
+                    "sell_price": item.get("sell_price"),
+                    "sell_qty": item.get("sell_qty"),
+                }
+            )
+    return {"toasts": toasts, "stops": stops}
 
 
 def push_user_sell_alerts(

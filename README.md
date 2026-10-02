@@ -335,6 +335,7 @@ market-desk/
 │   │   ├── alerts.py         # 价位触达、追价成本、ready 监控、复盘时段提示
 │   │   ├── discipline.py     # 收盘纪律审计卡：买入价带 / 止损执行 / 节奏三项评分、分数存档（settings discipline_hist:{uid}）
 │   │   └── payload.py        # 实时标注、代码历史、复盘页载荷
+│   ├── edge_shadow.py        # 进场影子账本（只显示）：站回再买 / 当日熔断（落库 book_open·book_ready）/ 龙头·趋势·时段降权，EDGE_SHADOW_SINCE 起算样本外
 │   ├── counterfactual/       # What-If 闸门净价值审计：trace 逐次到价/被拦原因（payload.cf）· sim 计划价模拟成交（止损/一字跌停/成本）· audit 分摊归因与结论
 │   ├── adapt/                # 自适应软反馈（context / gates / sizing / sell_learn / tune / bundle）
 │   ├── elliott/              # 大盘艾略特多情景（catalog / pivots / indicators / fit / timing / chart / board）
@@ -382,6 +383,7 @@ market-desk/
 ## 说明
 
 - 仓位与日级快照仅存本机 `data/desk.db`
-- 重点变化（可买入、卖出建议、主线切换、相位恐慌/高潮）会打 **Windows 右下角通知**；`config.TOAST_ENABLED` 可关，同键约 180 秒冷却
+- 重点变化（可买入、卖出建议、主线切换、主线衰退、相位恐慌/高潮）会打 **Windows 右下角通知**；`config.TOAST_ENABLED` 可关，同键约 180 秒冷却
+- **声音警报**（`static/js/desk/16-sound.js`，浏览器 Web Audio 合成、无音频文件）：顶栏「声音」开设置，偏好只存本机；本人止损亮灯 / 恐慌相位急促三连并出红色「止损警报」条，退出可买 / 主线衰退 / 极端拥挤禁开双音，可买 / 将飞单声（默认关）。每个页签的快照都带精简提醒源 `alert_feed`（`notify.build_alert_feed`），所以切到任何页签都会响；浏览器要求每次打开页面先点一下页面才能出声
 - 公开行情可能延迟或限流；盘中刷新过快有被封风险，可按需改 `SESSION_REFRESH_SECONDS`
 - 界面术语旁的 `?` 会弹出含义与近似算法（见 `glossary/`：desk / review / session / market 四个子模块，新词条加到主题对应的文件，并在 `static/js/desk/14-glossary-boot.js` 的分组里登记）

@@ -558,6 +558,14 @@ def build_review_payload(
     except Exception:
         summary["gate_ledger"] = {"ok": False, "rows": [], "note": "闸门账本暂不可用"}
     try:
+        from market_desk.edge_shadow import build_edge_shadow
+
+        summary["edge_shadow"] = build_edge_shadow(
+            [r for r in wide_rows if not _dragon_hide_from_review(r)]
+        )
+    except Exception:
+        summary["edge_shadow"] = {"ok": False, "note": "进场影子暂不可用"}
+    try:
         summary["chase_cost"] = build_chase_cost(apply_signal_user_meta(wide_rows, user_id))
     except Exception:
         summary["chase_cost"] = {"ok": False, "n": 0, "items": [], "note": "追价成本暂不可用"}

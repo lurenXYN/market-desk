@@ -14,6 +14,7 @@ from market_desk.db import (
     purge_stale_closed_positions,
 )
 from market_desk.glossary import GLOSSARY
+from market_desk.notify import build_alert_feed
 from market_desk.verdict import build_risk_overview, position_summary
 
 from market_desk.engine.watch import _decorate_watchlist
@@ -348,6 +349,8 @@ class DeskEngine(
             # Always attach glossary: review/pos/backtest also have 「?」 tips;
             # restoring last tab from localStorage must not leave GLOSSARY empty.
             "glossary": snap.get("glossary") or GLOSSARY,
+            # Sound alerts must fire on every tab, not only where sells / toasts render.
+            "alert_feed": build_alert_feed(snap, now=datetime.now(CN_TZ)),
         }
         by_view: dict[str, tuple[str, ...]] = {
             "boards": (

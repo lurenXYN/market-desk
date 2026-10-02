@@ -30,6 +30,49 @@ function paintGateLedger(gl) {
 }
 
 /**
+ * Render the edge shadow ledger: reclaim entry, intraday breaker, reweight (display only).
+ * @param {object} es - summary.edge_shadow from /api/review.
+ */
+function paintEdgeShadow(es) {
+  const box = document.getElementById("revEdgeShadow");
+  if (!box) return;
+  if (!es || !es.ok) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  const fmt = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const pct = (v) => (v == null ? "—" : `${v}%`);
+  const tbl = (head, rows) =>
+    `<table class="gl-tbl"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`
+    + `<tbody>${rows.join("")}</tbody></table>`;
+  const reclaim = (es.reclaim || []).map((r) =>
+    `<tr class="gl-${escAttr(r.tone)}"><td>${escAttr(r.key)}</td><td class="num">${r.n}/${r.days}天</td>`
+    + `<td class="num">${fmt(r.touch_d3)} · ${pct(r.touch_win)}</td>`
+    + `<td class="num">${r.reclaim_n} · ${fmt(r.reclaim_d3)}</td>`
+    + `<td class="num">${r.skip_n} · ${fmt(r.skip_d3)}</td>`
+    + `<td class="num">${fmt(r.delta)}</td><td>${escAttr(r.verdict)}</td></tr>`);
+  const breaker = (es.breaker || []).map((r) =>
+    `<tr class="gl-${escAttr(r.tone)}"><td>已亮均值 ≤ ${r.level}%</td><td class="num">${r.n}/${r.days}天</td>`
+    + `<td class="num">${r.lit_n}</td><td class="num">${fmt(r.blocked_d3)} · ${pct(r.blocked_win)}</td>`
+    + `<td class="num">${r.kept_n} · ${fmt(r.kept_d3)}</td>`
+    + `<td class="num">${fmt(r.diff)}</td><td>${escAttr(r.verdict)}</td></tr>`);
+  const reweight = (es.reweight || []).map((r) =>
+    `<tr class="gl-${escAttr(r.tone)}"><td>${escAttr(r.key)}</td><td>${r.polarity > 0 ? "加权" : "降权"}</td>`
+    + `<td class="num">${r.n}/${r.days}天</td><td class="num">${fmt(r.excess)}</td><td>${escAttr(r.verdict)}</td>`
+    + `<td class="num">${r.disc_n} · ${fmt(r.disc_excess)}</td></tr>`);
+  box.hidden = false;
+  box.innerHTML =
+    `<div class="hd">进场影子<button type="button" class="q" data-term="进场影子">?</button> · ${escAttr(es.note || "")}</div>`
+    + `<div class="meta">站回再买：触价后等现价站回分时均价再买（没站回 = 不买）</div>`
+    + tbl(["口径", "触价卡", "触价即买 三日·胜率", "站回 只·三日", "未站回 只·三日", "每卡差值", "结论"], reclaim)
+    + `<div class="meta">当日熔断：当天先亮的卡平均浮亏到阈值后，不再亮新卡</div>`
+    + tbl(["阈值", "被拦", "其中亮过", "被拦 三日·胜率", "放行 只·三日", "差值", "结论"], breaker)
+    + `<div class="meta">降权：同日对照超额（样本外判定；发现期仅参考）</div>`
+    + tbl(["规则", "方向", "样本外", "同日超额", "结论", "发现期 只·超额"], reweight);
+}
+
+/**
  * Render the viewer's daily discipline scorecard (chase / stops / rhythm).
  * @param {object} dc - summary.discipline from /api/review.
  */

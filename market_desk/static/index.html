@@ -47,6 +47,7 @@
           <span class="dot" id="liveDot"></span>
           <span id="stamp">加载中…</span>
           <span id="pageClock" style="margin-left:10px"></span>
+          <button type="button" class="sound-btn" id="soundBtn" title="声音警报（本机设置）">声音·关</button>
           <span class="auth-user" id="authUserChip">
             <span id="authUserLabel">未登录</span>
             <button type="button" id="authPwdBtn" hidden>改密</button>
@@ -60,9 +61,12 @@
         <button type="button" id="commuteBtnM" title="通勤极简">通勤</button>
         <button type="button" id="glossaryBtnM" title="浏览全部术语">术语</button>
         <button type="button" id="settingsBtnM" title="运行参数">参数</button>
+        <button type="button" class="sound-btn" id="soundBtnM" title="声音警报（本机设置）">声音关</button>
       </div>
     </div>
     <div class="data-banner" id="dataBanner"></div>
+    <div class="stop-alarm" id="stopAlarm" hidden role="alert"></div>
+    <div class="sound-panel" id="soundPanel" hidden></div>
     <div class="toast-strip" id="toastStrip"></div>
     <div class="term-pop" id="termPop" hidden role="dialog" aria-live="polite"></div>
 
@@ -750,6 +754,7 @@
         <div class="rev-missed" id="revMissed"></div>
         <div class="oc-compare" id="revOcCompare"></div>
         <div class="oc-compare gate-ledger" id="revGateLedger" hidden></div>
+        <div class="oc-compare gate-ledger" id="revEdgeShadow" hidden></div>
         <details class="oc-compare gate-ledger cf-audit" id="revCfAudit">
           <summary class="hd">闸门净价值审计（What-If）<button type="button" class="q" data-term="闸门净价值审计">?</button>
             <span class="meta" id="revCfHead">展开后加载</span></summary>

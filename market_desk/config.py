@@ -247,6 +247,15 @@ GATE_LEDGER_DAYS = 20
 GATE_LEDGER_MIN_N = 8
 GATE_LEDGER_MIN_DAYS = 3
 GATE_LEDGER_EDGE_PCT = 0.8
+# Edge shadow ledger (display only): reclaim-entry / intraday breaker / reweight
+# rules found in the September 2026 replay. Only trade dates on or after SINCE are
+# out-of-sample evidence; verdicts reuse the GATE_LEDGER_* sample / edge cutoffs.
+# The breaker blocks a card when ≥ MIN_LIT cards had lit earlier that day and
+# their average float was at or below a level (several levels judged side by side).
+EDGE_SHADOW_SINCE = "2026-10-08"
+EDGE_SHADOW_DAYS = 30
+EDGE_BREAKER_MIN_LIT = 2
+EDGE_BREAKER_LEVELS = (-1.0, -2.0, -3.0)
 # Counterfactual (What-If) gate net-value audit (display only). Cards whose price
 # came to plan but never lit are filled at plan in simulation: stop from day1
 # (recorded stop, else fallback %), exit at close of day HOLD_DAYS, minus a
@@ -492,7 +501,7 @@ BOARDS_DEGRADE_STREAK = 2               # in-session EM failures before degradin
 BOARDS_PROBE_RETRY_SEC = 120.0          # break-time retry cadence after a failed EM probe
 BOARDS_LUNCH_PROBE_SEC = 120.0          # lunch-break probe cadence (refresh loop is idle then)
 SOURCE_SHIFT_DAMP_SEC = 180.0           # after a source flip: no board-edge toasts / switch records
-SOURCE_SHIFT_DAMP_PREFIXES = ("buy:", "fly:", "exit:", "mainline:", "crowd:")
+SOURCE_SHIFT_DAMP_PREFIXES = ("buy:", "fly:", "exit:", "mainline:", "crowd:", "decline:")
 SOURCE_SHIFT_REPLAY_PREFIXES = ("buy:", "fly:", "exit:")  # re-diffed vs pre-flip baseline at window end
 
 # Sina → East Money alias learning (constituent overlap, runtime self-learning).

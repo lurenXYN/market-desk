@@ -159,6 +159,7 @@ function paintReview(payload) {
     }
   }
   paintGateLedger(sum.gate_ledger || {});
+  paintEdgeShadow(sum.edge_shadow || {});
   paintDiscipline(sum.discipline || {});
   paintChaseCost(sum.chase_cost || {});
   const chip = (lab, rate, n, lowN) =>

@@ -125,6 +125,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
         elif "first_last" in old_payload:
             merged["first_last"] = old_payload["first_last"]
 
+        # Shadow breaker input: today's lit book, frozen at first sight and at first light.
+        day_book = merged.pop("day_book", None)
+        if not existing and isinstance(day_book, dict):
+            merged["book_open"] = day_book
+
         # Gate evolution: keep first_ready / fail history across same-day upserts.
         ready_now = 1 if row.get("ready") else 0
         signaled = str(row.get("signaled_at") or "")
@@ -132,6 +137,10 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["ever_ready"] = True
             if not old_payload.get("first_ready_at"):
                 merged["first_ready_at"] = signaled or old_payload.get("first_ready_at")
+                if row.get("last") is not None:
+                    merged["first_ready_px"] = row.get("last")
+                if isinstance(day_book, dict):
+                    merged["book_ready"] = day_book
             else:
                 merged["first_ready_at"] = old_payload.get("first_ready_at")
         else:
@@ -213,6 +222,59 @@ def upsert_signal(row: dict[str, Any]) -> None:
             ),
         )
         conn.commit()
+
+
+def day_lit_book(trade_date: str, live_last: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Summarize the floating return of paper buys that have already lit today.
+
+    Input for the shadow intraday breaker (display only). Each code counts once;
+    entry is the price when the card first lit (falls back to the plan price) and
+    the mark is ``live_last`` when the code is on the current desk, else the last
+    stored refresh.
+
+    Args:
+        trade_date: Session date (``YYYY-MM-DD``).
+        live_last: Optional ``code -> last`` from the current refresh.
+
+    Returns:
+        ``{"n", "avg_pct", "worst_pct"}``; percentages are None when nothing lit.
+    """
+    from market_desk.numbers import num
+
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT code, price, last, payload FROM signals
+            WHERE trade_date = ? AND COALESCE(owner_user_id, 0) = 0
+              AND signal_type LIKE 'buy%'
+            ORDER BY id
+            """,
+            (trade_date,),
+        ).fetchall()
+    floats: dict[str, float] = {}
+    for row in rows:
+        code = str(row["code"] or "")
+        if not code or code in floats:
+            continue
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or not payload.get("ever_ready"):
+            continue
+        entry = num(payload.get("first_ready_px")) or num(payload.get("plan_price")) or num(row["price"])
+        mark = num((live_last or {}).get(code)) or num(row["last"])
+        if not entry or not mark or entry <= 0 or mark <= 0:
+            continue
+        floats[code] = (mark / entry - 1.0) * 100.0
+    if not floats:
+        return {"n": 0, "avg_pct": None, "worst_pct": None}
+    vals = list(floats.values())
+    return {
+        "n": len(vals),
+        "avg_pct": round(sum(vals) / len(vals), 2),
+        "worst_pct": round(min(vals), 2),
+    }
 
 
 def load_signal(signal_id: int) -> dict[str, Any] | None:

@@ -429,6 +429,9 @@ _posTab?.addEventListener("click", (ev) => {
     const d = await r.json().catch(() => ({}));
     if (d.user) {
       paintAuthUser(d.user);
+      // The boot-time applyMain() tick ran before the session was known; poll now
+      // instead of leaving the page blank until the first interval fires.
+      tick(true);
       return;
     }
   } catch (e) {}

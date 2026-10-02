@@ -169,6 +169,11 @@ async function tick(force) {
       }
     }
     paintVisible(lastData);
+    try {
+      soundOnSnapshot(d);
+    } catch (e) {
+      console.warn("sound alert failed", e);
+    }
     paintClock();
     scheduleTick(!!lastData.live);
     if (currentMain === "funds") ensureFundFlowFull();

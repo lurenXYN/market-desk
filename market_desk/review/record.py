@@ -34,6 +34,39 @@ def _slip_fields(item: dict[str, Any]) -> dict[str, Any]:
     return {"slip_bps": round(max(0.0, float(bps)), 1), "slip_level": slip.get("level")}
 
 
+_BUY_TREES = (
+    "recommend",
+    "side_recommend",
+    "link_recommend",
+    "watch_trial_recommend",
+    "independent_recommend",
+    "dragon_recommend",
+)
+
+
+def _day_book(trade_date: str, verdict: dict[str, Any]) -> dict[str, Any] | None:
+    """Return today's lit-book summary for the shadow breaker, or None.
+
+    Skipped when the round carries no buy cards (sell-only re-logging) or the
+    lookup fails; marks lit codes with the prices of the current refresh.
+    """
+    live: dict[str, Any] = {}
+    for key in _BUY_TREES:
+        for item in (verdict.get(key) or {}).get("items") or []:
+            code = normalize_code(item.get("code"))
+            last = num(item.get("last"))
+            if code and last:
+                live.setdefault(code, last)
+    if not live:
+        return None
+    try:
+        from market_desk.db import day_lit_book
+
+        return day_lit_book(trade_date, live)
+    except Exception:
+        return None
+
+
 def record_session_signals(snapshot: dict[str, Any]) -> int:
     """Persist buy/sell recommendations for the current session. Return insert/update count.
 
@@ -84,6 +117,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     market_gates = normalize_gate_notes(verdict.get("algo_notes"))
     arm_block = block_arm_reasons(verdict)
     stage_by_name = board_stage_lookup(snapshot)
+    day_book = _day_book(str(trade_date), verdict)
     n = 0
 
     def _log_buy_items(
@@ -200,6 +234,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "sell_conflict_block": bool(item.get("sell_conflict_block")),
                         "crowd_block": bool(item.get("crowd_block")),
                         "cf_now": trace_now(item, desk_source=desk_source, arm_block=arm_block),
+                        "day_book": day_book,
                         **_slip_fields(item),
                     },
                 }
@@ -362,14 +397,7 @@ def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
     }
     # Avoid re-logging buys: temporarily strip recommend trees.
     v = dict(slim["verdict"])
-    for key in (
-        "recommend",
-        "side_recommend",
-        "link_recommend",
-        "watch_trial_recommend",
-        "independent_recommend",
-        "dragon_recommend",
-    ):
+    for key in _BUY_TREES:
         v.pop(key, None)
     slim["verdict"] = v
     return record_session_signals(slim)

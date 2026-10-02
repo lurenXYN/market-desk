@@ -43,6 +43,9 @@
     font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
     min-height: 36px;
   }
+  .hdr .meta .sound-btn { display: none; }
+  .hdr-tools .sound-btn.on { border-color: #22c55e; color: #86efac; }
+  .hdr-tools .sound-btn.locked { border-color: #f59e0b; color: #fbbf24; }
   .nav-tabs {
     position: fixed;
     left: 0; right: 0; bottom: 0;
