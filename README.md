@@ -333,6 +333,7 @@ market-desk/
 │   │   ├── hit_rates.py      # 命中率对照、错过买点、调参提示、闸门击杀
 │   │   ├── bias.py           # 卖出复盘偏置、卖飞板、买入闸门偏置（带缓存）
 │   │   ├── alerts.py         # 价位触达、追价成本、ready 监控、复盘时段提示
+│   │   ├── discipline.py     # 收盘纪律审计卡：买入价带 / 止损执行 / 节奏三项评分、分数存档（settings discipline_hist:{uid}）
 │   │   └── payload.py        # 实时标注、代码历史、复盘页载荷
 │   ├── counterfactual/       # What-If 闸门净价值审计：trace 逐次到价/被拦原因（payload.cf）· sim 计划价模拟成交（止损/一字跌停/成本）· audit 分摊归因与结论
 │   ├── adapt/                # 自适应软反馈（context / gates / sizing / sell_learn / tune / bundle）
@@ -346,7 +347,9 @@ market-desk/
 │   │   ├── gates.py          # 大盘闸门、竞价桥接、换防保护、复盘/相似日偏置
 │   │   ├── branches.py       # 支线 / 联动分支推荐
 │   │   ├── desk.py           # 自选试探、龙头、独立人气、自选作战计划
-│   │   ├── sell.py           # 单仓卖点：止损、保本盾、止盈分层、板块塌陷
+│   │   ├── sell.py           # 单仓卖点主决策 `_sell_item`：止损、保本盾、止盈分层、软减、板块塌陷、高开低走
+│   │   ├── sell_theme.py     # 卖侧多主题归属：主线 / 支线 / 联动 / 热点同伴，持仓属于哪个主题、是否退潮
+│   │   ├── sell_guards.py    # 卖点前后处理：出场带按相似日 / 资金流 / 波浪微调；决策后护栏（昨买今弱、今日已减、反悔窗、换防护栏、T+1）
 │   │   ├── sell_crack.py     # 板块塌陷判定（龙头炸板回撤 / 连板核心转弱 / 成分跳水）
 │   │   ├── bands.py          # 出场带宽（主升/退潮/标准 + 日线 ATR 自适应）
 │   │   ├── tags.py           # 卖出标签、下一步动作、持仓提示合并

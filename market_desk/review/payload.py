@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 from market_desk.db import (
@@ -359,6 +360,35 @@ def build_code_signal_history(
     }
 
 
+log = logging.getLogger("market_desk")
+
+
+def _discipline_for(day_rows: list[dict[str, Any]], *, day: str, user_id: int | None) -> dict[str, Any]:
+    """Build the viewer's discipline card for ``day`` and attach the stored score history."""
+    if user_id is None:
+        return {"ok": False, "score": None, "note": "登录后按本人成交评分"}
+    try:
+        from market_desk.db import load_exec_diary, load_positions
+        from market_desk.review.discipline import (
+            build_discipline_card,
+            is_final_day,
+            record_discipline_history,
+        )
+
+        card = build_discipline_card(
+            day_rows,
+            load_exec_diary(user_id=int(user_id), trade_date=day, limit=200),
+            day=day,
+            user_id=int(user_id),
+            positions=load_positions(user_id=int(user_id)),
+        )
+        card["hist"] = record_discipline_history(int(user_id), card, final=is_final_day(day))
+        return card
+    except Exception:
+        log.exception("discipline card failed user=%s day=%s", user_id, day)
+        return {"ok": False, "score": None, "note": "纪律审计暂不可用"}
+
+
 def build_review_payload(
     limit: int = 180,
     quotes: dict[str, dict[str, Any]] | None = None,
@@ -531,6 +561,7 @@ def build_review_payload(
         summary["chase_cost"] = build_chase_cost(apply_signal_user_meta(wide_rows, user_id))
     except Exception:
         summary["chase_cost"] = {"ok": False, "n": 0, "items": [], "note": "追价成本暂不可用"}
+    summary["discipline"] = _discipline_for(day_rows, day=day, user_id=user_id)
     summary["session_hint"] = build_review_session_hint(day_rows, is_today=day == calendar_today)
     summary["sell_bias"] = build_sell_review_bias_bundle(global_rows)
     try:

@@ -90,13 +90,13 @@ from market_desk.verdict.tags import (  # noqa: F401
     attach_position_sell_hints,
     _sell_tune_tags,
 )
-from market_desk.verdict.sell import (  # noqa: F401
+from market_desk.verdict.sell_theme import (  # noqa: F401
     build_sell_themes,
     _position_tied_to_mainline,
     _match_sell_theme,
     _sell_theme_context,
-    _sell_item,
 )
+from market_desk.verdict.sell import _sell_item  # noqa: F401
 from market_desk.verdict.sell_advice import (  # noqa: F401
     build_sell_advice,
     _ready_buy_codes,

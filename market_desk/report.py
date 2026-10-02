@@ -513,8 +513,9 @@ def _eod_curate_push(bullets: list[str], *, cap: int = 8) -> list[str]:
     """Pick a push-sized subset that always keeps the day P&L bullet first."""
     if not bullets:
         return []
-    pnl = [b for b in bullets if str(b).startswith("今日盈亏")]
-    rest = [b for b in bullets if not str(b).startswith("今日盈亏")]
+    head = ("今日盈亏", "纪律分")
+    pnl = [b for k in head for b in bullets if str(b).startswith(k)]
+    rest = [b for b in bullets if not str(b).startswith(head)]
     ordered = pnl + rest
     return ordered[: max(1, int(cap))]
 
@@ -578,6 +579,9 @@ def build_eod_onepager(
             pnl_line += f"（{note}）"
 
     bullets: list[str] = [pnl_line]
+    disc = summary.get("discipline") if isinstance(summary.get("discipline"), dict) else {}
+    if disc.get("ok") and disc.get("score") is not None and disc.get("line"):
+        bullets.append(str(disc["line"]))
 
     diary_line = _eod_diary_line(diary_rows)
     if diary_line:

@@ -49,7 +49,8 @@ Agents: **at the start of each session involving this app, read this file before
 ### 阶段五：交易员作战座舱纪律体验
 
 > 顺序（2026-10-02 定）：纪律审计卡 → 声音警报 → 闪电复制。
-- [ ] **收盘《冷酷纪律执行审计卡》（Discipline Scorecard）** — 每日 15:30 自动比对系统信号与实际交割，评估是否追高、是否死扛止损、给出客观纪律分。
+- [x] **收盘《冷酷纪律执行审计卡》（Discipline Scorecard）** — 每日 15:30 自动比对系统信号与实际交割，评估是否追高、是否死扛止损、给出客观纪律分。*(2026-10-02，见 CHANGELOG v1.9.0：复盘页卡片 + 15:05 收盘推送一行；不考核盘中时段，因记账时间≠成交时间)*
+  - [ ] 次日补算扛单代价（次日收盘 vs 止损信号价），目前只显示当前价较信号价
   - 按人算，数据：已交易买卡成交价（`signal_user_meta`）+ 成交日记 `exec_diary` + 当日止损类卖卡 ready + 收盘持仓
   - 买入 40：成交 ≤ 计划价 +1.5% 不扣，+1.5%~+2.5% 扣一半，≥ 不追上限全扣；无卡的计划外买入单列并扣分
   - 止损 40：止损卡 ready 当日卖出满分，收盘仍持有记「扛单」0 分；次日补算扛单代价（次日收盘 vs 止损价）
@@ -80,7 +81,8 @@ Agents: **at the start of each session involving this app, read this file before
 - [ ] **`index.html`（1,120 行）** — 结构性模板，收益低，暂不拆。
 - [x] **CSS 遗留孤立声明** — 删除 `04-market.css` 末尾两行无选择器声明与多余 `}`（`.data-banner.ok-soft` 残留副本），被吞掉的 `.rec-actions` 弹性布局恢复生效（桌面端推荐卡按钮等宽 + 6px 间距）。*(2026-10-01)*
 - [x] **`glossary.py` → `glossary/`** — 涨到 1,327 行超阈值，按原顺序切成 desk / review / session / market 四个子模块（最大 381 行），`__init__` 合并出 `GLOSSARY`，拆前拆后 200 条内容与顺序逐字一致；并补 v1.8.1–1.8.3 欠的 3 个词条。*(2026-10-02，见 CHANGELOG v1.8.4)*
-- [ ] **暂不拆** — `backtest.py`（1,116）、`db/positions.py`（1,052）：接近阈值且内聚，等再增长时处理。
+- [x] **`verdict/sell.py`（1,272）→ `sell.py` + `sell_theme.py` + `sell_guards.py`** — 主题归属四个函数原样搬走；`_sell_item` 里出场带微调与决策后护栏链抽成两个函数（入参显式、状态回写），2 万组随机持仓新旧实现逐字段比对 0 差异且覆盖全部卖点分支。*(2026-10-02，见 CHANGELOG v1.9.1)*
+- [ ] **暂不拆** — `backtest.py`（1,184）、`verdict/buy.py`（1,154）、`db/positions.py`（1,052）：接近阈值且内聚，等再增长时处理。
 
 ## Done recently (context)
 

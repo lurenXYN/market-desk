@@ -159,6 +159,7 @@ function paintReview(payload) {
     }
   }
   paintGateLedger(sum.gate_ledger || {});
+  paintDiscipline(sum.discipline || {});
   paintChaseCost(sum.chase_cost || {});
   const chip = (lab, rate, n, lowN) =>
     `<div class="hit-chip${lowN ? " low-n" : ""}" title="${lowN ? "样本不足 n<8，灰显参考" : ""}"><div class="lab">${lab}</div>`

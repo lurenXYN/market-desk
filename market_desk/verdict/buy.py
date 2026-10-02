@@ -46,7 +46,7 @@ from market_desk.verdict.gates import (
     inject_switch_from_theme,
 )
 from market_desk.verdict.branches import _build_link_branch, _build_side_branch
-from market_desk.verdict.sell import build_sell_themes
+from market_desk.verdict.sell_theme import build_sell_themes
 from market_desk.verdict.desk import (
     build_dragon_recommend,
     build_independent_pullback_recommend,

@@ -234,8 +234,8 @@ class EodMixin:
             push_list = ubrief.get("push_bullets")
             if not isinstance(push_list, list) or not push_list:
                 raw = [str(b) for b in (ubrief.get("bullets") or []) if b]
-                pnl = [b for b in raw if b.startswith("今日盈亏")]
-                rest = [b for b in raw if not b.startswith("今日盈亏")]
+                pnl = [b for b in raw if b.startswith(("今日盈亏", "纪律分"))]
+                rest = [b for b in raw if not b.startswith(("今日盈亏", "纪律分"))]
                 push_list = (pnl + rest)[:8]
             body_lines = [str(ubrief.get("focus") or "").strip()]
             for b in push_list[:8]:

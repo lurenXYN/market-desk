@@ -30,6 +30,54 @@ function paintGateLedger(gl) {
 }
 
 /**
+ * Render the viewer's daily discipline scorecard (chase / stops / rhythm).
+ * @param {object} dc - summary.discipline from /api/review.
+ */
+function paintDiscipline(dc) {
+  const box = document.getElementById("revDiscipline");
+  if (!box) return;
+  if (!dc || !dc.ok) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  const fmt = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const secs = dc.sections || {};
+  const secTxt = [["buy", "买入"], ["stop", "止损"], ["rhythm", "节奏"]]
+    .filter(([k]) => secs[k])
+    .map(([k, lab]) => `${lab} ${secs[k].pts}/${secs[k].max}`)
+    .join(" · ");
+  const rows = (dc.items || []).map((it) => {
+    const tone = it.credit >= 1 && !(it.flags || []).length ? "good" : it.credit > 0 ? "mid" : "bad";
+    if (it.kind === "stop") {
+      const cost = it.label === "扛单" && it.vs_signal != null ? ` · 现价较信号 ${fmt(it.vs_signal)}` : "";
+      return `<tr class="gl-${tone}"><td>止损</td><td>${escAttr(it.name)}</td>`
+        + `<td>${escAttr(it.rule || "")}</td><td class="num">${it.sold}/${it.need}</td>`
+        + `<td>${escAttr(it.label + cost)}</td></tr>`;
+    }
+    const flags = (it.flags || []).join("、");
+    return `<tr class="gl-${tone}"><td>买入</td><td>${escAttr(it.name)}</td>`
+      + `<td class="num">${it.plan ?? "—"} → ${it.fill ?? "—"}</td><td class="num">${fmt(it.chase)}</td>`
+      + `<td>${escAttr(it.label + (flags ? ` · ${flags}` : ""))}</td></tr>`;
+  }).join("");
+  const hist = (dc.hist || []).slice(-10)
+    .map((h) => `<span class="disc-h" title="${escAttr(h.day)} ${escAttr(h.grade || "")}">${escAttr(h.day.slice(5))} <b>${h.score}</b></span>`)
+    .join("");
+  const score = dc.score == null ? "—" : dc.score;
+  box.hidden = false;
+  box.innerHTML =
+    `<div class="hd">纪律审计卡<button type="button" class="q" data-term="纪律审计卡">?</button> · `
+    + `<span class="disc-score disc-${escAttr(dc.tone || "low")}">${score}</span> ${escAttr(dc.grade || "")}`
+    + (secTxt ? ` · ${escAttr(secTxt)}` : "") + `</div>`
+    + `<div class="meta">${escAttr(dc.line || "")}</div>`
+    + (rows
+      ? `<table class="gl-tbl"><thead><tr><th>类型</th><th>标的</th><th>计划→成交 / 规则</th>`
+        + `<th>追价 / 卖出量</th><th>判定</th></tr></thead><tbody>${rows}</tbody></table>`
+      : "")
+    + (hist ? `<div class="disc-hist">近期：${hist}</div>` : "");
+}
+
+/**
  * Render the viewer's chase cost: buy fills vs plan price (display only).
  * @param {object} cc - summary.chase_cost from /api/review.
  */

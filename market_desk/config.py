@@ -229,6 +229,12 @@ REVIEW_ABOVE_PLAN_WARN_PCT = 1.0
 # Book fill ≥ this % above the buy plan → chase warning on record + review chase-cost.
 CHASE_WARN_PCT = 1.5
 CHASE_COST_DAYS = 20
+# Discipline scorecard: fills above plan by ≤ CHASE_WARN_PCT keep full buy credit,
+# up to this pct earn half, beyond it (or at/above the no-chase price) earn none.
+DISCIPLINE_CHASE_HARD_PCT = 2.5
+# First trade day whose buy cards persist ``ever_ready`` (only written when lit); before
+# it a card that lit and later dimmed is indistinguishable from one that never lit.
+EVER_READY_TRACKED_SINCE = "2026-09-11"
 # Ready-gate monitor on the review board (display only): lit buys vs same-day
 # peers over the most recent scored trade days. Below MIN_N no verdict is shown.
 REVIEW_READY_MONITOR_DAYS = 20
