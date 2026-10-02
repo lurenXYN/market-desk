@@ -17,6 +17,7 @@ from market_desk.counterfactual import (
     trace_now,
 )
 from market_desk.review.record import _slip_fields
+from market_desk.verdict.common import atr_shadow_stop, attach_atr_shadow_stops
 
 NOW = datetime(2026, 10, 10, 16, 0)
 CAL = [f"2026-09-{d:02d}" for d in range(1, 29)]
@@ -253,6 +254,36 @@ def test_audit_strict_drops_early_tier_and_dedupes_channels() -> None:
     assert strict["summary"]["released"]["n"] == 1 and strict["summary"]["blocked"]["n"] == 0
     loose = _run([early, blocked_main, lit_dragon], strict=False)
     assert loose["summary"]["tiers"].get("早盘") == 1 and loose["summary"]["blocked"]["n"] == 1
+
+
+def test_atr_shadow_stop_clamps_and_never_tightens() -> None:
+    assert atr_shadow_stop(10.0, 9.95, 4.0, False) == pytest.approx(9.7)
+    assert atr_shadow_stop(10.0, 9.95, 10.0, False) == pytest.approx(9.5)
+    assert atr_shadow_stop(10.0, 9.95, None, False) == pytest.approx(9.8)
+    assert atr_shadow_stop(10.0, 9.0, 4.0, False) == pytest.approx(9.0)
+    assert atr_shadow_stop(10.0, 10.2, 4.0, False) == pytest.approx(9.7)
+    assert atr_shadow_stop(10.0, 9.99, 1.0, True) == pytest.approx(9.9)
+    assert atr_shadow_stop(None, 9.9, 4.0, False) is None
+    rec = {"items": [
+        {"code": "600001", "kind": "stock", "plan_price": 10.0, "stop_price": 9.95},
+        {"code": "600002", "kind": "stock", "plan_price": 10.0, "stop_price": 9.95},
+    ]}
+    attach_atr_shadow_stops(rec, {"600001": 4.0})
+    a, b = rec["items"]
+    assert a["stop_atr"] == 9.7 and a["atr_pct"] == 4.0 and a["stop_price"] == 9.95
+    assert "stop_atr" not in b
+
+
+def test_audit_stop_compare_live_vs_shadow() -> None:
+    path = [(10.1, 10.2, 9.9, 10.0), (10.0, 10.1, 9.9, 10.0), (10.0, 10.3, 10.0, 10.2), (10.2, 10.5, 10.1, 10.4)]
+    tight = (_sig(2, {**TRACED, "stop_price": 9.95}, code="600031", ready=1), _packed(2, path))
+    rec = (_sig(2, {**TRACED, "stop_price": 9.95, "stop_atr": 9.85}, code="600032", ready=1), _packed(2, path))
+    cmp_ = _run([tight, rec])["stop_cmp"]
+    live, shadow = cmp_["rows"]
+    assert live["label"].startswith("现状") and shadow["label"].startswith("影子")
+    assert cmp_["recorded_n"] == 1
+    assert live["stop_rate"] == 100.0 and shadow["stop_rate"] == 0.0
+    assert shadow["mean"] > live["mean"] and shadow["gap_med"] > live["gap_med"]
 
 
 def test_bootstrap_ci_deterministic_and_needs_three() -> None:

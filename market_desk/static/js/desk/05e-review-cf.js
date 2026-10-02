@@ -80,6 +80,7 @@ function paintCfAudit(d) {
     + sides
     + gateTbl
     + cfSensTable(d.entry_sens)
+    + cfStopTable(d.stop_cmp)
     + `<ul class="cf-notes">${notes.map((n) => `<li>${escAttr(n)}</li>`).join("")}</ul>`;
 }
 
@@ -101,6 +102,25 @@ function cfSensTable(sens) {
   return `<div class="cf-sens-title" title="${escAttr(sens.note || "")}">入场偏差敏感度：多付几个点，三日净值掉多少</div>`
     + `<table class="gl-tbl cf-sens"><thead><tr><th>入场</th><th>张数</th><th>胜率</th><th>三日净值</th>`
     + `<th>较计划价</th><th>止损率</th><th>其中放行卡</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * Render the live vs shadow-ATR stop comparison on the same touched cards.
+ * @param {object|null} cmp - ``stop_cmp`` block of the audit payload.
+ * @returns {string} HTML, or an empty string when there are no rows.
+ */
+function cfStopTable(cmp) {
+  const rows = (cmp && cmp.rows) || [];
+  if (!rows.length) return "";
+  const body = rows.map((r) =>
+    `<tr><td>${escAttr(r.label)}</td><td class="num">${r.n}</td><td class="num">${r.gap_med}%</td>`
+    + `<td class="num">${r.stop_rate}%</td><td class="num">${r.win}%</td><td class="num">${cfPct(r.mean)}</td>`
+    + `<td class="num">${Number(r.r_mult_med).toFixed(2)}R</td></tr>`,
+  ).join("");
+  const tip = `${cmp.note || ""}\n实测记录 ${cmp.recorded_n || 0} 张，其余按日线现算`;
+  return `<div class="cf-sens-title" title="${escAttr(tip)}">止损口径对照：日低止损 vs 影子 ATR 止损（只对照，不改卡片）</div>`
+    + `<table class="gl-tbl cf-sens"><thead><tr><th>口径</th><th>张数</th><th>止损距离</th><th>止损率</th>`
+    + `<th>胜率</th><th>三日净值</th><th>R 倍数(中位)</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /**

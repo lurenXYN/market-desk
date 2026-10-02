@@ -254,6 +254,74 @@ def _stop_price(last: float | None, low: float | None, etf: bool) -> float | Non
     return float(last) * (0.985 if etf else 0.97)
 
 
+def atr_shadow_stop(
+    ref: float | None,
+    stop: float | None,
+    atr_pct: float | None,
+    etf: bool,
+) -> float | None:
+    """Return the shadow ATR buy stop (never tighter than the live stop).
+
+    Args:
+        ref: Entry reference (locked plan price, else buy / last).
+        stop: Live stop (session low); ignored when missing or not below ``ref``.
+        atr_pct: Completed-session daily ATR in percent; None falls back to the minimum gap.
+        etf: Use the ETF gap band instead of the stock band.
+
+    Returns:
+        ``min(stop, ref × (1 − gap%))`` with gap = clamp(mult × ATR, min, max), or None
+        without a positive ``ref``.
+    """
+    from market_desk.config import (
+        BUY_STOP_ATR_MULT,
+        ETF_BUY_STOP_MAX_PCT,
+        ETF_BUY_STOP_MIN_PCT,
+        STOCK_BUY_STOP_MAX_PCT,
+        STOCK_BUY_STOP_MIN_PCT,
+    )
+
+    try:
+        ref_f = float(ref) if ref is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    if ref_f <= 0:
+        return None
+    lo, hi = (ETF_BUY_STOP_MIN_PCT, ETF_BUY_STOP_MAX_PCT) if etf else (STOCK_BUY_STOP_MIN_PCT, STOCK_BUY_STOP_MAX_PCT)
+    gap = float(lo)
+    if atr_pct is not None and float(atr_pct) > 0:
+        gap = min(float(hi), max(float(lo), float(BUY_STOP_ATR_MULT) * float(atr_pct)))
+    target = ref_f * (1.0 - gap / 100.0)
+    try:
+        live = float(stop) if stop is not None else None
+    except (TypeError, ValueError):
+        live = None
+    if live is None or live <= 0 or live >= ref_f:
+        return target
+    return min(live, target)
+
+
+def attach_atr_shadow_stops(rec: dict[str, Any] | None, atr_by_code: dict[str, Any]) -> None:
+    """Stamp ``stop_atr`` / ``atr_pct`` on recommendation items in place (display + audit only).
+
+    Only codes present in ``atr_by_code`` (daily klines fetched this session) are
+    stamped; ``stop_price``, sizing and alerts are left untouched.
+    """
+    for item in (rec or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        code = normalize_code(item.get("code"))
+        if not code or code not in atr_by_code:
+            continue
+        etf = item.get("kind") == "etf" or _is_etf_code(code)
+        ref = item.get("plan_price") or item.get("buy_price") or item.get("last")
+        atr = atr_by_code.get(code)
+        shadow = atr_shadow_stop(ref, item.get("stop_price"), atr, etf)
+        if shadow is None:
+            continue
+        item["stop_atr"] = _px(shadow, 3 if etf else 2)
+        item["atr_pct"] = atr
+
+
 def _chase_price(last: float | None, high: float | None, etf: bool) -> float | None:
     """Mark the price above which chasing is not allowed."""
     if last is None:

@@ -162,6 +162,8 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "plan_price": plan if plan is not None else price,
                         "wait_price": item.get("wait_price"),
                         "stop_price": item.get("stop_price"),
+                        "stop_atr": item.get("stop_atr"),
+                        "atr_pct": item.get("atr_pct"),
                         "chase_price": item.get("chase_price"),
                         "buy_price": item.get("buy_price"),
                         "qty": int(item.get("qty") or 0) or None,

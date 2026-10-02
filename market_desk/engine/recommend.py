@@ -17,6 +17,7 @@ from market_desk.filters import normalize_code
 from market_desk.minute_confirm import apply_minute_confirmations
 from market_desk.trend import classify_many, daily_atr_pct
 from market_desk.verdict import apply_stock_daily_trends, mark_pullback_entries
+from market_desk.verdict.common import attach_atr_shadow_stops
 
 from market_desk.engine.watch import _attach_holders_to_items
 
@@ -119,6 +120,8 @@ class RecommendMixin:
         closes_by_code, fetch_ok_by_code = await self._resolve_daily_closes(
             client, codes, trade_date
         )
+        for key in ("recommend", "side_recommend", "link_recommend", "dragon_recommend", "independent_recommend"):
+            attach_atr_shadow_stops(verdict.get(key), self._kline_atr)
         verdict["recommend"] = apply_stock_daily_trends(
             rec, closes_by_code, fetch_ok_by_code
         )

@@ -361,6 +361,7 @@ def build_counterfactual_audit(
         "summary": summary,
         "gates": gates,
         "entry_sens": build_entry_sensitivity(touched_rows, now=now),
+        "stop_cmp": build_stop_compare(touched_rows, now=now),
         "headline": _headline(summary, gates),
     }
 
@@ -417,6 +418,97 @@ def build_entry_sensitivity(
     return {
         "rows": rows,
         "note": "同一批到价卡，只改入场价（计划价 + x%，限在当日最低~最高之间；低开到计划价下方仍按开盘），止损价按计划价固定",
+    }
+
+
+def _shadow_stop_for(row: dict[str, Any], packed: Any) -> tuple[float | None, bool]:
+    """Return (shadow ATR stop, recorded) for one card.
+
+    Prefers the live-recorded ``payload.stop_atr``; otherwise rebuilds it from
+    daily bars completed before day0 (the same inputs the live refresh uses).
+    """
+    from market_desk.trend import daily_atr_pct
+    from market_desk.verdict.common import _is_etf_code, atr_shadow_stop
+
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    try:
+        rec = float(payload.get("stop_atr")) if payload.get("stop_atr") is not None else None
+    except (TypeError, ValueError):
+        rec = None
+    if rec is not None and rec > 0:
+        return rec, True
+    plan = payload.get("plan_price") or payload.get("buy_price") or row.get("price")
+    atr = None
+    if packed:
+        dates, closes, ohlc = packed
+        day0 = str(row.get("trade_date") or "")[:10]
+        if day0 in list(dates):
+            i0 = list(dates).index(day0)
+            atr = daily_atr_pct(list(ohlc.get("high") or [])[:i0], list(ohlc.get("low") or [])[:i0], list(closes)[:i0])
+    etf = _is_etf_code(str(row.get("code") or "").zfill(6))
+    return atr_shadow_stop(plan, payload.get("stop_price"), atr, etf), False
+
+
+def build_stop_compare(
+    touched: list[tuple[dict[str, Any], Any, bool]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Compare the live session-low stop with the shadow ATR stop on the same touched cards.
+
+    Returns:
+        ``{"rows": [...], "recorded_n", "note"}``; each row has ``label``, ``n``,
+        ``mean``, ``win``, ``stop_rate``, ``gap_med`` (stop distance %) and
+        ``r_mult_med`` (median net return ÷ stop distance; −1 = lost exactly the
+        planned risk; median because sub-1% stops make the mean explode).
+    """
+    import copy
+
+    variants: dict[str, list[dict[str, Any]]] = {"现状·日低止损": [], "影子·ATR 止损": []}
+    recorded = 0
+    for row, packed, _lit in touched:
+        shadow, was_rec = _shadow_stop_for(row, packed)
+        recorded += 1 if was_rec else 0
+        alt = copy.deepcopy(row)
+        if shadow is not None:
+            alt.setdefault("payload", {})["stop_price"] = shadow
+        for label, r in (("现状·日低止损", row), ("影子·ATR 止损", alt)):
+            sim = simulate_cf_trade(r, packed, now=now)
+            if not sim or not sim.get("filled") or sim.get("r") is None or not sim.get("stop"):
+                continue
+            gap = (float(sim["entry"]) - float(sim["stop"])) / float(sim["entry"]) * 100.0
+            if gap <= 0:
+                continue
+            variants[label].append({"r": float(sim["r"]), "gap": gap, "stop": bool(sim.get("stop_hit"))})
+    rows: list[dict[str, Any]] = []
+    for label, xs in variants.items():
+        if not xs:
+            continue
+        gaps = sorted(x["gap"] for x in xs)
+        mults = sorted(x["r"] / x["gap"] for x in xs)
+        rows.append({
+            "label": label,
+            "n": len(xs),
+            "mean": round(sum(x["r"] for x in xs) / len(xs), 2),
+            "win": round(sum(1 for x in xs if x["r"] > 0) / len(xs) * 100.0, 1),
+            "stop_rate": round(sum(1 for x in xs if x["stop"]) / len(xs) * 100.0, 1),
+            "gap_med": round(gaps[len(gaps) // 2], 2),
+            "r_mult_med": round(mults[len(mults) // 2], 2),
+        })
+    from market_desk.config import (
+        BUY_STOP_ATR_MULT,
+        ETF_BUY_STOP_MAX_PCT,
+        ETF_BUY_STOP_MIN_PCT,
+        STOCK_BUY_STOP_MAX_PCT,
+        STOCK_BUY_STOP_MIN_PCT,
+    )
+
+    return {
+        "rows": rows,
+        "recorded_n": recorded,
+        "note": f"影子止损 = min(日低止损, 计划价 × (1 − clamp({BUY_STOP_ATR_MULT:g}×日线ATR, "
+        f"个股 {STOCK_BUY_STOP_MIN_PCT:g}~{STOCK_BUY_STOP_MAX_PCT:g}% / ETF {ETF_BUY_STOP_MIN_PCT:g}~{ETF_BUY_STOP_MAX_PCT:g}%)))；"
+        "只记录与对照，卡片、仓位、提醒仍用日低止损；无实测记录的卡按出卡前日线现算",
     }
 
 

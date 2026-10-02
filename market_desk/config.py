@@ -258,6 +258,13 @@ CF_BOOTSTRAP_N = 400
 CF_CACHE_SEC = 600.0
 # Entry-premium sensitivity: same touched cards re-filled at plan × (1 + x%).
 CF_ENTRY_OFFSETS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
+# Shadow ATR buy stop (recorded + audited only; the live card keeps the session-low stop).
+# stop_atr = min(live stop, plan × (1 − clamp(mult × daily ATR%, min, max) / 100)).
+BUY_STOP_ATR_MULT = 0.75
+STOCK_BUY_STOP_MIN_PCT = 2.0
+STOCK_BUY_STOP_MAX_PCT = 5.0
+ETF_BUY_STOP_MIN_PCT = 1.0
+ETF_BUY_STOP_MAX_PCT = 2.5
 # Post-close fund-flow research snapshot: per-kind board count for the full pull
 # (the hot path only keeps the top-80 inflow boards).
 EOD_FUND_FLOW_LIMIT = 500
