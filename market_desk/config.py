@@ -256,6 +256,8 @@ CF_MIN_N = 5
 CF_MIN_DAYS = 3
 CF_BOOTSTRAP_N = 400
 CF_CACHE_SEC = 600.0
+# Entry-premium sensitivity: same touched cards re-filled at plan × (1 + x%).
+CF_ENTRY_OFFSETS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
 # Post-close fund-flow research snapshot: per-kind board count for the full pull
 # (the hot path only keeps the top-80 inflow boards).
 EOD_FUND_FLOW_LIMIT = 500

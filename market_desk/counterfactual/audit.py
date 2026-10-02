@@ -24,6 +24,7 @@ from typing import Any
 from market_desk.config import (
     CF_BOOTSTRAP_N,
     CF_EDGE_PCT,
+    CF_ENTRY_OFFSETS,
     CF_HOLD_DAYS,
     CF_MIN_DAYS,
     CF_MIN_N,
@@ -200,8 +201,8 @@ def build_counterfactual_audit(
         now: Clock override for tests.
 
     Returns:
-        ``{"summary", "gates", "headline"}`` ready for the review panel;
-        ``gates`` sorted by |net avoided| descending.
+        ``{"summary", "gates", "entry_sens", "headline"}`` ready for the review
+        panel; ``gates`` sorted by |net avoided| descending.
     """
     from market_desk.review.signals import is_buy_signal
 
@@ -216,6 +217,7 @@ def build_counterfactual_audit(
     tiers: dict[str, int] = defaultdict(int)
     released: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    touched_rows: list[tuple[dict[str, Any], Any, bool]] = []
     for row in _one_card_per_stock_day([r for r in buys if str(r.get("trade_date") or "")[:10] in window_days]):
         day = str(row.get("trade_date") or "")[:10]
         counts["cards"] += 1
@@ -239,6 +241,7 @@ def build_counterfactual_audit(
             "r": float(sim["r"]), "r1": sim.get("r1"), "stop_hit": bool(sim.get("stop_hit")),
             "tier": sim.get("touch"),
         }
+        touched_rows.append((row, klines.get(code), _released(row)))
         if _released(row):
             released.append(base)
             continue
@@ -357,7 +360,63 @@ def build_counterfactual_audit(
     return {
         "summary": summary,
         "gates": gates,
+        "entry_sens": build_entry_sensitivity(touched_rows, now=now),
         "headline": _headline(summary, gates),
+    }
+
+
+def build_entry_sensitivity(
+    touched: list[tuple[dict[str, Any], Any, bool]],
+    *,
+    offsets: tuple[float, ...] = CF_ENTRY_OFFSETS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Re-run the same touched cards with the entry paid at plan + offset%.
+
+    The stop stays anchored on plan, so each row isolates the cost of paying
+    more than the plan price (chasing inside or beyond the entry band).
+
+    Args:
+        touched: ``(row, klines, released)`` for every audited touched card.
+        offsets: Entry premiums over plan in percent (0 = exactly at plan).
+        now: Clock override for tests.
+
+    Returns:
+        ``{"rows": [...], "note"}``; each row has ``off``, ``n``, ``mean``,
+        ``win``, ``stop_rate``, ``delta`` (vs plan) and ``rel_mean`` (lit cards only).
+    """
+    rows: list[dict[str, Any]] = []
+    base_mean: float | None = None
+    for off in offsets:
+        rs: list[float] = []
+        rel: list[float] = []
+        stops = 0
+        for row, packed, lit in touched:
+            sim = simulate_cf_trade(row, packed, entry_offset_pct=float(off), now=now)
+            if not sim or not sim.get("filled") or sim.get("r") is None:
+                continue
+            rs.append(float(sim["r"]))
+            stops += 1 if sim.get("stop_hit") else 0
+            if lit:
+                rel.append(float(sim["r"]))
+        if not rs:
+            continue
+        mean = sum(rs) / len(rs)
+        if base_mean is None:
+            base_mean = mean
+        rows.append({
+            "off": float(off),
+            "n": len(rs),
+            "mean": round(mean, 2),
+            "win": round(sum(1 for v in rs if v > 0) / len(rs) * 100.0, 1),
+            "stop_rate": round(stops / len(rs) * 100.0, 1),
+            "delta": round(mean - base_mean, 2),
+            "rel_mean": round(sum(rel) / len(rel), 2) if rel else None,
+            "rel_n": len(rel),
+        })
+    return {
+        "rows": rows,
+        "note": "同一批到价卡，只改入场价（计划价 + x%，限在当日最低~最高之间；低开到计划价下方仍按开盘），止损价按计划价固定",
     }
 
 

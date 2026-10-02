@@ -120,6 +120,7 @@ def simulate_cf_trade(
     *,
     hold_days: int = CF_HOLD_DAYS,
     cost_pct: float = CF_ROUNDTRIP_COST_PCT,
+    entry_offset_pct: float | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Simulate one plan-price fill with a stop and a fixed holding window.
@@ -142,6 +143,10 @@ def simulate_cf_trade(
         packed: ``(dates, closes, {"open","high","low"})`` daily klines for the code.
         hold_days: Holding window in settled sessions after day0.
         cost_pct: Round-trip cost in percent.
+        entry_offset_pct: Entry-slippage sensitivity mode. When set, the fill is
+            re-anchored at plan × (1 + offset%) clamped into day0's range (a
+            gap-open under plan still fills at the open) and the stop is anchored
+            on plan, so only the price paid changes between offsets.
         now: Clock override for tests.
 
     Returns:
@@ -178,10 +183,21 @@ def simulate_cf_trade(
     touch, entry = _touch_entry(signal, plan, low0, _at(highs, i0), _at(opens, i0), _f(closes[i0]))
     if entry is None:
         return {"filled": False, "entry": plan, "touch": touch}
+    anchor = entry
+    if entry_offset_pct is not None:
+        anchor = plan
+        open0 = _at(opens, i0)
+        gap_fill = open0 is not None and open0 < plan and abs(entry - open0) < 1e-9
+        if not gap_fill:
+            high0 = _at(highs, i0)
+            entry = plan * (1.0 + float(entry_offset_pct) / 100.0)
+            if high0 is not None:
+                entry = min(entry, high0)
+            entry = max(entry, low0)
     stop = _f(payload.get("stop_price"))
-    if stop is None or stop >= entry:
+    if stop is None or stop >= anchor:
         fb = CF_STOP_FALLBACK_ETF_PCT if _is_etf(str(signal.get("code") or "")) else CF_STOP_FALLBACK_STOCK_PCT
-        stop = entry * (1.0 - float(fb) / 100.0)
+        stop = anchor * (1.0 - float(fb) / 100.0)
     fwd = [j for j in range(i0 + 1, len(dates)) if forward_session_ready(dates[j], now=now)]
     if not fwd:
         return {"filled": True, "pending": True, "touch": touch, "entry": round(entry, 4)}

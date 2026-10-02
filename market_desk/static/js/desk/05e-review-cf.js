@@ -79,7 +79,28 @@ function paintCfAudit(d) {
     `<div class="cf-headline">${escAttr(d.headline || "")}</div>`
     + sides
     + gateTbl
+    + cfSensTable(d.entry_sens)
     + `<ul class="cf-notes">${notes.map((n) => `<li>${escAttr(n)}</li>`).join("")}</ul>`;
+}
+
+/**
+ * Render the entry-premium sensitivity table (same cards, entry = plan + x%).
+ * @param {object|null} sens - ``entry_sens`` block of the audit payload.
+ * @returns {string} HTML, or an empty string when there are no rows.
+ */
+function cfSensTable(sens) {
+  const rows = (sens && sens.rows) || [];
+  if (!rows.length) return "";
+  const tone = (r) => (r.off === 0 ? "" : r.delta <= -1.0 ? "gl-bad" : r.delta <= -0.5 ? "gl-mid" : "gl-good");
+  const body = rows.map((r) =>
+    `<tr class="${tone(r)}"><td>${r.off === 0 ? "计划价" : `+${r.off}%`}</td>`
+    + `<td class="num">${r.n}</td><td class="num">${r.win}%</td><td class="num">${cfPct(r.mean)}</td>`
+    + `<td class="num">${r.off === 0 ? "—" : cfPct(r.delta)}</td><td class="num">${r.stop_rate}%</td>`
+    + `<td class="num">${r.rel_mean == null ? "—" : `${cfPct(r.rel_mean)}（${r.rel_n}）`}</td></tr>`,
+  ).join("");
+  return `<div class="cf-sens-title" title="${escAttr(sens.note || "")}">入场偏差敏感度：多付几个点，三日净值掉多少</div>`
+    + `<table class="gl-tbl cf-sens"><thead><tr><th>入场</th><th>张数</th><th>胜率</th><th>三日净值</th>`
+    + `<th>较计划价</th><th>止损率</th><th>其中放行卡</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /**

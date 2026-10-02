@@ -160,6 +160,20 @@ def test_sim_touch_tiers_for_untraced_history() -> None:
     assert simulate_cf_trade(_sig(2, {"near_entry": True}, at="13:30:00"), early, now=NOW)["touch"] == "盘中"
 
 
+def test_sim_entry_offset_reprices_fill_and_keeps_plan_stop() -> None:
+    packed = _packed(2, [(10.1, 10.2, 9.8, 10.0), (10.0, 10.3, 9.9, 10.2), (10.2, 10.5, 10.1, 10.4), (10.4, 10.7, 10.3, 10.6)])
+    sig = _sig(2, {"cf": {"seen": 4, "touch_n": 1, "touch_px": 9.9}})
+    base = simulate_cf_trade(sig, packed, entry_offset_pct=0.0, now=NOW)
+    plus1 = simulate_cf_trade(sig, packed, entry_offset_pct=1.0, now=NOW)
+    capped = simulate_cf_trade(sig, packed, entry_offset_pct=3.0, now=NOW)
+    assert base["entry"] == 10.0 and plus1["entry"] == 10.1 and capped["entry"] == 10.2
+    assert base["stop"] == plus1["stop"] == capped["stop"] == 9.7
+    assert plus1["r"] == pytest.approx((10.6 / 10.1 - 1) * 100 - 0.25, abs=1e-3)
+    gap = _packed(2, [(9.8, 10.2, 9.7, 10.0), (10.0, 10.3, 9.9, 10.2), (10.2, 10.5, 10.1, 10.4), (10.4, 10.7, 10.3, 10.6)])
+    out = simulate_cf_trade(_sig(2, {}, at="09:25:00"), gap, entry_offset_pct=1.5, now=NOW)
+    assert out["entry"] == 9.8
+
+
 def test_sim_pending_without_full_window() -> None:
     packed = _packed(2, [(10.1, 10.2, 9.8, 10.0), (10.0, 10.3, 9.9, 10.2)])
     out = simulate_cf_trade(_sig(2, TRACED), packed, now=NOW)
@@ -212,6 +226,11 @@ def test_audit_verdicts_hero_loss_and_tape() -> None:
     assert s["touched"] == 24 and s["released"]["n"] == 6 and s["blocked"]["n"] == 18
     assert s["exact_n"] == 18 and s["tiers"] == {"实测": 24}
     assert "功臣：日线下降" in out["headline"]
+    sens = out["entry_sens"]["rows"]
+    assert [r["off"] for r in sens] == [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+    assert sens[0]["delta"] == 0 and sens[0]["n"] == 24 and sens[0]["rel_n"] == 6
+    assert all(a["mean"] >= b["mean"] for a, b in zip(sens, sens[1:]))
+    assert sens[-1]["delta"] < 0
 
 
 def test_audit_split_weight_unknown_and_small_sample() -> None:
