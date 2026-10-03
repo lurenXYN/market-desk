@@ -331,6 +331,40 @@ def test_narrative_clusters_cross_industry_only() -> None:
     assert build_narrative_clusters(concepts, zt, mainline="算力")[0]["hidden"] is False
 
 
+def test_narrative_preopen_result_does_not_hold_throttle(monkeypatch) -> None:
+    import asyncio
+
+    import market_desk.engine.radar as eng_radar
+    from market_desk.engine.core import DeskEngine
+
+    saved: list[str] = []
+    monkeypatch.setattr(eng_radar, "load_narrative_shadow", lambda *a, **k: [])
+    monkeypatch.setattr(eng_radar, "upsert_narrative_shadow", lambda day, clusters, **k: saved.append(day))
+    concepts = [
+        {"name": "算力", "kind": "concept", "pool": [{"code": c} for c in ("600001", "600002", "600003")]},
+        {"name": "液冷", "kind": "concept", "pool": [{"code": c} for c in ("600002", "600003", "600004")]},
+    ]
+    zt = [_zt("600001", "通信设备"), _zt("600002", "通信设备"), _zt("600003", "电力设备"), _zt("600004", "电力设备")]
+
+    async def _concepts(self, client, boards, cards):
+        return concepts
+
+    monkeypatch.setattr(DeskEngine, "_narrative_concepts", _concepts)
+    eng = DeskEngine()
+
+    async def _call(hhmm: str) -> dict:
+        now = datetime.strptime(f"2026-10-08 {hhmm}", "%Y-%m-%d %H:%M")
+        return await eng._radar_narrative(
+            None, [], [], zt, now=now, trade_date_dash="2026-10-08", mainline="银行"
+        )
+
+    pre = asyncio.run(_call("09:29"))
+    assert pre["ok"] is False and eng._narr_cache is None
+    post = asyncio.run(_call("09:31"))
+    assert post["ok"] is True and len(post["clusters"]) == 1
+    assert saved == ["2026-10-08"] and eng._narr_cache is not None
+
+
 def test_summarize_leads_counts_hidden_hits() -> None:
     rows = [
         {"trade_date": "2026-09-30", "label": "算力", "concepts": ["算力"], "mainline_at_first": "银行",

@@ -306,7 +306,8 @@ class RadarMixin:
         if hit and hit[1] == trade_date_dash and mono - hit[0] < float(NARR_FETCH_EVERY_SEC):
             return hit[2]
         out: dict[str, Any] = {"ok": False, "shadow": True, "clusters": [], "stats": {}, "at": None}
-        if is_trading_day(now) and session_minutes_elapsed(now) is not None and zt:
+        computed = bool(is_trading_day(now) and session_minutes_elapsed(now) is not None and zt)
+        if computed:
             concepts = await self._narrative_concepts(client, boards, cards)
             industries = [c for c in cards if c.get("kind") == "industry"]
             clusters = build_narrative_clusters(
@@ -330,5 +331,7 @@ class RadarMixin:
             out["stats"] = summarize_leads(rows)
         except Exception:
             log.exception("narrative shadow stats failed")
-        self._narr_cache = (mono, trade_date_dash, out)
+        # Gate-closed results (pre-open, empty zt) must not hold the throttle past 09:30.
+        if computed:
+            self._narr_cache = (mono, trade_date_dash, out)
         return out
