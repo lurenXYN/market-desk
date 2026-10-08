@@ -83,6 +83,74 @@ class ReviewMixin:
             }
         return out
 
+    def _review_klines_cached(self, codes: list[str]) -> dict[str, Any]:
+        """Return cached review klines for ``codes`` and refresh missing / stale ones in the background."""
+        from market_desk.config import REVIEW_HEAVY_REFRESH_SEC
+
+        now_m = time.monotonic()
+        ttl = float(REVIEW_HEAVY_REFRESH_SEC)
+        out: dict[str, Any] = {}
+        stale = False
+        for raw in codes:
+            code = normalize_code(raw)
+            hit = self._review_kline_cache.get(code) if code else None
+            if hit:
+                out[code] = hit[1]
+            if code and (not hit or now_m - hit[0] >= ttl):
+                stale = True
+        task = self._review_kline_task
+        if stale and (task is None or task.done()):
+            self._review_kline_task = asyncio.create_task(self._warm_review_klines(list(codes)))
+        return out
+
+    async def _warm_review_klines(self, codes: list[str]) -> None:
+        """Fetch review klines into the cache, then drop cached review payloads."""
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                await self._review_klines(client, codes)
+        except Exception:
+            log.exception("review kline warm-up failed")
+        finally:
+            self._review_cache.clear()
+
+    async def _score_review_backlog(self, pending: list[dict[str, Any]], today: str) -> None:
+        """Score pending outcomes and run the one-off formula rescore off the request path.
+
+        Outcomes are written to the DB; the review cache is dropped afterwards so the
+        next review build shows them.
+        """
+        from market_desk.config import OUTCOME_FORMULA_VERSION
+        from market_desk.db import load_setting, load_signals, save_setting
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                if pending:
+                    codes = [str(r.get("code") or "") for r in pending]
+                    packed = await fetch_daily_klines_many(client, codes, limit=40)
+                    apply_outcomes(pending, packed)
+                # Re-score labeled rows once when the OHLC fake-red formula bumps.
+                ver = int(OUTCOME_FORMULA_VERSION)
+                try:
+                    cur = int(load_setting("outcome_formula_v") or 0)
+                except (TypeError, ValueError):
+                    cur = 0
+                if cur < ver:
+                    rows = [
+                        r
+                        for r in load_signals(limit=800)
+                        if r.get("outcome_label") and str(r.get("trade_date") or "") < today
+                    ]
+                    if rows:
+                        codes = list(dict.fromkeys(str(r.get("code") or "") for r in rows))
+                        packed = await fetch_daily_klines_many(client, codes, limit=60)
+                        n = apply_outcomes(rows, packed, overwrite=True)
+                        log.info("outcome formula v%s rescore updated %s / %s rows", ver, n, len(rows))
+                    save_setting("outcome_formula_v", ver)
+        except Exception:
+            log.exception("review backlog scoring failed")
+        finally:
+            self._review_cache.clear()
+
     async def build_review(
         self,
         limit: int = 180,
@@ -128,8 +196,14 @@ class ReviewMixin:
 
         since = (datetime.now(CN_TZ) - timedelta(days=12)).strftime("%Y-%m-%d")
         # Outcomes persist to DB, so scoring more often than the heavy cadence adds nothing.
+        # Scoring runs in the background: after a holiday the backlog plus a throttled
+        # East Money can take a minute, and the review page must not wait on it.
         run_scoring = now_m - self._review_scored_at >= float(REVIEW_HEAVY_REFRESH_SEC)
-        pending = load_pending_outcomes(today, since=since, cap=80) if run_scoring else []
+        task = self._review_scoring_task
+        if run_scoring and (task is None or task.done()):
+            pending = load_pending_outcomes(today, since=since, cap=80)
+            self._review_scored_at = now_m
+            self._review_scoring_task = asyncio.create_task(self._score_review_backlog(pending, today))
         quotes: dict[str, dict[str, Any]] = {}
         holders: dict[str, dict[str, Any]] = {}
         day_rows: list[dict[str, Any]] = []
@@ -161,45 +235,6 @@ class ReviewMixin:
                 except Exception:
                     compare_codes = list(dict.fromkeys([c for c in live_codes if c]))
 
-                async def _score_pending() -> None:
-                    if not pending:
-                        return
-                    codes = [str(r.get("code") or "") for r in pending]
-                    packed = await fetch_daily_klines_many(client, codes, limit=40)
-                    apply_outcomes(pending, packed)
-
-                async def _migrate_outcome_labels() -> None:
-                    """Re-score labeled rows once when OHLC fake-red formula bumps."""
-                    from market_desk.config import OUTCOME_FORMULA_VERSION
-                    from market_desk.db import load_setting, load_signals, save_setting
-
-                    if not run_scoring:
-                        return
-                    ver = int(OUTCOME_FORMULA_VERSION)
-                    try:
-                        cur = int(load_setting("outcome_formula_v") or 0)
-                    except (TypeError, ValueError):
-                        cur = 0
-                    if cur >= ver:
-                        return
-                    rows = [
-                        r
-                        for r in load_signals(limit=800)
-                        if r.get("outcome_label")
-                        and str(r.get("trade_date") or "") < today
-                    ]
-                    if rows:
-                        codes = list(dict.fromkeys(str(r.get("code") or "") for r in rows))
-                        packed = await fetch_daily_klines_many(client, codes, limit=60)
-                        n = apply_outcomes(rows, packed, overwrite=True)
-                        log.info(
-                            "outcome formula v%s rescore updated %s / %s rows",
-                            ver,
-                            n,
-                            len(rows),
-                        )
-                    save_setting("outcome_formula_v", ver)
-
                 async def _quotes() -> dict[str, dict[str, Any]]:
                     return await fetch_quotes(client, live_codes)
 
@@ -207,23 +242,20 @@ class ReviewMixin:
                     return await fetch_holder_stats_many(client, stock_codes)
 
                 async def _overlay_klines() -> dict[str, Any]:
-                    # Always fetch when possible: outcome_compare needs all three standards.
+                    # outcome_compare reads cached bars only; missing / stale codes are
+                    # fetched in the background so a throttled source cannot stall the page.
                     codes = compare_codes or live_codes
                     if not codes:
                         return {}
-                    return await self._review_klines(client, codes)
+                    return self._review_klines_cached(codes)
 
                 # zt_ytd / daily-trend chips load async (see /api/review/zt-ytd, /trends).
-                _, _, quotes, holders, packed_overlay = await asyncio.gather(
-                    _score_pending(),
-                    _migrate_outcome_labels(),
+                quotes, holders, packed_overlay = await asyncio.gather(
                     _quotes(),
                     _holders(),
                     _overlay_klines(),
                 )
                 note_quote_ticks(quotes)
-                if run_scoring:
-                    self._review_scored_at = time.monotonic()
         except Exception:
             log.exception("signal scoring / live marks failed")
         phase = None
@@ -255,7 +287,7 @@ class ReviewMixin:
         if packed_overlay:
             try:
                 from market_desk.db import load_signals as _load_signals
-                from market_desk.review import filter_signals_for_viewer
+                from market_desk.db import filter_signals_for_viewer
 
                 wide = filter_signals_for_viewer(_load_signals(limit=160), user_id)
                 summary = dict(payload.get("summary") or {})

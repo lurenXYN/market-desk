@@ -94,6 +94,8 @@ class DeskEngine(
         # Review daily klines for outcome compare: code -> (monotonic_ts, packed row)
         self._review_kline_cache: dict[str, tuple[float, Any]] = {}
         self._review_scored_at: float = 0.0
+        self._review_scoring_task: Any = None
+        self._review_kline_task: Any = None
         # What-If gate audit: (window days, strict) -> (monotonic_ts, payload).
         self._cf_cache: dict[tuple[int, bool], tuple[float, dict[str, Any]]] = {}
         self._fund_flow_full_at: float = 0.0
