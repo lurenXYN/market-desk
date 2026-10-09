@@ -178,6 +178,21 @@ def avail_state() -> dict[str, dict[str, Any]]:
     return {fam: dict(st) for fam, st in sorted(_STATE.items())}
 
 
+def recently_blocked(url: str) -> bool:
+    """Return True when ``url``'s family is blocked and last failed within ``EM_BLOCK_SKIP_SEC``.
+
+    Only for callers that have another source: they skip the request instead of
+    waiting on a known-dead edge. Once the last failure is older than the window
+    the next call goes through again, which re-probes the family.
+    """
+    from market_desk.config import EM_BLOCK_SKIP_SEC
+
+    st = _STATE.get(classify(url))
+    if not st or st.get("up", True):
+        return False
+    return _cn_now().timestamp() - float(st.get("fail_ts") or 0.0) < float(EM_BLOCK_SKIP_SEC)
+
+
 def blocked_families(within_sec: float | None = None) -> list[str]:
     """Families currently considered blocked (consecutive failures, no success since).
 

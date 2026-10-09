@@ -53,6 +53,37 @@ def test_stale_block_is_not_reported_within_window() -> None:
     assert avail.blocked_families(within_sec=900.0) == [], "no traffic since → re-probe allowed"
 
 
+def test_kline_skips_recently_blocked_hosts_then_reprobes(monkeypatch) -> None:
+    from market_desk.eastmoney import bars
+
+    monkeypatch.setattr(avail, "_pace", lambda url: asyncio.sleep(0))
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        return httpx.Response(200, json={"data": {"klines": []}})
+
+    def fetch() -> list:
+        async def go():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+                return await bars._fetch_daily_bars_eastmoney(c, "600519", limit=5)
+
+        return asyncio.run(go())
+
+    now = avail._cn_now().replace(tzinfo=None)
+    for fam in ("push2his/kline", "push2delay/kline"):
+        for _ in range(3):
+            avail.note(fam, False, "RemoteProtocolError", now=now)
+    assert avail.recently_blocked("https://push2his.eastmoney.com/api/qt/stock/kline/get")
+    assert fetch() == [] and seen == [], "known-dead kline hosts are not hit"
+
+    old = datetime(2020, 1, 1, 9, 0, 0)
+    for fam in ("push2his/kline", "push2delay/kline"):
+        avail.note(fam, False, "RemoteProtocolError", now=old)
+    fetch()
+    assert seen == ["push2his.eastmoney.com", "push2delay.eastmoney.com"], "stale block re-probes"
+
+
 def _run(handler, url: str):
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:

@@ -143,6 +143,7 @@ def merge_trace(old: dict[str, Any] | None, now: dict[str, Any] | None, at: str)
     """Fold one refresh snapshot into the same-day accumulated trace.
 
     Accumulated fields: ``seen`` (traced refreshes — marks the row as traced),
+    ``lo_px`` / ``lo_at`` (lowest live price seen after the card existed),
     ``touch_n`` / ``touch_at`` / ``touch_px``, ``ready_n``,
     ``blocked_n``, ``blk`` (blocker → touched-and-gated refresh count) and
     ``first_blk`` / ``first_blk_at`` (the blockers at the first gated touch —
@@ -160,9 +161,16 @@ def merge_trace(old: dict[str, Any] | None, now: dict[str, Any] | None, at: str)
     if not now:
         return cf or None
     cf["seen"] = int(cf.get("seen") or 0) + 1
+    hms = str(at or "")[11:19] or str(at or "")
+    try:
+        px = float(now.get("px"))
+    except (TypeError, ValueError):
+        px = 0.0
+    if px > 0 and (cf.get("lo_px") is None or px < float(cf["lo_px"])):
+        cf["lo_px"] = px
+        cf["lo_at"] = hms
     if not now.get("touch"):
         return cf
-    hms = str(at or "")[11:19] or str(at or "")
     cf["touch_n"] = int(cf.get("touch_n") or 0) + 1
     cf.setdefault("touch_at", hms)
     cf.setdefault("touch_px", now.get("px"))

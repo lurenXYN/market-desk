@@ -273,6 +273,15 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
                 "detail": "尚无自动备份文件",
             }
         )
+    try:
+        from market_desk.shadow_health import shadow_check, shadow_health
+
+        radar = snap.get("radar") if isinstance(snap.get("radar"), dict) else {}
+        checks.append(shadow_check(shadow_health(1), radar.get("narrative")))
+    except Exception as exc:
+        checks.append(
+            {"id": "shadows", "title": "影子账本", "level": "warn", "detail": f"{type(exc).__name__}: {exc}"[:120]}
+        )
     nr = snap.get("news_radar") if isinstance(snap.get("news_radar"), dict) else {}
     if nr.get("enabled"):
         st = str(nr.get("status") or "")
@@ -303,6 +312,18 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
         "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
         "pid": os.getpid(),
     }
+
+
+@router.get("/api/ops/shadows")
+def ops_shadows(
+    days: int = Query(default=10, ge=1, le=40),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Per-day shadow-ledger rows and trigger proximity (empty because quiet vs. broken)."""
+    del user
+    from market_desk.shadow_health import shadow_health
+
+    return {"ok": True, "days": shadow_health(days)}
 
 
 @router.get("/api/ops/em-avail")

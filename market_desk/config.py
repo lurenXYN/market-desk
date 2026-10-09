@@ -487,6 +487,8 @@ ETF_PULSE_FETCH_SEC = 60                # minute refetch cadence per ETF
 
 # Narrative graph (shadow mode): cross-industry clusters of limit-up names.
 NARR_EXTRA_CONCEPTS = 20                # extra top-pct concept boards whose members are fetched
+NARR_SNAP_MIN_BOARDS = 100              # East Money snapshot concepts needed to use the snapshot pool
+NARR_SNAP_MAX_MEMBERS = 600             # skip catch-all concepts (index / margin lists) in the snapshot pool
 NARR_FETCH_EVERY_SEC = 300
 NARR_MIN_SHARED = 2                     # limit-ups a concept needs to join the graph
 NARR_EDGE_JACCARD = 0.3                 # concept-concept edge threshold
@@ -519,6 +521,7 @@ ALIAS_EM_BACKOFF_SEC = 7200.0           # pause East Money snapshots after two e
 # East Money request volume (push2 family is rate-limited per IP, not by clock).
 EM_PUSH2_MIN_GAP_SEC = 0.15             # process-wide min spacing between push2* request starts
 EM_BLOCK_AFTER_FAILS = 3                # consecutive failures before an endpoint counts as blocked
+EM_BLOCK_SKIP_SEC = 180.0               # skip a blocked kline / trends family this long after its last failure
 EM_AVAIL_FLUSH_SEC = 300.0              # flush hourly request counters to SQLite this often
 EM_AVAIL_KEEP_DAYS = 30                 # prune availability history older than this
 BOARDS_INDUSTRY_TTL_SEC = 60.0          # reuse the paged industry universe this long (concepts every tick)

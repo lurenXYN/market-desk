@@ -48,6 +48,7 @@ class RadarMixin:
     _pulse_base: tuple[str, dict[str, tuple[dict[str, float], float | None]]] | None = None
     _pulse_cache: tuple[float, dict[str, Any]] | None = None
     _narr_cache: tuple[float, str, dict[str, Any]] | None = None
+    _narr_snap_cache: tuple[str, list[dict[str, Any]]] | None = None
 
     def _radar_crowding(
         self,
@@ -248,20 +249,59 @@ class RadarMixin:
             log.exception("narrative graph failed")
         return out
 
+    def _narrative_snap_concepts(self, trade_date_dash: str) -> list[dict[str, Any]]:
+        """East Money concept boards with full constituents from the off-hours snapshot (cached per day)."""
+        from market_desk.config import NARR_SNAP_MAX_MEMBERS
+        from market_desk.db import load_board_members_snap
+
+        hit = self._narr_snap_cache
+        if hit and hit[0] == trade_date_dash:
+            return hit[1]
+        try:
+            snaps = load_board_members_snap("em")
+        except Exception:
+            log.exception("narrative snapshot load failed")
+            snaps = {}
+        rows = [
+            {
+                "name": s["name"],
+                "kind": "concept",
+                "src": "snap",
+                "members": [{"code": c} for c in s["codes"]],
+            }
+            for s in snaps.values()
+            if s.get("kind") == "concept" and s.get("name") and 0 < s.get("n", 0) <= int(NARR_SNAP_MAX_MEMBERS)
+        ]
+        self._narr_snap_cache = (trade_date_dash, rows)
+        return rows
+
     async def _narrative_concepts(
         self,
         client: httpx.AsyncClient,
         boards: list[dict[str, Any]] | None,
         cards: list[dict[str, Any]],
+        trade_date_dash: str = "",
     ) -> list[dict[str, Any]]:
-        """Concept boards with members: enriched cards plus the top-pct extras."""
-        from market_desk.config import NARR_EXTRA_CONCEPTS
+        """Concept boards with members for the narrative graph.
+
+        Prefers full constituents from the East Money snapshot, so concepts are picked
+        by limit-up coverage rather than by today's pct rank, and no live fetch is
+        needed. Without enough snapshot boards it falls back to enriched cards (top
+        members only) plus live members of the top-pct concepts.
+        """
+        from market_desk.config import NARR_EXTRA_CONCEPTS, NARR_SNAP_MIN_BOARDS
 
         out: dict[str, dict[str, Any]] = {}
+        snap = self._narrative_snap_concepts(trade_date_dash) if trade_date_dash else []
+        if len(snap) >= int(NARR_SNAP_MIN_BOARDS):
+            for c in snap:
+                out.setdefault(str(c["name"]), c)
         for c in cards:
             name = str(c.get("name") or "")
             if name and c.get("kind") == "concept" and c.get("pool") and name not in out:
                 out[name] = c
+        if len(snap) >= int(NARR_SNAP_MIN_BOARDS):
+            return list(out.values())
         extras = sorted(
             (
                 b
@@ -308,11 +348,12 @@ class RadarMixin:
         out: dict[str, Any] = {"ok": False, "shadow": True, "clusters": [], "stats": {}, "at": None}
         computed = bool(is_trading_day(now) and session_minutes_elapsed(now) is not None and zt)
         if computed:
-            concepts = await self._narrative_concepts(client, boards, cards)
+            concepts = await self._narrative_concepts(client, boards, cards, trade_date_dash)
             industries = [c for c in cards if c.get("kind") == "industry"]
             clusters = build_narrative_clusters(
                 concepts, zt, industry_boards=industries, mainline=mainline
             )
+            out["pool"] = "snap" if any(c.get("src") == "snap" for c in concepts) else "live"
             at = now.strftime("%H:%M:%S")
             if clusters:
                 try:

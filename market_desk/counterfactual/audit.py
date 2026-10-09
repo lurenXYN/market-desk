@@ -218,6 +218,7 @@ def build_counterfactual_audit(
     released: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     touched_rows: list[tuple[dict[str, Any], Any, bool]] = []
+    near_rows: list[tuple[dict[str, Any], Any]] = []
     for row in _one_card_per_stock_day([r for r in buys if str(r.get("trade_date") or "")[:10] in window_days]):
         day = str(row.get("trade_date") or "")[:10]
         counts["cards"] += 1
@@ -228,6 +229,8 @@ def build_counterfactual_audit(
             continue
         if not sim.get("filled"):
             counts["touch_unknown" if sim.get("touch") == "触达未知" else "untouched"] += 1
+            if sim.get("touch") == "实测未到":
+                near_rows.append((row, klines.get(code)))
             continue
         if strict and sim.get("touch") == "早盘":
             counts["weak_dropped"] += 1
@@ -361,6 +364,7 @@ def build_counterfactual_audit(
         "summary": summary,
         "gates": gates,
         "entry_sens": build_entry_sensitivity(touched_rows, now=now),
+        "near_miss": build_near_miss(near_rows, now=now),
         "stop_cmp": build_stop_compare(touched_rows, now=now),
         "headline": _headline(summary, gates),
     }
@@ -418,6 +422,66 @@ def build_entry_sensitivity(
     return {
         "rows": rows,
         "note": "同一批到价卡，只改入场价（计划价 + x%，限在当日最低~最高之间；低开到计划价下方仍按开盘），止损价按计划价固定",
+    }
+
+
+def build_near_miss(
+    untouched: list[tuple[dict[str, Any], Any]],
+    *,
+    offsets: tuple[float, ...] = CF_ENTRY_OFFSETS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Cards that never reached plan but came within plan + x%: what a limit at plan + x% would have earned.
+
+    Complements ``build_entry_sensitivity``: that table prices the extra paid on
+    cards that did fill; this one prices the extra fills a higher limit buys.
+    Only traced cards qualify — ``cf.lo_px`` is the lowest live price seen after
+    the card existed, so a pre-card daily low never counts. Cumulative per
+    offset: a card within +0.5% also fills at +1%, paying plan × 1.01.
+
+    Returns:
+        ``{"rows": [...], "traced", "note"}``; each row has ``off``, ``n``,
+        ``mean``, ``win``, ``stop_rate`` (pending fills are skipped).
+    """
+    with_lo: list[tuple[dict[str, Any], Any, float, float]] = []
+    for row, packed in untouched:
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        cf = payload.get("cf") if isinstance(payload.get("cf"), dict) else {}
+        plan = payload.get("plan_price") or payload.get("buy_price") or row.get("price")
+        try:
+            lo, plan_f = float(cf.get("lo_px")), float(plan)
+        except (TypeError, ValueError):
+            continue
+        if lo > 0 and plan_f > 0:
+            with_lo.append((row, packed, lo, plan_f))
+    rows: list[dict[str, Any]] = []
+    for off in offsets:
+        if off <= 0:
+            continue
+        rs: list[float] = []
+        stops = 0
+        for row, packed, lo, plan in with_lo:
+            limit = plan * (1.0 + float(off) / 100.0)
+            if lo > limit:
+                continue
+            sim = simulate_cf_trade(row, packed, force_entry=limit, now=now)
+            if not sim or not sim.get("filled") or sim.get("r") is None:
+                continue
+            rs.append(float(sim["r"]))
+            stops += 1 if sim.get("stop_hit") else 0
+        if not rs:
+            continue
+        rows.append({
+            "off": float(off),
+            "n": len(rs),
+            "mean": round(sum(rs) / len(rs), 2),
+            "win": round(sum(1 for v in rs if v > 0) / len(rs) * 100.0, 1),
+            "stop_rate": round(stops / len(rs) * 100.0, 1),
+        })
+    return {
+        "rows": rows,
+        "traced": len(with_lo),
+        "note": "没回踩到计划价、但出卡后实测最低价进过计划价 +x% 以内的卡，按 +x% 挂单成交；止损按计划价固定；累计口径",
     }
 
 

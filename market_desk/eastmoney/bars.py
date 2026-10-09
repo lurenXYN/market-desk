@@ -9,7 +9,7 @@ from market_desk.config import EASTMONEY_UT, HTTP_HEADERS
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
 
-from market_desk.eastmoney.avail import em_get
+from market_desk.eastmoney.avail import em_get, recently_blocked
 
 
 def _secid(code: str) -> str:
@@ -50,6 +50,8 @@ async def _fetch_daily_bars_eastmoney(
     )
     for host in hosts:
         url = f"https://{host}{path}"
+        if recently_blocked(url):
+            continue
         try:
             resp = await em_get(client, url, headers=HTTP_HEADERS, timeout=6.0)
             resp.raise_for_status()

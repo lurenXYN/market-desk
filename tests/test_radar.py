@@ -346,7 +346,7 @@ def test_narrative_preopen_result_does_not_hold_throttle(monkeypatch) -> None:
     ]
     zt = [_zt("600001", "通信设备"), _zt("600002", "通信设备"), _zt("600003", "电力设备"), _zt("600004", "电力设备")]
 
-    async def _concepts(self, client, boards, cards):
+    async def _concepts(self, client, boards, cards, trade_date_dash=""):
         return concepts
 
     monkeypatch.setattr(DeskEngine, "_narrative_concepts", _concepts)
@@ -363,6 +363,39 @@ def test_narrative_preopen_result_does_not_hold_throttle(monkeypatch) -> None:
     post = asyncio.run(_call("09:31"))
     assert post["ok"] is True and len(post["clusters"]) == 1
     assert saved == ["2026-10-08"] and eng._narr_cache is not None
+
+
+def test_narrative_concepts_prefer_full_snapshot(monkeypatch) -> None:
+    import asyncio
+
+    import market_desk.config as cfg
+    import market_desk.db as desk_db
+    import market_desk.engine.radar as eng_radar
+    from market_desk.engine.core import DeskEngine
+
+    snaps = {
+        "BK1": {"name": "算力", "kind": "concept", "n": 3, "at": "", "codes": {"600001", "600002", "600003"}},
+        "BK2": {"name": "液冷", "kind": "concept", "n": 3, "at": "", "codes": {"600002", "600003", "600004"}},
+        "BK3": {"name": "大杂烩", "kind": "concept", "n": 900, "at": "", "codes": {"600001"}},
+        "BK4": {"name": "通信设备", "kind": "industry", "n": 2, "at": "", "codes": {"600001", "600002"}},
+    }
+    calls: list[int] = []
+    monkeypatch.setattr(desk_db, "load_board_members_snap", lambda source, **k: calls.append(1) or snaps)
+    monkeypatch.setattr(cfg, "NARR_SNAP_MIN_BOARDS", 2)
+
+    async def _no_fetch(*a, **k):
+        raise AssertionError("snapshot pool must not fetch live members")
+
+    monkeypatch.setattr(eng_radar, "fetch_board_members", _no_fetch)
+    eng = DeskEngine()
+    boards = [{"name": "热门", "kind": "concept", "bk": "BK9", "pct": 9.0}]
+    cards = [{"name": "算力", "kind": "concept", "pool": [{"code": "600001"}]}]
+    out = asyncio.run(eng._narrative_concepts(None, boards, cards, "2026-10-09"))
+    by_name = {c["name"]: c for c in out}
+    assert set(by_name) == {"算力", "液冷"}
+    assert len(by_name["算力"]["members"]) == 3 and by_name["算力"]["src"] == "snap"
+    asyncio.run(eng._narrative_concepts(None, boards, cards, "2026-10-09"))
+    assert calls == [1]
 
 
 def test_summarize_leads_counts_hidden_hits() -> None:

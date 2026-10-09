@@ -80,6 +80,7 @@ function paintCfAudit(d) {
     + sides
     + gateTbl
     + cfSensTable(d.entry_sens)
+    + cfNearTable(d.near_miss)
     + cfStopTable(d.stop_cmp)
     + `<ul class="cf-notes">${notes.map((n) => `<li>${escAttr(n)}</li>`).join("")}</ul>`;
 }
@@ -102,6 +103,27 @@ function cfSensTable(sens) {
   return `<div class="cf-sens-title" title="${escAttr(sens.note || "")}">入场偏差敏感度：多付几个点，三日净值掉多少</div>`
     + `<table class="gl-tbl cf-sens"><thead><tr><th>入场</th><th>张数</th><th>胜率</th><th>三日净值</th>`
     + `<th>较计划价</th><th>止损率</th><th>其中放行卡</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * Render the near-miss table (never reached plan, came within plan + x%).
+ * @param {object|null} near - ``near_miss`` block of the audit payload.
+ * @returns {string} HTML; a one-line note while no traced card has a recorded low.
+ */
+function cfNearTable(near) {
+  if (!near) return "";
+  const rows = near.rows || [];
+  const title = `<div class="cf-sens-title" title="${escAttr(near.note || "")}">差一点到价：挂高 x% 多成交的卡，三日净值多少</div>`;
+  if (!rows.length) {
+    return title + `<div class="meta">暂无样本（实测最低价自 v1.9.7 起记录，已记录未到价卡 ${near.traced || 0} 张）</div>`;
+  }
+  const body = rows.map((r) =>
+    `<tr><td>+${r.off}%</td><td class="num">${r.n}</td><td class="num">${r.win}%</td>`
+    + `<td class="num">${cfPct(r.mean)}</td><td class="num">${r.stop_rate}%</td></tr>`,
+  ).join("");
+  return title
+    + `<table class="gl-tbl cf-sens"><thead><tr><th>挂单</th><th>多成交张数</th><th>胜率</th><th>三日净值</th>`
+    + `<th>止损率</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /**

@@ -77,6 +77,20 @@ def test_block_arm_reasons_from_verdict() -> None:
     assert block_arm_reasons({}) == []
 
 
+def test_near_miss_fills_untouched_cards_within_limit() -> None:
+    from market_desk.counterfactual.audit import build_near_miss
+
+    path = [(10.3, 10.4, 10.0, 10.2), (10.3, 10.6, 10.2, 10.5), (10.5, 10.6, 10.4, 10.5), (10.5, 10.6, 10.4, 10.5)]
+    near = _sig(3, {"cf": {"seen": 5, "lo_px": 10.04}, "stop_price": 9.7})
+    far = _sig(3, {"cf": {"seen": 5, "lo_px": 10.25}, "stop_price": 9.7}, code="600002")
+    untraced = _sig(3, {"stop_price": 9.7}, code="600003")
+    out = build_near_miss([(near, _packed(3, path)), (far, _packed(3, path)), (untraced, _packed(3, path))], now=NOW)
+    by_off = {r["off"]: r for r in out["rows"]}
+    assert out["traced"] == 2
+    assert by_off[0.5]["n"] == 1 and by_off[2.0]["n"] == 1 and by_off[3.0]["n"] == 2
+    assert by_off[0.5]["mean"] == pytest.approx((10.5 / 10.05 - 1) * 100 - 0.25, abs=0.01)
+
+
 def test_trace_now_and_merge_keep_first_blocked_touch() -> None:
     far = trace_now({"last": 10.5, "plan_price": 10.0}, desk_source="main")
     assert far == {"touch": False, "ready": False, "px": 10.5, "blk": []}
@@ -84,7 +98,7 @@ def test_trace_now_and_merge_keep_first_blocked_touch() -> None:
     assert hit["touch"] and hit["blk"] == ["日线下降"]
     lit = trace_now({"last": 9.97, "plan_price": 10.0, "ready": True}, desk_source="main")
     cf = merge_trace(None, far, "2026-09-02 09:31:00")
-    assert cf == {"seen": 1}
+    assert cf == {"seen": 1, "lo_px": 10.5, "lo_at": "09:31:00"}
     cf = merge_trace(cf, hit, "2026-09-02 09:40:00")
     cf = merge_trace(cf, dict(hit, blk=["卡·离日高"]), "2026-09-02 09:41:00")
     cf = merge_trace(cf, lit, "2026-09-02 09:45:00")
@@ -92,6 +106,7 @@ def test_trace_now_and_merge_keep_first_blocked_touch() -> None:
     assert cf["first_blk"] == ["日线下降"] and cf["first_blk_at"] == "09:40:00"
     assert cf["touch_at"] == "09:40:00" and cf["touch_px"] == 9.98
     assert cf["blk"] == {"日线下降": 1, "卡·离日高": 1}
+    assert cf["lo_px"] == 9.97 and cf["lo_at"] == "09:45:00"
 
 
 def test_upsert_merges_trace_and_sticky_probe(monkeypatch, tmp_path) -> None:

@@ -121,6 +121,7 @@ def simulate_cf_trade(
     hold_days: int = CF_HOLD_DAYS,
     cost_pct: float = CF_ROUNDTRIP_COST_PCT,
     entry_offset_pct: float | None = None,
+    force_entry: float | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Simulate one plan-price fill with a stop and a fixed holding window.
@@ -147,6 +148,9 @@ def simulate_cf_trade(
             re-anchored at plan × (1 + offset%) clamped into day0's range (a
             gap-open under plan still fills at the open) and the stop is anchored
             on plan, so only the price paid changes between offsets.
+        force_entry: Near-miss mode for cards that never reached plan: fill at
+            this price (clamped into day0's range) without touch evidence, stop
+            anchored on plan; ``touch`` is reported as ``近价``.
         now: Clock override for tests.
 
     Returns:
@@ -180,10 +184,14 @@ def simulate_cf_trade(
     prev0 = _f(closes[i0 - 1]) if i0 > 0 else None
     if is_one_word_limit_up(_at(opens, i0), _at(highs, i0), low0, _f(closes[i0]), prev0):
         return {"filled": False, "entry": plan, "touch": "一字涨停"}
-    touch, entry = _touch_entry(signal, plan, low0, _at(highs, i0), _at(opens, i0), _f(closes[i0]))
+    if force_entry is not None:
+        high0 = _at(highs, i0)
+        touch, entry = "近价", max(min(float(force_entry), high0 if high0 is not None else float(force_entry)), low0)
+    else:
+        touch, entry = _touch_entry(signal, plan, low0, _at(highs, i0), _at(opens, i0), _f(closes[i0]))
     if entry is None:
         return {"filled": False, "entry": plan, "touch": touch}
-    anchor = entry
+    anchor = plan if force_entry is not None else entry
     if entry_offset_pct is not None:
         anchor = plan
         open0 = _at(opens, i0)
