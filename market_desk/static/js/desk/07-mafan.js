@@ -161,7 +161,7 @@ function paintMaFanHead() {
     ["code", "股票"],
     ["sector", "板块"],
     ["stage", "阶段"],
-    ["score", "形态分"],
+    ["score", "形态分", "均线形态的完整度，不是预期收益：回放里形态分对之后 5 / 10 日超额没有稳定区分度（详见「发散胜率」）"],
     ["pick", "打分"],
     ["close", "收盘"],
     ["pct", "涨跌%"],
@@ -176,11 +176,12 @@ function paintMaFanHead() {
     ["", "标签"],
     ["", "备注"],
   ];
-  head.innerHTML = cols.map(([id, label]) => {
+  head.innerHTML = cols.map(([id, label, tip]) => {
     if (!id) return `<th>${label}</th>`;
     const on = maFanSort.id === id;
     const ind = on ? (maFanSort.dir > 0 ? "▲" : "▼") : "";
-    return `<th class="rev-sort" data-sort="${id}">${label}<span class="sort-ind">${ind}</span></th>`;
+    const title = tip ? ` title="${escAttr(tip)}"` : "";
+    return `<th class="rev-sort" data-sort="${id}"${title}>${label}<span class="sort-ind">${ind}</span></th>`;
   }).join("");
 }
 
@@ -381,6 +382,7 @@ function paintMaFan(d) {
         scan.saved_at ? `落盘 ${scan.saved_at}` : "",
         scan.formula_version != null ? `公式 v${scan.formula_version}` : "",
       ].filter(Boolean).map((t, i) => (i ? `<span class="meta"> · ${t}</span>` : t)).join("")
+        + maFanFailedHtml(scan.failed)
         + maFanOutcomeHtml(d.outcome);
     }
   }
@@ -418,6 +420,8 @@ function paintMaFan(d) {
       if (t === "贴主线" || t === "近主线" || t === "主线同主题") return "rev-chip up";
       if (t === "贴支线" || t === "近支线" || t === "支线同主题" || t === "贴联动" || t === "近联动" || t === "联动同主题") return "rev-chip";
       if (String(t).startsWith("额档·")) return "rev-chip";
+      if (t === "今日发散" || t === "量价齐升") return "rev-chip up";
+      if (t === "跌破MA10" || t === "跌破MA20" || t === "MACD新死叉" || String(t).startsWith("回撤")) return "rev-chip down";
       if (t === "⚠MA60偏弱" || t === "MA60偏弱") return "rev-chip down";
       if (t === "后期" || t === "放量过猛" || t === "单日放量" || t === "坡度弱" || t === "一日拉开" || String(t).startsWith("已拉")) return "rev-chip gate soft";
       return "rev-chip";
@@ -446,6 +450,18 @@ function paintMaFan(d) {
           <td class="col-wrap col-note meta">${maFanRemark(it, rawTags)}</td>
         </tr>`;
   }).join("");
+}
+
+/** Fans that formed recently but failed on the scan day (removed from the list). */
+function maFanFailedHtml(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "";
+  const shown = list.slice(0, 12).map((r) =>
+    `${escAttr(r.name || r.code || "")}<span class="meta">（${escAttr((r.failed || []).join("·"))}）</span>`
+  ).join("、");
+  const more = list.length > 12 ? `<span class="meta"> 等 ${list.length} 只</span>` : "";
+  const tip = "近 7 日内发散过、扫描当日已失效：从发散后最高收盘回撤超 8%、3 日连跌且收在 MA5 下、MA60 走弱且收在其下方（v8，回放验证见 scripts/validate_ma_fan.py）";
+  return `<div class="meta" style="margin-top:4px" title="${escAttr(tip)}">发散失效已移出 ${list.length}：${shown}${more}</div>`;
 }
 
 /** Comparison-scorer result (latest scan day); factors in the tooltip. */

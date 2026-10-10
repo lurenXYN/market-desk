@@ -90,7 +90,7 @@ async def _score_one(
                 await asyncio.sleep(0.04)
         if stats is not None:
             stats.record_fetch(bool(bars))
-        got = score_pattern((bars or [])[-MA_FAN_SCORE_BARS:])
+        got = score_pattern((bars or [])[-MA_FAN_SCORE_BARS:], include_failed=True)
         zt_ytd = (
             count_limit_ups_ytd_from_bars(bars, name=name, code=code, year=datetime.now().year)
             if got
@@ -103,6 +103,16 @@ async def _score_one(
     close = float(got["close"])
     if min_price > 0 and close < float(min_price):
         return None
+    if got.get("failed"):
+        return {
+            "failed": list(got["failed"]),
+            "code": code,
+            "name": name,
+            "close": close,
+            "pct": got.get("pct"),
+            "fan_date": got.get("fan_date") or "",
+            "score_base": float(got["score"]),
+        }
     amt = row.get("amount")
     amt_yi = round(float(amt) / 1e8, 2) if amt not in (None, "") else None
     try:
@@ -146,6 +156,10 @@ async def _score_one(
         "slopes": got.get("slopes"),
         "progressive": bool(got.get("progressive")),
         "ma60_ok": bool(got.get("ma60_ok", True)),
+        "fan_date": got.get("fan_date") or "",
+        "lag": got.get("lag"),
+        "drawdown": got.get("drawdown"),
+        "udr": got.get("udr"),
         "zt_ytd": zt_ytd,
         "mv_yi": _wan_to_yi(row.get("mktcap_wan")),
     }
@@ -176,6 +190,25 @@ def _merge_hits(
     out = list(by_code.values())
     out.sort(key=lambda h: float(h.get("score_base") or h.get("score") or 0), reverse=True)
     return out[: max(10, keep)]
+
+
+MA_FAN_FAILED_KEEP = 40
+
+
+def _merge_failed(
+    prev: list[dict[str, Any]],
+    new: list[dict[str, Any]],
+    *,
+    hit_codes: set[Any],
+) -> list[dict[str, Any]]:
+    """Merge failed fans by code (latest wins), drop codes still listed as hits, best score first."""
+    by_code: dict[str, dict[str, Any]] = {}
+    for item in list(prev or []) + list(new or []):
+        code = normalize_code(item.get("code")) or ""
+        if code and code not in hit_codes:
+            by_code[code] = dict(item)
+    out = sorted(by_code.values(), key=lambda h: float(h.get("score_base") or 0), reverse=True)
+    return out[:MA_FAN_FAILED_KEEP]
 
 
 def slices_done_for_day(trade_date: str) -> set[str]:
@@ -270,7 +303,7 @@ async def run_ma_fan_scan(
                 pacer=pacer,
                 stats=st,
             )
-            if hit:
+            if hit and not hit.get("failed"):
                 st.record_hit()
             return hit
 
@@ -279,7 +312,7 @@ async def run_ma_fan_scan(
         raise RuntimeError(
             f"日线源连续失败 {MA_FAN_MAX_CONSECUTIVE_FAIL} 次，疑似被限流，已中止（档 {key}）"
         )
-    chunk = [h for h in raw if h]
+    chunk = [h for h in raw if h and not h.get("failed")]
     chunk.sort(key=lambda h: float(h.get("score_base") or h.get("score") or 0), reverse=True)
 
     from market_desk.db import load_ma_fan_day, save_ma_fan_day
@@ -288,6 +321,11 @@ async def run_ma_fan_scan(
     prev_items = [] if replace else list(prev.get("items") or [])
     keep = max(20, min(int(top or 80), 150))
     merged = _merge_hits(prev_items, chunk, keep=keep)
+    failed = _merge_failed(
+        [] if replace else list(prev.get("failed") or []),
+        [h for h in raw if h and h.get("failed")],
+        hit_codes={h.get("code") for h in merged},
+    )
     signal_codes = _buy_signal_codes_for_day(day)
     for h in merged:
         code = normalize_code(h.get("code")) or ""
@@ -318,6 +356,7 @@ async def run_ma_fan_scan(
         "prefer_main": prefer,
         "formula_version": MA_FAN_FORMULA_VERSION,
         "items": merged,
+        "failed": failed,
         "slices_done": sorted(done, key=lambda s: (len(s), s)),
         "last_slice": key,
         "last_slice_scanned": len(pool),

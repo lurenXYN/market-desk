@@ -6,7 +6,60 @@ from typing import Any
 
 
 MA_PERIODS = (5, 10, 20, 30, 60)
-MA_FAN_FORMULA_VERSION = 7
+MA_FAN_FORMULA_VERSION = 8
+
+# v8 scan-day checks (scripts/validate_ma_fan.py, 800 names · 210 sessions, same-day
+# paired excess vs CSI 1000): failed fans drop out of the list, softer ones lose points.
+FAN_FAIL_DRAWDOWN_PCT = 8.0   # close this far below the best close since the fan bar → failed
+FAN_SOFT_DRAWDOWN_PCT = 5.0   # tag only: measured from the first fan bar it carries no edge (5d −0.24, t −0.8)
+FAN_UDR_GOOD = 1.3            # up-day / down-day volume over 10 sessions
+
+
+def _ema(xs: list[float], n: int) -> list[float]:
+    """Exponential moving average seeded with the first value."""
+    k = 2.0 / (n + 1)
+    out = [xs[0]]
+    for x in xs[1:]:
+        out.append(out[-1] + k * (x - out[-1]))
+    return out
+
+
+def _scan_day_checks(
+    closes: list[float], vols: list[float], i: int, k: int, mas_now: list[float]
+) -> dict[str, Any]:
+    """Judge on scan day ``i`` a fan first seen at bar ``k`` (``k <= i``).
+
+    ``k`` must be the earliest qualifying fan bar: a later one can be the first
+    down day itself, which would hide the drop. Returns drawdown since ``k``,
+    MACD state, up/down volume ratio, and
+    ``failed`` reasons: drawdown over ``FAN_FAIL_DRAWDOWN_PCT``, three lower closes
+    ending under MA5, or a weakening MA60 with the close beneath it.
+    """
+    c = closes[i]
+    peak = max(closes[k : i + 1])
+    drawdown = (1.0 - c / peak) * 100.0 if peak > 0 else 0.0
+    down3 = i >= 3 and closes[i] < closes[i - 1] < closes[i - 2] < closes[i - 3] and c < mas_now[0]
+    ma60_prev = _sma(closes, i - 10, 60)
+    ma60_weak_below = ma60_prev is not None and mas_now[4] < ma60_prev * 0.995 and c < mas_now[4]
+    dif = [a - b for a, b in zip(_ema(closes, 12), _ema(closes, 26))]
+    dea = _ema(dif, 9)
+    dead3 = any(dif[t - 1] >= dea[t - 1] and dif[t] < dea[t] for t in range(max(1, i - 2), i + 1))
+    up = sum(vols[t] for t in range(max(1, i - 9), i + 1) if closes[t] > closes[t - 1])
+    dn = sum(vols[t] for t in range(max(1, i - 9), i + 1) if closes[t] < closes[t - 1])
+    failed: list[str] = []
+    if drawdown > FAN_FAIL_DRAWDOWN_PCT:
+        failed.append(f"回撤{drawdown:.0f}%")
+    if down3:
+        failed.append("3日连跌破MA5")
+    if ma60_weak_below:
+        failed.append("MA60走弱且在下方")
+    return {
+        "drawdown": drawdown,
+        "macd_dead": dif[i] < dea[i],
+        "macd_dead3": dead3,
+        "udr": up / dn if dn > 0 else (9.9 if up > 0 else None),
+        "failed": failed,
+    }
 
 
 def _sma(closes: list[float], end: int, n: int) -> float | None:
@@ -47,11 +100,18 @@ def _slope_up(closes: list[float], i: int, n: int, look: int = 5) -> bool:
     return a > b * 1.001
 
 
-def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
+def score_pattern(bars: list[dict[str, Any]], *, include_failed: bool = False) -> dict[str, Any] | None:
     """Score one name; return diagnostics or None when pattern fails hard gates.
 
     Observation layer: hard gates stay permissive; quality is expressed via
-    ``score``, ``stage``, and structured ``tags`` rather than exclusion.
+    ``score``, ``stage``, and structured ``tags`` rather than exclusion. The fan
+    may have formed up to six sessions back, but ``close`` / ``pct`` / ``ma_order``
+    and the scan-day checks always describe the last bar.
+
+    Args:
+        bars: Daily bars, oldest first, ending on the scan day.
+        include_failed: Return fans that failed the scan-day checks too (with a
+            non-empty ``failed`` list) instead of None.
     """
     if len(bars) < 80:
         return None
@@ -101,6 +161,7 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
     sticky_avg, sticky_amp, sticky_s, sticky_e = best
 
     fan_pick: dict[str, Any] | None = None
+    fan_first: int | None = None
     for k in range(max(i - 6, sticky_e + 1), i + 1):
         mas = _ma_bundle(closes, k)
         if not mas:
@@ -120,6 +181,8 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
             continue
         if closes[k] < mas[0] * 0.985:
             continue
+        if fan_first is None:
+            fan_first = k
         fan_pick = {
             "i": k,
             "mas": mas,
@@ -197,43 +260,63 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         "续发散" if days_since_sticky <= 5 else "远端发散"
     )
 
-    score = 0.0
-    score += max(0.0, (sticky_max - sticky_avg) * 7)
-    score += max(0.0, (sticky_amp_soft - sticky_amp) * 0.35)
-    score += min(32.0, (fan_ratio - 1.3) * 11)
-    if 1.25 <= vol_ratio <= 2.9:
-        score += 12
-    elif 0.95 <= vol_ratio < 1.25:
-        score += 5
-    elif 2.9 < vol_ratio <= 3.8:
-        score += 3
-    else:
-        score -= 5
-    if day_spike > 3.5:
-        score -= 4
-    score += slopes * 2.5
-    if ordered:
-        score += 4
-    else:
-        score -= 2
-    if stage == "初期":
-        score += 12
-    elif stage == "中期":
-        score += 5
-    else:
-        score -= (ext - 55) * 0.35
-    if freshness == "刚发散":
-        score += 4
-    elif freshness == "远端发散":
-        score -= 3
-    if progressive:
-        score += 6
-    elif one_day_pop:
-        score -= 5
-    if ma60_strong:
-        score += 3
-    elif not ma60_ok:
-        score -= 4
+    mas_now = _ma_bundle(closes, i) or mas
+    today = _scan_day_checks(closes, vols, i, fan_first if fan_first is not None else k, mas_now)
+    if today["failed"] and not include_failed:
+        return None
+    lag = i - k
+
+    c_now = closes[i]
+    below_ma10 = c_now < mas_now[1] * 0.97
+    below_ma20 = c_now < mas_now[2]
+    udr = today["udr"]
+    parts: dict[str, float] = {
+        "sticky": max(0.0, (sticky_max - sticky_avg) * 7),
+        "amp": max(0.0, (sticky_amp_soft - sticky_amp) * 0.35),
+        "fan": min(32.0, (fan_ratio - 1.3) * 11),
+        "vol": 12.0 if 1.25 <= vol_ratio <= 2.9 else (
+            5.0 if 0.95 <= vol_ratio < 1.25 else (3.0 if 2.9 < vol_ratio <= 3.8 else -5.0)
+        ),
+        "spike": -4.0 if day_spike > 3.5 else 0.0,
+        "slopes": slopes * 2.5,
+        "order": 4.0 if ordered else -2.0,
+        "stage": 12.0 if stage == "初期" else (5.0 if stage == "中期" else -(ext - 55) * 0.35),
+        "fresh": 4.0 if freshness == "刚发散" else (-3.0 if freshness == "远端发散" else 0.0),
+        "prog": 6.0 if progressive else (-5.0 if one_day_pop else 0.0),
+        "ma60": 3.0 if ma60_strong else (-4.0 if not ma60_ok else 0.0),
+        "ma10": -5.0 if below_ma10 else 0.0,
+        "ma20": -4.0 if below_ma20 else 0.0,
+        "dead3": -4.0 if today["macd_dead3"] else 0.0,
+        "lag0": 3.0 if lag == 0 else 0.0,
+        "udr": 3.0 if udr is not None and udr > FAN_UDR_GOOD else 0.0,
+    }
+    score = sum(parts.values())
+    ma60_now_i = mas_now[4]
+    ma60_prev_i = _sma(closes, i - 10, 60)
+    feat = {
+        "sticky_avg": sticky_avg,
+        "sticky_amp": sticky_amp,
+        "fan_ratio": fan_ratio,
+        "fan_spread": fan_sp,
+        "vol_ratio": vol_ratio,
+        "day_spike": day_spike,
+        "slopes": slopes,
+        "ordered": int(ordered),
+        "ext": ext,
+        "days_since_sticky": days_since_sticky,
+        "progressive": int(progressive),
+        "one_day_pop": int(one_day_pop),
+        "ma60_slope": (ma60_now_i / ma60_prev_i - 1) * 100 if ma60_prev_i else 0.0,
+        "lag": lag,
+        "drawdown": today["drawdown"],
+        "udr": udr if udr is not None else 1.0,
+        "c_ma5": (c_now / mas_now[0] - 1) * 100,
+        "c_ma20": (c_now / mas_now[2] - 1) * 100,
+        "spread_now": _spread_pct(mas_now),
+        "macd_dead3": int(today["macd_dead3"]),
+        "macd_dead": int(today["macd_dead"]),
+        "ret5": (c_now / closes[i - 5] - 1) * 100 if i >= 5 and closes[i - 5] > 0 else 0.0,
+    }
 
     tags: list[str] = [stage, freshness]
     # Surface MA60 first so the list chip is hard to miss.
@@ -283,18 +366,38 @@ def score_pattern(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
         tags.append(f"已拉{ext:.0f}%")
     elif stage == "中期":
         tags.append(f"离开{ext:.0f}%")
+    tags.append("今日发散" if lag == 0 else f"发散后{lag}日")
+    if today["drawdown"] > FAN_SOFT_DRAWDOWN_PCT:
+        tags.append(f"回撤{today['drawdown']:.0f}%")
+    if below_ma10:
+        tags.append("跌破MA10")
+    if below_ma20:
+        tags.append("跌破MA20")
+    if today["macd_dead3"]:
+        tags.append("MACD新死叉")
+    elif today["macd_dead"]:
+        tags.append("MACD死叉")
+    if udr is not None and udr > FAN_UDR_GOOD:
+        tags.append("量价齐升")
 
     return {
         "score": round(score, 1),
-        "close": round(closes[k], 2),
-        "pct": bars[k].get("pct"),
+        "close": round(c_now, 2),
+        "pct": bars[i].get("pct"),
         "sticky_end": str(bars[sticky_e].get("date") or ""),
+        "fan_date": str(bars[k].get("date") or ""),
         "sticky_spread": round(sticky_avg, 2),
         "sticky_amp": round(sticky_amp, 1),
         "fan_spread": round(fan_sp, 2),
         "fan_ratio": round(fan_ratio, 2),
         "vol_ratio": round(vol_ratio, 2),
-        "ma_order": ">".join(f"{v:.2f}" for v in mas),
+        "ma_order": ">".join(f"{v:.2f}" for v in mas_now),
+        "lag": lag,
+        "drawdown": round(today["drawdown"], 1),
+        "udr": None if udr is None else round(udr, 2),
+        "failed": today["failed"],
+        "parts": {key: round(v, 2) for key, v in parts.items()},
+        "feat": {key: round(float(v), 4) for key, v in feat.items()},
         "note": " · ".join(tags) or "命中",
         "ext_pct": round(ext, 1),
         "stage": stage,
