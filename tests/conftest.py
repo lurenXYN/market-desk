@@ -18,6 +18,7 @@ def _ensure_db_schema() -> None:
 def _isolated_em_avail(monkeypatch) -> None:
     """Give each test empty East Money availability state and no push2 pacing delay."""
     monkeypatch.setattr(em_avail, "EM_PUSH2_MIN_GAP_SEC", 0.0)
+    monkeypatch.setattr(em_avail, "EM_PUSH2_OPEN", ())
     monkeypatch.setattr(em_avail, "_HOURLY", {})
     monkeypatch.setattr(em_avail, "_EVENTS", [])
     monkeypatch.setattr(em_avail, "_STATE", {})

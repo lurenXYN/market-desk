@@ -170,7 +170,7 @@ def test_em_snapshot_backs_off_after_two_empties(monkeypatch, tmp_path) -> None:
                                              "丙": ("BK0003", "concept"), "丁": ("BK0004", "concept")})
     answers = {"BK0001": [], "BK0002": ["000001"], "BK0003": [], "BK0004": []}
 
-    async def fake_codes(_client, bk):
+    async def fake_codes(_client, bk, **_kw):
         return list(answers[bk])
 
     import market_desk.eastmoney as em
@@ -197,7 +197,7 @@ def test_em_snapshot_skips_when_clist_recently_blocked(monkeypatch, tmp_path) ->
     monkeypatch.setattr(bf, "_EM_BY_NAME", {"甲": ("BK0001", "concept")})
     calls: list[str] = []
 
-    async def fake_codes(_client, bk):
+    async def fake_codes(_client, bk, **_kw):
         calls.append(bk)
         return ["000001"]
 

@@ -21,16 +21,18 @@ LIT_FIELDS = ("first_ready_px", "book_ready", "slip_bps")
 FIELD_MIN_COVER = 0.8
 
 
-def _count_by_day(conn: Any, table: str, days: list[str]) -> dict[str, int]:
+def _count_by_day(conn: Any, table: str, days: list[str], where: str = "") -> dict[str, int]:
     """Return ``{YYYY-MM-DD: rows}`` for ``table`` over ``days`` (missing table → {}).
 
-    Some ledgers key days as ``YYYYMMDD``; both forms are matched.
+    Some ledgers key days as ``YYYYMMDD``; both forms are matched. ``where`` is an
+    optional extra SQL condition (trusted constant, not user input).
     """
     keys = list(days) + [d.replace("-", "") for d in days]
     marks = ",".join("?" * len(keys))
+    extra = f" AND ({where})" if where else ""
     try:
         rows = conn.execute(
-            f"SELECT trade_date, COUNT(*) FROM {table} WHERE trade_date IN ({marks}) GROUP BY trade_date",
+            f"SELECT trade_date, COUNT(*) FROM {table} WHERE trade_date IN ({marks}){extra} GROUP BY trade_date",
             keys,
         ).fetchall()
     except Exception:
@@ -49,7 +51,8 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
     Returns:
         One dict per day with ``cards`` / ``lit``, ``card_fields`` and ``lit_fields``
         coverage ratios, ``missing`` (card fields under ``FIELD_MIN_COVER``),
-        ``narrative`` / ``crowd`` / ``auction`` / ``pulse`` row counts, and
+        ``narrative`` / ``crowd`` / ``auction`` / ``pulse`` row counts,
+        ``narrative_snap`` (narrative rows first seen on the snapshot pool), and
         ``crowd_max`` (highest industry / concept turnover share that day) so an
         empty crowd ledger can be compared with the ``CROWD_ABS_*`` thresholds.
     """
@@ -65,6 +68,7 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
         if not dates:
             return []
         narrative = _count_by_day(conn, "narrative_shadow", dates)
+        narrative_snap = _count_by_day(conn, "narrative_shadow", dates, "pool = 'snap'")
         crowd = _count_by_day(conn, "crowd_shadow", dates)
         auction = _count_by_day(conn, "auction_lock", dates)
         pulse = _count_by_day(conn, "etf_pulse_log", dates)
@@ -111,6 +115,7 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
                 "lit_fields": {k: cover(lit, k) for k in LIT_FIELDS},
                 "missing": [k for k, v in card_fields.items() if v is not None and v < FIELD_MIN_COVER],
                 "narrative": narrative.get(day, 0),
+                "narrative_snap": narrative_snap.get(day, 0),
                 "crowd": crowd.get(day, 0),
                 "crowd_max": crowd_max.get(day, {}),
                 "auction": auction.get(day, 0),
@@ -143,7 +148,9 @@ def shadow_check(rows: list[dict[str, Any]], narrative_live: dict[str, Any] | No
     pool = str((narrative_live or {}).get("pool") or "")
     concepts = (narrative_live or {}).get("concepts")
     pool_txt = f"（概念池 {'快照' if pool == 'snap' else '实时'} {concepts} 个）" if concepts is not None else ""
-    parts.append(f"叙事{r['narrative']}{pool_txt}")
+    snap_n = int(r.get("narrative_snap") or 0)
+    split = f"（快照池 {snap_n}）" if snap_n and snap_n != r["narrative"] else ""
+    parts.append(f"叙事{r['narrative']}{split}{pool_txt}")
     if not r["narrative"] and pool != "snap" and level == "ok":
         level = "warn"
     parts.append(f"竞价锁{r['auction']}·脉冲{r['pulse']}")

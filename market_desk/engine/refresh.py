@@ -176,6 +176,8 @@ class RefreshMixin:
             if not live:
                 await self._maybe_probe_boards(now)
                 await self._maybe_learn_aliases(now)
+            else:
+                self._spawn_alias_learn(now)
             self._flush_em_avail(now)
             if ma_fan_due:
                 try:

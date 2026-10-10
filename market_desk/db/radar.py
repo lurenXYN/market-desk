@@ -148,6 +148,7 @@ def upsert_narrative_shadow(
     *,
     at: str,
     mainline: str,
+    pool: str = "",
 ) -> int:
     """Record narrative-cluster sightings: keep first sighting, refresh peak / last.
 
@@ -159,6 +160,8 @@ def upsert_narrative_shadow(
         clusters: Candidate clusters with ``label`` / ``zt_n`` / ``industries`` / ``concepts``.
         at: ``HH:MM:SS`` sighting clock.
         mainline: Current live mainline name.
+        pool: Concept pool behind the sighting (``snap`` / ``live``); fixed at first sighting
+            so reviews can split samples across the pool switch.
 
     Returns:
         Number of clusters written.
@@ -184,8 +187,8 @@ def upsert_narrative_shadow(
                     """
                     INSERT INTO narrative_shadow(
                         trade_date, label, first_seen, last_seen, peak_zt, industries,
-                        concepts, mainline_at_first, became_mainline_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        concepts, mainline_at_first, became_mainline_at, pool
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         day,
@@ -197,6 +200,7 @@ def upsert_narrative_shadow(
                         json.dumps(concepts, ensure_ascii=False),
                         mainline or None,
                         at if is_main else None,
+                        pool or None,
                     ),
                 )
             else:

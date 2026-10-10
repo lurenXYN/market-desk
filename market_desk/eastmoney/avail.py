@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from market_desk.config import EM_BLOCK_AFTER_FAILS, EM_PUSH2_MIN_GAP_SEC
+from market_desk.config import EM_BLOCK_AFTER_FAILS, EM_PUSH2_MIN_GAP_SEC, EM_PUSH2_OPEN
 
 try:
     from zoneinfo import ZoneInfo
@@ -191,6 +191,27 @@ def recently_blocked(url: str) -> bool:
     if not st or st.get("up", True):
         return False
     return _cn_now().timestamp() - float(st.get("fail_ts") or 0.0) < float(EM_BLOCK_SKIP_SEC)
+
+
+def push2_open(now: datetime | None = None) -> bool:
+    """Return True when the Beijing clock falls inside an ``EM_PUSH2_OPEN`` range (empty = always)."""
+    if not EM_PUSH2_OPEN:
+        return True
+    cur = now or _cn_now()
+    minutes = cur.hour * 60 + cur.minute
+    return any(lo <= minutes < hi for lo, hi in EM_PUSH2_OPEN)
+
+
+def em_skip(url: str, now: datetime | None = None) -> bool:
+    """Return True when a caller with a fallback source should not try ``url`` now.
+
+    Skips push2* hosts outside ``EM_PUSH2_OPEN`` (they answer nothing there) and any
+    family :func:`recently_blocked` reports. Other hosts (push2ex, datacenter) are
+    only subject to the block check.
+    """
+    if classify(url).split("/")[0] in _PUSH2_HOSTS and not push2_open(now):
+        return True
+    return recently_blocked(url)
 
 
 def blocked_families(within_sec: float | None = None) -> list[str]:

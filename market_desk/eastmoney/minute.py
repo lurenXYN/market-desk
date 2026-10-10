@@ -13,7 +13,7 @@ from market_desk.config import EASTMONEY_UT, HTTP_HEADERS
 from market_desk.filters import normalize_code
 from market_desk.numbers import num
 
-from market_desk.eastmoney.avail import em_get, recently_blocked
+from market_desk.eastmoney.avail import em_get, em_skip
 from market_desk.eastmoney.bars import _secid
 
 log = logging.getLogger("market_desk.eastmoney")
@@ -284,7 +284,7 @@ async def _minute_trends_eastmoney(
     )
     for host in hosts:
         url = f"https://{host}{path}"
-        if recently_blocked(url):
+        if em_skip(url):
             continue
         try:
             resp = await em_get(client, url, headers=HTTP_HEADERS, timeout=6.0)

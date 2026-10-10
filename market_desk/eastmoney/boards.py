@@ -465,12 +465,25 @@ async def fetch_board_members(
     return [dict(row) for row in members]
 
 
-async def fetch_board_codes_em(client: httpx.AsyncClient, bk: str) -> list[str]:
+async def fetch_board_codes_em(
+    client: httpx.AsyncClient, bk: str, *, ignore_sina_lock: bool = False
+) -> list[str]:
     """Return every constituent code of one East Money board (alias overlap learning).
 
-    Returns [] when board clist is paused / locked on Sina or the call fails.
+    Args:
+        client: Shared HTTP client.
+        bk: East Money board code (``BKxxxx``).
+        ignore_sina_lock: Still fetch while the live board source is locked on Sina.
+            Snapshots never feed the live board universe, so only the timed clist
+            pause applies to them.
+
+    Returns:
+        Constituent codes, or [] when board clist is paused / locked or the call fails.
     """
-    if not str(bk or "").upper().startswith("BK") or _boards_clist_paused():
+    if not str(bk or "").upper().startswith("BK"):
+        return []
+    paused = time.time() < _BOARDS_CLIST_PAUSE_UNTIL if ignore_sina_lock else _boards_clist_paused()
+    if paused:
         return []
     try:
         rows = await _fetch_clist_pages(

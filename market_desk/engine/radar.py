@@ -357,7 +357,9 @@ class RadarMixin:
             at = now.strftime("%H:%M:%S")
             if clusters:
                 try:
-                    upsert_narrative_shadow(trade_date_dash, clusters, at=at, mainline=mainline)
+                    upsert_narrative_shadow(
+                        trade_date_dash, clusters, at=at, mainline=mainline, pool=out["pool"]
+                    )
                 except Exception:
                     log.exception("narrative shadow save failed")
             out.update(ok=True, clusters=clusters, at=at[:5], concepts=len(concepts))

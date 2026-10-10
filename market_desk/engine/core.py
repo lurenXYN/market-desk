@@ -121,6 +121,7 @@ class DeskEngine(
         # Sina → East Money alias self-learning (AliasLearnMixin).
         self._alias_tick_at = 0.0
         self._alias_em_backoff_until = 0.0
+        self._alias_task: Any = None
         self._alias_learned_day = ""
         self._alias_progress: dict[str, Any] = {}
 

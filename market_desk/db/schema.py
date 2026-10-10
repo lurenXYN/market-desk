@@ -186,10 +186,13 @@ def init_db() -> None:
                 concepts TEXT,
                 mainline_at_first TEXT,
                 became_mainline_at TEXT,
+                pool TEXT,
                 PRIMARY KEY (trade_date, label)
             )
             """
         )
+        if "pool" not in {r[1] for r in conn.execute("PRAGMA table_info(narrative_shadow)").fetchall()}:
+            conn.execute("ALTER TABLE narrative_shadow ADD COLUMN pool TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS crowd_shadow (

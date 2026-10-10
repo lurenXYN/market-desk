@@ -84,6 +84,34 @@ def test_kline_skips_recently_blocked_hosts_then_reprobes(monkeypatch) -> None:
     assert seen == ["push2his.eastmoney.com", "push2delay.eastmoney.com"], "stale block re-probes"
 
 
+def test_push2_skipped_outside_open_hours_only(monkeypatch) -> None:
+    monkeypatch.setattr(avail, "EM_PUSH2_OPEN", ((9 * 60, 11 * 60 + 35), (13 * 60, 16 * 60)))
+    kline = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    zt = "https://push2ex.eastmoney.com/getTopicZTPool"
+    night, lunch, morning = (datetime(2026, 10, 12, h, m) for h, m in ((20, 0), (12, 10), (10, 0)))
+    assert avail.em_skip(kline, night) and avail.em_skip(kline, lunch), "push2 refuses off-hours"
+    assert not avail.em_skip(kline, morning)
+    assert not avail.em_skip(zt, night), "push2ex answers all day"
+    monkeypatch.setattr(avail, "EM_PUSH2_OPEN", ())
+    assert not avail.em_skip(kline, night), "empty window = always try"
+
+
+def test_em_snapshot_window_follows_push2_hours(monkeypatch) -> None:
+    from market_desk.engine import alias_learn
+
+    monkeypatch.setattr(avail, "EM_PUSH2_OPEN", ((9 * 60, 11 * 60 + 35), (13 * 60, 16 * 60)))
+    mon, sat = datetime(2026, 10, 12, 0, 0), datetime(2026, 10, 10, 0, 0)
+
+    def at(day: datetime, h: int, m: int) -> bool:
+        return alias_learn._em_snap_window(day.replace(hour=h, minute=m))
+
+    assert at(mon, 10, 0) and at(mon, 15, 30)
+    assert not at(mon, 9, 20), "trading day: skip the open rush"
+    assert not at(mon, 12, 0) and not at(mon, 20, 0)
+    assert at(sat, 9, 10) and not at(sat, 21, 0), "weekends follow the clock window only"
+    assert alias_learn._alias_window(mon.replace(hour=20)) and not alias_learn._alias_window(mon.replace(hour=10))
+
+
 def _run(handler, url: str):
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:

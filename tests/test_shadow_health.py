@@ -51,3 +51,21 @@ def test_shadow_health_flags_missing_fields_and_explains_empty_crowd(monkeypatch
     assert chk["level"] == "warn" and "电子器件 7.1%" in chk["detail"]
     assert shadow_check(rows, {"pool": "snap", "concepts": 400})["level"] == "ok"
     assert shadow_check(rows[1:], None)["level"] == "bad"
+
+
+def test_narrative_rows_keep_pool_of_first_sighting(monkeypatch, tmp_path) -> None:
+    _setup(monkeypatch, tmp_path)
+    with _connect() as conn:
+        _card(conn, "2026-10-12", "600001", {"cf": {}})
+        conn.commit()
+    cl = [{"label": "固态电池", "zt_n": 3, "industries": 2, "concepts": ["固态电池"]}]
+    desk_db.upsert_narrative_shadow("2026-10-12", cl, at="10:00:00", mainline="", pool="snap")
+    desk_db.upsert_narrative_shadow("2026-10-12", cl, at="10:05:00", mainline="", pool="live")
+    desk_db.upsert_narrative_shadow(
+        "2026-10-12", [{**cl[0], "label": "机器人"}], at="10:05:00", mainline="", pool="live"
+    )
+    rows = desk_db.load_narrative_shadow("2026-10-12")
+    assert {r["label"]: r["pool"] for r in rows} == {"固态电池": "snap", "机器人": "live"}
+    day = shadow_health(1)[0]
+    assert day["narrative"] == 2 and day["narrative_snap"] == 1
+    assert "叙事2（快照池 1）" in shadow_check([day], {"pool": "snap", "concepts": 120})["detail"]

@@ -516,12 +516,18 @@ ALIAS_EM_COVERAGE_MIN = 0.9             # share of EM boards snapped before lear
 ALIAS_LEARN_SINA_PER_TICK = 8           # idle-loop budget: Sina boards per tick
 ALIAS_LEARN_EM_PER_TICK = 3             # idle-loop budget: East Money boards per tick (WAF-friendly)
 ALIAS_LEARN_TICK_SEC = 120.0            # idle-loop cadence of one learning step
-ALIAS_EM_BACKOFF_SEC = 7200.0           # pause East Money snapshots after two empty boards
+ALIAS_EM_BACKOFF_SEC = 900.0            # pause East Money snapshots after two empty boards / a recent clist block
+ALIAS_EM_SESSION_PER_TICK = 1           # East Money boards per tick on trading days (shares the edge with live calls)
+ALIAS_EM_SESSION_FROM = 9 * 60 + 35     # trading days: no snapshots before this minute (open rush)
 
 # East Money request volume (push2 family is rate-limited per IP, not by clock).
 EM_PUSH2_MIN_GAP_SEC = 0.15             # process-wide min spacing between push2* request starts
 EM_BLOCK_AFTER_FAILS = 3                # consecutive failures before an endpoint counts as blocked
 EM_BLOCK_SKIP_SEC = 180.0               # skip a blocked kline / trends family this long after its last failure
+# Beijing-clock minute ranges [start, end) when push2* answers this deployment; outside
+# them kline / trends go straight to fallbacks. VPS 10/2–10/9: 0 successes 16:00–08:59
+# and at lunch. Empty tuple = always try.
+EM_PUSH2_OPEN = ((9 * 60, 11 * 60 + 35), (13 * 60, 16 * 60))
 EM_AVAIL_FLUSH_SEC = 300.0              # flush hourly request counters to SQLite this often
 EM_AVAIL_KEEP_DAYS = 30                 # prune availability history older than this
 BOARDS_INDUSTRY_TTL_SEC = 60.0          # reuse the paged industry universe this long (concepts every tick)
