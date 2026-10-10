@@ -12,32 +12,92 @@ function paintPickSel() {
   el.textContent = n ? `已选 ${n} 只（最多 ${PICK_MAX}）` : "在名称前勾选 2–5 只";
 }
 
-function pickScoreClass(grade) {
-  return ({ 优先: "g-hi", 可以考虑: "g-mid", 谨慎: "g-lo", 放弃: "g-drop" })[grade] || "g-mid";
+const PICK_KIND = { hard: ["✕", "硬伤"], risk: ["⚠", "风险"], plus: ["✓", "加分"], info: ["·", "参考"] };
+const PICK_KIND_ORDER = { hard: 0, risk: 1, plus: 2, info: 3 };
+
+/**
+ * Classify one factor row; mirrors pick_score.factor_kind for stored rows without ``kind``.
+ */
+function pickKind(f) {
+  if (f && PICK_KIND[f.kind]) return f.kind;
+  const p = Number((f && f.points) || 0);
+  const key = String((f && f.key) || "");
+  if ((key === "gate" || key === "pct") && p < 0) return "hard";
+  if (key === "gap" || key === "lhb" || p < 0) return "risk";
+  return p > 0 ? "plus" : "info";
+}
+
+function pickSigned(v, digits = 2) {
+  const n = Number(v);
+  return (n > 0 ? "+" : "") + n.toFixed(digits);
+}
+
+/**
+ * Render the checklist badge (硬伤 / 风险N / 无风险) with the item lists as tooltip.
+ */
+function pickCheckHtml(chk, tag = "span", extraCls = "") {
+  if (!chk || !chk.label) return "";
+  const tip = [
+    chk.hard && chk.hard.length ? "硬伤：" + chk.hard.join("、") : "",
+    chk.risk && chk.risk.length ? "风险：" + chk.risk.join("、") : "",
+    chk.plus && chk.plus.length ? "加分：" + chk.plus.join("、") : "",
+  ].filter(Boolean).join("\n") || "没有硬伤、风险或加分项";
+  return `<${tag} class="pick-chk chk-${escAttr(chk.tone || "mid")} ${extraCls}" title="${escAttr(tip)}">${escAttr(chk.label)}</${tag}>`;
 }
 
 function pickFactorsHtml(factors) {
-  return (factors || []).map((f) => {
+  const rows = (factors || []).slice().sort((a, b) => PICK_KIND_ORDER[pickKind(a)] - PICK_KIND_ORDER[pickKind(b)]);
+  return rows.map((f) => {
+    const k = pickKind(f);
     const p = Number(f.points || 0);
-    const cls = p > 0 ? "plus" : (p < 0 ? "minus" : "");
+    const pts = p ? ` <span class="pts-ref" title="冻结公式的参考分点数">${p > 0 ? "+" : ""}${p}</span>` : "";
     const hist = f.hist ? `<span class="hist">${escAttr(f.hist)}</span>` : "";
-    return `<li><span class="pts ${cls}">${p > 0 ? "+" : ""}${p}</span>`
-      + `<span><b>${escAttr(f.label)}</b> ${escAttr(f.detail)}${hist}</span></li>`;
-  }).join("") || `<li class="meta">没有可比的加减分项</li>`;
+    return `<li class="k-${k}"><span class="mk" title="${PICK_KIND[k][1]}">${PICK_KIND[k][0]}</span>`
+      + `<span><b>${escAttr(f.label)}</b> ${escAttr(f.detail)}${pts}${hist}</span></li>`;
+  }).join("") || `<li class="meta">没有可比项</li>`;
 }
 
 function pickPosHtml(pos) {
   if (!pos || !pos.label) return "";
-  return `<span class="pick-pos pos-${escAttr(pos.tone || "mid")}" title="${escAttr(pos.detail || "")}（买点位置，不计分）">${escAttr(pos.label)}</span>`;
+  return `<span class="pick-pos pos-${escAttr(pos.tone || "mid")}" title="${escAttr(pos.detail || "")}（买点位置；过不追 / 到止损算硬伤）">${escAttr(pos.label)}</span>`;
+}
+
+/**
+ * One-line out-of-sample self-audit of the legacy score.
+ */
+function pickAuditHtml(a) {
+  if (!a || !a.label) return "";
+  const tone = ({ works: "good", weak: "mid", fails: "bad", building: "mid" })[a.status] || "mid";
+  const extra = [];
+  if (a.top_minus_bottom != null) extra.push(`高分 1/3 减低分 1/3 三日 ${pickSigned(a.top_minus_bottom)}%`);
+  if (a.clean_minus_flagged != null) extra.push(`无风险减有风险/硬伤 ${pickSigned(a.clean_minus_flagged)}%（${a.clean_days} 天）`);
+  return `<div class="meta pick-audit pa-${tone}">参考分自检：${escAttr(a.label)}${extra.length ? "；" + escAttr(extra.join("；")) : ""}</div>`;
+}
+
+/**
+ * Same-day lit-card float: the day effect the per-stock checklist cannot see.
+ */
+function pickDayBookHtml(b, isToday) {
+  if (!b || !b.n || b.avg_pct == null) return "";
+  const avg = Number(b.avg_pct);
+  const tone = avg <= -2 ? "bad" : (avg < 0 ? "mid" : "good");
+  const lab = isToday ? "今日已亮卡" : "当日已亮卡";
+  const tip = "按首次亮灯价算的浮动盈亏，同代码只算一次（历史日期用最后一次刷新价）。"
+    + "好坏日扎堆：已亮卡整体在亏的日子，新买点也容易亏；「进场影子·当日熔断」在检验 −1/−2/−3% 档。只提示，不拦截。";
+  return `<span class="rev-daybook db-${tone}" title="${escAttr(tip)}">${lab} ${b.n} 只 · 均 ${pickSigned(avg)}% · 最差 ${pickSigned(b.worst_pct)}%</span>`;
 }
 
 function revTopPicksHtml(viewDate, isToday) {
-  if (revScores.day !== viewDate || !(revScores.top || []).length) return "";
-  const lab = isToday ? "今日高分" : "当日高分（信号时）";
-  const links = revScores.top.map((t) =>
-    `<button type="button" class="rev-top-pick ${pickScoreClass(t.grade)}" data-id="${escAttr(String(t.id))}">${escAttr(t.name || t.code)} <b>${t.score}</b></button>`
+  if (revScores.day !== viewDate) return "";
+  const book = pickDayBookHtml(revScores.day_book, isToday);
+  const top = revScores.top || [];
+  if (!book && !top.length) return "";
+  const lab = isToday ? "今日无风险项" : "当日无风险项（信号时）";
+  const links = top.map((t) =>
+    `<button type="button" class="rev-top-pick" data-id="${escAttr(String(t.id))}" title="${escAttr((t.plus || []).length ? "加分：" + t.plus.join("、") : "没有硬伤和风险项")}">`
+    + `${escAttr(t.name || t.code)}${t.plus_n ? ` <b>+${t.plus_n}</b>` : ""}</button>`
   ).join("");
-  return `<div class="rev-top-picks"><span class="lab">${lab}</span>${links}</div>`;
+  return `<div class="rev-top-picks">${book}${top.length ? `<span class="lab">${lab}</span>${links}` : ""}</div>`;
 }
 
 async function loadReviewScores(date) {
@@ -58,6 +118,8 @@ async function loadReviewScores(date) {
       scored_at: d.scored_at || "",
       history_n: d.history_n || 0,
       base_win3: d.base_win3,
+      audit: d.audit || null,
+      day_book: d.day_book || null,
     };
   } catch (e) {
     if (seq !== reviewScoreSeq) return;
@@ -74,7 +136,14 @@ function closeScorePop() {
   if (pop) pop.remove();
 }
 
-const PICK_AUDIT_NOTE = "回测：分数与三日收益只有弱正相关，最高分不稳定跑赢；更适合看低分项当风险清单。";
+/**
+ * Small grey legacy-score line; struck through once the self-audit says it fails.
+ */
+function pickRefScoreHtml(score, grade, audit) {
+  if (score == null) return "";
+  const dead = audit && audit.status === "fails";
+  return `<span class="pick-ref${dead ? " dead" : ""}" title="冻结公式的 0–100 参考分，只存档供样本外自检，不用于排序">参考分 ${score}${grade ? " " + escAttr(grade) : ""}</span>`;
+}
 
 function showScorePop(anchor, id) {
   closeScorePop();
@@ -84,21 +153,21 @@ function showScorePop(anchor, id) {
   pop.id = "revScorePop";
   pop.className = "rev-score-pop";
   const when = revScores.live
-    ? `实时打分 ${escAttr(it.at || revScores.scored_at || "")}`
-    : `信号当时打分 ${escAttr(it.at || "")}`;
-  const first = it.first && it.first.score != null
-    ? ` · 首次 ${it.first.score} 分（${escAttr(it.first.at || "")}）`
+    ? `实时 ${escAttr(it.at || revScores.scored_at || "")}`
+    : `信号当时 ${escAttr(it.at || "")}`;
+  const first = it.first && it.first.check_label
+    ? ` · 首次「${escAttr(it.first.check_label)}」（${escAttr(it.first.at || "")}）`
     : "";
   const base = revScores.base_win3 == null ? "" : `，整体三日胜率 ${revScores.base_win3}%`;
   pop.innerHTML = `<div class="hd"><span><b>${escAttr(it.name || it.code || "")}</b> <span class="meta">${escAttr(it.code || "")}</span></span>`
-    + `<span class="score ${pickScoreClass(it.grade)}">${it.score}</span></div>`
-    + `<div class="meta">${escAttr(it.grade || "")} · ${when}${first}</div>`
-    + (it.position ? `<div class="meta">买点位置 ${pickPosHtml(it.position)} ${escAttr(it.position.detail || "")}（不计分）</div>` : "")
+    + `${pickCheckHtml(it.check, "span", "big")}</div>`
+    + `<div class="meta">${when}${first} · ${pickRefScoreHtml(it.score, it.grade, revScores.audit)}</div>`
+    + (it.position ? `<div class="meta">买点位置 ${pickPosHtml(it.position)} ${escAttr(it.position.detail || "")}</div>` : "")
     + `<ul>${pickFactorsHtml(it.factors)}</ul>`
-    + `<div class="meta">基础分 60，按上面各项加减后截到 0–100；≥75 优先、60–74 可以考虑、45–59 谨慎、&lt;45 放弃。`
-    + (revScores.live ? `历史胜率参考近 ${revScores.history_n || 0} 条已打分买点${base}（仅参考，不计分）。` : "")
+    + `<div class="meta">✕ 硬伤＝今天按计划买不了或闸门没过；⚠ 风险＝回测里偏弱的特征（证据弱，单项别当否决）；✓ 加分；· 只作参考。`
+    + (revScores.live ? `历史胜率参考近 ${revScores.history_n || 0} 条已打分买点${base}。` : "")
     + `只作参考，不改信号。<button type="button" class="q" data-term="纠结对比">规则</button></div>`
-    + `<div class="meta">${PICK_AUDIT_NOTE}</div>`;
+    + pickAuditHtml(revScores.audit);
   document.body.appendChild(pop);
   const rc = anchor.getBoundingClientRect();
   const w = pop.offsetWidth;
@@ -140,17 +209,19 @@ function paintPickResult(d) {
     const px = it.live_last == null ? "" : `现价 ${it.live_last}${pct}`;
     const plan = it.price == null ? "" : ` · 计划 ${it.price}`;
     const rows = pickFactorsHtml(it.factors);
-    return `<div class="rev-pick-card${i === 0 ? " top" : ""}">`
+    const chk = it.check || {};
+    const top = i === 0 && !(chk.hard || []).length;
+    return `<div class="rev-pick-card${top ? " top" : ""}">`
       + `<div class="hd"><span><b>${escAttr(it.name || it.code)}</b> <span class="meta">${escAttr(it.code || "")} · ${escAttr(it.source_label || "")}</span></span>`
-      + `<span class="score ${pickScoreClass(it.grade)}">${it.score}</span></div>`
-      + `<div class="meta">${escAttr(it.grade)}${px ? " · " + escAttr(px) : ""}${escAttr(plan)} ${pickPosHtml(it.position)}</div>`
+      + `${pickCheckHtml(chk, "span", "big")}</div>`
+      + `<div class="meta">${px ? escAttr(px) : ""}${escAttr(plan)} ${pickPosHtml(it.position)} ${pickRefScoreHtml(it.score, it.grade, d.audit)}</div>`
       + `<ul>${rows}</ul></div>`;
   }).join("");
   const base = d.base_win3 == null ? "" : `，整体三日胜率 ${d.base_win3}%`;
   out.innerHTML = `<div class="verdict">${escAttr(d.verdict || "")}</div>`
     + `<div class="rev-pick-cards">${cards}</div>`
-    + `<div class="meta" style="margin-top:6px">${escAttr(d.scored_at || "")} 打分 · 基础分 60，按各项加减；历史胜率参考近 ${d.history_n || 0} 条已打分买点${base}（不计分）。只作参考，不改信号。</div>`
-    + `<div class="meta">${PICK_AUDIT_NOTE}</div>`;
+    + `<div class="meta" style="margin-top:6px">${escAttr(d.scored_at || "")} · 按硬伤数、风险数、加分数排序，清单相同就是并列；历史胜率参考近 ${d.history_n || 0} 条已打分买点${base}。只作参考，不改信号。</div>`
+    + pickAuditHtml(d.audit);
 }
 
 async function runPickScore() {

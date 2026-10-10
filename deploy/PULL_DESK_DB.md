@@ -1,5 +1,9 @@
 # 从线上拉 desk.db 到本地（避免 malformed）
 
+> 只做分析、不想替换本地库：用 `.\scripts\pull-vps-db-research.ps1 -HostName root@VPS`，
+> 线上用 sqlite3 在线备份出一致快照，拷到 `%TEMP%\desk-vps.db`，本地 desk 不用停；
+> 研究脚本加 `--db $env:TEMP\desk-vps.db` 读这份（`audit_attribution` / `audit_pick_score` / `audit_factors` 及依赖它们的脚本）。
+
 ## 原则
 
 1. **先停本地** market-desk  

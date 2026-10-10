@@ -36,8 +36,9 @@ desk_db.DATA_DIR = _SCRATCH.parent
 import audit_factors as af  # noqa: E402
 from market_desk.chip_volume import build_cv  # noqa: E402
 from market_desk.pick_score import build_history_stats, score_pick  # noqa: E402
+from research_db import research_db_path  # noqa: E402
 
-DB = ROOT / "data" / "desk.db"
+DB = research_db_path(ROOT / "data" / "desk.db")
 LAG_DAYS = 4
 DROP_RULE = {"日线趋势", "板块", "可买入", "当日涨幅"}
 

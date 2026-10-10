@@ -38,15 +38,20 @@ def _engine(monkeypatch) -> DeskEngine:
     return eng
 
 
-def test_pick_top_dedupes_codes_and_drops_low_scores():
+def test_pick_top_lists_clean_codes_once():
+    plus = {"key": "cap", "label": "流通市值", "points": 3}
+    risk = {"key": "chip", "label": "筹码位置", "points": -2}
+    hard = {"key": "gate", "label": "确认闸门", "points": -10}
     items = {
-        "1": {"code": "600001", "name": "A", "score": 70, "grade": "可以考虑"},
-        "2": {"code": "600001", "name": "A", "score": 78, "grade": "优先"},
-        "3": {"code": "600002", "name": "B", "score": 55, "grade": "谨慎"},
-        "4": {"code": "600003", "name": "C", "score": 62, "grade": "可以考虑"},
+        "1": {"code": "600001", "name": "A", "factors": []},
+        "2": {"code": "600001", "name": "A", "factors": [plus]},
+        "3": {"code": "600002", "name": "B", "factors": [risk]},
+        "4": {"code": "600003", "name": "C", "factors": []},
+        "5": {"code": "600004", "name": "D", "factors": [hard, plus]},
+        "6": {"code": "600005", "name": "E", "factors": [], "blocked": True},
     }
     top = pick_top(items)
-    assert [(t["code"], t["score"], t["id"]) for t in top] == [("600001", 78, "2"), ("600003", 62, "4")]
+    assert [(t["code"], t["plus_n"], t["id"]) for t in top] == [("600001", 1, "2"), ("600003", 0, "4")]
 
 
 def test_set_signal_payload_once_skips_existing_key():
@@ -67,9 +72,10 @@ def test_today_scores_live_and_store_first(monkeypatch):
     out = asyncio.run(eng.build_review_scores())
     assert out["live"] is True and list(out["items"]) == [str(sid)]
     item = out["items"][str(sid)]
-    assert item["score"] == 60 and "first" not in item
+    assert item["score"] == 60 and "first" not in item and item["check"]["label"] == "无风险"
+    assert out["audit"]["status"] == "building" and out["day_book"]["n"] == 0
     stored = desk_db.load_signal(sid)["payload"]["pick0"]
-    assert stored["score"] == 60 and stored["at"] == item["at"]
+    assert stored["score"] == 60 and stored["at"] == item["at"] and stored["check"]["label"] == "无风险"
     again = asyncio.run(eng.build_review_scores())
     assert again.get("cache_hit") is True
     eng._review_score_cache = None
@@ -86,4 +92,15 @@ def test_past_day_shows_stored_score_only(monkeypatch):
     assert out["live"] is False
     assert list(out["items"]) == [str(sid)]
     assert out["items"][str(sid)]["stored"] is True
-    assert out["top"][0]["score"] == 81
+    assert out["items"][str(sid)]["check"]["label"] == "无风险"
+    assert out["top"][0]["code"] == "600001"
+
+
+def test_audit_rows_read_pick0_since_date(monkeypatch):
+    early = _signal("2026-10-07", "600001", payload={"plan_price": 10.0, "pick0": {"score": 70}})
+    sid = _signal("2026-10-08", "600002", payload={"plan_price": 10.0, "pick0": {"score": 55}})
+    _signal("2026-10-08", "600003")
+    for x in (early, sid):
+        desk_db.mark_signal_outcome(x, {"outcome_day3_pct": 1.5, "outcome_label": "平淡"})
+    rows = desk_db.load_pick_audit_rows("2026-10-08")
+    assert [(r["code"], r["payload"].get("pick0", {}).get("score")) for r in rows] == [("600002", 55)]

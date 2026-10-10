@@ -295,9 +295,15 @@ function revCellHtml(col, r, ctx) {
     if (!(st === "buy" || st.startsWith("buy_"))) return "";
     const it = revScores.items[String(r.id)];
     if (!it) return revScores.loading ? `<span class="meta">…</span>` : `<span class="meta">—</span>`;
-    const tip = revScores.live ? "实时打分，点开看每项加减" : "信号当时的打分，点开看每项加减";
-    return `<button type="button" class="rev-score-btn ${pickScoreClass(it.grade)}" data-id="${escAttr(String(r.id))}" title="${tip}">`
-      + `<b>${it.score}</b><small>${escAttr(it.grade || "")}</small></button>`
+    const chk = it.check || {};
+    const lists = [
+      (chk.hard || []).length ? "硬伤：" + chk.hard.join("、") : "",
+      (chk.risk || []).length ? "风险：" + chk.risk.join("、") : "",
+      (chk.plus || []).length ? "加分：" + chk.plus.join("、") : "",
+    ].filter(Boolean).join("\n");
+    const tip = (revScores.live ? "实时清单" : "信号当时的清单") + "，点开看明细" + (lists ? "\n" + lists : "");
+    return `<button type="button" class="rev-score-btn chk-${escAttr(chk.tone || "mid")}" data-id="${escAttr(String(r.id))}" title="${escAttr(tip)}">`
+      + `<b>${escAttr(chk.label || "—")}</b></button>`
       + (revScores.live ? pickPosHtml(it.position) : "");
   }
   if (col === "code") return r.code || "";
@@ -385,6 +391,14 @@ function revCellHtml(col, r, ctx) {
   if (col === "day3") {
     const d3 = r.outcome_day3_pct;
     return `<td class="col-day3 ${d3 == null ? "" : (d3 >= 0 ? "up" : "down")}">${d3 == null ? "—" : ((d3 > 0 ? "+" : "") + d3 + "%")}</td>`;
+  }
+  if (col === "excess") {
+    const ex = r.excess_d3_pct;
+    if (ex == null) return "—";
+    const sgn = (v) => (Number(v) > 0 ? "+" : "") + Number(v).toFixed(2);
+    const part = Number(r.bench_sessions || 0) < 3 ? `（未满三日，已过 ${r.bench_sessions || 0} 日）` : "";
+    const tip = `三日 ${sgn(r.outcome_day3_pct)}% − 中证1000 同窗口 ${sgn(r.bench_d3_pct)}%${part}`;
+    return `<span class="${ex >= 0 ? "up" : "down"}" title="${tip}">${sgn(ex)}%${part ? "*" : ""}</span>`;
   }
   if (col === "result") return `${ctx.label}${ctx.pend}`;
   if (col === "ops") {

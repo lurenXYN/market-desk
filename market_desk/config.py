@@ -347,6 +347,23 @@ PICK_CV_SMALL_CAP_PTS = 3.0
 PICK_GAP_WATCH_PCT = 2.0
 PICK_LHB_LOOKBACK_DAYS = 5
 PICK_LHB_CACHE_SEC = 1800.0
+# 2026-10 review: the score was fitted on 9/04–9/30 buys (in-sample same-day IC
+# +0.17, the day's top score still ran −1.4pp below the day mean) and on ~16k
+# two-year pullback days none of its price / volume / chip inputs ranked buys
+# (|IC| ≤ 0.05). The UI now leads with the hard / risk / plus checklist; points
+# above stay frozen so the stored pick0 score is judged out of sample from the
+# first session captured with this formula. Status needs MIN_DAYS sessions with
+# at least MIN_PER_DAY distinct codes.
+PICK_AUDIT_SINCE = "2026-10-08"
+PICK_AUDIT_MIN_DAYS = 10
+PICK_AUDIT_MIN_PER_DAY = 5
+PICK_AUDIT_CACHE_SEC = 300.0
+# Review "vs CSI 1000": buy cards' 3-day % minus the index close(D) → close(D+3)
+# return. September buys averaged −0.85% of pure market move, so raw 三日% mixes
+# market timing with picking. Summary covers the last BENCH_SUMMARY_DAYS settled days.
+REVIEW_BENCH_SYMBOL = "sh000852"
+REVIEW_BENCH_LABEL = "中证1000"
+REVIEW_BENCH_SUMMARY_DAYS = 20
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8

@@ -302,11 +302,19 @@ def test_audit_stop_compare_live_vs_shadow() -> None:
 
 
 def test_bootstrap_ci_deterministic_and_needs_three() -> None:
-    pairs = [(1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (-1.0, 0.5)]
-    assert bootstrap_ci(pairs) == bootstrap_ci(pairs)
-    lo, hi = bootstrap_ci(pairs)
+    rows = [("d1", 1.0, 1.0), ("d2", 2.0, 1.0), ("d3", 3.0, 1.0), ("d4", -1.0, 0.5)]
+    assert bootstrap_ci(rows) == bootstrap_ci(rows)
+    lo, hi = bootstrap_ci(rows)
     assert lo <= hi
-    assert bootstrap_ci(pairs[:2]) == (None, None)
+    assert bootstrap_ci(rows[:2]) == (None, None)
+    assert bootstrap_ci([("d1", 1.0, 1.0)] * 5) == (None, None)
+
+
+def test_day_bootstrap_wider_than_card_bootstrap() -> None:
+    # Ten cards per day that move together: the day, not the card, is the sample.
+    rows = [(f"d{d:02d}", v + 0.01 * i, 1.0) for d, v in enumerate([2, -1, 3, -2, 1, 2, -3, 1]) for i in range(10)]
+    lo, hi = bootstrap_ci(rows)
+    assert lo < 0 < hi
 
 
 # ---------- backtest limit constraints / slippage ----------

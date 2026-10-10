@@ -98,9 +98,10 @@ def test_blocked_top_is_skipped_in_verdict_and_top_list():
         _cand("600002", price_flags=["in_band"]),
     ]
     res = rank_picks(st_rows, [])
-    assert res["items"][0]["code"] == "600001"
-    assert res["verdict"].startswith("优先 票02") and "今天不宜买（过不追/到止损）：票01" in res["verdict"]
-    items = {str(i): {"code": it["code"], "score": 70, "blocked": it["blocked"]} for i, it in enumerate(res["items"])}
+    assert [it["code"] for it in res["items"]] == ["600002", "600001"]
+    assert res["items"][1]["check"]["hard"] == ["过不追"]
+    assert res["verdict"].startswith("先看 票02（无风险项）") and "有硬伤，今天别买：票01（过不追）" in res["verdict"]
+    items = {str(i): {"code": it["code"], "factors": it["factors"], "blocked": it["blocked"]} for i, it in enumerate(res["items"])}
     assert [t["code"] for t in pick_score.pick_top(items)] == ["600002"]
 
 
@@ -131,5 +132,65 @@ def test_rank_verdict_names_top_close_gap_and_drops():
     res = rank_picks([good, bad, close], [])
     assert [it["code"] for it in res["items"]] == ["600002", "600001", "600003"]
     assert res["items"][2]["score"] == 48 and res["items"][2]["blocked"]
-    assert "优先 票02" in res["verdict"] and "只差 5 分" not in res["verdict"]
-    assert "今天不宜买（过不追/到止损）：票03" in res["verdict"]
+    assert res["items"][0]["check"]["plus"] == ["均线"] and res["items"][0]["check"]["label"] == "无风险"
+    assert res["verdict"].startswith("先看 票02（无风险项）")
+    assert "票03（过不追、当日涨幅）" in res["verdict"]
+
+
+def test_tied_checklists_are_reported_as_ties():
+    a = _cand("600001", price_flags=["in_band"])
+    b = _cand("600002", price_flags=["in_band"])
+    res = rank_picks([a, b], [])
+    assert "票01、票02 并列无风险项" in res["verdict"]
+
+
+def test_factor_kind_classifies_stored_rows_without_kind():
+    assert pick_score.factor_kind({"key": "gate", "points": -10}) == "hard"
+    assert pick_score.factor_kind({"key": "pct", "points": -12}) == "hard"
+    assert pick_score.factor_kind({"key": "lhb", "points": 0}) == "risk"
+    assert pick_score.factor_kind({"key": "chip", "points": -2}) == "risk"
+    assert pick_score.factor_kind({"key": "cap", "points": 3}) == "plus"
+    assert pick_score.factor_kind({"key": "trend", "points": 0}) == "info"
+    chk = pick_score.pick_check(
+        [{"key": "chip", "label": "筹码位置", "points": -2}, {"key": "cap", "label": "流通市值", "points": 3}],
+        {"kind": "stop", "label": "到止损"},
+    )
+    assert chk["hard"] == ["到止损"] and chk["risk"] == ["筹码位置"] and chk["label"] == "硬伤"
+    assert chk["rank"] == [1, 1, -1]
+
+
+def _audit_row(day: str, code: str, score: float, d3: float, factors=None, rid=0):
+    return {
+        "id": rid,
+        "trade_date": day,
+        "code": code,
+        "outcome_day3_pct": d3,
+        "payload": {"pick0": {"score": score, "factors": factors or []}},
+    }
+
+
+def test_self_audit_building_then_judged(monkeypatch):
+    import market_desk.config as cfg
+
+    monkeypatch.setattr(cfg, "PICK_AUDIT_SINCE", "2026-10-08")
+    monkeypatch.setattr(cfg, "PICK_AUDIT_MIN_DAYS", 3)
+    monkeypatch.setattr(cfg, "PICK_AUDIT_MIN_PER_DAY", 5)
+    risk = [{"key": "chip", "label": "筹码位置", "points": -2}]
+    rows = [_audit_row("2026-09-30", "600900", 99, -9.0)]
+    rid = 0
+    for d in ("2026-10-08", "2026-10-09"):
+        for i in range(6):
+            rid += 1
+            rows.append(_audit_row(d, f"60000{i}", 50 + i, float(i), risk if i < 3 else None, rid))
+    rows.append(_audit_row("2026-10-09", "600000", 10, 99.0, rid=999))
+    out = pick_score.pick_self_audit(rows)
+    assert out["status"] == "building" and out["days"] == 2 and out["n"] == 12
+    assert out["ic"] == 1.0 and out["clean_minus_flagged"] == 3.0
+    for i in range(6):
+        rows.append(_audit_row("2026-10-12", f"60000{i}", 50 + i, float(5 - i), rid=100 + i))
+    out = pick_score.pick_self_audit(rows)
+    assert out["days"] == 3 and out["status"] == "weak"
+    for d in ("2026-10-13", "2026-10-14"):
+        for i in range(6):
+            rows.append(_audit_row(d, f"60000{i}", 50 + i, float(5 - i), rid=200 + i))
+    assert pick_score.pick_self_audit(rows)["status"] == "fails"

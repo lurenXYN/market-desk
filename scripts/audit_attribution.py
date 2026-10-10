@@ -25,7 +25,7 @@ fallback); board index bars from East Money, paced one request at a
 time because bursts get the IP cut off. Bars are cached under the temp dir and
 the cache is extended on every run. Reads ``data/desk.db`` read-only.
 
-Usage: ``python scripts/audit_attribution.py [--bench sh000852] [--refresh]``
+Usage: ``python scripts/audit_attribution.py [--bench sh000852] [--refresh] [--db PATH]``
 """
 
 from __future__ import annotations
@@ -44,10 +44,13 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from market_desk.calendar import is_trading_day  # noqa: E402
+from market_desk.stats_tools import day_means, safe_t  # noqa: E402
+from research_db import research_db_path  # noqa: E402
 
-DB = ROOT / "data" / "desk.db"
+DB = research_db_path(ROOT / "data" / "desk.db")
 CACHE = Path(tempfile.gettempdir()) / "desk_attr_bars_v2.json"
 M5_CACHE = Path(tempfile.gettempdir()) / "desk_attr_m5.json"
 BUY_TYPES = ("buy", "buy_side", "buy_link", "buy_dragon", "buy_indep")
@@ -248,6 +251,8 @@ def _load_cards() -> tuple[list[dict[str, Any]], dict[str, str]]:
                 "plan": float(price),
                 "first_last": float(first_last) if first_last else None,
                 "lit": bool(p.get("ever_ready") or ready),
+                "lit_at": str(p.get("first_ready_at") or ""),
+                "lit_px": float(p["first_ready_px"]) if p.get("first_ready_px") else None,
                 "board": board,
                 "vs_mainline": p.get("vs_mainline") or "",
                 "trend": "升" if p.get("trend_ok") else ("降" if p.get("trend_down") else "其他"),
@@ -311,23 +316,19 @@ def _dedupe(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _excess(rows: list[dict[str, Any]], key: str) -> tuple[int, float | None, str]:
     """Return (n, mean excess over market, 'positive days/days tD') for one entry return.
 
-    ``tD`` is the t-stat of the daily mean excess across days; cards on the same day
-    share one market move, so days rather than cards are the independent samples.
+    ``tD`` is the conservative t (smaller of plain and Newey–West lag 2) of the daily
+    mean excess in date order: cards on the same day share one market move, so days
+    are the samples, and 3-day outcomes of neighbouring days overlap, so the days
+    are not independent either.
     """
     rows = [r for r in rows if key in r]
     if not rows:
         return 0, None, "-"
-    by_day: dict[str, list[float]] = defaultdict(list)
-    for r in rows:
-        by_day[r["day"]].append(r[key] - r["market"])
-    means = [sum(v) / len(v) for v in by_day.values()]
+    means = [m for _, m in day_means(rows, lambda r: r["day"], lambda r: r[key] - r["market"])]
     pos = sum(1 for m in means if m > 0)
-    t = ""
-    if len(means) >= 3:
-        mu = sum(means) / len(means)
-        sd = (sum((m - mu) ** 2 for m in means) / (len(means) - 1)) ** 0.5
-        t = f" t{mu / (sd / len(means) ** 0.5):+.1f}" if sd else ""
-    return len(rows), sum(r[key] - r["market"] for r in rows) / len(rows), f"{pos}/{len(by_day)}{t}"
+    tv = safe_t(means)
+    t = f" t{tv:+.1f}" if tv is not None else ""
+    return len(rows), sum(r[key] - r["market"] for r in rows) / len(rows), f"{pos}/{len(means)}{t}"
 
 
 def _fmt(v: float | None) -> str:
@@ -390,6 +391,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--bench", default="sh000852", choices=BENCHES)
     ap.add_argument("--refresh", action="store_true", help="Refetch bars instead of using the cache")
+    ap.add_argument("--db", help="desk.db to read (default data/desk.db), e.g. a VPS copy in the temp dir")
     args = ap.parse_args()
 
     cards, name_bk = _load_cards()

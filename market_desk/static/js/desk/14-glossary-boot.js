@@ -282,6 +282,7 @@ document.getElementById("revExport").addEventListener("click", () => {
     if (id === "zt_ytd") return r.zt_ytd ?? "";
     if (id === "day1") return r.outcome_day1_pct;
     if (id === "day3") return r.outcome_day3_pct;
+    if (id === "excess") return r.excess_d3_pct ?? "";
     if (id === "result") return r.outcome_label;
     return "";
   }).map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")));

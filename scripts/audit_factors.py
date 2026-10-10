@@ -22,10 +22,12 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from market_desk.config import EASTMONEY_UT, HTTP_HEADERS  # noqa: E402
+from research_db import research_db_path  # noqa: E402
 
-DB = ROOT / "data" / "desk.db"
+DB = research_db_path(ROOT / "data" / "desk.db")
 CACHE = Path(tempfile.gettempdir()) / "md-audit-factors-cache.json"
 CHIP_WINDOW = 120
 CHIP_BINS = 200

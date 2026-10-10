@@ -209,6 +209,7 @@ class ReviewMixin:
         day_rows: list[dict[str, Any]] = []
         live_codes: list[str] = []
         packed_overlay: dict[str, Any] = {}
+        bench_closes: list[tuple[str, float]] = []
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 day_rows = load_signals_for_date(day)
@@ -241,6 +242,13 @@ class ReviewMixin:
                 async def _holders() -> dict[str, dict[str, Any]]:
                     return await fetch_holder_stats_many(client, stock_codes)
 
+                async def _bench() -> list[tuple[str, float]]:
+                    try:
+                        return await self._review_bench_closes(client)
+                    except Exception:
+                        log.exception("review bench closes failed")
+                        return []
+
                 async def _overlay_klines() -> dict[str, Any]:
                     # outcome_compare reads cached bars only; missing / stale codes are
                     # fetched in the background so a throttled source cannot stall the page.
@@ -250,10 +258,11 @@ class ReviewMixin:
                     return self._review_klines_cached(codes)
 
                 # zt_ytd / daily-trend chips load async (see /api/review/zt-ytd, /trends).
-                quotes, holders, packed_overlay = await asyncio.gather(
+                quotes, holders, packed_overlay, bench_closes = await asyncio.gather(
                     _quotes(),
                     _holders(),
                     _overlay_klines(),
+                    _bench(),
                 )
                 note_quote_ticks(quotes)
         except Exception:
@@ -332,6 +341,11 @@ class ReviewMixin:
                     payload["summary"] = summary
             except Exception:
                 pass
+        if bench_closes:
+            try:
+                self._attach_review_bench(payload, bench_closes, day=day, user_id=user_id)
+            except Exception:
+                log.exception("review bench excess failed")
         payload["trends_fp"] = review_trends_fingerprint(
             day, day_rows or load_signals_for_date(day), calendar_day=today
         )
@@ -339,6 +353,62 @@ class ReviewMixin:
         payload["cache_hit"] = False
         self._review_cache[cache_key] = (now_m, payload)
         return payload
+
+    async def _review_bench_closes(self, client: httpx.AsyncClient) -> list[tuple[str, float]]:
+        """Return cached benchmark index closes, refetching after ``REVIEW_HEAVY_REFRESH_SEC``.
+
+        A failed fetch keeps serving the previous series.
+        """
+        from market_desk.chip_volume import fetch_index_closes
+        from market_desk.config import REVIEW_BENCH_SYMBOL, REVIEW_HEAVY_REFRESH_SEC
+
+        now_m = time.monotonic()
+        hit = getattr(self, "_review_bench_cache", None)
+        if hit and now_m - hit[0] < float(REVIEW_HEAVY_REFRESH_SEC):
+            return hit[1]
+        closes = await fetch_index_closes(client, REVIEW_BENCH_SYMBOL, 80)
+        if closes:
+            self._review_bench_cache = (now_m, closes)
+            return closes
+        return hit[1] if hit else []
+
+    def _attach_review_bench(
+        self,
+        payload: dict[str, Any],
+        closes: list[tuple[str, float]],
+        *,
+        day: str,
+        user_id: int | None,
+    ) -> None:
+        """Add per-row excess vs the benchmark and the multi-day summary to ``payload`` in place.
+
+        Row excess follows the displayed outcome standard; the summary uses the
+        stored (classic) outcomes of recent buys.
+        """
+        from market_desk.config import REVIEW_BENCH_LABEL, REVIEW_BENCH_SUMMARY_DAYS
+        from market_desk.db import apply_signal_user_meta, filter_signals_for_viewer, load_signals
+        from market_desk.review import (
+            _dragon_hide_from_review,
+            attach_bench_excess,
+            build_bench_excess_summary,
+        )
+
+        payload["signals"] = attach_bench_excess(list(payload.get("signals") or []), closes)
+        wide = [
+            r
+            for r in filter_signals_for_viewer(load_signals(limit=1500), user_id)
+            if not _dragon_hide_from_review(r)
+        ]
+        wide = apply_signal_user_meta(wide, user_id)
+        summary = dict(payload.get("summary") or {})
+        summary["bench_excess"] = build_bench_excess_summary(
+            wide,
+            closes,
+            label=REVIEW_BENCH_LABEL,
+            max_days=int(REVIEW_BENCH_SUMMARY_DAYS),
+            view_day=day,
+        )
+        payload["summary"] = summary
 
     def clear_review_cache(self) -> None:
         """Drop cached review payloads after personal trade annotations change."""
@@ -446,6 +516,7 @@ class ReviewMixin:
             history = []
         out = rank_picks(rows, history)
         out["scored_at"] = datetime.now(CN_TZ).strftime("%H:%M:%S")
+        out["audit"] = self._pick_audit()
         return out
 
     async def _enrich_pick_rows(
@@ -575,8 +646,8 @@ class ReviewMixin:
         live price factors would be meaningless there.
         """
         from market_desk.config import REVIEW_SCORE_CACHE_SEC
-        from market_desk.db import load_signals, load_signals_for_date, set_signal_payload_once
-        from market_desk.pick_score import build_history_stats, pick_top, score_pick
+        from market_desk.db import day_lit_book, load_signals, load_signals_for_date, set_signal_payload_once
+        from market_desk.pick_score import build_history_stats, pick_check, pick_top, score_pick
         from market_desk.review import _flatten_signal_prices, is_buy_signal
 
         now = datetime.now(CN_TZ)
@@ -589,12 +660,31 @@ class ReviewMixin:
             return p0 if isinstance(p0, dict) and p0.get("score") is not None else None
 
         if day != today:
-            items = {
-                str(r["id"]): {**p0, "code": r.get("code"), "name": r.get("name"), "stored": True}
-                for r in raw
-                if (p0 := _stored(r))
+            items = {}
+            for r in raw:
+                p0 = _stored(r)
+                if not p0:
+                    continue
+                items[str(r["id"])] = {
+                    **p0,
+                    "check": p0.get("check") or pick_check(p0.get("factors"), p0.get("position")),
+                    "code": r.get("code"),
+                    "name": r.get("name"),
+                    "stored": True,
+                }
+            try:
+                book = day_lit_book(day)
+            except Exception:
+                book = None
+            return {
+                "ok": True,
+                "trade_date": day,
+                "live": False,
+                "items": items,
+                "top": pick_top(items),
+                "audit": self._pick_audit(),
+                "day_book": book,
             }
-            return {"ok": True, "trade_date": day, "live": False, "items": items, "top": pick_top(items)}
 
         key = (day, tuple(sorted(int(r["id"]) for r in raw)))
         cached = getattr(self, "_review_score_cache", None)
@@ -623,6 +713,7 @@ class ReviewMixin:
                     "score": s["score"],
                     "grade": s["grade"],
                     "factors": s["factors"],
+                    "check": s["check"],
                     "waiting": s["waiting"],
                     "position": s["position"],
                     "blocked": s["blocked"],
@@ -631,11 +722,17 @@ class ReviewMixin:
                 }
                 first = _stored(r)
                 if first:
-                    item["first"] = {"score": first.get("score"), "grade": first.get("grade"), "at": first.get("at")}
+                    first_chk = first.get("check") or pick_check(first.get("factors"), first.get("position"))
+                    item["first"] = {
+                        "score": first.get("score"),
+                        "grade": first.get("grade"),
+                        "at": first.get("at"),
+                        "check_label": first_chk.get("label"),
+                    }
                 else:
                     fresh[int(r["id"])] = (
                         "pick0",
-                        {k: item[k] for k in ("score", "grade", "factors", "position", "live_last", "at")},
+                        {k: item[k] for k in ("score", "grade", "factors", "check", "position", "live_last", "at")},
                     )
                 items[str(r["id"])] = item
             if fresh:
@@ -643,6 +740,11 @@ class ReviewMixin:
                     set_signal_payload_once(fresh)
                 except Exception:
                     log.exception("store first pick scores failed")
+            marks = {str(r.get("code")): r.get("live_last") for r in rows if r.get("live_last") is not None}
+            try:
+                book = day_lit_book(day, marks)
+            except Exception:
+                book = None
             out = {
                 "ok": True,
                 "trade_date": day,
@@ -652,9 +754,28 @@ class ReviewMixin:
                 "scored_at": datetime.now(CN_TZ).strftime("%H:%M:%S"),
                 "history_n": stats["n"],
                 "base_win3": stats["base_win3"],
+                "audit": self._pick_audit(),
+                "day_book": book,
             }
             self._review_score_cache = (key, time.time(), out)
             return out
+
+    def _pick_audit(self) -> dict[str, Any] | None:
+        """Out-of-sample self-audit of the stored first pick score (cached briefly)."""
+        from market_desk.config import PICK_AUDIT_CACHE_SEC, PICK_AUDIT_SINCE
+        from market_desk.db import load_pick_audit_rows
+        from market_desk.pick_score import pick_self_audit
+
+        cached = getattr(self, "_pick_audit_cache", None)
+        if cached and time.time() - cached[0] < float(PICK_AUDIT_CACHE_SEC):
+            return cached[1]
+        try:
+            audit = pick_self_audit(load_pick_audit_rows(str(PICK_AUDIT_SINCE)))
+        except Exception:
+            log.exception("pick self-audit failed")
+            return None
+        self._pick_audit_cache = (time.time(), audit)
+        return audit
 
     def _maybe_capture_pick_scores(self, now: datetime) -> None:
         """Score today's buys in the background so ``pick0`` lands near signal time."""

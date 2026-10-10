@@ -1,8 +1,9 @@
-"""Side-by-side pick scoring for a handful of candidate tickers.
+"""Side-by-side pick checklist for a handful of candidate tickers.
 
-Rule points set the baseline for each factor; factors that can be bucketed on
-stored signals get a small nudge from local 3-day win rates. Display only —
-never gates or rewrites a signal.
+Each factor is tagged hard (execution blocker), risk, plus or info; the
+checklist orders the comparison. The legacy 0–100 score is still computed with
+frozen points and stored as ``pick0`` so ``pick_self_audit`` can judge it out of
+sample. Display only — never gates or rewrites a signal.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from market_desk.config import (
     PICK_ZT_NONE_PTS,
 )
 from market_desk.numbers import num
+from market_desk.stats_tools import safe_t, spearman
 
 SOURCE_LABELS: dict[str, str] = {
     "buy": "主线回踩",
@@ -145,14 +147,79 @@ def _hist_adj(key: str, bucket: str | None, stats: dict[str, Any]) -> tuple[floa
     return max(-cap, min(cap, raw)), note
 
 
+HARD_KEYS = frozenset({"gate", "pct"})
+RISK_WATCH_KEYS = frozenset({"gap", "lhb"})
+
+
+def factor_kind(f: dict[str, Any]) -> str:
+    """Classify a factor row as ``hard`` / ``risk`` / ``plus`` / ``info``.
+
+    Works on stored ``pick0`` factors too (older rows carry no ``kind``): hard
+    keys are execution blockers, watch-only tags count as risk, everything else
+    follows the sign of its points.
+    """
+    kind = f.get("kind")
+    if kind in ("hard", "risk", "plus", "info"):
+        return str(kind)
+    key = str(f.get("key") or "")
+    pts = num(f.get("points")) or 0.0
+    if key in HARD_KEYS and pts < 0:
+        return "hard"
+    if key in RISK_WATCH_KEYS or pts < 0:
+        return "risk"
+    return "plus" if pts > 0 else "info"
+
+
 def _factor(key: str, label: str, points: float, detail: str, hist: str = "") -> dict[str, Any]:
     """Pack one scored factor row."""
-    return {
+    row = {
         "key": key,
         "label": label,
         "points": round(points, 1),
         "detail": detail,
         "hist": hist,
+    }
+    row["kind"] = factor_kind(row)
+    return row
+
+
+def pick_check(factors: list[dict[str, Any]] | None, position: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Summarize factors as a hard / risk / plus checklist (the primary pick display).
+
+    Args:
+        factors: Factor rows from ``score_pick`` or a stored ``pick0``.
+        position: Optional live position status; stop / chase count as hard.
+
+    Returns:
+        ``{hard, risk, plus, label, tone, rank}`` where ``rank`` sorts best first.
+    """
+    hard: list[str] = []
+    risk: list[str] = []
+    plus: list[str] = []
+    for f in factors or []:
+        kind = factor_kind(f)
+        text = str(f.get("label") or f.get("key") or "")
+        if kind == "hard":
+            hard.append(text)
+        elif kind == "risk":
+            risk.append(text)
+        elif kind == "plus":
+            plus.append(text)
+    if position and position.get("kind") in ("stop", "chase"):
+        hard.insert(0, str(position.get("label") or "位置"))
+    if hard:
+        label, tone = "硬伤", "bad"
+    elif risk:
+        label, tone = f"风险{len(risk)}", "warn"
+    else:
+        label, tone = "无风险", ("good" if plus else "mid")
+    return {
+        "hard": hard,
+        "risk": risk,
+        "plus": plus,
+        "label": label,
+        "tone": tone,
+        "rank": [len(hard), len(risk), -len(plus)],
     }
 
 
@@ -335,56 +402,70 @@ def score_pick(row: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
         "score": score,
         "grade": grade,
         "factors": factors,
+        "check": pick_check(factors, pos),
         "position": pos,
         "waiting": bool(pos and pos["kind"] == "above"),
         "blocked": bool(pos and pos["kind"] in ("stop", "chase")),
     }
 
 
+def _check_of(it: dict[str, Any]) -> dict[str, Any]:
+    """Return an item's checklist, rebuilding it for stored rows that predate it."""
+    chk = it.get("check")
+    if isinstance(chk, dict) and "rank" in chk:
+        return chk
+    return pick_check(it.get("factors"), it.get("position"))
+
+
 def pick_top(items: dict[str, dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
-    """Return the best-scored codes (one row per code, score ≥ 60), highest first."""
+    """Return codes with no hard or risk item (one row per code), most plus items first."""
     best: dict[str, dict[str, Any]] = {}
     for sid, it in (items or {}).items():
         code = str(it.get("code") or "")
-        score = it.get("score")
-        if not code or score is None or int(score) < 60 or it.get("blocked"):
+        chk = _check_of(it)
+        if not code or chk["hard"] or chk["risk"] or it.get("blocked"):
             continue
-        if code not in best or int(score) > int(best[code]["score"]):
+        if code not in best or len(chk["plus"]) > best[code]["plus_n"]:
             best[code] = {
                 "id": sid,
                 "code": code,
                 "name": it.get("name") or code,
-                "score": int(score),
-                "grade": it.get("grade"),
+                "plus_n": len(chk["plus"]),
+                "plus": chk["plus"],
             }
-    return sorted(best.values(), key=lambda x: (-x["score"], x["code"]))[:limit]
+    return sorted(best.values(), key=lambda x: (-x["plus_n"], x["code"]))[:limit]
 
 
 def rank_picks(rows: list[dict[str, Any]], history: list[dict[str, Any]] | None) -> dict[str, Any]:
-    """Score and rank candidates; add a one-line verdict for the comparison."""
+    """Rank candidates by their checklist (hard, then risk, then plus count); ties stay ties.
+
+    The 0–100 score rides along for the self-audit only: on every sample tested
+    it did not reliably rank buys, so it no longer orders the comparison.
+    """
     stats = build_history_stats(history)
     items = [score_pick(r, stats) for r in rows]
-    items.sort(key=lambda it: (-int(it["score"]), str(it["code"] or "")))
+    items.sort(key=lambda it: (it["check"]["rank"], str(it["code"] or "")))
     verdict = ""
     if items:
-        open_items = [it for it in items if not it["blocked"]] or items
-        top = open_items[0]
-        bits = [f"优先 {top['name']}（{top['score']} 分）"]
-        if top["blocked"]:
-            bits[0] += f"，但{top['position']['detail']}"
-        elif top["waiting"]:
-            bits[0] += "，但现价高于计划价，挂计划价等回踩"
-        rest = [it for it in open_items if it is not top]
-        if rest:
-            gap = int(top["score"]) - int(rest[0]["score"])
-            if gap <= 3:
-                bits.append(f"与 {rest[0]['name']} 只差 {gap} 分，差距不大，可按仓位分开或只选一个更贴主线的")
-        blocked = [it["name"] for it in items if it["blocked"] and it is not top]
-        if blocked:
-            bits.append("今天不宜买（过不追/到止损）：" + "、".join(str(d) for d in blocked))
-        drops = [it["name"] for it in items if it["grade"] == "放弃" and not it["blocked"]]
-        if drops:
-            bits.append("建议放弃：" + "、".join(str(d) for d in drops))
+        names = lambda group: "、".join(str(it["name"]) for it in group)  # noqa: E731
+        hard = [it for it in items if it["check"]["hard"]]
+        ok = [it for it in items if not it["check"]["hard"]]
+        bits: list[str] = []
+        if ok:
+            best = ok[0]["check"]["rank"]
+            lead = [it for it in ok if it["check"]["rank"] == best]
+            what = "无风险项" if not best[1] else f"风险项最少（{best[1]} 项）"
+            if len(lead) > 1:
+                bits.append(f"{names(lead)} 并列{what}，清单分不出高下：按仓位分开，或只选更贴主线的")
+            else:
+                bits.append(f"先看 {lead[0]['name']}（{what}）")
+            waiting = [it for it in lead if it["waiting"]]
+            if waiting:
+                bits.append(f"{names(waiting)} 现价高于计划价，挂计划价等回踩")
+        if hard:
+            bits.append("有硬伤，今天别买：" + "；".join(
+                f"{it['name']}（{'、'.join(it['check']['hard'])}）" for it in hard
+            ))
         verdict = "；".join(bits)
     return {
         "ok": True,
@@ -392,4 +473,82 @@ def rank_picks(rows: list[dict[str, Any]], history: list[dict[str, Any]] | None)
         "verdict": verdict,
         "history_n": stats["n"],
         "base_win3": stats["base_win3"],
+    }
+
+
+def pick_self_audit(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Out-of-sample check of the stored first score (``pick0``) against 3-day outcomes.
+
+    Each (day, code) counts once (earliest signal). Per day with enough rows:
+    Spearman IC of the score, top-third minus bottom-third 3-day return, and the
+    mean 3-day return of checklist-clean rows minus flagged rows.
+
+    Args:
+        rows: Buy signals with ``trade_date``, ``code``, ``outcome_day3_pct`` and
+            a decoded ``payload``; rows before ``PICK_AUDIT_SINCE`` are ignored.
+
+    Returns:
+        Summary dict with ``status`` in ``building`` / ``works`` / ``weak`` / ``fails``
+        and a one-line Chinese ``label`` for the UI.
+    """
+    from market_desk.config import PICK_AUDIT_MIN_DAYS, PICK_AUDIT_MIN_PER_DAY, PICK_AUDIT_SINCE
+
+    seen: set[tuple[str, str]] = set()
+    by_day: dict[str, list[tuple[float, float, bool]]] = {}
+    for row in sorted(rows or [], key=lambda r: (str(r.get("trade_date") or ""), int(r.get("id") or 0))):
+        day = str(row.get("trade_date") or "")[:10]
+        code = str(row.get("code") or "")
+        d3 = num(row.get("outcome_day3_pct"))
+        p0 = _payload(row).get("pick0")
+        if day < str(PICK_AUDIT_SINCE) or not code or d3 is None or not isinstance(p0, dict):
+            continue
+        score = num(p0.get("score"))
+        if score is None or (day, code) in seen:
+            continue
+        seen.add((day, code))
+        chk = _check_of(p0)
+        by_day.setdefault(day, []).append((score, d3, not chk["hard"] and not chk["risk"]))
+    n = sum(len(v) for v in by_day.values())
+    ics: list[float] = []
+    spreads: list[float] = []
+    clean_gap: list[float] = []
+    for vals in by_day.values():
+        if len(vals) < int(PICK_AUDIT_MIN_PER_DAY):
+            continue
+        ic = spearman([v[0] for v in vals], [v[1] for v in vals])
+        if ic is not None:
+            ics.append(ic)
+        ordered = sorted(vals, key=lambda v: -v[0])
+        k = max(1, len(ordered) // 3)
+        spreads.append(sum(v[1] for v in ordered[:k]) / k - sum(v[1] for v in ordered[-k:]) / k)
+        clean = [v[1] for v in vals if v[2]]
+        flagged = [v[1] for v in vals if not v[2]]
+        if clean and flagged:
+            clean_gap.append(sum(clean) / len(clean) - sum(flagged) / len(flagged))
+    mean = lambda v: round(sum(v) / len(v), 3) if v else None  # noqa: E731
+    ic_mean, ic_t = mean(ics), safe_t(ics)
+    days = len(ics)
+    if days < int(PICK_AUDIT_MIN_DAYS):
+        status = "building"
+        label = f"样本外积累中：{days}/{int(PICK_AUDIT_MIN_DAYS)} 天（{n} 条，{PICK_AUDIT_SINCE} 起）"
+    elif (ic_mean or 0.0) <= 0:
+        status = "fails"
+        label = f"样本外无效：同日秩相关 {ic_mean or 0.0:+.2f}（{days} 天），分数只存档、不作参考"
+    elif ic_t is not None and ic_t >= 2.0:
+        status = "works"
+        label = f"样本外有效：同日秩相关 {ic_mean:+.2f}（t {ic_t:+.1f}，{days} 天）"
+    else:
+        status = "weak"
+        label = f"样本外不显著：同日秩相关 {ic_mean:+.2f}（{days} 天）"
+    return {
+        "since": str(PICK_AUDIT_SINCE),
+        "n": n,
+        "days": days,
+        "ic": ic_mean,
+        "ic_t": round(ic_t, 2) if ic_t is not None else None,
+        "top_minus_bottom": mean(spreads),
+        "clean_minus_flagged": mean(clean_gap),
+        "clean_days": len(clean_gap),
+        "status": status,
+        "label": label,
     }

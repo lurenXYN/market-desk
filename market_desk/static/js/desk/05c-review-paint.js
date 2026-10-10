@@ -1,3 +1,29 @@
+/** Render the buy-card excess-vs-index line (multi-day + view day) under 三标准对照. */
+function benchExcessHtml(be) {
+  if (!be || (!be.ok && !be.day)) return "";
+  const sgn = (v) => (v == null ? "—" : (Number(v) > 0 ? "+" : "") + Number(v).toFixed(2) + "%");
+  const cls = (v) => (v == null ? "" : (Number(v) >= 0 ? "up" : "down"));
+  const lab = be.label || "中证1000";
+  const parts = [];
+  if (be.ok) {
+    const t = be.t == null ? "" : ` · t ${Number(be.t) > 0 ? "+" : ""}${be.t}`;
+    const traded = be.traded_n ? ` · 我买的 ${be.traded_n} 只 <b class="${cls(be.traded_excess)}">${sgn(be.traded_excess)}</b>` : "";
+    parts.push(
+      `近 ${be.days} 天买卡 ${be.n} 只：三日 ${sgn(be.mean_card)}，${lab} ${sgn(be.mean_bench)}，`
+      + `按天超额 <b class="${cls(be.mean_excess)}">${sgn(be.mean_excess)}</b>（正 ${be.pos_days}/${be.days} 天${t}）${traded}`
+    );
+  }
+  const d = be.day;
+  if (d) {
+    parts.push(
+      `${String(d.date).slice(5)} 买卡 ${d.n} 只：三日 ${sgn(d.mean_card)}，${lab} ${sgn(d.bench)}，`
+      + `超额 <b class="${cls(d.excess)}">${sgn(d.excess)}</b>${d.partial ? "（未满三日）" : ""}`
+    );
+  }
+  return `<div class="meta" style="margin-top:6px" title="${escAttr(be.note || "")}">`
+    + `相对${lab}<button type="button" class="q" data-term="相对中证1000超额">?</button>：${parts.join("；")}</div>`;
+}
+
 function paintReview(payload) {
   lastReview = payload || { signals: [], summary: {} };
   const sum = lastReview.summary || {};
@@ -157,6 +183,7 @@ function paintReview(payload) {
         `<div class="hd">三标准对照<button type="button" class="q" data-term="三标准对照">?</button></div>`
         + `<span class="meta">${oc.note || "有隔日打分后并排显示"}</span>`;
     }
+    ocBox.insertAdjacentHTML("beforeend", benchExcessHtml(sum.bench_excess));
   }
   paintGateLedger(sum.gate_ledger || {});
   paintEdgeShadow(sum.edge_shadow || {});

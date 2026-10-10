@@ -54,10 +54,40 @@
 }
 .rev-score-btn b { font-size: 14px; }
 .rev-score-btn small { font-size: 11px; color: var(--muted); }
-.rev-score-btn.g-hi { border-color: #14532d; }
-.rev-score-btn.g-hi b { color: #86efac; }
-.rev-score-btn.g-lo b { color: #fbbf24; }
-.rev-score-btn.g-drop b { color: var(--muted); }
+.rev-score-btn b { font-size: 12px; }
+.rev-score-btn.chk-good { border-color: #14532d; }
+.rev-score-btn.chk-good b { color: #86efac; }
+.rev-score-btn.chk-warn { border-color: #78350f; }
+.rev-score-btn.chk-warn b { color: #fbbf24; }
+.rev-score-btn.chk-bad { border-color: #7f1d1d; }
+.rev-score-btn.chk-bad b { color: #fca5a5; }
+.rev-score-btn.chk-mid b { color: var(--muted); }
+.pick-chk {
+  display: inline-block; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line);
+  font-size: 12px; line-height: 18px; white-space: nowrap; font-weight: 700;
+}
+.pick-chk.big { font-size: 15px; line-height: 22px; padding: 0 8px; }
+.pick-chk.chk-good { color: #86efac; border-color: #14532d; }
+.pick-chk.chk-warn { color: #fbbf24; border-color: #78350f; }
+.pick-chk.chk-bad { color: #fca5a5; border-color: #7f1d1d; }
+.pick-chk.chk-mid { color: var(--muted); }
+.pick-ref { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.pick-ref.dead { text-decoration: line-through; }
+.pick-audit { margin-top: 4px; }
+.pick-audit.pa-good { color: #86efac; }
+.pick-audit.pa-bad { color: #fca5a5; }
+.rev-pick-card li .mk, .rev-score-pop li .mk { min-width: 1.2em; text-align: center; font-weight: 700; }
+.rev-pick-card li.k-hard .mk, .rev-score-pop li.k-hard .mk { color: #fca5a5; }
+.rev-pick-card li.k-risk .mk, .rev-score-pop li.k-risk .mk { color: #fbbf24; }
+.rev-pick-card li.k-plus .mk, .rev-score-pop li.k-plus .mk { color: #86efac; }
+.rev-pick-card li.k-info, .rev-score-pop li.k-info { color: var(--muted); }
+.rev-pick-card li .pts-ref, .rev-score-pop li .pts-ref { color: var(--muted); font-size: 11px; }
+.rev-daybook {
+  padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; cursor: help;
+}
+.rev-daybook.db-good { color: #86efac; border-color: #14532d; }
+.rev-daybook.db-mid { color: #fbbf24; border-color: #78350f; }
+.rev-daybook.db-bad { color: #fca5a5; border-color: #7f1d1d; }
 .pick-pos {
   display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 3px;
   font-size: 11px; line-height: 16px; white-space: nowrap; border: 1px solid var(--border, #334155);

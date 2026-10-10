@@ -277,6 +277,45 @@ def day_lit_book(trade_date: str, live_last: dict[str, Any] | None = None) -> di
     }
 
 
+def load_pick_audit_rows(since: str) -> list[dict[str, Any]]:
+    """Return scored desk buys since ``since`` with only the ``pick0`` payload key.
+
+    Args:
+        since: First trade date (``YYYY-MM-DD``) to include.
+
+    Returns:
+        Rows with ``id``, ``trade_date``, ``code``, ``outcome_day3_pct`` and a
+        ``payload`` dict holding ``pick0`` when present.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, trade_date, code, outcome_day3_pct,
+                   json_extract(payload, '$.pick0') AS pick0
+            FROM signals
+            WHERE trade_date >= ? AND COALESCE(owner_user_id, 0) = 0
+              AND signal_type LIKE 'buy%' AND outcome_day3_pct IS NOT NULL
+            ORDER BY trade_date, id
+            """,
+            (str(since)[:10],),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            pick0 = json.loads(row["pick0"]) if row["pick0"] else None
+        except (TypeError, json.JSONDecodeError):
+            pick0 = None
+        out.append({
+            "id": row["id"],
+            "trade_date": row["trade_date"],
+            "code": row["code"],
+            "outcome_day3_pct": row["outcome_day3_pct"],
+            "signal_type": "buy",
+            "payload": {"pick0": pick0} if isinstance(pick0, dict) else {},
+        })
+    return out
+
+
 def load_signal(signal_id: int) -> dict[str, Any] | None:
     """Return one signal row by id, or None."""
     with _connect() as conn:

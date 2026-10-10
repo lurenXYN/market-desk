@@ -103,6 +103,11 @@ from market_desk.review.alerts import (  # noqa: F401
     build_ready_monitor,
     build_review_session_hint,
 )
+from market_desk.review.bench import (  # noqa: F401
+    attach_bench_excess,
+    bench_window_pct,
+    build_bench_excess_summary,
+)
 from market_desk.review.payload import (  # noqa: F401
     enrich_signals_with_live_marks,
     enrich_signals_with_trends,

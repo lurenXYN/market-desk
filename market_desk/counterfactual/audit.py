@@ -16,7 +16,6 @@ first-half / second-half split before a verdict is issued.
 
 from __future__ import annotations
 
-import random
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
@@ -33,6 +32,7 @@ from market_desk.config import (
 )
 from market_desk.counterfactual.sim import simulate_cf_trade
 from market_desk.counterfactual.trace import UNKNOWN_KEY, gate_kind, item_blockers
+from market_desk.stats_tools import day_block_bootstrap_ci
 
 
 def _wmean(pairs: list[tuple[float, float]]) -> float | None:
@@ -44,41 +44,26 @@ def _wmean(pairs: list[tuple[float, float]]) -> float | None:
 
 
 def bootstrap_ci(
-    pairs: list[tuple[float, float]],
+    samples: list[tuple[str, float, float]],
     *,
     n: int = CF_BOOTSTRAP_N,
     seed: int = 7,
-    lo_q: float = 0.05,
-    hi_q: float = 0.95,
 ) -> tuple[float | None, float | None]:
-    """Percentile bootstrap CI for a weighted mean (deterministic seed).
+    """90% CI of a gate's weighted mean avoided %, resampling trading days in blocks.
+
+    Cards blocked on the same day share one market move and 3-day outcomes of
+    neighbouring days overlap, so resampling single cards made the interval far
+    too narrow; see ``stats_tools.day_block_bootstrap_ci``.
 
     Args:
-        pairs: (value, weight) samples.
+        samples: ``(day, value, weight)`` rows.
         n: Resample count.
         seed: RNG seed so the panel does not flicker between refreshes.
-        lo_q: Lower quantile.
-        hi_q: Upper quantile.
 
     Returns:
-        (low, high), or (None, None) with fewer than 3 samples.
+        ``(low, high)``, or ``(None, None)`` below 3 samples or 2 trading days.
     """
-    if len(pairs) < 3 or n <= 0:
-        return None, None
-    rng = random.Random(seed)
-    k = len(pairs)
-    stats: list[float] = []
-    for _ in range(int(n)):
-        draw = [pairs[rng.randrange(k)] for _ in range(k)]
-        m = _wmean(draw)
-        if m is not None:
-            stats.append(m)
-    if not stats:
-        return None, None
-    stats.sort()
-    lo = stats[max(0, int(lo_q * len(stats)))]
-    hi = stats[min(len(stats) - 1, int(hi_q * len(stats)))]
-    return round(lo, 2), round(hi, 2)
+    return day_block_bootstrap_ci(samples, n=int(n), seed=seed)
 
 
 def _verdict(
@@ -274,7 +259,7 @@ def build_counterfactual_audit(
         eff_n = sum(x["w"] for x in samples)
         mean_avoid = _wmean(pairs)
         n_days = len({x["day"] for x in samples})
-        ci = bootstrap_ci(pairs)
+        ci = bootstrap_ci([(x["day"], x["avoid"], x["w"]) for x in samples])
         stable = _split_stability(samples)
         sole = [x for x in samples if x["sole"]]
         excess_pairs = [

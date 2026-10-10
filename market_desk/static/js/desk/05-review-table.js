@@ -51,7 +51,7 @@ const REV_COL_CATALOG = [
   { id: "date", label: "信号时间" },
   { id: "type", label: "类型" },
   { id: "name", label: "名称" },
-  { id: "score", label: "打分" },
+  { id: "score", label: "风险清单" },
   { id: "code", label: "代码" },
   { id: "price", label: "建议价" },
   { id: "fill", label: "成交" },
@@ -66,6 +66,7 @@ const REV_COL_CATALOG = [
   { id: "zt_ytd", label: "年内涨停" },
   { id: "day1", label: "次日%" },
   { id: "day3", label: "三日%" },
+  { id: "excess", label: "超中证1000" },
   { id: "result", label: "结果" },
   { id: "ops", label: "操作" },
 ];
@@ -155,6 +156,7 @@ function revSortValue(r, id) {
   }
   if (id === "day1") return r.outcome_day1_pct == null ? null : Number(r.outcome_day1_pct);
   if (id === "day3") return r.outcome_day3_pct == null ? null : Number(r.outcome_day3_pct);
+  if (id === "excess") return r.excess_d3_pct == null ? null : Number(r.excess_d3_pct);
   if (id === "result") return String(r.outcome_label || "");
   if (id === "vs_ml") return String(r.vs_mainline || "");
   if (id === "phase") return String(r.phase || "");
