@@ -5,6 +5,7 @@ const MAFAN_FILTER_KEY = "md_mafan_filters_v1";
 let maFanSort = { id: "score", dir: -1 };
 let maFanFilters = {
   stage: "",
+  pos: "",
   ma60: "",
   band: "",
   theme: "",
@@ -22,6 +23,7 @@ function loadMaFanFilters() {
     if (!o || typeof o !== "object") return;
     maFanFilters = {
       stage: String(o.stage || ""),
+      pos: String(o.pos || ""),
       ma60: String(o.ma60 || ""),
       band: String(o.band || ""),
       theme: String(o.theme || ""),
@@ -46,6 +48,7 @@ function syncMaFanFilterInputs() {
     else el.value = val == null ? "" : String(val);
   };
   set("maFanFltStage", maFanFilters.stage);
+  set("maFanFltPos", maFanFilters.pos);
   set("maFanFltMa60", maFanFilters.ma60);
   set("maFanFltBand", maFanFilters.band);
   set("maFanFltTheme", maFanFilters.theme);
@@ -58,6 +61,7 @@ function readMaFanFilterInputs() {
   const g = (id) => document.getElementById(id);
   maFanFilters = {
     stage: (g("maFanFltStage") && g("maFanFltStage").value) || "",
+    pos: (g("maFanFltPos") && g("maFanFltPos").value) || "",
     ma60: (g("maFanFltMa60") && g("maFanFltMa60").value) || "",
     band: (g("maFanFltBand") && g("maFanFltBand").value) || "",
     theme: (g("maFanFltTheme") && g("maFanFltTheme").value) || "",
@@ -77,6 +81,12 @@ function maFanPassFilter(it) {
   const f = maFanFilters;
   const tags = maFanRawTags(it);
   if (f.stage && String(it.stage || "") !== f.stage) return false;
+  if (f.pos) {
+    // Scans saved before positions existed carry no pos120 and drop out of a position filter.
+    const p = it.position || "";
+    if (!p) return false;
+    if (f.pos === "not_high" ? p === "高位" : p !== f.pos) return false;
+  }
   if (f.ma60 === "weak") {
     if (!tags.some((t) => t === "⚠MA60偏弱" || t === "MA60偏弱")) return false;
   } else if (f.ma60 === "ok") {
@@ -112,6 +122,7 @@ function maFanSortValue(it, id) {
     const m = { 初期: 1, 中期: 2, 后期: 3 };
     return m[it.stage] || 9;
   }
+  if (id === "pos") return it.pos120 == null ? NaN : Number(it.pos120);
   if (id === "score") return Number(it.score);
   if (id === "pick") return it.pick && it.pick.score != null ? Number(it.pick.score) : NaN;
   if (id === "d1" || id === "d3") {
@@ -161,6 +172,7 @@ function paintMaFanHead() {
     ["code", "股票"],
     ["sector", "板块"],
     ["stage", "阶段"],
+    ["pos", "位置", "收盘在近 120 日高低区间的位置（0=最低，100%=最高）；悬停看离 120 日低点涨了多少、250 日位置"],
     ["score", "形态分", "均线形态的完整度，不是预期收益：回放里形态分对之后 5 / 10 日超额没有稳定区分度（详见「发散胜率」）"],
     ["pick", "打分"],
     ["close", "收盘"],
@@ -230,7 +242,7 @@ async function loadMaFan(force, date) {
     const where = `${stage}${status != null ? " · HTTP " + status : ""}`;
     const isAdmin = !!(authUser && authUser.role === "admin");
     document.getElementById("maFanBody").innerHTML =
-      `<tr><td colspan="17" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
+      `<tr><td colspan="18" class="meta mafan-err">均线发散加载失败（${escAttr(where)}）：${escAttr(msg)}`
       + (isAdmin
         ? ` · <a href="/api/ops/logs?level=warning&lines=300" target="_blank" rel="noopener">看错误日志</a>`
         : "")
@@ -379,6 +391,9 @@ function paintMaFan(d) {
         `初/中/后 ${stages["初期"]}/${stages["中期"]}/${stages["后期"]}`,
         `复盘交集 ${overlap}`,
         `主线相关 ${themeN}`,
+        Array.isArray(scan.pot)
+          ? `<a href="#" data-goto-pot="${escAttr(scan.trade_date)}" title="同一次扫描的锅底名单">锅底 ${scan.pot.length} 只 →</a>`
+          : "",
         scan.saved_at ? `落盘 ${scan.saved_at}` : "",
         scan.formula_version != null ? `公式 v${scan.formula_version}` : "",
       ].filter(Boolean).map((t, i) => (i ? `<span class="meta"> · ${t}</span>` : t)).join("")
@@ -397,11 +412,11 @@ function paintMaFan(d) {
   const body = document.getElementById("maFanBody");
   if (!body) return;
   if (!all.length) {
-    body.innerHTML = `<tr><td colspan="17" class="meta">该日无命中（或尚未扫描）</td></tr>`;
+    body.innerHTML = `<tr><td colspan="18" class="meta">该日无命中（或尚未扫描）</td></tr>`;
     return;
   }
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="17" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
+    body.innerHTML = `<tr><td colspan="18" class="meta">无匹配行（放宽筛选条件）</td></tr>`;
     return;
   }
   body.innerHTML = items.map((it) => {
@@ -413,7 +428,7 @@ function paintMaFan(d) {
       tags.push(`<span class="rev-chip mkt-chip mkt-${MAFAN_MKT_CLS[it.market_board] || "x"}">${escAttr(it.market_board)}</span>`);
     }
     if (it.in_review) tags.push(`<span class="rev-chip up" title="当日复盘有买信号">复盘交集</span>`);
-    const rawTags = maFanRawTags(it).filter((t) => t !== it.stage);
+    const rawTags = maFanRawTags(it).filter((t) => t !== it.stage && t !== it.position);
     const chipClass = (t) => {
       if (t === "初期" || t === "刚发散" || t === "量能温和" || t === "粘连很紧" || t === "多头排列" || t === "坡度强") return "rev-chip up";
       if (t === "渐进发散" || t === "振幅小" || t === "MA60稳升" || t === "MA60稳" || t === "主板") return "rev-chip up";
@@ -434,6 +449,7 @@ function paintMaFan(d) {
           <td>${tickerHtml(it.name || code, code)}</td>
           <td class="col-wrap col-sector">${maFanSectorHtml(it)}</td>
           <td>${stage}</td>
+          <td>${maFanPosHtml(it)}</td>
           <td>${it.score != null ? it.score : "—"}</td>
           <td>${maFanPickHtml(it.pick)}</td>
           <td>${it.close != null ? it.close : "—"}</td>
@@ -450,6 +466,20 @@ function paintMaFan(d) {
           <td class="col-wrap col-note meta">${maFanRemark(it, rawTags)}</td>
         </tr>`;
   }).join("");
+}
+
+/** Long-term position cell: label + 120-day range %, details in the tooltip. */
+function maFanPosHtml(it) {
+  if (it.pos120 == null) return `<span class="meta" title="该日扫描早于位置字段，重扫后才有">—</span>`;
+  const pct = Math.round(Number(it.pos120) * 100);
+  const lab = it.position || "";
+  const tip = [
+    `120 日区间位置 ${pct}%`,
+    it.rise120 != null ? `离 120 日低点 +${Number(it.rise120).toFixed(0)}%` : "",
+    it.pos250 != null ? `250 日区间位置 ${Math.round(Number(it.pos250) * 100)}%` : "",
+  ].filter(Boolean).join("，");
+  const cls = lab === "高位" ? "gate soft" : (lab === "低位" ? "up" : "");
+  return `<span class="rev-chip ${cls}" title="${escAttr(tip)}">${lab} ${pct}%</span>`;
 }
 
 /** Fans that formed recently but failed on the scan day (removed from the list). */

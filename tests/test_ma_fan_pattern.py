@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from market_desk.ma_fan import scan as mf_scan
-from market_desk.ma_fan.pattern import score_pattern
+from market_desk.ma_fan.pattern import position_in_range, position_label, score_pattern
 
 
 def _bars(closes: list[float], vols: list[float]) -> list[dict]:
@@ -33,6 +33,18 @@ def test_fresh_fan_reports_scan_day_and_bonus_tags() -> None:
     assert got and got["failed"] == []
     assert got["close"] == round(closes[-1], 2) and got["lag"] == 0
     assert "今日发散" in got["tags"] and "量价齐升" in got["tags"]
+    # Breakout to a new 120-day high: stage still 初期, position flags it as 高位.
+    assert got["stage"] == "初期" and got["position"] == "高位" and got["pos120"] == 1.0
+    assert got["rise120"] == round((closes[-1] / 10.0 - 1) * 100, 1)
+
+
+def test_position_in_range_and_label() -> None:
+    bars = [{"close": c, "high": c, "low": c} for c in (5.4, 6.0, 6.87, 6.5)]
+    pos, rise = position_in_range(bars)
+    assert round(pos, 3) == round((6.5 - 5.4) / (6.87 - 5.4), 3)
+    assert round(rise, 1) == round((6.5 / 5.4 - 1) * 100, 1)
+    assert position_in_range([{"close": 5.0, "high": 5.0, "low": 5.0}]) is None
+    assert [position_label(p) for p in (None, 0.2, 0.5, 0.79, 0.8)] == ["", "低位", "中位", "中位", "高位"]
 
 
 def test_fan_followed_by_sharp_drop_is_failed_and_reports_latest_close() -> None:

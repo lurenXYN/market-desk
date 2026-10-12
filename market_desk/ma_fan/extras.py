@@ -136,17 +136,19 @@ def _merge_extras(fresh: dict[str, Any], computed: dict[str, Any]) -> dict[str, 
     Keeps concurrent edits (e.g. a meta backfill saved meanwhile) instead of
     overwriting the whole day with the copy loaded at the start of the run.
     """
-    by_code = {normalize_code(it.get("code")): it for it in computed.get("items") or []}
     out = dict(fresh)
-    items = []
-    for raw in fresh.get("items") or []:
-        it = dict(raw)
-        src = by_code.get(normalize_code(it.get("code"))) or {}
-        for key in ("fwd", "pick"):
-            if src.get(key) is not None:
-                it[key] = src[key]
-        items.append(it)
-    out["items"] = items
+    for list_key in ("items", "pot"):
+        by_code = {normalize_code(it.get("code")): it for it in computed.get(list_key) or []}
+        rows = []
+        for raw in fresh.get(list_key) or []:
+            it = dict(raw)
+            src = by_code.get(normalize_code(it.get("code"))) or {}
+            for key in ("fwd", "pick"):
+                if src.get(key) is not None:
+                    it[key] = src[key]
+            rows.append(it)
+        if list_key in fresh:
+            out[list_key] = rows
     if computed.get("index_fwd") is not None:
         out["index_fwd"] = computed["index_fwd"]
     return out
@@ -190,6 +192,10 @@ async def refresh_ma_fan_extras(*, force: bool = False, now: datetime | None = N
                     continue
                 if (d < through and _needs_fwd(it)) or (d == latest and not it.get("pick")):
                     codes.add(code)
+            for it in (body.get("pot") or []) if d < through else []:
+                code = normalize_code(it.get("code"))
+                if code and _needs_fwd(it):
+                    codes.add(code)
         need_index = any(d < through and not (b.get("index_fwd") or {}).get("final") for d, b in bodies.items())
         if not codes and not need_index:
             return {"ok": True, "days": len(dates), "codes": 0}
@@ -219,6 +225,14 @@ async def refresh_ma_fan_extras(*, force: bool = False, now: datetime | None = N
                     if upto and upto[-1]["date"] == d:
                         it["pick"] = pick_for_hit(it, upto, mkt)
                         pick_n += 1
+                        changed = True
+            for it in (body.get("pot") or []) if d < through else []:
+                series = bars.get(normalize_code(it.get("code"))) or []
+                if series and _needs_fwd(it):
+                    got = forward_returns([(b["date"], b["close"]) for b in series], d, through=through)
+                    if got and got != it.get("fwd"):
+                        it["fwd"] = got
+                        fwd_n += 1
                         changed = True
             if changed:
                 save_ma_fan_day(d, _merge_extras(load_ma_fan_day(d) or body, body))

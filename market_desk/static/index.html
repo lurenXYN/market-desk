@@ -80,6 +80,7 @@
       <button type="button" class="nav-core" data-main="pos">仓位</button>
       <button type="button" class="nav-core" data-main="review">复盘<span class="hint">信号</span></button>
       <button type="button" class="nav-sec" data-main="mafan">发散<span class="hint">均线</span></button>
+      <button type="button" class="nav-sec" data-main="pot">锅底<span class="hint">观察</span></button>
       <button type="button" class="nav-sec" data-main="backtest">回测<span class="hint">撮合</span></button>
       <button type="button" class="nav-more-btn" id="navMoreBtn" aria-expanded="false" aria-controls="navMoreSheet">更多</button>
       <button type="button" class="q" data-term="信号复盘" title="信号复盘说明" style="align-self:center">?</button>
@@ -100,6 +101,7 @@
         <button type="button" data-main="funds">资金</button>
         <button type="button" data-main="watch">观察</button>
         <button type="button" data-main="mafan">发散</button>
+        <button type="button" data-main="pot">锅底</button>
         <button type="button" data-main="backtest">回测</button>
       </div>
     </div>
@@ -901,13 +903,22 @@
         </div>
         <div class="rev-today" id="maFanSummary"></div>
         <div class="rev-toolbar" style="margin-top:8px">
-          <div class="pos-form" id="maFanFilters" style="grid-template-columns:90px 110px 120px 110px 100px auto auto auto auto;margin:0;flex:1;align-items:end">
+          <div class="pos-form" id="maFanFilters" style="grid-template-columns:90px 110px 110px 120px 110px 100px auto auto auto auto;margin:0;flex:1;align-items:end">
             <label>阶段
               <select id="maFanFltStage" title="初期/中期/后期">
                 <option value="">全部</option>
                 <option value="初期">初期</option>
                 <option value="中期">中期</option>
                 <option value="后期">后期</option>
+              </select>
+            </label>
+            <label>位置
+              <select id="maFanFltPos" title="收盘在近 120 日高低区间里的位置：低位 &lt;50%、中位 50–80%、高位 ≥80%。只是风格筛选，回放里低位并不更赚（见「均线发散」说明）">
+                <option value="">全部</option>
+                <option value="低位">低位 &lt;50%</option>
+                <option value="not_high">非高位 &lt;80%</option>
+                <option value="中位">中位</option>
+                <option value="高位">高位 ≥80%</option>
               </select>
             </label>
             <label>MA60
@@ -962,7 +973,47 @@
               <tr id="maFanHead"></tr>
             </thead>
             <tbody id="maFanBody">
-              <tr><td colspan="17" class="meta">打开页签后加载…</td></tr>
+              <tr><td colspan="18" class="meta">打开页签后加载…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="panel-pot" hidden>
+      <section class="card" id="potCard">
+        <h2 style="text-transform:none">锅底（观察）<button type="button" class="q" data-term="锅底">?</button>
+          <span class="mod-stamp" id="potStamp" title="扫描落盘时间"></span>
+        </h2>
+        <p class="rev-note">先跌 ≥15%，再 8–30 日小阴小阳、缩量横盘，最近 1–3 日首次收上平台顶、温和放量。与均线发散同一批股票、同一次夜间扫描（重扫在「发散」页）。<b>样本外回放没有超额</b>（含「浅跌放量」子集），只作看图提示：不进亮灯、不加分、不排序推荐。</p>
+        <div class="rev-daybar" id="potDayBar">
+          <div class="rev-day-nav">
+            <button type="button" class="rev-col-btn" id="potDayPrev" title="更早一日">←</button>
+            <input type="date" id="potDayInput" />
+            <button type="button" class="rev-col-btn" id="potDayNext" title="更新一日">→</button>
+            <button type="button" class="rev-col-btn" id="potDayLatest">最近</button>
+          </div>
+          <div class="rev-day-chips" id="potDayChips"></div>
+        </div>
+        <div class="rev-today" id="potSummary"></div>
+        <div class="rev-toolbar" style="margin-top:8px">
+          <label class="settings-check" style="display:flex;align-items:center;gap:6px">
+            <input type="checkbox" id="potFltFocus" />
+            <span>仅浅跌放量（前跌 15–25% 且放量 ≥2×）</span>
+          </label>
+          <label class="settings-check" style="display:flex;align-items:center;gap:6px">
+            <input type="checkbox" id="potFltEarly" />
+            <span>仅初期</span>
+          </label>
+          <span class="meta" id="potFltCount" style="align-self:center"></span>
+        </div>
+        <div class="rev-table-wrap">
+          <table class="rev-table" id="potTable">
+            <thead>
+              <tr id="potHead"></tr>
+            </thead>
+            <tbody id="potBody">
+              <tr><td colspan="14" class="meta">打开页签后加载…</td></tr>
             </tbody>
           </table>
         </div>

@@ -57,10 +57,12 @@ async def api_ma_fan(
             log.exception("ma_fan review flags failed date=%s", want)
             warn = "复盘交集标注失败（已记日志），列表照常显示"
     outcome = None
+    pot_outcome = None
     if body:
         try:
             recent = {d: load_ma_fan_day(d) or {} for d in dates[:MA_FAN_EXTRAS_DAYS]}
             outcome = build_outcome_summary(want, body, recent)
+            pot_outcome = _pot_outcome(want, body, recent, build_outcome_summary)
         except Exception:
             log.exception("ma_fan outcome summary failed date=%s", want)
     return {
@@ -69,8 +71,24 @@ async def api_ma_fan(
         "dates": dates,
         "scan": body,
         "outcome": outcome,
+        "pot_outcome": pot_outcome,
         "warn": warn,
         "note": "18/20/22 点分档扫成交额榜并合并；标签含额档与主线同主题旁注。观察层，不进 ready。",
+    }
+
+
+def _pot_outcome(day: str, body: dict, recent: dict, summarize) -> dict | None:
+    """Forward-outcome summary for pot-bottom rows: all hits and the 浅跌放量 subset."""
+    if "pot" not in body:
+        return None
+
+    def view(b: dict, *, focus: bool) -> dict:
+        rows = [it for it in (b or {}).get("pot") or [] if not focus or it.get("focus")]
+        return {"items": rows, "index_fwd": (b or {}).get("index_fwd")}
+
+    return {
+        key: summarize(day, view(body, focus=focus), {d: view(b, focus=focus) for d, b in recent.items()})
+        for key, focus in (("all", False), ("focus", True))
     }
 
 

@@ -27,7 +27,7 @@ MA_FAN_SCORE_BARS = 120
 MA_FAN_CACHE_FROM = (15, 5)
 _PROGRESS: dict[str, Any] = {"running": False}
 _LAST_FORCE_END = 0.0
-_SCORE_CACHE: dict[str, tuple[str, dict[str, Any] | None, int | None]] = {}
+_SCORE_CACHE: dict[str, tuple[str, dict[str, Any] | None, int | None, dict[str, Any] | None]] = {}
 
 
 def _score_cache_day(now: datetime | None = None) -> str | None:
@@ -38,23 +38,30 @@ def _score_cache_day(now: datetime | None = None) -> str | None:
     return t.strftime("%Y-%m-%d")
 
 
-def _score_cache_get(code: str) -> tuple[dict[str, Any] | None, int | None] | None:
-    """Return a cached ``(pattern, zt_ytd)`` for today's post-close bars."""
+def _score_cache_get(
+    code: str,
+) -> tuple[dict[str, Any] | None, int | None, dict[str, Any] | None] | None:
+    """Return a cached ``(pattern, zt_ytd, pot_bottom)`` for today's post-close bars."""
     day = _score_cache_day()
     hit = _SCORE_CACHE.get(code) if day else None
     if not hit or hit[0] != day:
         return None
-    return hit[1], hit[2]
+    return hit[1], hit[2], hit[3]
 
 
-def _score_cache_put(code: str, got: dict[str, Any] | None, zt_ytd: int | None) -> None:
-    """Cache one code's pattern result; drops entries from earlier days."""
+def _score_cache_put(
+    code: str,
+    got: dict[str, Any] | None,
+    zt_ytd: int | None,
+    pot: dict[str, Any] | None = None,
+) -> None:
+    """Cache one code's pattern results; drops entries from earlier days."""
     day = _score_cache_day()
     if not day:
         return
     if _SCORE_CACHE and next(iter(_SCORE_CACHE.values()))[0] != day:
         _SCORE_CACHE.clear()
-    _SCORE_CACHE[code] = (day, got, zt_ytd)
+    _SCORE_CACHE[code] = (day, got, zt_ytd, pot)
 
 
 class _Pacer:

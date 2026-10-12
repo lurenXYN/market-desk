@@ -14,6 +14,35 @@ FAN_FAIL_DRAWDOWN_PCT = 8.0   # close this far below the best close since the fa
 FAN_SOFT_DRAWDOWN_PCT = 5.0   # tag only: measured from the first fan bar it carries no edge (5d −0.24, t −0.8)
 FAN_UDR_GOOD = 1.3            # up-day / down-day volume over 10 sessions
 
+# Long-term position (display / filter only, no points). ``stage`` measures the move
+# away from the sticky zone, so a months-long grind such as 中国银行 5.40 → 6.87 still
+# reads 初期. scripts/research_ma_fan_position.py (800 names, 2025-11 → 2026-10,
+# same-day paired 10d excess): low (<50%) minus high (≥80%) of the 120-day range was
+# −3.3% (t −4.5) in the first half and ≈0 in the second, so it is not a quality gate.
+FAN_POS_LOW = 0.5
+FAN_POS_HIGH = 0.8
+
+
+def position_in_range(bars: list[dict[str, Any]]) -> tuple[float, float] | None:
+    """Return ``(position 0..1, rise % from the low)`` of the last close within ``bars``' high-low range."""
+    if not bars:
+        return None
+    hi = max(float(b.get("high") or b["close"]) for b in bars)
+    lo = min(float(b.get("low") or b["close"]) for b in bars)
+    c = float(bars[-1]["close"])
+    if lo <= 0 or hi <= lo:
+        return None
+    return (c - lo) / (hi - lo), (c / lo - 1.0) * 100.0
+
+
+def position_label(pos: float | None) -> str:
+    """Map a 0..1 range position to 低位 / 中位 / 高位 (empty when unknown)."""
+    if pos is None:
+        return ""
+    if pos < FAN_POS_LOW:
+        return "低位"
+    return "高位" if pos >= FAN_POS_HIGH else "中位"
+
 
 def _ema(xs: list[float], n: int) -> list[float]:
     """Exponential moving average seeded with the first value."""
@@ -318,7 +347,11 @@ def score_pattern(bars: list[dict[str, Any]], *, include_failed: bool = False) -
         "ret5": (c_now / closes[i - 5] - 1) * 100 if i >= 5 and closes[i - 5] > 0 else 0.0,
     }
 
+    pos = position_in_range(bars[-120:])
+    pos_lab = position_label(pos[0] if pos else None)
     tags: list[str] = [stage, freshness]
+    if pos_lab:
+        tags.append(pos_lab)
     # Surface MA60 first so the list chip is hard to miss.
     if ma60_strong:
         tags.append("MA60稳升")
@@ -400,6 +433,9 @@ def score_pattern(bars: list[dict[str, Any]], *, include_failed: bool = False) -
         "feat": {key: round(float(v), 4) for key, v in feat.items()},
         "note": " · ".join(tags) or "命中",
         "ext_pct": round(ext, 1),
+        "pos120": None if pos is None else round(pos[0], 3),
+        "rise120": None if pos is None else round(pos[1], 1),
+        "position": pos_lab,
         "stage": stage,
         "tags": tags,
         "freshness": freshness,

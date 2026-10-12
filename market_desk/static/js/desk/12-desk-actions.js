@@ -900,14 +900,14 @@ const maFanFilterApply = () => {
 document.getElementById("maFanFltApply")?.addEventListener("click", maFanFilterApply);
 document.getElementById("maFanFltReset")?.addEventListener("click", () => {
   maFanFilters = {
-    stage: "", ma60: "", band: "", theme: "", mkt: "",
+    stage: "", pos: "", ma60: "", band: "", theme: "", mkt: "",
     review: false, progressive: false,
   };
   saveMaFanFilters();
   syncMaFanFilterInputs();
   paintMaFan(lastMaFan);
 });
-["maFanFltStage", "maFanFltMa60", "maFanFltBand", "maFanFltTheme"].forEach((id) => {
+["maFanFltStage", "maFanFltPos", "maFanFltMa60", "maFanFltBand", "maFanFltTheme"].forEach((id) => {
   document.getElementById(id)?.addEventListener("change", maFanFilterApply);
 });
 ["maFanFltReview", "maFanFltProgressive"].forEach((id) => {

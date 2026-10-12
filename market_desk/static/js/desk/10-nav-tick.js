@@ -23,10 +23,10 @@ function applyMain(tab) {
     next = currentMain && currentMain !== "backtest" ? currentMain : "desk";
   }
   currentMain = next;
-  const moreTabs = new Set(["market", "boards", "funds", "watch", "auction", "mafan", "backtest"]);
+  const moreTabs = new Set(["market", "boards", "funds", "watch", "auction", "mafan", "pot", "backtest"]);
   const moreLabels = {
     market: "大盘", boards: "板块", funds: "资金",
-    watch: "观察", auction: "竞价", mafan: "发散", backtest: "回测",
+    watch: "观察", auction: "竞价", mafan: "发散", pot: "锅底", backtest: "回测",
   };
   document.querySelectorAll("#navTabs button[data-main]").forEach((el) =>
     el.classList.toggle("on", el.getAttribute("data-main") === currentMain)
@@ -41,7 +41,7 @@ function applyMain(tab) {
     moreBtn.textContent = inMore ? (moreLabels[currentMain] || "更多") : "更多";
   }
   closeNavMore();
-  ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "mafan", "backtest"].forEach((name) => {
+  ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "mafan", "pot", "backtest"].forEach((name) => {
     const el = document.getElementById("panel-" + name);
     if (el) el.hidden = name !== currentMain;
   });
@@ -50,6 +50,7 @@ function applyMain(tab) {
     loadMaFan(false);
     if (!maFanPollTimer) pollMaFanProgress();
   }
+  if (currentMain === "pot") loadPot(false);
   if (currentMain === "backtest" && typeof ensureBacktestDefaults === "function") ensureBacktestDefaults();
   if (currentMain === "funds") ensureFundFlowFull();
   if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);

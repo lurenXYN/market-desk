@@ -32,6 +32,7 @@ from market_desk.ma_fan.job import (
 from market_desk.ma_fan.pattern import (
     MA_FAN_FORMULA_VERSION,
     amount_band_for_rank,
+    position_in_range,
     score_pattern,
 )
 from market_desk.ma_fan.sources import (
@@ -40,6 +41,7 @@ from market_desk.ma_fan.sources import (
     enrich_hits_meta,
     load_universe,
 )
+from market_desk.pot_bottom import POT_VERSION, score_pot_bottom
 from market_desk.zt_stats import count_limit_ups_ytd_from_bars
 
 log = logging.getLogger("market_desk.ma_fan")
@@ -64,21 +66,26 @@ async def _score_one(
     prefer_main: bool = False,
     pacer: _Pacer | None = None,
     stats: _ScanStats | None = None,
-) -> dict[str, Any] | None:
-    """Fetch bars and score one quote row into a hit dict."""
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Fetch bars once and score one quote row.
+
+    Returns:
+        ``(fan, pot)``: the MA-fan hit (or a ``failed`` row) and the pot-bottom
+        hit; either may be None.
+    """
     code = normalize_code(row.get("code")) or ""
     name = str(row.get("name") or "")
     if not code or not _board_ok(code, boards) or is_st(name):
-        return None
+        return None, None
     cached = _score_cache_get(code)
     if cached is not None:
-        got, zt_ytd = cached
+        got, zt_ytd, pot = cached
         if stats is not None:
             stats.record_fetch(True)
     else:
         async with sem:
             if stats is not None and stats.aborted:
-                return None
+                return None, None
             if pacer is not None:
                 await pacer.wait()
             try:
@@ -91,18 +98,42 @@ async def _score_one(
         if stats is not None:
             stats.record_fetch(bool(bars))
         got = score_pattern((bars or [])[-MA_FAN_SCORE_BARS:], include_failed=True)
+        if got and len(bars or []) >= 250:
+            p250 = position_in_range(bars[-250:])
+            got["pos250"] = None if p250 is None else round(p250[0], 3)
+        pot = score_pot_bottom(bars or [])
         zt_ytd = (
             count_limit_ups_ytd_from_bars(bars, name=name, code=code, year=datetime.now().year)
-            if got
+            if got or pot
             else None
         )
         if bars:
-            _score_cache_put(code, got, zt_ytd)
+            _score_cache_put(code, got, zt_ytd, pot)
+    amt = row.get("amount")
+    amt_yi = round(float(amt) / 1e8, 2) if amt not in (None, "") else None
+    try:
+        amount_rank = int(row.get("_rank") or 0) or None
+    except (TypeError, ValueError):
+        amount_rank = None
+    band = amount_band_for_rank(amount_rank)
+    pot_hit = None
+    if pot and not (min_price > 0 and float(pot["close"]) < float(min_price)):
+        pot_hit = {
+            **pot,
+            "code": code,
+            "name": name,
+            "tags": list(pot.get("tags") or []),
+            "amount_yi": amt_yi,
+            "amount_rank": amount_rank,
+            "amount_band": band,
+            "zt_ytd": zt_ytd,
+            "mv_yi": _wan_to_yi(row.get("mktcap_wan")),
+        }
     if not got:
-        return None
+        return None, pot_hit
     close = float(got["close"])
     if min_price > 0 and close < float(min_price):
-        return None
+        return None, pot_hit
     if got.get("failed"):
         return {
             "failed": list(got["failed"]),
@@ -112,14 +143,7 @@ async def _score_one(
             "pct": got.get("pct"),
             "fan_date": got.get("fan_date") or "",
             "score_base": float(got["score"]),
-        }
-    amt = row.get("amount")
-    amt_yi = round(float(amt) / 1e8, 2) if amt not in (None, "") else None
-    try:
-        amount_rank = int(row.get("_rank") or 0) or None
-    except (TypeError, ValueError):
-        amount_rank = None
-    band = amount_band_for_rank(amount_rank)
+        }, pot_hit
     tags = list(got.get("tags") or [])
     if band and band not in tags:
         tags.append(band)
@@ -150,6 +174,10 @@ async def _score_one(
         "ma_order": str(got["ma_order"]),
         "note": " · ".join(tags) if tags else str(got["note"]),
         "ext_pct": got.get("ext_pct"),
+        "pos120": got.get("pos120"),
+        "rise120": got.get("rise120"),
+        "pos250": got.get("pos250"),
+        "position": got.get("position") or "",
         "stage": got.get("stage") or "",
         "tags": tags,
         "freshness": got.get("freshness") or "",
@@ -162,7 +190,32 @@ async def _score_one(
         "udr": got.get("udr"),
         "zt_ytd": zt_ytd,
         "mv_yi": _wan_to_yi(row.get("mktcap_wan")),
-    }
+    }, pot_hit
+
+
+MA_FAN_POT_KEEP = 80
+
+
+def _merge_pot(
+    prev: list[dict[str, Any]],
+    new: list[dict[str, Any]],
+    *,
+    fan_codes: set[str],
+) -> list[dict[str, Any]]:
+    """Merge pot-bottom hits by code (latest slice wins) and flag MA-fan overlap.
+
+    Order is 浅跌放量 first, then longer bases; neither is a predicted-return rank.
+    """
+    by_code: dict[str, dict[str, Any]] = {}
+    for item in list(prev or []) + list(new or []):
+        code = normalize_code(item.get("code")) or ""
+        if code:
+            by_code[code] = dict(item)
+    out = list(by_code.values())
+    for h in out:
+        h["in_fan"] = normalize_code(h.get("code")) in fan_codes
+    out.sort(key=lambda h: (not h.get("focus"), -int(h.get("base_len") or 0), str(h.get("code") or "")))
+    return out[:MA_FAN_POT_KEEP]
 
 
 def _merge_hits(
@@ -292,8 +345,8 @@ async def run_ma_fan_scan(
         sem = asyncio.Semaphore(MA_FAN_CONCURRENCY)
         pacer = _Pacer(MA_FAN_MIN_INTERVAL_S)
 
-        async def _one(row: dict[str, Any]) -> dict[str, Any] | None:
-            hit = await _score_one(
+        async def _one(row: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+            hit, pot = await _score_one(
                 client,
                 sem,
                 row,
@@ -305,13 +358,15 @@ async def run_ma_fan_scan(
             )
             if hit and not hit.get("failed"):
                 st.record_hit()
-            return hit
+            return hit, pot
 
-        raw = await asyncio.gather(*[_one(row) for row in ranked])
+        pairs = await asyncio.gather(*[_one(row) for row in ranked])
     if st.aborted:
         raise RuntimeError(
             f"日线源连续失败 {MA_FAN_MAX_CONSECUTIVE_FAIL} 次，疑似被限流，已中止（档 {key}）"
         )
+    raw = [h for h, _p in pairs]
+    pot_chunk = [p for _h, p in pairs if p]
     chunk = [h for h in raw if h and not h.get("failed")]
     chunk.sort(key=lambda h: float(h.get("score_base") or h.get("score") or 0), reverse=True)
 
@@ -335,9 +390,15 @@ async def run_ma_fan_scan(
     )
     # Re-trim after theme / review score nudges.
     merged = merged[:keep]
+    pot = _merge_pot(
+        [] if replace else list(prev.get("pot") or []),
+        pot_chunk,
+        fan_codes={normalize_code(h.get("code")) or "" for h in merged},
+    )
     st.phase("meta")
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), trust_env=False) as client:
         merged = await enrich_hits_meta(client, merged)
+        pot = await enrich_hits_meta(client, pot)
 
     done = set() if replace else {str(x) for x in (prev.get("slices_done") or [])}
     done.add(key)
@@ -357,6 +418,9 @@ async def run_ma_fan_scan(
         "formula_version": MA_FAN_FORMULA_VERSION,
         "items": merged,
         "failed": failed,
+        "pot": pot,
+        "pot_n": len(pot),
+        "pot_version": POT_VERSION,
         "slices_done": sorted(done, key=lambda s: (len(s), s)),
         "last_slice": key,
         "last_slice_scanned": len(pool),
@@ -370,12 +434,13 @@ async def run_ma_fan_scan(
     if persist:
         save_ma_fan_day(day, payload)
         log.info(
-            "ma_fan slice %s day=%s pool=%s chunk_hits=%s merged=%s done=%s",
+            "ma_fan slice %s day=%s pool=%s chunk_hits=%s merged=%s pot=%s done=%s",
             key,
             day,
             len(pool),
             len(chunk),
             len(merged),
+            len(pot),
             sorted(done),
         )
     return payload
