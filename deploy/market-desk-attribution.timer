@@ -1,0 +1,17 @@
+[Unit]
+Description=牛来-作战台 盘中归因审计定时器（交易日东财可拉板 K 窗口）
+
+[Timer]
+# Asia/Shanghai wall clock. Wrapper still skips holidays and off-window fires.
+Timezone=Asia/Shanghai
+OnCalendar=Mon-Fri *-*-* 09:45:00
+OnCalendar=Mon-Fri *-*-* 10:30:00
+OnCalendar=Mon-Fri *-*-* 11:15:00
+OnCalendar=Mon-Fri *-*-* 13:20:00
+OnCalendar=Mon-Fri *-*-* 14:10:00
+OnCalendar=Mon-Fri *-*-* 14:45:00
+Persistent=false
+Unit=market-desk-attribution.service
+
+[Install]
+WantedBy=timers.target

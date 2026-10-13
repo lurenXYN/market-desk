@@ -52,6 +52,48 @@ def _win(values: list[float]) -> float | None:
     return round(100.0 * sum(1 for v in values if v > 0) / len(values), 1) if values else None
 
 
+_DRAGON_SOURCES = frozenset({"dragon", "emotion_dragon", "mid_army_dragon"})
+
+
+def soft_rank_parts(
+    *,
+    dragon: bool = False,
+    trend_ok: bool = False,
+    trend_down: bool = False,
+    hhmm: str = "",
+    early_half: bool = False,
+    include_tod: bool = True,
+) -> list[tuple[str, int]]:
+    """Build soft-rank / reweight components from explicit fields.
+
+    Args:
+        dragon: True for dragon-desk cards.
+        trend_ok / trend_down: Daily trend flags on the card.
+        hhmm: ``HH:MM`` of first signal (time-of-day terms); ignored when
+            ``include_tod`` is False (live desk sort uses structural terms only).
+        early_half: True for fly / band-relaxed half windows (live promote).
+        include_tod: Whether to attach 10:00–11:30 / 13–14 clock terms.
+
+    Returns:
+        ``(label, delta)`` pairs; deltas are -1 (demote) or +1 (promote).
+    """
+    parts: list[tuple[str, int]] = []
+    if dragon:
+        parts.append(("龙头卡", -1))
+    if trend_ok:
+        parts.append(("日线上升", -1))
+    if trend_down:
+        parts.append(("日线下降", 1))
+    if early_half:
+        parts.append(("将飞/半仓早窗", 1))
+    if include_tod and hhmm:
+        if "13:00" <= hhmm < "14:00":
+            parts.append(("13–14点出卡", -1))
+        elif "10:00" <= hhmm <= "11:30":
+            parts.append(("10:00–11:30出卡", 1))
+    return parts
+
+
 def reweight_parts(row: dict[str, Any]) -> list[tuple[str, int]]:
     """List the shadow reweight components ``(label, delta)`` one buy card carries.
 
@@ -63,23 +105,85 @@ def reweight_parts(row: dict[str, Any]) -> list[tuple[str, int]]:
     """
     payload = _payload(row)
     hhmm = str(row.get("signaled_at") or "")[11:16]
-    parts: list[tuple[str, int]] = []
-    if str(row.get("signal_type") or "") == "buy_dragon":
-        parts.append(("龙头卡", -1))
-    if payload.get("trend_ok"):
-        parts.append(("日线上升", -1))
-    if payload.get("trend_down"):
-        parts.append(("日线下降", 1))
-    if "13:00" <= hhmm < "14:00":
-        parts.append(("13–14点出卡", -1))
-    elif "10:00" <= hhmm <= "11:30":
-        parts.append(("10:00–11:30出卡", 1))
-    return parts
+    src = str(payload.get("desk_source") or "")
+    dragon = str(row.get("signal_type") or "") == "buy_dragon" or src in _DRAGON_SOURCES
+    return soft_rank_parts(
+        dragon=dragon,
+        trend_ok=bool(payload.get("trend_ok")),
+        trend_down=bool(payload.get("trend_down")),
+        hhmm=hhmm,
+        early_half=False,
+        include_tod=True,
+    )
 
 
 def reweight_score(row: dict[str, Any]) -> int:
     """Return the summed shadow reweight delta for one buy card."""
     return sum(delta for _, delta in reweight_parts(row))
+
+
+def live_soft_rank_parts(item: dict[str, Any]) -> list[tuple[str, int]]:
+    """Soft-rank parts for a live recommend card (no clock terms)."""
+    src = str(item.get("desk_source") or "")
+    role = str(item.get("role_label") or "")
+    dragon = src in _DRAGON_SOURCES or "龙头" in role
+    early = bool(item.get("fly_warn") or item.get("ready_relaxed") or item.get("probe_ok"))
+    return soft_rank_parts(
+        dragon=dragon,
+        trend_ok=bool(item.get("trend_ok")),
+        trend_down=bool(item.get("trend_down")),
+        early_half=early,
+        include_tod=False,
+    )
+
+
+def live_soft_rank_score(item: dict[str, Any]) -> int:
+    """Return the live soft-rank delta for one recommend card."""
+    return sum(delta for _, delta in live_soft_rank_parts(item))
+
+
+def apply_soft_rank_order(recommend: dict[str, Any] | None) -> dict[str, Any]:
+    """Reorder recommend cards by readiness tier then soft-rank delta.
+
+    Does not change ready / probe / gates — display order only. Ready full-size
+    cards stay ahead of half / fly / wait cards; within a tier higher soft-rank
+    (日线降、将飞早窗) sorts first.
+    """
+    from market_desk.config import SOFT_RANK_LIVE
+
+    rec = dict(recommend or {})
+    items = [dict(x) for x in (rec.get("items") or [])]
+    if not items:
+        return rec
+    for item in items:
+        parts = live_soft_rank_parts(item)
+        item["soft_rank"] = sum(d for _, d in parts)
+        item["soft_rank_parts"] = [{"label": lab, "delta": d} for lab, d in parts]
+    if not SOFT_RANK_LIVE:
+        rec["items"] = items
+        return rec
+
+    def _tier(it: dict[str, Any]) -> int:
+        if it.get("ready") and not it.get("ready_relaxed") and not it.get("probe_ok"):
+            return 0
+        if it.get("ready") or it.get("ready_relaxed") or it.get("fly_warn"):
+            return 1
+        if it.get("probe_ok"):
+            return 2
+        if it.get("near_entry"):
+            return 3
+        return 4
+
+    items.sort(
+        key=lambda it: (
+            _tier(it),
+            -int(it.get("soft_rank") or 0),
+            -float(it.get("score") or 0.0),
+        )
+    )
+    rec["items"] = items
+    rec["soft_rank"] = True
+    return rec
 
 
 def _scored_buys(rows: Iterable[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -296,13 +400,71 @@ def _reweight_rows(oos: list[dict[str, Any]], disc: list[dict[str, Any]]) -> lis
     return out
 
 
+def _early_half_rows(samples: list[dict[str, Any]], *, since: str) -> list[dict[str, Any]]:
+    """Compare first fly/half print vs wait-for-ready vs skip on tagged cards.
+
+    Only rows with a frozen ``payload.early_half`` (first ``fly_warn`` print) and
+    a scored day-3 outcome enter the ledger. Out-of-sample from ``since``.
+    """
+    early_rets: list[float] = []
+    ready_rets: list[float] = []
+    wait_deltas: list[float] = []  # early − ready (ready never lit → early − 0)
+    days: set[str] = set()
+    n_ready = n_skip = 0
+    for r in samples:
+        day = _day(r)
+        if day < since:
+            continue
+        payload = _payload(r)
+        eh = payload.get("early_half")
+        if not isinstance(eh, dict):
+            continue
+        entry = num(eh.get("px"))
+        plan = num(payload.get("plan_price")) or num(r.get("price"))
+        if not entry or entry <= 0 or not plan or plan <= 0:
+            continue
+        # Replay close3 from stored plan-based d3: close3 = plan * (1 + d3/100).
+        close3 = plan * (1.0 + _d3(r) / 100.0)
+        e_ret = (close3 / entry - 1.0) * 100.0
+        early_rets.append(e_ret)
+        days.add(day)
+        ready_px = num(payload.get("first_ready_px"))
+        if ready_px and ready_px > 0 and _lit(r):
+            r_ret = (close3 / ready_px - 1.0) * 100.0
+            ready_rets.append(r_ret)
+            wait_deltas.append(e_ret - r_ret)
+            n_ready += 1
+        else:
+            # Never lit → waiting forever = skip (0); early half vs skip.
+            wait_deltas.append(e_ret - 0.0)
+            n_skip += 1
+    delta = _r2(_mean(wait_deltas))
+    tone, verdict = _judge(delta, 1, len(early_rets), len(days))
+    verdict = {"有效": "早进更优", "反向": "等亮灯/不买更优"}.get(verdict, verdict)
+    return [{
+        "key": "将飞半仓早进",
+        "n": len(early_rets),
+        "days": len(days),
+        "early_d3": _r2(_mean(early_rets)),
+        "early_win": _win(early_rets),
+        "ready_n": n_ready,
+        "ready_d3": _r2(_mean(ready_rets)),
+        "ready_win": _win(ready_rets),
+        "skip_n": n_skip,
+        "delta": delta,
+        "tone": tone,
+        "verdict": verdict,
+        "note": "早进 − 等亮灯（未亮记 0）；需落盘 early_half",
+    }]
+
+
 def build_edge_shadow(
     rows: list[dict[str, Any]] | None,
     *,
     since: str | None = None,
     days: int | None = None,
 ) -> dict[str, Any]:
-    """Build the three shadow-rule ledgers over scored paper buys.
+    """Build the edge shadow ledgers over scored paper buys.
 
     Args:
         rows: Signal rows (any order); non-buy, skipped, unscored and
@@ -312,11 +474,16 @@ def build_edge_shadow(
 
     Returns:
         Dict with ``ok``, ``since``, ``oos_days`` / ``oos_n``, ``reclaim`` /
-        ``breaker`` / ``reweight`` row lists and a one-line ``note``.
+        ``breaker`` / ``reweight`` / ``early_half`` row lists and a note.
     """
-    from market_desk.config import EDGE_SHADOW_DAYS, EDGE_SHADOW_SINCE
+    from market_desk.config import (
+        EARLY_HALF_SHADOW_SINCE,
+        EDGE_SHADOW_DAYS,
+        EDGE_SHADOW_SINCE,
+    )
 
     start = str(since or EDGE_SHADOW_SINCE)
+    early_since = str(EARLY_HALF_SHADOW_SINCE)
     window = int(days or EDGE_SHADOW_DAYS)
     samples = _scored_buys(rows)
     if not samples:
@@ -332,11 +499,13 @@ def build_edge_shadow(
     return {
         "ok": True,
         "since": start,
+        "early_half_since": early_since,
         "oos_days": len(oos_dates),
         "oos_n": len(oos),
         "disc_n": len(disc),
         "reclaim": _reclaim_rows(oos),
         "breaker": _breaker_rows(oos),
         "reweight": _reweight_rows(oos, disc),
+        "early_half": _early_half_rows(samples, since=early_since),
         "note": note,
     }

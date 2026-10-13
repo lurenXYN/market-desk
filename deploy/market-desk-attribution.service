@@ -1,0 +1,18 @@
+[Unit]
+Description=牛来-作战台 盘中归因审计 (audit_attribution)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=REPLACE_USER
+Group=REPLACE_USER
+WorkingDirectory=/opt/market-desk
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Shanghai
+Nice=10
+# Wrapper exits 0 when outside the session / non-trading day.
+ExecStart=/opt/market-desk/deploy/run-attribution-session.sh
+
+StandardOutput=journal
+StandardError=journal

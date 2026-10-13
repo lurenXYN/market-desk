@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import market_desk.db as desk_db
-from market_desk.edge_shadow import build_edge_shadow, reweight_parts, reweight_score
+from market_desk.edge_shadow import (
+    apply_soft_rank_order,
+    build_edge_shadow,
+    live_soft_rank_score,
+    reweight_parts,
+    reweight_score,
+)
 from market_desk.review.record import record_session_signals
 
 
@@ -111,3 +117,54 @@ def test_same_code_counts_once_preferring_lit_row():
     out = build_edge_shadow(rows)
     assert out["oos_n"] == 1
     assert next(r for r in out["reweight"] if r["key"] == "龙头卡")["n"] == 0
+
+
+def test_soft_rank_promotes_downtrend_and_fly_over_dragon():
+    rec = apply_soft_rank_order({
+        "items": [
+            {"code": "1", "ready": True, "desk_source": "dragon", "trend_ok": True, "score": 90},
+            {"code": "2", "ready": True, "trend_down": True, "fly_warn": True, "score": 50},
+            {"code": "3", "near_entry": True, "trend_down": True, "score": 80},
+        ]
+    })
+    codes = [x["code"] for x in rec["items"]]
+    assert codes[0] == "2" and codes[1] == "1" and codes[2] == "3"
+    assert live_soft_rank_score(rec["items"][0]) >= 1
+    assert rec["items"][0]["soft_rank_parts"]
+
+
+def test_early_half_shadow_compares_fly_entry_to_ready():
+    rows = [
+        _row(
+            "2026-10-13", "600001", 6.0, ever_ready=True,
+            early_half={"at": "2026-10-13 10:00:00", "px": 10.5, "size": 0.5},
+            first_ready_px=11.0,
+        ),
+        _row(
+            "2026-10-13", "600002", -3.0,
+            early_half={"at": "2026-10-13 10:05:00", "px": 10.2, "size": 0.5},
+        ),
+        _row("2026-10-13", "600003", 1.0),
+    ]
+    eh = build_edge_shadow(rows)["early_half"][0]
+    assert eh["n"] == 2 and eh["ready_n"] == 1 and eh["skip_n"] == 1
+    # close3 from plan 10: 10*1.06=10.6 → early 10.5 → +0.95%; ready 11 → -3.64%; delta vs ready
+    # and second: close3=9.7 from -3%, early 10.2 → -4.90% vs skip 0 → delta -4.90
+    assert eh["early_d3"] is not None and eh["delta"] is not None
+
+
+def test_early_half_frozen_on_first_fly(monkeypatch, tmp_path):
+    _db(monkeypatch, tmp_path)
+    snap = {
+        "trade_date": "2026-10-13", "updated_at": "2026-10-13 10:05:00", "phase": "发酵",
+        "verdict": {"action": "观察回踩", "mainline": {"name": "电子"}, "recommend": {"items": [
+            {"code": "600001", "name": "A", "plan_price": 10.0, "last": 10.4,
+             "ready": False, "fly_warn": True, "ready_relaxed": True},
+        ]}},
+    }
+    assert record_session_signals(snap) == 1
+    snap["updated_at"] = "2026-10-13 10:20:00"
+    snap["verdict"]["recommend"]["items"][0]["last"] = 10.8
+    record_session_signals(snap)
+    p = desk_db.load_signals_for_date("2026-10-13")[0]["payload"]
+    assert p["early_half"]["px"] == 10.4 and p["early_half"]["size"] == 0.5

@@ -576,6 +576,9 @@ def finalize_recommend_buy_ux(
         for raw in rec.get("items") or []:
             raw["probe_ok"] = False
     rec = attach_buy_progress(rec)
+    from market_desk.edge_shadow import apply_soft_rank_order
+
+    rec = apply_soft_rank_order(rec)
     return _annotate_sole_etf_chase(rec)
 
 

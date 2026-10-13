@@ -33,6 +33,8 @@ async function openSettings() {
     document.getElementById("setTargetCost").value = s.target_total_cost ?? 50000;
     document.getElementById("setEquity").value = s.account_equity ?? s.target_total_cost ?? 50000;
     document.getElementById("setRiskPct").value = s.risk_pct_per_trade ?? 1;
+    const fullPos = document.getElementById("setFullPos");
+    if (fullPos) fullPos.value = s.full_position_cny ?? 10000;
     document.getElementById("setMinMv").value = s.min_stock_mv_yi ?? 120;
     document.getElementById("setEqualW").checked = s.equal_weight_target !== false;
     document.getElementById("setBatch").checked = s.batch_plan !== false;
@@ -194,6 +196,7 @@ document.getElementById("settingsSave").addEventListener("click", async () => {
     target_total_cost: Number(document.getElementById("setTargetCost").value),
     account_equity: Number(document.getElementById("setEquity").value),
     risk_pct_per_trade: Number(document.getElementById("setRiskPct").value),
+    full_position_cny: Number(document.getElementById("setFullPos")?.value || 10000),
     min_stock_mv_yi: Number(document.getElementById("setMinMv").value),
     equal_weight_target: !!document.getElementById("setEqualW").checked,
     batch_plan: !!document.getElementById("setBatch").checked,
@@ -212,6 +215,12 @@ document.getElementById("settingsSave").addEventListener("click", async () => {
   if (!r.ok) {
     alert("保存失败");
     return;
+  }
+  try {
+    const saved = await r.json();
+    if (saved && saved.settings) window.__lastSettings = saved.settings;
+  } catch (e) {
+    window.__lastSettings = Object.assign({}, window.__lastSettings || {}, body);
   }
   // Personal Server酱 (ignore errors for guests).
   try {

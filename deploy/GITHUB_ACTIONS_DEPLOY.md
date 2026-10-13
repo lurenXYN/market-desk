@@ -76,7 +76,11 @@ ssh -i ./market-desk-deploy root@HOST "systemctl is-active market-desk"
 ```bash
 journalctl -u market-desk -n 30 --no-pager
 curl -sS http://127.0.0.1:8765/api/health
+systemctl list-timers market-desk-attribution.timer
+journalctl -u market-desk-attribution -n 20 --no-pager
 ```
+
+盘中归因定时器由 `remote-update.sh` 同步安装；休市/窗外会 skip（exit 0），不标失败。
 
 也可在 Actions 页点 **Run workflow** 手动部署。
 

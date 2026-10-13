@@ -1,5 +1,7 @@
-.rec-actions { display: flex; gap: 6px; margin-top: 8px; }
-.rec-actions .pos-btn { flex: 1; margin-top: 0; width: auto; }
+.rec-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.rec-actions .pos-btn { flex: 1 1 72px; margin-top: 0; width: auto; }
+.rec-actions .rec-flash,
+.rev-actions .rec-flash { flex: 0 0 auto; min-width: 52px; border-color: #334155; color: #cbd5e1; }
 .rec-batch {
   margin-top: 6px; font-size: 11px; color: var(--muted); line-height: 1.45;
 }

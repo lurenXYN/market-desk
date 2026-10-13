@@ -201,6 +201,7 @@ const recCard = (it) => {
             data-suggest="${buy ?? ""}"
             data-stop="${it.stop_price ?? ""}"
             data-chase="${it.chase_price ?? ""}">钉自选</button>`;
+  const flashBtn = (typeof flashBuyBtnHtml === "function") ? flashBuyBtnHtml(it) : "";
   const actionHtml = `<div class="rec-actions">
             <button type="button" class="pos-btn rec-book"
               data-code="${it.code || ""}"
@@ -218,6 +219,7 @@ const recCard = (it) => {
               data-qty="${qtyForBook}"
               title="只带到仓位页表单，不自动保存">填到仓位页</button>
             ${pinBtn}
+            ${flashBtn}
           </div>`;
   const cardCls = [
     "rec-card",
@@ -234,6 +236,14 @@ const recCard = (it) => {
     ? `<div class="rec-absorb-alert"><b>⚠ 承接未确认</b> <button type="button" class="q" data-term="主动买盘承接">?</button>`
       + `<span>${String(it.absorb_warn || "ready 仅凭形态，宜小仓或等主买确认").replace(/^承接未确认/, "")}</span></div>`
     : "";
+  const softRankBadge = (() => {
+    const sr = Number(it.soft_rank);
+    if (!Number.isFinite(sr) || sr === 0) return "";
+    const tip = ((it.soft_rank_parts || []).map((p) => `${p.label}${p.delta > 0 ? "+" : ""}${p.delta}`).join(" · ")
+      || "软排序（不改亮灯）").replace(/"/g, "");
+    const cls = sr > 0 ? "entry-badge-probe" : "entry-badge-soft";
+    return `<span class="entry-badge ${cls}" title="${tip}">软序${sr > 0 ? "+" : ""}${sr}</span>`;
+  })();
   const entryBadge = (() => {
     if (fly) {
       return `<span class="entry-badge entry-badge-fly" title="${it.fly_note || "半仓试探窗口，再等可能飞"}">将飞·半仓</span>`;
@@ -296,7 +306,7 @@ const recCard = (it) => {
       ? `<div class="buy-progress"><span class="bp-sum">还差：${(it.confirm_fail || []).slice(0, 3).join(" · ")}</span></div>`
       : "");
   return `<article class="${cardCls}">
-        <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${fmtPct(it.pct)}</div>
+        <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${softRankBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${absorbBanner}
         ${trendHtml}
@@ -379,11 +389,13 @@ const sellCard = (it) => {
   const clearQ = it.sell_qty_clear != null ? it.sell_qty_clear : (it.qty || 0);
   const halfCls = !t1 && mode === "half" ? " pos-btn exit-pref" : " pos-btn";
   const clearCls = !t1 && mode === "clear" ? " pos-btn exit-pref clear" : " pos-btn";
+  const flashSell = (typeof flashSellBtnHtml === "function") ? flashSellBtnHtml(it) : "";
   const actions = t1
-    ? `<button type="button" class="pos-btn sell-go" disabled>T+1 隔日可卖</button>`
+    ? `<button type="button" class="pos-btn sell-go" disabled>T+1 隔日可卖</button>${flashSell}`
     : `<button type="button" class="${halfCls.trim()} sell-half" data-id="${it.id || ""}" data-qty="${halfQ}" data-last="${it.last ?? ""}">减半 ${halfQ}股</button>
            <button type="button" class="${clearCls.trim()} sell-clear" data-id="${it.id || ""}" data-qty="${clearQ}" data-last="${it.last ?? ""}">清仓 ${clearQ}股</button>
-           <button type="button" class="pos-btn sell-go">去仓位</button>`;
+           <button type="button" class="pos-btn sell-go">去仓位</button>
+           ${flashSell}`;
   let trendHtml = "";
   if (it.trend_ok) {
     trendHtml = `<div class="trend-ok">日线 · 上升趋势（MA5 ${it.ma5 ?? "—"} / MA20 ${it.ma20 ?? "—"}）</div>`;

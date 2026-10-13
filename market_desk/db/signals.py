@@ -173,6 +173,23 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["final_fail"] = old_payload.get("final_fail")
         if incoming.get("probe_ok") or old_payload.get("ever_probe"):
             merged["ever_probe"] = True
+        # Early-half shadow: freeze first fly / band-relaxed print (display audit).
+        if incoming.get("fly_warn") or incoming.get("ready_relaxed"):
+            if not isinstance(old_payload.get("early_half"), dict):
+                from market_desk.numbers import num as _num
+
+                px = _num(row.get("last")) or _num(incoming.get("buy_price")) or _num(row.get("price"))
+                if px and float(px) > 0:
+                    merged["early_half"] = {
+                        "at": signaled or None,
+                        "px": float(px),
+                        "size": 0.5,
+                        "via": "fly" if incoming.get("fly_warn") else "band",
+                    }
+            else:
+                merged["early_half"] = old_payload["early_half"]
+        elif isinstance(old_payload.get("early_half"), dict):
+            merged["early_half"] = old_payload["early_half"]
         # Live book impact is frozen once the card has lit (fill-time estimate).
         if old_payload.get("ever_ready") and old_payload.get("slip_bps") is not None:
             merged["slip_bps"] = old_payload["slip_bps"]

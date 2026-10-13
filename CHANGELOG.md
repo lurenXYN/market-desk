@@ -14,6 +14,54 @@
 
 ---
 
+## [v1.10.7] - 2026-10-13
+
+### 【背景与动机（为什么做 · Why）】
+- 四段归因要盘中拉东财板块 K；盘外（含周末）VPS 也会被拦。人工 SSH 每小时代跑容易漏。
+
+### 【做了什么（What）】
+- **Added** `deploy/run-attribution-session.sh`：仅交易日且在 09:35–11:30 / 13:00–14:55 跑 `audit_attribution.py`，窗外/休市 `exit 0`。
+- **Added** `market-desk-attribution.service` + `.timer`（上海时区周一至五 09:45 / 10:30 / 11:15 / 13:20 / 14:10 / 14:45）。
+- **Changed** `install-systemd.sh` / `remote-update.sh`：安装并刷新该定时器。
+
+### 【影响与验证（Impact & Verification）】
+- 不改行情主循环；归因与实盘刷新隔离（Nice=10）。
+- 已有 VPS：下次部署会自动 enable timer；也可本机跑完 `install-systemd.sh` / 推送后看 `systemctl list-timers market-desk-attribution.timer`。
+
+---
+
+## [v1.10.6] - 2026-10-13
+
+### 【背景与动机（为什么做 · Why）】
+- 「主线回踩」亮灯路径在样本里偏弱；不宜放宽不追换信号，但可先做两件不改闸门的事：同档软排序、将飞半仓早进单独影子。
+
+### 【做了什么（What）】
+- **Added 作战台软排序**：`apply_soft_rank_order`（`SOFT_RANK_LIVE`）按 ready 分档后用降权同套 Δ 重排；抬日线降 / 将飞·半仓，压龙头 / 日线升；卡面「软序±N」。**不改 ready**。
+- **Added `early_half` 落盘**：首次 `fly_warn` / `ready_relaxed` 冻结半仓价；复盘「进场影子」新增将飞半仓早进表（早进三日 − 等亮灯，未亮记 0）；样本外自 `EARLY_HALF_SHADOW_SINCE=2026-10-13`。
+- **Changed** 术语「进场影子」；新增「软排序」。
+
+### 【影响与验证（Impact & Verification）】
+- 亮灯 / 闸门 / 不追纪律不变；仅卡序与影子记账。
+- `tests/test_edge_shadow.py` 覆盖软序与早进影子。
+
+---
+
+## [v1.10.5] - 2026-10-13
+
+### 【背景与动机（为什么做 · Why）】
+- 胜率相关算法仍在攒影子样本，不宜大改；阶段五最后一项「闪电复制」可缩短开仓/减仓时对着卡片手打指令的摩擦。
+
+### 【做了什么（What）】
+- **Added 设置 `full_position_cny`（单票满仓金额）**：个人私有，默认 10000；防守/平衡/进攻预设 8000/10000/15000。
+- **Added 买/卖卡「复制」按钮**：按满仓额算股数（半仓/试探/将飞/价带放松用一半），向下取整到 100 股；文案形如 `买入 代码 名称 价 × N股（满/半）止损 X` / `卖出 …（半/清）`。
+- **Added `market_desk/flash_copy.py` + `tests/test_flash_copy.py`**；术语「闪电复制」「单票满仓金额」。
+
+### 【影响与验证（Impact & Verification）】
+- 不改亮灯、打分、闸门；仅剪贴板文本。
+- `pytest tests/test_flash_copy.py` 覆盖满仓额钳位与买文案。
+
+---
+
 ## [v1.10.4] - 2026-10-13
 
 ### 【背景与动机（为什么做 · Why）】

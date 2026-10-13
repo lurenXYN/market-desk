@@ -17,6 +17,7 @@ USER_PRIVATE_KEYS = frozenset(
     {
         "account_equity",
         "risk_pct_per_trade",
+        "full_position_cny",
         "daily_loss_cap_pct",
         "cool_after_losses",
         "target_total_cost",
@@ -43,6 +44,7 @@ SETTINGS_PORTABLE_KEYS = frozenset(
     {
         "account_equity",
         "risk_pct_per_trade",
+        "full_position_cny",
         "daily_loss_cap_pct",
         "cool_after_losses",
         "target_total_cost",
@@ -78,6 +80,7 @@ SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
         "cool_after_losses": 2,
         "target_total_cost": 30000.0,
         "account_equity": 50000.0,
+        "full_position_cny": 8000.0,
         "equal_weight_target": True,
         "batch_plan": True,
         "open_mute_minutes": 10,
@@ -92,6 +95,7 @@ SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
         "cool_after_losses": 3,
         "target_total_cost": 50000.0,
         "account_equity": 50000.0,
+        "full_position_cny": 10000.0,
         "equal_weight_target": True,
         "batch_plan": True,
         "open_mute_minutes": 5,
@@ -106,6 +110,7 @@ SETTINGS_PRESETS: dict[str, dict[str, Any]] = {
         "cool_after_losses": 4,
         "target_total_cost": 80000.0,
         "account_equity": 80000.0,
+        "full_position_cny": 15000.0,
         "equal_weight_target": False,
         "batch_plan": True,
         "open_mute_minutes": 0,
@@ -146,6 +151,8 @@ DEFAULTS: dict[str, Any] = {
     "ma_fan_prefer_main": False,
     "account_equity": 50000.0,
     "risk_pct_per_trade": 1.0,
+    # One-name notional for flash order-copy text (满仓); half / probe use half.
+    "full_position_cny": 10000.0,
     # Total market-cap floor (亿元) for stock recommend cards; 0 = off.
     "min_stock_mv_yi": float(cfg.MIN_STOCK_MV_YI),
     # Observation side branch: max main−side score gap to surface (0 = off).
@@ -311,6 +318,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["backup_keep"] = max(5, min(90, int(out.get("backup_keep") or 30)))
     out["account_equity"] = max(1000.0, min(5_000_000.0, float(out["account_equity"])))
     out["risk_pct_per_trade"] = max(0.2, min(5.0, float(out["risk_pct_per_trade"])))
+    out["full_position_cny"] = max(1000.0, min(5_000_000.0, float(out.get("full_position_cny") or 10000.0)))
     out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
     out["side_mainline_gap"] = max(0.0, min(40.0, float(out.get("side_mainline_gap") or 0.0)))
     out["open_mute_minutes"] = max(0, min(30, int(out["open_mute_minutes"])))

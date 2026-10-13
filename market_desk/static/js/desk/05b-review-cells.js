@@ -61,15 +61,24 @@ function paintEdgeShadow(es) {
     `<tr class="gl-${escAttr(r.tone)}"><td>${escAttr(r.key)}</td><td>${r.polarity > 0 ? "加权" : "降权"}</td>`
     + `<td class="num">${r.n}/${r.days}天</td><td class="num">${fmt(r.excess)}</td><td>${escAttr(r.verdict)}</td>`
     + `<td class="num">${r.disc_n} · ${fmt(r.disc_excess)}</td></tr>`);
+  const early = (es.early_half || []).map((r) =>
+    `<tr class="gl-${escAttr(r.tone)}"><td>${escAttr(r.key)}</td><td class="num">${r.n}/${r.days}天</td>`
+    + `<td class="num">${fmt(r.early_d3)} · ${pct(r.early_win)}</td>`
+    + `<td class="num">${r.ready_n} · ${fmt(r.ready_d3)}</td>`
+    + `<td class="num">${r.skip_n}</td>`
+    + `<td class="num">${fmt(r.delta)}</td><td>${escAttr(r.verdict)}</td></tr>`);
+  const earlySince = es.early_half_since ? ` · 早进样本外自 ${escAttr(es.early_half_since)}` : "";
   box.hidden = false;
   box.innerHTML =
-    `<div class="hd">进场影子<button type="button" class="q" data-term="进场影子">?</button> · ${escAttr(es.note || "")}</div>`
+    `<div class="hd">进场影子<button type="button" class="q" data-term="进场影子">?</button> · ${escAttr(es.note || "")}${earlySince}</div>`
     + `<div class="meta">站回再买：触价后等现价站回分时均价再买（没站回 = 不买）</div>`
     + tbl(["口径", "触价卡", "触价即买 三日·胜率", "站回 只·三日", "未站回 只·三日", "每卡差值", "结论"], reclaim)
     + `<div class="meta">当日熔断：当天先亮的卡平均浮亏到阈值后，不再亮新卡</div>`
     + tbl(["阈值", "被拦", "其中亮过", "被拦 三日·胜率", "放行 只·三日", "差值", "结论"], breaker)
-    + `<div class="meta">降权：同日对照超额（样本外判定；发现期仅参考）</div>`
-    + tbl(["规则", "方向", "样本外", "同日超额", "结论", "发现期 只·超额"], reweight);
+    + `<div class="meta">降权：同日对照超额（样本外判定；发现期仅参考）。软排序已用同套 Δ 调作战台卡序，不改亮灯。</div>`
+    + tbl(["规则", "方向", "样本外", "同日超额", "结论", "发现期 只·超额"], reweight)
+    + `<div class="meta">将飞半仓早进：首次将飞/价带半仓价买入 vs 等满仓亮灯（未亮记 0）</div>`
+    + tbl(["口径", "样本", "早进 三日·胜率", "等亮灯 只·三日", "未亮跳过", "早进−等亮", "结论"], early);
 }
 
 /**

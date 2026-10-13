@@ -94,6 +94,31 @@ run_root bash -lc "
   .venv/bin/python -m pip install -q -r requirements.txt
 "
 
+# Refresh optional session attribution timer (idempotent; skip if units absent).
+ATTR_SVC="market-desk-attribution.service"
+ATTR_TIMER="market-desk-attribution.timer"
+ATTR_SRC_SVC="${INSTALL_DIR}/deploy/${ATTR_SVC}"
+ATTR_SRC_TIMER="${INSTALL_DIR}/deploy/${ATTR_TIMER}"
+ATTR_WRAPPER="${INSTALL_DIR}/deploy/run-attribution-session.sh"
+if [[ -f "$ATTR_SRC_SVC" && -f "$ATTR_SRC_TIMER" ]]; then
+  echo "==> refresh attribution timer units"
+  run_root chmod +x "$ATTR_WRAPPER" || true
+  SVC_USER="$(run_root systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  if [[ -z "$SVC_USER" || "$SVC_USER" == "-" ]]; then
+    SVC_USER="$(id -un)"
+  fi
+  TMP_ATTR="$(mktemp)"
+  sed \
+    -e "s|REPLACE_USER|${SVC_USER}|g" \
+    -e "s|/opt/market-desk|${INSTALL_DIR}|g" \
+    "$ATTR_SRC_SVC" > "$TMP_ATTR"
+  run_root cp "$TMP_ATTR" "/etc/systemd/system/${ATTR_SVC}"
+  rm -f "$TMP_ATTR"
+  run_root cp "$ATTR_SRC_TIMER" "/etc/systemd/system/${ATTR_TIMER}"
+  run_root systemctl daemon-reload
+  run_root systemctl enable --now "$ATTR_TIMER" || true
+fi
+
 echo "==> restart $SERVICE_NAME"
 run_root systemctl restart "$SERVICE_NAME"
 

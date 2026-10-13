@@ -37,6 +37,7 @@ class SettingsIn(BaseModel):
     backup_keep: int | None = None
     account_equity: float | None = None
     risk_pct_per_trade: float | None = None
+    full_position_cny: float | None = None
     min_stock_mv_yi: float | None = None
     # Review hit-rate: traded (executed only) | all (paper signals too).
     hit_rate_mode: str | None = None

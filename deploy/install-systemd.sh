@@ -215,12 +215,30 @@ echo "Installing unit -> ${UNIT_DST}"
 run_root cp "$TMP_UNIT" "$UNIT_DST"
 rm -f "$TMP_UNIT"
 
+ATTR_SVC="market-desk-attribution.service"
+ATTR_TIMER="market-desk-attribution.timer"
+ATTR_WRAPPER="${INSTALL_DIR}/deploy/run-attribution-session.sh"
+run_root chmod +x "$ATTR_WRAPPER" || true
+TMP_ATTR="$(mktemp)"
+sed \
+  -e "s|REPLACE_USER|${SERVICE_USER}|g" \
+  -e "s|/opt/market-desk|${INSTALL_DIR}|g" \
+  "$ROOT/deploy/${ATTR_SVC}" > "$TMP_ATTR"
+echo "Installing unit -> /etc/systemd/system/${ATTR_SVC}"
+run_root cp "$TMP_ATTR" "/etc/systemd/system/${ATTR_SVC}"
+rm -f "$TMP_ATTR"
+run_root cp "$ROOT/deploy/${ATTR_TIMER}" "/etc/systemd/system/${ATTR_TIMER}"
+
 run_root systemctl daemon-reload
 run_root systemctl enable --now "$UNIT_NAME"
+run_root systemctl enable --now "$ATTR_TIMER"
 run_root systemctl --no-pager --full status "$UNIT_NAME" || true
+run_root systemctl --no-pager --full status "$ATTR_TIMER" || true
 
 echo
 echo "Done. Open: http://127.0.0.1:${PORT}/"
 echo "Logs:     journalctl -u ${UNIT_NAME} -f"
+echo "Attr:     journalctl -u ${ATTR_SVC} -f"
+echo "          systemctl list-timers ${ATTR_TIMER}"
 echo "Stop:     systemctl stop ${UNIT_NAME}"
 echo "Restart:  systemctl restart ${UNIT_NAME}"

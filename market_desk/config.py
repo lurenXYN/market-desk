@@ -256,6 +256,11 @@ EDGE_SHADOW_SINCE = "2026-10-08"
 EDGE_SHADOW_DAYS = 30
 EDGE_BREAKER_MIN_LIT = 2
 EDGE_BREAKER_LEVELS = (-1.0, -2.0, -3.0)
+# Early-half (fly_warn) shadow: paper half-size entry at first fly print vs wait
+# for full ready vs skip. Out-of-sample from this date (pre-registered 2026-10-13).
+EARLY_HALF_SHADOW_SINCE = "2026-10-13"
+# Live desk soft order applies reweight deltas to card order only (never lights).
+SOFT_RANK_LIVE = True
 # Counterfactual (What-If) gate net-value audit (display only). Cards whose price
 # came to plan but never lit are filled at plan in simulation: stop from day1
 # (recorded stop, else fallback %), exit at close of day HOLD_DAYS, minus a
