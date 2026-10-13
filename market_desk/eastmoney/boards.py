@@ -19,6 +19,7 @@ from market_desk.config import (
     BOARDS_INDUSTRY_TTL_SEC,
     BOARDS_PROBE_RETRY_SEC,
     BOARDS_RESTORE_STREAK,
+    BOARDS_SHADOW_MERGE_SEC,
     CONCEPT_JUNK_KEYWORDS,
     CONSTITUENT_TOP,
 )
@@ -94,6 +95,9 @@ _BOARDS_CLIST_PAUSE_SEC = 600.0
 _BOARDS_RESTORE_OK = 0
 # Consecutive in-session EM failures while still on East Money (degrade gate).
 _BOARDS_FAIL_STREAK = 0
+# Last EM shadow-merge probe (monotonic) and the boards from that probe.
+_SHADOW_MERGE_AT = 0.0
+_SHADOW_CACHE: list[dict[str, Any]] = []
 # Today's source flips: [{"at": "HH:MM:SS", "to": "sina|eastmoney", "why": str}].
 _BOARDS_SWITCH_DAY = ""
 _BOARDS_SWITCH_LOG: list[dict[str, Any]] = []
@@ -159,6 +163,60 @@ def boards_switch_stats() -> dict[str, Any]:
     }
 
 
+def _append_em_only(
+    sina_rows: list[dict[str, Any]], em_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Append East Money boards whose name/bk are absent from the Sina list."""
+    names = {str(b.get("name") or "") for b in sina_rows}
+    bks = {str(b.get("bk") or "").upper() for b in sina_rows}
+    out = [dict(b) for b in sina_rows]
+    for raw in em_rows:
+        name = str(raw.get("name") or "")
+        bk = str(raw.get("bk") or "").upper()
+        if not name or not bk.startswith("BK") or name in names or bk in bks:
+            continue
+        row = dict(raw)
+        row["em_shadow"] = True
+        out.append(row)
+        names.add(name)
+        bks.add(bk)
+    return out
+
+
+async def _merge_em_shadow_boards(
+    client: httpx.AsyncClient, sina_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """While sticky on Sina, probe East Money and append EM-only board names.
+
+    Does not flip ``_BOARDS_SOURCE``. Concepts Sina lacks (e.g. PCB) can still
+    feed side / pool cards once East Money clist is healthy again mid-session.
+    Probes are throttled by ``BOARDS_SHADOW_MERGE_SEC``; failures stay soft.
+    """
+    global _SHADOW_MERGE_AT, _SHADOW_CACHE
+    if not sina_rows:
+        return sina_rows
+    now = time.time()
+    gap = float(BOARDS_SHADOW_MERGE_SEC)
+    if now - _SHADOW_MERGE_AT < gap:
+        return _append_em_only(sina_rows, _SHADOW_CACHE)
+    _SHADOW_MERGE_AT = now
+    try:
+        em_rows = await _hot_boards_from_clist(client)
+    except Exception as exc:
+        log.debug("em shadow merge probe failed: %r", exc)
+        em_rows = []
+    if not em_rows:
+        _SHADOW_CACHE = []
+        return sina_rows
+    _SHADOW_CACHE = list(em_rows)
+    board_fallback.remember_em_boards(em_rows)
+    merged = _append_em_only(sina_rows, em_rows)
+    added = len(merged) - len(sina_rows)
+    if added:
+        log.info("em shadow merge +%s boards (source stays sina)", added)
+    return merged
+
+
 async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Fetch concept gainers and the full industry universe.
 
@@ -166,6 +224,10 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     When East Money returns nothing (blocked IP), boards come from Sina and the
     source stays on Sina until the next break; there East Money is re-probed and
     only restored after ``BOARDS_RESTORE_STREAK`` consecutive successes.
+
+    While locked on Sina inside a half-session, East Money is still probed on a
+    throttle and EM-only board names are merged in (``em_shadow``) without
+    flipping the sticky source — so mainline ranking stays on Sina.
     """
     global _BOARDS_CLIST_PAUSE_UNTIL, _BOARDS_RESTORE_OK, _BOARDS_FAIL_STREAK
     if not _boards_clist_paused():
@@ -198,6 +260,8 @@ async def fetch_hot_boards(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     if _BOARDS_SOURCE != "sina":
         log.warning("hot boards via Sina fallback (%s rows)", len(rows))
     _set_boards_source("sina", "clist empty")
+    if in_decision_window():
+        rows = await _merge_em_shadow_boards(client, rows)
     return rows
 
 
@@ -445,14 +509,18 @@ async def fetch_board_members(
 
     Constituent lists change slowly intraday; cache briefly to cut refresh fan-out.
     Falls back to the board's Sina node when clist is paused or returns nothing.
+    For an East Money ``BK`` that has no Sina node (shadow-merged concepts such as
+    PCB), still try the East Money member clist even while the board source is
+    locked on Sina — otherwise those boards stay empty and never mint cards.
     """
     key = f"{str(bk or '').upper()}:{'w' if weakest else 's'}"
     now = time.time()
     hit = _BOARD_MEMBERS_CACHE.get(key)
     if hit and now - hit[0] < _members_ttl(key):
         return [dict(row) for row in hit[1]]
+    bk_u = str(bk or "").upper()
     members: list[dict[str, Any]] = []
-    if str(bk or "").upper().startswith("BK") and not _boards_clist_paused():
+    if bk_u.startswith("BK") and not _boards_clist_paused():
         members = await _board_members_clist(client, bk, weakest)
     if not members:
         try:
@@ -460,6 +528,9 @@ async def fetch_board_members(
         except Exception as exc:
             log.debug("sina board members fallback failed (%s): %r", bk, exc)
             members = []
+    if not members and bk_u.startswith("BK"):
+        # Locked on Sina: primary path skipped EM; Sina has no node for this BK.
+        members = await _board_members_clist(client, bk, weakest)
     if members:
         _BOARD_MEMBERS_CACHE[key] = (now, members)
     return [dict(row) for row in members]

@@ -519,6 +519,10 @@ BOARDS_RESTORE_STREAK = 2               # consecutive EM successes needed to swi
 BOARDS_DEGRADE_STREAK = 2               # in-session EM failures before degrading (1st → reuse last cards)
 BOARDS_PROBE_RETRY_SEC = 120.0          # break-time retry cadence after a failed EM probe
 BOARDS_LUNCH_PROBE_SEC = 120.0          # lunch-break probe cadence (refresh loop is idle then)
+# While sticky on Sina in a half-session, still probe East Money clist on this
+# cadence and append EM-only board names (e.g. PCB) into the hot list without
+# flipping `_BOARDS_SOURCE`. Primary ranking / mainline stay on Sina.
+BOARDS_SHADOW_MERGE_SEC = 60.0
 SOURCE_SHIFT_DAMP_SEC = 180.0           # after a source flip: no board-edge toasts / switch records
 SOURCE_SHIFT_DAMP_PREFIXES = ("buy:", "fly:", "exit:", "mainline:", "crowd:", "decline:")
 SOURCE_SHIFT_REPLAY_PREFIXES = ("buy:", "fly:", "exit:")  # re-diffed vs pre-flip baseline at window end

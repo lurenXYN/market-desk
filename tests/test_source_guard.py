@@ -15,23 +15,27 @@ from market_desk.notify import build_damped_toast_alerts
 
 EM_ROWS = [{"bk": "BK0900", "name": "半导体", "kind": "industry", "pct": 2.0}]
 SINA_ROWS = [{"bk": "SINA:new_dzqj", "name": "电子器件", "kind": "industry", "pct": 2.1}]
+EM_ONLY = [{"bk": "BK0896", "name": "PCB", "kind": "concept", "pct": 3.5}]
 
 
 @pytest.fixture()
 def feed(monkeypatch):
     """Script East Money responses; Sina always answers. Returns the control dict."""
-    ctl = {"em_ok": True, "em_calls": 0, "window": True}
+    ctl = {"em_ok": True, "em_calls": 0, "window": True, "em_rows": list(EM_ROWS)}
     monkeypatch.setattr(em_boards, "_BOARDS_SOURCE", "eastmoney")
     monkeypatch.setattr(em_boards, "_BOARDS_CLIST_PAUSE_UNTIL", 0.0)
     monkeypatch.setattr(em_boards, "_BOARDS_RESTORE_OK", 0)
     monkeypatch.setattr(em_boards, "_BOARDS_FAIL_STREAK", 0)
     monkeypatch.setattr(em_boards, "_BOARDS_SWITCH_DAY", "")
     monkeypatch.setattr(em_boards, "_BOARDS_SWITCH_LOG", [])
+    monkeypatch.setattr(em_boards, "_SHADOW_MERGE_AT", 0.0)
+    monkeypatch.setattr(em_boards, "_SHADOW_CACHE", [])
     monkeypatch.setattr(em_boards, "in_decision_window", lambda now=None: ctl["window"])
+    monkeypatch.setattr(bf, "remember_em_boards", lambda rows: None)
 
     async def clist(_client):
         ctl["em_calls"] += 1
-        return list(EM_ROWS) if ctl["em_ok"] else []
+        return list(ctl["em_rows"]) if ctl["em_ok"] else []
 
     async def sina(_client):
         return list(SINA_ROWS)
@@ -57,22 +61,75 @@ def test_single_in_session_blip_reuses_last_cards(feed) -> None:
 def test_degrade_locks_sina_until_break_then_needs_two_probes(feed) -> None:
     feed["em_ok"] = False
     _fetch()
+    # Locked: Sina list + soft EM shadow probe (em_ok still False → no extras).
     assert _fetch() == SINA_ROWS and em_boards._BOARDS_SOURCE == "sina"
     stats = em.boards_switch_stats()
     assert stats["switches"] == 1 and stats["locked"] is True
 
     feed["em_ok"] = True
     em_boards._BOARDS_CLIST_PAUSE_UNTIL = 0.0
+    em_boards._SHADOW_MERGE_AT = 0.0
     calls = feed["em_calls"]
-    assert _fetch() == SINA_ROWS, "EM healthy again but still inside the half-session"
-    assert feed["em_calls"] == calls, "no EM probe while locked"
+    locked = _fetch()
+    assert em_boards._BOARDS_SOURCE == "sina", "half-session lock stays on Sina"
+    assert feed["em_calls"] == calls + 1, "shadow merge still probes EM while locked"
+    assert locked[0] == SINA_ROWS[0]
+    assert locked[1] == {**EM_ROWS[0], "em_shadow": True}
 
     feed["window"] = False
+    em_boards._SHADOW_MERGE_AT = 0.0
     assert _fetch() == SINA_ROWS, "1st break probe succeeds but keeps Sina"
     assert em_boards._BOARDS_RESTORE_OK == 1
     assert _fetch() == EM_ROWS and em_boards._BOARDS_SOURCE == "eastmoney"
     stats = em.boards_switch_stats()
     assert stats["switches"] == 2 and [r["to"] for r in stats["log"]] == ["sina", "eastmoney"]
+
+
+def test_shadow_merge_appends_em_only_boards_while_locked(feed) -> None:
+    feed["em_ok"] = False
+    _fetch()
+    _fetch()
+    assert em_boards._BOARDS_SOURCE == "sina"
+
+    feed["em_ok"] = True
+    feed["em_rows"] = list(EM_ONLY)
+    em_boards._BOARDS_CLIST_PAUSE_UNTIL = 0.0
+    em_boards._SHADOW_MERGE_AT = 0.0
+    rows = _fetch()
+    assert em_boards._BOARDS_SOURCE == "sina"
+    assert rows[0]["name"] == "电子器件"
+    assert rows[1] == {**EM_ONLY[0], "em_shadow": True}
+
+    # Throttle: second call inside the gap reuses cache, no new EM probe.
+    calls = feed["em_calls"]
+    again = _fetch()
+    assert feed["em_calls"] == calls
+    assert again[1]["em_shadow"] is True
+
+
+def test_locked_bk_members_fall_back_to_em_clist(feed, monkeypatch) -> None:
+    """Sina-locked BK with no Sina node still gets East Money constituents."""
+    em_boards._BOARDS_SOURCE = "sina"
+    em_boards._BOARDS_CLIST_PAUSE_UNTIL = 0.0
+    feed["window"] = True
+    members = [{"code": "002463", "name": "沪电股份", "pct": 5.0}]
+    calls = {"em": 0, "sina": 0}
+
+    async def em_mem(_client, bk, weakest=False):
+        calls["em"] += 1
+        return list(members)
+
+    async def sina_mem(_client, bk, weakest=False):
+        calls["sina"] += 1
+        return []
+
+    monkeypatch.setattr(em_boards, "_board_members_clist", em_mem)
+    monkeypatch.setattr(bf, "fetch_board_members_sina", sina_mem)
+    monkeypatch.setattr(em_boards, "_BOARD_MEMBERS_CACHE", {})
+
+    rows = asyncio.run(em_boards.fetch_board_members(None, "BK0896"))
+    assert rows == members
+    assert calls["sina"] == 1 and calls["em"] == 1
 
 
 def test_break_failure_resets_restore_streak(feed) -> None:
