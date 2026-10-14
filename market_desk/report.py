@@ -638,18 +638,7 @@ def build_eod_onepager(
         label = "漏买/宜复盘" if missed else "未交易宜复盘"
         bullets.append(f"{label} {len(worth)}：{' / '.join(bits)}")
 
-    tm_brief = tomorrow_brief
-    if tm_brief is None and (snap or rev):
-        try:
-            tm_brief = build_tomorrow_brief(snapshot=snap, review=rev)
-        except Exception:
-            tm_brief = None
-    if isinstance(tm_brief, dict):
-        tm_focus = str(tm_brief.get("focus") or "").strip()
-        if tm_focus:
-            if len(tm_focus) > 72:
-                tm_focus = tm_focus[:72] + "…"
-            bullets.append(f"明日看点：{tm_focus}")
+    # Tomorrow focus lives in the separate 「明日看点」card / export — not inlined here.
 
     if hints:
         h0 = str(hints[0] or "").strip()

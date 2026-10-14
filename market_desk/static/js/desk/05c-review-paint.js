@@ -202,26 +202,7 @@ function paintReview(payload) {
     if (!chips.length) return "";
     return `<div class="hit-board">${chips.join("")}</div>`;
   })();
-  const kindLine = kh.length
-    ? ("品种 " + kh.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" · "))
-    : "";
-  const deskLine = (() => {
-    if (!dh.length) return "";
-    const main = dh.find((k) => k.source === "main");
-    const rest = dh.filter((k) => k.source !== "main");
-    const mainBit = main
-      ? `主线 ${main.hit_rate}%（${main.scored_n}）`
-      : "";
-    const restBit = rest.length
-      ? ("次要 " + rest.map((k) => `${k.label} ${k.hit_rate}%（${k.scored_n}）`).join(" / "))
-      : "";
-    return "来源 " + [mainBit, restBit].filter(Boolean).join(" · ");
-  })();
-  const themeLine = th.length
-    ? ("题材 " + th.slice(0, 6).map((t) =>
-        `${t.label || t.theme} ${t.hit_rate}%（${t.scored_n}）`
-      ).join(" · "))
-    : "";
+  // Chips already cover 来源/品种/题材/相位 — keep only non-chip lines below.
   const crossLine = pkh.length
     ? ("交叉 " + pkh.slice(0, 8).map((p) =>
         `${p.phase}·${p.label} ${p.hit_rate}%（${p.scored_n}）`
@@ -263,17 +244,11 @@ function paintReview(payload) {
     ? (`<div class="ready-mon rm-${escAttr(rm.tone || "low")}" style="margin-top:4px" title="${escAttr(rmTitle)}">`
       + `<button type="button" class="q" data-term="可买入监控">?</button> 可买入监控 ${escAttr(rm.note)}</div>`)
     : "";
-  document.getElementById("revPhase").innerHTML = (boardHtml || ph.length || kh.length || dh.length || th.length || gates.length || sellLine || wbLine || hints.length || readyLine)
+  document.getElementById("revPhase").innerHTML = (boardHtml || crossLine || gates.length || sellLine || wbLine || hints.length || readyLine)
     ? (`<div class="hd">命中率看板（跨日）<button type="button" class="q" data-term="命中率看板">?</button></div>`
       + (hintHtml ? `<div class="hd" style="margin-top:4px">调参建议</div>${hintHtml}` : "")
       + readyLine
       + boardHtml
-      + (ph.length
-        ? `<div style="margin-top:6px">相位 ${ph.map((p) => `${p.phase || "未标"} ${p.hit_rate == null ? "—" : (p.hit_rate + "%")}（${p.scored_n}）`).join(" · ")}</div>`
-        : "")
-      + (kindLine ? `<div class="meta" style="margin-top:4px">${kindLine}</div>` : "")
-      + (deskLine ? `<div class="meta" style="margin-top:4px">${deskLine}</div>` : "")
-      + (themeLine ? `<div class="meta" style="margin-top:4px">${themeLine}</div>` : "")
       + (crossLine ? `<div class="meta" style="margin-top:4px">${crossLine}</div>` : "")
       + (gateLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="闸门归因">?</button> ${gateLine}</div>` : "")
       + (sellLine ? `<div class="meta" style="margin-top:4px"><button type="button" class="q" data-term="卖点闭环">?</button> ${sellLine}</div>` : "")
@@ -364,6 +339,7 @@ function paintReview(payload) {
   const srcFilter = (document.getElementById("revSource") || {}).value || "";
   const main = ((document.getElementById("revMain") || {}).value || "").trim();
   const hideWait = !!(document.getElementById("revHideWait") || {}).checked;
+  const foldChannels = !!(document.getElementById("revFoldChannels") || {}).checked;
   const srcOf = (r) => revNormSrc(r);
   const isPaperWait = (r) => {
     const st = String(r.signal_type || "");
@@ -383,7 +359,7 @@ function paintReview(payload) {
     // Pure 盯回踩 paper: waiting far from band, no gate fail, no live flag.
     return true;
   };
-  const rows = applyRevSort((lastReview.signals || []).filter((r) => {
+  let rows = applyRevSort((lastReview.signals || []).filter((r) => {
     if (type === "buy") {
       const st = String(r.signal_type || "");
       if (st === "sell" || !(st === "buy" || st.startsWith("buy_"))) return false;
@@ -394,6 +370,16 @@ function paintReview(payload) {
     if (hideWait && isPaperWait(r)) return false;
     return true;
   }));
+  const beforeFoldN = rows.length;
+  if (foldChannels) {
+    rows = foldReviewBuyChannels(rows);
+  } else {
+    for (const r of rows) {
+      delete r._channel_n;
+      delete r._channel_tip;
+    }
+  }
+  const foldedAwayN = foldChannels ? Math.max(0, beforeFoldN - rows.length) : 0;
   const hiddenWaitN = hideWait
     ? (lastReview.signals || []).filter((r) => {
         if (type === "buy") {
@@ -412,6 +398,12 @@ function paintReview(payload) {
     hideLab.textContent = hiddenWaitN
       ? `隐藏纯盯回踩（已藏 ${hiddenWaitN}）`
       : "隐藏纯盯回踩";
+  }
+  const foldLab = document.querySelector("#revFoldChannels")?.parentElement?.querySelector("span");
+  if (foldLab) {
+    foldLab.textContent = foldedAwayN
+      ? `收拢同码次通道（已藏 ${foldedAwayN}）`
+      : "收拢同码次通道";
   }
   const cols = visibleRevCols();
   document.getElementById("revHead").innerHTML = cols.map((id) => {

@@ -292,8 +292,13 @@ function revCellHtml(col, r, ctx) {
     const pickChk = (r.id != null && (st === "buy" || st.startsWith("buy_")))
       ? `<input type="checkbox" class="rev-pick-chk" data-id="${escAttr(String(r.id))}" title="加入纠结对比"${revPickIds.has(String(r.id)) ? " checked" : ""} />`
       : "";
+    const chN = Number(r._channel_n || 0);
+    const chBadge = chN > 1
+      ? ` <span class="rev-chip channel" title="${escAttr("同日同码通道：" + (r._channel_tip || "") + "（已收拢）")}">多通道 ${chN}</span>`
+      : "";
     return pickChk
       + `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
+      + chBadge
       + revTrendChips(r)
       + cvChips
       + histBtn

@@ -157,7 +157,6 @@
         </label>
         <label class="settings-check" title="调参反哺固定用落库 classic；开关仅标注意图">
           <input id="setAdaptFollowOc" type="checkbox" /> 调参跟随评测标准<button type="button" class="q" data-term="调参口径">?</button>
-          <button type="button" class="q" data-term="调参口径">?</button>
         </label>
         <label>Ready 风格 <button type="button" class="q" data-term="Ready风格">?</button>
           <select id="setReadyStyle" title="价带放松：靠近建议价且未到不追 → 半仓 ready">
@@ -740,7 +739,7 @@
           <span class="mod-stamp" id="revTrendStamp" title="日线趋势 chip 异步补齐时间"></span>
           <span class="mod-stamp" id="revZtStamp" title="年内涨停列异步补齐时间"></span>
         </h2>
-        <p class="rev-note">按交易日浏览。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。进入可买带或触及止损/不追会弹系统通知。</p>
+        <p class="rev-note">按交易日浏览：摘要 → 信号表 → 审计区（默认折叠）。建议价=理想回踩，不追=可接受上限。「已交易」可一键写入/减仓位。同码多通道默认收拢，角标「多通道 n」。</p>
         <div class="rev-daybar" id="revDayBar">
           <div class="rev-day-nav">
             <button type="button" class="rev-col-btn" id="revDayPrev" title="更早一日">←</button>
@@ -753,53 +752,14 @@
         <div class="rev-session" id="revSession" hidden></div>
         <div class="rev-today" id="revToday"></div>
         <div class="rev-exec" id="revExec"></div>
-        <div class="week-exec" id="revWeekExec"></div>
         <div class="rev-missed" id="revMissed"></div>
-        <div class="oc-compare" id="revOcCompare"></div>
-        <div class="oc-compare gate-ledger" id="revGateLedger" hidden></div>
-        <div class="oc-compare gate-ledger" id="revEdgeShadow" hidden></div>
-        <details class="oc-compare gate-ledger cf-audit" id="revCfAudit">
-          <summary class="hd">闸门净价值审计（What-If）<button type="button" class="q" data-term="闸门净价值审计">?</button>
-            <span class="meta" id="revCfHead">展开后加载</span></summary>
-          <div class="cf-ctl">
-            窗口 <select id="cfDays"><option value="10">10 日</option><option value="20" selected>20 日</option><option value="40">40 日</option></select>
-            <label title="把「早盘出卡 + 日线最低到价」也算作到价；该档有前视偏差，默认剔除"><input type="checkbox" id="cfLoose"> 含早盘推断</label>
-            <button type="button" id="cfReload">刷新</button>
-          </div>
-          <div id="revCfBody"></div>
-        </details>
-        <div class="oc-compare gate-ledger disc-card" id="revDiscipline" hidden></div>
-        <div class="oc-compare gate-ledger" id="revChaseCost" hidden></div>
-        <div class="eod-brief" id="eodBrief">
-          <div class="hd">
-            <b>收盘一页纸</b>
-            <button type="button" class="q" data-term="收盘一页纸">?</button>
-            <button type="button" class="copy-btn" id="eodCopy">复制</button>
-          </div>
-          <p class="focus" id="eodFocus">打开复盘日后自动汇总</p>
-          <ul id="eodBullets"></ul>
+        <div class="rev-jump">
+          <a class="rev-col-btn" href="#revSignals">↓ 跳到信号表</a>
+          <a class="rev-col-btn" href="#revAudit">↓ 审计区</a>
+          <span class="meta">摘要 → 主表 → 审计默认折叠</span>
         </div>
-        <div class="eod-brief" id="tomorrowBrief">
-          <div class="hd">
-            <b>明日看点</b>
-            <button type="button" class="q" data-term="明日看点">?</button>
-            <button type="button" class="copy-btn" id="tomorrowCopy">复制</button>
-          </div>
-          <p class="focus" id="tomorrowFocus">收盘后自动生成次日观察清单</p>
-          <ul id="tomorrowBullets"></ul>
-        </div>
-        <div class="rev-vsml" id="revVsMl">
-          <span class="lab">对照主线</span>
-          <button type="button" class="rev-col-btn vsml-btn" data-mode="live" id="vsMlLive">实时</button>
-          <button type="button" class="rev-col-btn vsml-btn" data-mode="day" id="vsMlDay">当日</button>
-          <span class="meta" id="vsMlHint"></span>
-        </div>
-        <div class="rev-phase" id="revPhase"></div>
-        <div class="rev-hist" id="revHist"></div>
-        <div class="rev-sum" id="revSum"></div>
-        <div class="sell-fly-board" id="sellFlyBoard"></div>
-        <div class="rev-toolbar">
-          <div class="pos-form" id="revFilters" style="grid-template-columns: 90px 90px 110px 120px 120px auto auto auto auto auto; margin:0; flex:1;">
+        <div class="rev-toolbar" id="revSignals">
+          <div class="pos-form" id="revFilters" style="grid-template-columns: 90px 90px 110px 120px 120px auto auto auto auto auto auto; margin:0; flex:1;">
             <label>类型
               <select id="revType">
                 <option value="">全部</option>
@@ -843,6 +803,10 @@
               <input type="checkbox" id="revHideWait" checked />
               <span>隐藏纯盯回踩</span>
             </label>
+            <label class="wide" style="display:flex;align-items:center;gap:6px;grid-column:auto" title="同日同代码多通道（主线/支线/龙头…）默认只留一条，角标显示通道数；取消勾选可看全部通道">
+              <input type="checkbox" id="revFoldChannels" checked />
+              <span>收拢同码次通道</span>
+            </label>
             <button type="button" id="revApply">筛选</button>
             <button type="button" id="revExport" class="ghost" style="border:1px solid var(--line);background:#151c28;color:var(--muted);padding:7px 12px;border-radius:4px;cursor:pointer">导出 CSV</button>
             <button type="button" id="revReport" class="rev-col-btn">导出日报</button>
@@ -879,6 +843,76 @@
             <tbody id="revBody"></tbody>
           </table>
         </div>
+
+        <div class="rev-audit-anchor" id="revAudit"></div>
+        <details class="rev-audit">
+          <summary>近周归因 · 计划遵守</summary>
+          <div class="week-exec" id="revWeekExec"></div>
+        </details>
+        <details class="rev-audit" open>
+          <summary>三标准对照</summary>
+          <div class="oc-compare" id="revOcCompare"></div>
+        </details>
+        <details class="rev-audit" id="revAuditGate">
+          <summary>闸门账本</summary>
+          <div class="oc-compare gate-ledger" id="revGateLedger"></div>
+        </details>
+        <details class="rev-audit" id="revAuditEdge">
+          <summary>进场影子</summary>
+          <div class="oc-compare gate-ledger" id="revEdgeShadow"></div>
+        </details>
+        <details class="oc-compare gate-ledger cf-audit rev-audit" id="revCfAudit">
+          <summary class="hd">闸门净价值审计（What-If）<button type="button" class="q" data-term="闸门净价值审计">?</button>
+            <span class="meta" id="revCfHead">展开后加载</span></summary>
+          <div class="cf-ctl">
+            窗口 <select id="cfDays"><option value="10">10 日</option><option value="20" selected>20 日</option><option value="40">40 日</option></select>
+            <label title="把「早盘出卡 + 日线最低到价」也算作到价；该档有前视偏差，默认剔除"><input type="checkbox" id="cfLoose"> 含早盘推断</label>
+            <button type="button" id="cfReload">刷新</button>
+          </div>
+          <div id="revCfBody"></div>
+        </details>
+        <details class="rev-audit" id="revAuditDisc">
+          <summary>纪律审计 / 追价成本</summary>
+          <div class="oc-compare gate-ledger disc-card" id="revDiscipline"></div>
+          <div class="oc-compare gate-ledger" id="revChaseCost"></div>
+        </details>
+        <details class="rev-audit">
+          <summary>收盘一页纸 / 明日看点</summary>
+          <div class="eod-brief" id="eodBrief">
+            <div class="hd">
+              <b>收盘一页纸</b>
+              <button type="button" class="q" data-term="收盘一页纸">?</button>
+              <button type="button" class="copy-btn" id="eodCopy">复制</button>
+            </div>
+            <p class="focus" id="eodFocus">打开复盘日后自动汇总</p>
+            <ul id="eodBullets"></ul>
+          </div>
+          <div class="eod-brief" id="tomorrowBrief">
+            <div class="hd">
+              <b>明日看点</b>
+              <button type="button" class="q" data-term="明日看点">?</button>
+              <button type="button" class="copy-btn" id="tomorrowCopy">复制</button>
+            </div>
+            <p class="focus" id="tomorrowFocus">收盘后自动生成次日观察清单</p>
+            <ul id="tomorrowBullets"></ul>
+          </div>
+          <div class="rev-vsml" id="revVsMl">
+            <span class="lab">对照主线</span>
+            <button type="button" class="rev-col-btn vsml-btn" data-mode="live" id="vsMlLive">实时</button>
+            <button type="button" class="rev-col-btn vsml-btn" data-mode="day" id="vsMlDay">当日</button>
+            <span class="meta" id="vsMlHint"></span>
+          </div>
+        </details>
+        <details class="rev-audit">
+          <summary>命中率看板 / 近窗汇总</summary>
+          <div class="rev-phase" id="revPhase"></div>
+          <div class="rev-hist" id="revHist"></div>
+          <div class="rev-sum" id="revSum"></div>
+        </details>
+        <details class="rev-audit">
+          <summary>卖飞 / 卖后回落看板</summary>
+          <div class="sell-fly-board" id="sellFlyBoard"></div>
+        </details>
       </section>
     </section>
 

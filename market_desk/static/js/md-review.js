@@ -207,6 +207,7 @@
         source: (document.getElementById("revSource") || {}).value || "",
         main: ((document.getElementById("revMain") || {}).value || "").trim(),
         hideWait: !!(document.getElementById("revHideWait") || {}).checked,
+        foldChannels: !!(document.getElementById("revFoldChannels") || {}).checked,
       };
       localStorage.setItem(FILTER_STORAGE, JSON.stringify(payload));
     } catch (e) { /* ignore quota / private mode */ }
@@ -228,6 +229,9 @@
       setVal("revMain", raw.main || "");
       if (typeof raw.hideWait === "boolean") {
         setVal("revHideWait", raw.hideWait);
+      }
+      if (typeof raw.foldChannels === "boolean") {
+        setVal("revFoldChannels", raw.foldChannels);
       }
     } catch (e) { /* ignore */ }
   }

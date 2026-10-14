@@ -133,6 +133,79 @@ function revNormSrc(r) {
 function revSrcTagMeta(src) {
   return (window.MDReview && MDReview.srcTagMeta) ? MDReview.srcTagMeta(src) : null;
 }
+
+/** Collapse same-day same-code buy channels to one row; stamp ``_channel_n``. */
+function foldReviewBuyChannels(rows) {
+  const list = rows || [];
+  const rank = {
+    main: 0,
+    dragon: 1,
+    side: 2,
+    link: 3,
+    watch_trial: 4,
+    independent_pop: 5,
+  };
+  const srcLab = {
+    main: "主线",
+    dragon: "龙头",
+    side: "支线",
+    link: "联动",
+    watch_trial: "自选",
+    independent_pop: "独立人气",
+  };
+  const groups = new Map();
+  for (const r of list) {
+    const st = String(r.signal_type || "");
+    if (!(st === "buy" || st.startsWith("buy_"))) continue;
+    const day = String(r.trade_date || "").slice(0, 10);
+    const code = String(r.code || "").replace(/\D/g, "").padStart(6, "0");
+    if (!code) continue;
+    const key = `${day}|${code}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const winners = new Map();
+  for (const [, g] of groups) {
+    for (const r of g) {
+      delete r._channel_n;
+      delete r._channel_tip;
+    }
+    if (g.length === 1) {
+      g[0]._channel_n = 1;
+      winners.set(g[0].id, g[0]);
+      continue;
+    }
+    g.sort((a, b) => {
+      const ta = Number(a.traded || 0) ? 0 : 1;
+      const tb = Number(b.traded || 0) ? 0 : 1;
+      if (ta !== tb) return ta - tb;
+      const ra = Number(a.ready || 0) ? 0 : 1;
+      const rb = Number(b.ready || 0) ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      const sa = rank[revNormSrc(a)] ?? 9;
+      const sb = rank[revNormSrc(b)] ?? 9;
+      if (sa !== sb) return sa - sb;
+      return Number(a.id || 0) - Number(b.id || 0);
+    });
+    const win = g[0];
+    win._channel_n = g.length;
+    win._channel_tip = g.map((x) => srcLab[revNormSrc(x)] || revNormSrc(x)).join(" / ");
+    winners.set(win.id, win);
+  }
+  const out = [];
+  const seen = new Set();
+  for (const r of list) {
+    const st = String(r.signal_type || "");
+    if (st === "buy" || st.startsWith("buy_")) {
+      if (!winners.has(r.id) || seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(winners.get(r.id));
+    } else {
+      out.push(r);
+    }
+  }
+  return out;
+}
 function revTrendChips(r) {
   return (window.MDReview && MDReview.trendChipsHtml) ? MDReview.trendChipsHtml(r) : "";
 }

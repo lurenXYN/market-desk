@@ -104,7 +104,7 @@ class EodOnepagerTests(unittest.TestCase):
         self.assertTrue(any("尖峰" in b or "观察回踩" in b for b in brief["bullets"]))
         self.assertTrue(any("净换防" in b or "最终主线" in b for b in brief["bullets"]))
         self.assertTrue(any("漏买" in b or "宜复盘" in b for b in brief["bullets"]))
-        self.assertTrue(any(b.startswith("明日看点") for b in brief["bullets"]))
+        self.assertFalse(any(b.startswith("明日看点") for b in brief["bullets"]))
         self.assertTrue(any(b.startswith("调参") for b in brief["bullets"]))
         # Counts stay secondary: not the first push line.
         self.assertFalse(brief["push_bullets"][0].startswith("信号 买"))

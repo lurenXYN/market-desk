@@ -259,6 +259,51 @@
 .live-arrow.down { color: var(--down); }
 .live-arrow.flat { color: var(--muted); }
 .live-vs { font-size: 11px; margin-left: 2px; }
+.rev-jump {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+.rev-jump a.rev-col-btn {
+  text-decoration: none;
+}
+.rev-audit {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0e141c;
+  padding: 0 10px 10px;
+}
+.rev-audit > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.rev-audit > summary::-webkit-details-marker { display: none; }
+.rev-audit > summary::before {
+  content: "▸ ";
+  color: var(--accent, #38bdf8);
+}
+.rev-audit[open] > summary::before { content: "▾ "; }
+.rev-audit-anchor { height: 0; }
+.rev-chip.channel {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid #3a4a5e;
+  background: #1a2433;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
 .rev-daybar {
   display: flex;
   flex-wrap: wrap;
