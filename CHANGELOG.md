@@ -14,6 +14,38 @@
 
 ---
 
+## [v1.10.9] - 2026-10-14
+
+### 【背景与动机（为什么做 · Why）】
+- 收口包后，换源仍会丢昨收列：密封只绑当日 `bk`，新浪 `SINA:*` 与东财 `BK*` 对不上；无合并历史时生命周期整列空洞或误当萌芽。
+
+### 【做了什么（What）】
+- **C 稳定键**：`lifecycle_stable_key`（BK 优先，否则 `N:规范名`）；密封双写候选键；昨收列按稳定身份去重，换源可续列。
+- **C′ 并史 / 灰态**：enrich 用 `resolve_board_hist` 按名并回东财史；仍无史的新浪板标 `lifecycle_no_hist`「无史·不判阶段」，面板列出、不进萌芽。
+
+### 【影响与验证（Impact & Verification）】
+- 不改亮灯；只修生命周期身份与历史附着。
+- `tests/test_lifecycle_identity.py` + 既有 lifecycle 单测。
+
+---
+
+## [v1.10.8] - 2026-10-14
+
+### 【背景与动机（为什么做 · Why）】
+- 生命周期体感混乱：板块页昨收冻结列 vs 作战台实时阶段两套说法；尖峰禁追仍落在「主升」桶（主升·尖峰仅观察）；收盘后每轮重写 `lifecycle_close` 易被尾盘噪声污染次日列。
+
+### 【做了什么（What）】
+- **A 口径统一**：顶栏 / trio 显示 `lifecycle_display`（优先昨收列）；`lifecycle` / `lifecycle_live` 仍供买卖、换防、卖点、衰退提醒；不一致旁注「盘中阶段像X」。
+- **B 尖峰独立**：`classify_lifecycle` 对「尖峰禁追」返回 `peak`；板块页新增「尖峰观察」列；不再叫主升。
+- **F 术语**：词条与列 note 区分「昨收阶段」与「盘中阶段」。
+- **K 密封一次**：`lifecycle_close:{date}` 收盘后只写一次；其后复用密封 map，不再随 live 覆盖。
+
+### 【影响与验证（Impact & Verification）】
+- 不改亮灯 / 闸门公式；决策仍看盘中阶段。
+- `tests/test_lifecycle_stable.py`、`tests/test_lifecycle_seal.py` 覆盖尖峰桶、显示附着、密封一次。
+
+---
+
 ## [v1.10.7] - 2026-10-13
 
 ### 【背景与动机（为什么做 · Why）】

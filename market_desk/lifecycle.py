@@ -1,4 +1,4 @@
-"""Multi-day board lifecycle: starting / ongoing / ending mainlines."""
+"""Multi-day board lifecycle: starting / ongoing / peak / ending mainlines."""
 
 from __future__ import annotations
 
@@ -6,11 +6,15 @@ from datetime import datetime
 from typing import Any
 
 # Display labels (UI / glossary). Internal stage keys stay English.
+# ``peak`` is tip-chase observation — not 「主升」 (diffusion ≠ buyable).
 STAGE_LABELS = {
     "starting": "萌芽",
     "ongoing": "主升",
+    "peak": "尖峰观察",
     "ending": "衰退",
 }
+
+STAGE_COLUMNS = ("starting", "ongoing", "peak", "ending")
 
 
 def stage_label(stage: str | None) -> str:
@@ -18,6 +22,121 @@ def stage_label(stage: str | None) -> str:
     if not stage:
         return ""
     return STAGE_LABELS.get(str(stage), str(stage))
+
+
+def lifecycle_stable_key(board: dict[str, Any] | None) -> str:
+    """Return a cross-source identity for ``lifecycle_close`` seals.
+
+    Prefer East Money ``BK*`` when the card already carries one (including
+    Sina boards resolved via alias). Unmapped ``SINA:*`` boards use
+    ``N:<alias_name>`` so a later flip onto a BK still finds yesterday's stage.
+    """
+    card = board if isinstance(board, dict) else {}
+    bk = str(card.get("bk") or "").strip()
+    if bk.upper().startswith("BK"):
+        return bk.upper()
+    name = str(card.get("name") or card.get("sina_name") or "").strip()
+    try:
+        from market_desk.db.market import board_alias_name
+        from market_desk.board_alias import normalize_board_name
+
+        alias = board_alias_name(name) or normalize_board_name(name)
+    except Exception:
+        alias = name
+    if alias:
+        return f"N:{alias}"
+    return bk or name
+
+
+def lifecycle_key_candidates(board: dict[str, Any] | None) -> list[str]:
+    """Return lookup keys for matching a live card to a sealed stage_map entry."""
+    card = board if isinstance(board, dict) else {}
+    keys: list[str] = []
+
+    def _add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if text and text not in keys:
+            keys.append(text)
+
+    _add(lifecycle_stable_key(card))
+    _add(card.get("bk"))
+    if str(card.get("bk") or "").upper().startswith("BK"):
+        _add(str(card.get("bk") or "").upper())
+    _add(card.get("name"))
+    _add(card.get("sina_name"))
+    node = str(card.get("sina_node") or "").strip()
+    if node:
+        _add(f"SINA:{node}")
+    try:
+        from market_desk.db.market import board_alias_name
+
+        for raw in (card.get("name"), card.get("sina_name")):
+            alias = board_alias_name(raw)
+            if alias:
+                _add(f"N:{alias}")
+    except Exception:
+        pass
+    return keys
+
+
+def _index_boards_by_keys(
+    boards: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Index boards under every lifecycle key candidate (first write wins)."""
+    out: dict[str, dict[str, Any]] = {}
+    for src in boards or []:
+        if not isinstance(src, dict):
+            continue
+        for key in lifecycle_key_candidates(src):
+            out.setdefault(key, src)
+    return out
+
+
+def _put_stage_keys(
+    stage_map: dict[str, str],
+    board: dict[str, Any],
+    stage: str | None,
+) -> None:
+    """Write ``stage`` under all candidate keys for ``board`` (dual-write)."""
+    value = str(stage or "")
+    for key in lifecycle_key_candidates(board):
+        stage_map[key] = value
+
+
+def _closed_series_for_key(
+    closed: dict[str, list[dict[str, Any]]],
+    key: str,
+) -> list[dict[str, Any]]:
+    """Find a closed hist series for a stable / legacy stage_map key.
+
+    ``N:<alias>`` must resolve to the East Money ``BK*`` series that shares the
+    same ``board_alias_name``; otherwise seals written under the name key never
+    remount onto today's BK card and hist backfill overwrites them.
+    """
+    raw = str(key or "").strip()
+    if not raw:
+        return []
+    if raw in closed:
+        return list(closed[raw])
+    want_alias = raw[2:] if raw.startswith("N:") else ""
+    for bk, series in closed.items():
+        if not series:
+            continue
+        name = (series[-1] or {}).get("name")
+        if bk == raw:
+            return list(series)
+        sk = lifecycle_stable_key({"bk": bk, "name": name})
+        if sk == raw:
+            return list(series)
+        if want_alias:
+            try:
+                from market_desk.db.market import board_alias_name
+
+                if board_alias_name(name) == want_alias:
+                    return list(series)
+            except Exception:
+                pass
+    return []
 
 
 def build_mainline_lifecycle(
@@ -30,13 +149,13 @@ def build_mainline_lifecycle(
     final: bool = True,
     side_live: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Classify watched boards into starting / ongoing / ending buckets.
+    """Classify watched boards into starting / ongoing / peak / ending buckets.
 
     Lifecycle is a multi-day view, so columns only move once per day:
 
     * ``final=True`` (after the close): classify today's cards with the closed
       session included; ``stage_map`` should be persisted as tomorrow's
-      ``frozen`` baseline.
+      ``frozen`` baseline (caller seals at most once per day).
     * ``final=False`` (pre-open / intraday): columns come from ``frozen`` (the
       last close) or, when missing, from closed-day ``hist_map`` rows only.
       Live cards only decorate the rows (``live_hint``) and feed ``fresh``
@@ -49,34 +168,80 @@ def build_mainline_lifecycle(
     Thresholds soften when recent review hit-rate is weak.
     """
     bias = _review_lifecycle_bias()
-    live: dict[str, dict[str, Any]] = {}
-    for src in (hot or []) + (pins or []):
-        bk = str(src.get("bk") or src.get("name") or "")
-        if bk and bk not in live:
-            live[bk] = src
+    live_rows = [s for s in list(hot or []) + list(pins or []) if isinstance(s, dict)]
+    live_index = _index_boards_by_keys(live_rows)
+    # Unique live cards (by id) for final classify / fresh scan.
+    live_unique: list[dict[str, Any]] = []
+    seen_id: set[int] = set()
+    for src in live_rows:
+        sid = id(src)
+        if sid in seen_id:
+            continue
+        seen_id.add(sid)
+        live_unique.append(src)
+
+    side_index = _index_boards_by_keys(
+        [c for c in (side_live or {}).values() if isinstance(c, dict)]
+    )
 
     stage_map: dict[str, str] = {}
     pool: list[dict[str, Any]] = []
     fresh: list[dict[str, Any]] = []
     if final or hist_map is None:
-        for bk, src in live.items():
+        for src in live_unique:
             stage = classify_lifecycle(src, bias=bias)
-            stage_map[bk] = stage or ""
+            _put_stage_keys(stage_map, src, stage)
             if stage:
                 pool.append(_compact(src, stage, bias=bias))
         mode = "close" if final else "live"
     else:
         closed = _closed_series_map(hist_map)
-        base = dict(frozen or {})
+        base: dict[str, str] = {}
+        # Re-key legacy seals (bk / SINA:*) onto stable keys when possible.
+        for raw_key, stage in dict(frozen or {}).items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            series = _closed_series_for_key(closed, key)
+            if series:
+                sk = lifecycle_stable_key(
+                    {"bk": series[-1].get("bk") or key, "name": series[-1].get("name")}
+                )
+                base.setdefault(sk, str(stage or ""))
+            base.setdefault(key, str(stage or ""))
         for bk, series in closed.items():
-            if bk not in base:
-                base[bk] = closed_stage_from_hist(series, bias=bias) or ""
-        for bk, stage in base.items():
-            stage_map[bk] = stage
+            sk = lifecycle_stable_key(
+                {"bk": bk, "name": (series[-1] or {}).get("name") if series else ""}
+            )
+            if sk not in base and bk not in base:
+                base[sk] = closed_stage_from_hist(series, bias=bias) or ""
+        # Dual-written seals (BK / SINA:* / N:alias) must not duplicate columns.
+        emitted: set[str] = set()
+        for key, stage in base.items():
+            stage_map[key] = stage
             if not stage:
                 continue
-            card = live.get(bk)
-            side = (side_live or {}).get(bk) if card is None else None
+            card = live_index.get(key)
+            side = side_index.get(key) if card is None else None
+            series: list[dict[str, Any]] = []
+            if card is not None:
+                sk = lifecycle_stable_key(card)
+            elif side is not None:
+                sk = lifecycle_stable_key(side)
+            else:
+                series = _closed_series_for_key(closed, key)
+                if not series:
+                    continue
+                sk = lifecycle_stable_key(
+                    {"bk": series[-1].get("bk") or key, "name": series[-1].get("name")}
+                )
+            if card is not None:
+                _put_stage_keys(stage_map, card, stage)
+            elif side is not None:
+                _put_stage_keys(stage_map, side, stage)
+            if sk in emitted:
+                continue
+            emitted.add(sk)
             if card is not None:
                 row = _compact(card, stage, bias=bias)
                 live_stage = classify_lifecycle(card, bias=bias)
@@ -93,15 +258,12 @@ def build_mainline_lifecycle(
                     hint += " · " + _live_hint(live_stage)
                 row["live_hint"] = hint
             else:
-                series = closed.get(bk) or []
-                if not series:
-                    continue
                 row = _compact(_card_from_closed(series), stage, bias=bias)
                 row["off_hot"] = True
                 row["live_hint"] = "今日未进热门 · 数据为上一收盘"
             pool.append(row)
-        for bk, card in live.items():
-            if stage_map.get(bk):
+        for card in live_unique:
+            if any(stage_map.get(k) for k in lifecycle_key_candidates(card)):
                 continue
             if classify_lifecycle(card, bias=bias) == "starting":
                 fresh.append(
@@ -115,19 +277,35 @@ def build_mainline_lifecycle(
         fresh.sort(key=lambda r: (int(r.get("zt_n") or 0), float(r.get("pct") or 0)), reverse=True)
         mode = "frozen"
 
+    no_hist = [
+        {
+            "bk": c.get("bk"),
+            "name": c.get("name"),
+            "pct": c.get("pct"),
+            "zt_n": c.get("zt_n"),
+        }
+        for c in live_unique
+        if c.get("lifecycle_no_hist")
+    ][:limit_each]
+
     starting = [x for x in pool if x["stage"] == "starting"]
     ongoing = [x for x in pool if x["stage"] == "ongoing"]
+    peak = [x for x in pool if x["stage"] == "peak"]
     ending = [x for x in pool if x["stage"] == "ending"]
 
     starting.sort(key=_rank_start, reverse=True)
     ongoing.sort(key=_rank_ongoing, reverse=True)
+    peak.sort(key=_rank_ongoing, reverse=True)
     ending.sort(key=_rank_ending, reverse=True)
 
-    note = "按近几日热点持续度划分：萌芽 / 主升 / 衰退（非买卖指令）"
+    note = "昨收阶段雷达：萌芽 / 主升 / 尖峰观察 / 衰退（非买卖指令）"
     if mode == "frozen":
-        note += "；按上一收盘分列，盘中不换列，收盘后更新"
+        note += "；列按昨收冻结，盘中阶段不一致只旁注，收盘密封后更新"
     elif mode == "close":
-        note += "；已按今日收盘更新"
+        note += "；已按今日收盘密封（当日只写一次）"
+    note += "；密封键优先 BK / N:规范名，换源可续昨收列"
+    if no_hist:
+        note += f"；{len(no_hist)} 个新浪板无史·不判阶段"
     if bias.get("strict"):
         note += f"；复盘命中偏弱({bias.get('hit_rate')}%)，衰退判定更敏感"
     elif bias.get("hit_rate") is not None:
@@ -136,13 +314,79 @@ def build_mainline_lifecycle(
     return {
         "starting": starting[:limit_each],
         "ongoing": ongoing[:limit_each],
+        "peak": peak[:limit_each],
         "ending": ending[:limit_each],
         "fresh": fresh[:limit_each],
+        "no_hist": no_hist,
         "note": note,
         "mode": mode,
         "stage_map": stage_map,
         "bias": bias,
     }
+
+
+def lookup_close_stage(
+    lifecycle: dict[str, Any] | None,
+    *,
+    bk: str = "",
+    name: str = "",
+    board: dict[str, Any] | None = None,
+) -> str:
+    """Return the column (昨收) stage for a board from ``stage_map`` / column rows."""
+    life = lifecycle if isinstance(lifecycle, dict) else {}
+    stage_map = life.get("stage_map") if isinstance(life.get("stage_map"), dict) else {}
+    card = board if isinstance(board, dict) else {"bk": bk, "name": name}
+    for key in lifecycle_key_candidates(card):
+        if stage_map.get(key):
+            return str(stage_map.get(key) or "")
+    bk_s = str(card.get("bk") or bk or "").strip()
+    name_s = str(card.get("name") or name or "").strip()
+    for col in STAGE_COLUMNS:
+        for row in life.get(col) or []:
+            if not isinstance(row, dict):
+                continue
+            if bk_s and str(row.get("bk") or "") == bk_s:
+                return str(row.get("stage") or "")
+            if name_s and str(row.get("name") or "") == name_s:
+                return str(row.get("stage") or "")
+    return ""
+
+
+def attach_mainline_lifecycle_display(
+    verdict: dict[str, Any] | None,
+    lifecycle: dict[str, Any] | None,
+) -> None:
+    """Stamp 昨收阶段 onto mainline for desk UI; keep live stage for decisions.
+
+    * ``lifecycle`` on mainline stays the live classify (buy / sticky / sell / notify)
+    * ``lifecycle_live`` mirrors that live value explicitly
+    * ``lifecycle_close`` is the sealed / frozen column stage when known
+    * ``lifecycle_display`` is what the desk pill shows (close preferred)
+    * ``lifecycle_hint`` notes when 盘中阶段 disagrees with the column
+    """
+    if not isinstance(verdict, dict):
+        return
+    ml = verdict.get("mainline")
+    if not isinstance(ml, dict):
+        return
+    live = str(ml.get("lifecycle") or "")
+    ml["lifecycle_live"] = live
+    close = lookup_close_stage(lifecycle, board=ml)
+    ml["lifecycle_close"] = close
+    mode = str((lifecycle or {}).get("mode") or "")
+    if close and mode in ("frozen", "close"):
+        display = close
+    elif close:
+        display = close
+    else:
+        display = live
+    ml["lifecycle_display"] = display
+    if live and display and live != display:
+        ml["lifecycle_hint"] = f"盘中阶段像{stage_label(live)}"
+    elif live and not display:
+        ml["lifecycle_hint"] = ""
+    else:
+        ml["lifecycle_hint"] = ""
 
 
 def closed_stage_from_hist(
@@ -225,10 +469,10 @@ def _closed_series_map(
 
 
 def _live_hint(live_stage: str | None) -> str:
-    """Short intraday note when live data disagrees with the frozen column."""
+    """Short intraday note when 盘中阶段 disagrees with the 昨收 column."""
     if not live_stage:
-        return "盘中转淡 · 收盘复核"
-    return f"盘中像{stage_label(live_stage)} · 收盘复核"
+        return "盘中阶段转淡 · 昨收列不变"
+    return f"盘中阶段像{stage_label(live_stage)} · 昨收列不变"
 
 
 def classify_lifecycle(
@@ -236,7 +480,7 @@ def classify_lifecycle(
     *,
     bias: dict[str, Any] | None = None,
 ) -> str | None:
-    """Return starting | ongoing | ending | None for one board card."""
+    """Return starting | ongoing | peak | ending | None for one board card."""
     status = board.get("status") or ""
     if status in ("冰点", "冷冻", "相对最冷", "传染预警"):
         return None
@@ -272,6 +516,10 @@ def classify_lifecycle(
             return "ending"
         return None
 
+    # Tip-peak is its own bucket — never labeled 主升 (not a buy signal).
+    if status == "尖峰禁追":
+        return "peak"
+
     # Starting: ignition, jump, recovery from a quiet base, or early confirm.
     recovering = prev_zt <= 1 and zt_n >= 2 and pct >= 1.0 and hot_days <= 2
     if flags.get("点火") or jumped or recovering:
@@ -281,14 +529,12 @@ def classify_lifecycle(
     if status == "观察" and zt_n >= 2 and pct >= 1.2 and hot_days <= 2:
         return "starting"
 
-    # Ongoing: multi-day confirmation / peak but not fade.
-    if status in ("确认中", "尖峰禁追") and hot_days >= 2:
+    # Ongoing: multi-day confirmation, not tip-peak.
+    if status == "确认中" and hot_days >= 2:
         return "ongoing"
     if status == "确认中" and (flags.get("一波") or flags.get("二波") or flags.get("加速")):
         return "ongoing"
     if hot_days >= 3 and zt_n >= 1 and pct >= 0:
-        return "ongoing"
-    if status == "尖峰禁追" and hot_days >= 1:
         return "ongoing"
 
     return None

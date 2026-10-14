@@ -540,10 +540,12 @@ def is_pre_match_stamp(stamp: str | None) -> bool:
 
 def board_stage_lookup(snapshot: dict[str, Any] | None) -> dict[str, str]:
     """Map board name → lifecycle stage key from the snapshot's frozen lifecycle."""
+    from market_desk.lifecycle import STAGE_COLUMNS, lifecycle_key_candidates
+
     snap = snapshot or {}
     life = snap.get("mainline_lifecycle") if isinstance(snap.get("mainline_lifecycle"), dict) else {}
     out: dict[str, str] = {}
-    for col in ("starting", "ongoing", "ending"):
+    for col in STAGE_COLUMNS:
         for row in life.get(col) or []:
             name = str((row or {}).get("name") or "").strip()
             if name:
@@ -552,7 +554,11 @@ def board_stage_lookup(snapshot: dict[str, Any] | None) -> dict[str, str]:
     if stage_map:
         for card in list(snap.get("hot_boards") or []) + list(snap.get("pin_boards") or []):
             name = str((card or {}).get("name") or "").strip()
-            stage = stage_map.get(str((card or {}).get("bk") or ""))
+            stage = ""
+            for key in lifecycle_key_candidates(card if isinstance(card, dict) else {}):
+                if stage_map.get(key):
+                    stage = str(stage_map.get(key) or "")
+                    break
             if name and stage:
                 out.setdefault(name, str(stage))
     return out

@@ -57,21 +57,26 @@ function renderDeskHead(d, v) {
   document.getElementById("phasePill").innerHTML = phase && phase !== "—"
     ? (`相位 ${termHtml(phase)}`) : "";
   const lifePill = document.getElementById("lifePill");
-  const lifeStage = (v.mainline && v.mainline.lifecycle) || "";
-  const mlStatus = String((v.mainline && v.mainline.status) || "");
-  const tipPeak = lifeStage === "ongoing" && mlStatus === "尖峰禁追";
-  const lifeLabel = ({ starting: "萌芽", ongoing: "主升", ending: "衰退" })[lifeStage] || "";
+  const mlLife = (v.mainline || {});
+  // Desk pill follows 昨收阶段 (lifecycle_display); live stays for decisions / hint.
+  const lifeStage = mlLife.lifecycle_display || mlLife.lifecycle_close || mlLife.lifecycle || "";
+  const lifeHint = String(mlLife.lifecycle_hint || "");
+  const lifeLabel = ({ starting: "萌芽", ongoing: "主升", peak: "尖峰观察", ending: "衰退" })[lifeStage] || "";
   if (lifePill) {
-    if (tipPeak) {
-      lifePill.textContent = "阶段 主升·尖峰仅观察";
-      lifePill.title = "生命周期落在主升，但板块状态为尖峰禁追：只描述扩散强度，不等于可追可买";
+    if (lifeLabel) {
+      lifePill.textContent = "昨收阶段 " + lifeLabel
+        + (lifeHint ? ` · ${lifeHint}` : "");
+      lifePill.title = lifeHint
+        ? (`列阶段按昨收；${lifeHint}。买卖/换防仍看盘中阶段。`)
+        : "昨收阶段与板块页三列同口径；不等于可买入";
     } else {
-      lifePill.textContent = lifeLabel ? (`阶段 ${lifeLabel}`) : "";
+      lifePill.textContent = "";
       lifePill.title = "";
     }
     lifePill.className = "meta " + ({
       starting: "life-start",
-      ongoing: tipPeak ? "life-run life-tip" : "life-run",
+      ongoing: "life-run",
+      peak: "life-peak",
       ending: "life-end",
     }[lifeStage] || "");
   }
@@ -116,15 +121,14 @@ function renderDeskHead(d, v) {
   if (trioPhase) trioPhase.textContent = (phase && phase !== "—") ? phase : "相位未明";
   if (trioMain) trioMain.textContent = ml || "主线未明";
   if (trioStage) {
-    trioStage.textContent = tipPeak
-      ? "主升·尖峰仅观察"
-      : (lifeLabel || "阶段未明");
-    trioStage.title = tipPeak
-      ? "尖峰禁追仍可落在主升桶：只看扩散，不当现买"
-      : "";
+    trioStage.textContent = lifeLabel || "阶段未明";
+    trioStage.title = lifeHint
+      ? (`昨收阶段；${lifeHint}`)
+      : (lifeStage === "peak" ? "尖峰观察：不当现买" : "");
     trioStage.className = "w stage " + ({
       starting: "life-start",
-      ongoing: tipPeak ? "life-run life-tip" : "life-run",
+      ongoing: "life-run",
+      peak: "life-peak",
       ending: "life-end",
     }[lifeStage] || "");
   }

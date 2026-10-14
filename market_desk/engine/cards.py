@@ -143,7 +143,7 @@ class CardsMixin:
 
         off = [
             r
-            for col in ("starting", "ongoing", "ending")
+            for col in ("starting", "ongoing", "peak", "ending")
             for r in (lifecycle.get(col) or [])
             if r.get("off_hot") and r.get("bk")
         ][: int(LIFECYCLE_SIDE_MAX)]

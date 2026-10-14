@@ -72,7 +72,7 @@ function renderDeskBoxes(d, v) {
     if (side && side.name) {
       sideBox.hidden = false;
       const gap = side.score_gap;
-      const lifeMap = { starting: "萌芽", ongoing: "主升", ending: "衰退" };
+      const lifeMap = { starting: "萌芽", ongoing: "主升", peak: "尖峰观察", ending: "衰退" };
       const sideLife = lifeMap[side.lifecycle] || "";
       document.getElementById("sideline").textContent =
         sideRec.text || sideRec.title || (`观察 · ${side.name}`);
@@ -200,7 +200,7 @@ function renderDeskBoxes(d, v) {
     } else {
       favDeskEl.hidden = false;
       if (favDeskNote) favDeskNote.textContent = favDesk.size_note ? ("· " + favDesk.size_note) : "";
-      const lifeMap = { starting: "萌芽", ongoing: "主升", ending: "衰退" };
+      const lifeMap = { starting: "萌芽", ongoing: "主升", peak: "尖峰观察", ending: "衰退" };
       favDeskBody.innerHTML = favBoards.map((b) => {
         const buy = b.buy || {};
         const sell = b.sell || {};

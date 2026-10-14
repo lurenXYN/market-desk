@@ -32,7 +32,7 @@ def test_frozen_stage_ignores_intraday_flip(monkeypatch):
     assert [r["bk"] for r in out["ongoing"]] == ["BK1"]
     assert out["ending"] == []
     assert out["ongoing"][0]["live_stage"] == "ending"
-    assert "收盘复核" in out["ongoing"][0]["live_hint"]
+    assert "盘中阶段像衰退" in out["ongoing"][0]["live_hint"]
 
 
 def test_frozen_map_wins_and_fresh_not_counted(monkeypatch):
@@ -52,7 +52,8 @@ def test_after_close_uses_live_and_exports_stage_map(monkeypatch):
             "hist": _hist("BK1", [("2026-09-23", 5, 3.0, "确认中")]), "tags": []}
     out = lc.build_mainline_lifecycle([live], [], final=True)
     assert out["mode"] == "close"
-    assert out["stage_map"] == {"BK1": "ending"}
+    assert out["stage_map"].get("BK1") == "ending"
+    assert out["stage_map"].get(lc.lifecycle_stable_key(live)) == "ending"
     assert [r["bk"] for r in out["ending"]] == ["BK1"]
 
 
@@ -64,3 +65,49 @@ def test_weekend_rows_are_skipped(monkeypatch):
     ])
     closed = lc._closed_series_map({"BK1": series})
     assert [r["trade_date"] for r in closed["BK1"]] == ["2026-09-18"]
+
+
+def test_tip_peak_is_peak_not_ongoing(monkeypatch):
+    _no_bias(monkeypatch)
+    hist = _hist("BK1", [
+        ("2026-09-21", 3, 2.0, "确认中"),
+        ("2026-09-22", 4, 2.5, "确认中"),
+        ("2026-09-23", 5, 3.0, "确认中"),
+    ])
+    card = {
+        "bk": "BK1",
+        "name": "BK1",
+        "status": "尖峰禁追",
+        "zt_n": 6,
+        "pct": 4.0,
+        "hist": hist,
+        "tags": [],
+    }
+    assert lc.classify_lifecycle(card) == "peak"
+    out = lc.build_mainline_lifecycle([card], [], final=True)
+    assert [r["bk"] for r in out["peak"]] == ["BK1"]
+    assert out["ongoing"] == []
+
+
+def test_attach_display_prefers_close_column(monkeypatch):
+    _no_bias(monkeypatch)
+    verdict = {
+        "mainline": {
+            "bk": "BK1",
+            "name": "半导体",
+            "lifecycle": "ending",
+            "status": "退潮",
+        }
+    }
+    life = {
+        "mode": "frozen",
+        "stage_map": {"BK1": "ongoing"},
+        "ongoing": [{"bk": "BK1", "name": "半导体", "stage": "ongoing"}],
+    }
+    lc.attach_mainline_lifecycle_display(verdict, life)
+    ml = verdict["mainline"]
+    assert ml["lifecycle"] == "ending"
+    assert ml["lifecycle_live"] == "ending"
+    assert ml["lifecycle_close"] == "ongoing"
+    assert ml["lifecycle_display"] == "ongoing"
+    assert "盘中阶段像衰退" in ml["lifecycle_hint"]

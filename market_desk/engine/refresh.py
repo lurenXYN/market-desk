@@ -707,6 +707,12 @@ class RefreshMixin:
                             )
                     except Exception:
                         log.exception("lifecycle side boards failed")
+                try:
+                    from market_desk.lifecycle import attach_mainline_lifecycle_display
+
+                    attach_mainline_lifecycle_display(verdict, lifecycle)
+                except Exception:
+                    log.exception("attach mainline lifecycle display failed")
                 payload = {
                     "ok": True,
                     "error": None,

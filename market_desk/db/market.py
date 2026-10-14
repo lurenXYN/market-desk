@@ -476,6 +476,43 @@ def _merge_name_aliases(series_map: dict[str, list[dict[str, Any]]]) -> None:
             series_map[bk] = merged
 
 
+def resolve_board_hist(
+    hist_map: dict[str, list[dict[str, Any]]] | None,
+    board: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return prior-day rows for a live board, merging across Sina / EM identity.
+
+    Lookup order: exact ``bk`` → same ``board_alias_name`` group (East Money
+    series preferred). Empty when the theme has never been written to
+    ``board_daily`` under any alias.
+    """
+    hist = hist_map if isinstance(hist_map, dict) else {}
+    card = board if isinstance(board, dict) else {}
+    bk = str(card.get("bk") or "").strip()
+    if bk and hist.get(bk):
+        return list(hist[bk])
+    aliases: set[str] = set()
+    for raw in (card.get("name"), card.get("sina_name")):
+        alias = board_alias_name(raw)
+        if alias:
+            aliases.add(alias)
+    if not aliases:
+        return []
+    candidates: list[tuple[int, str, list[dict[str, Any]]]] = []
+    for other_bk, series in hist.items():
+        if not series:
+            continue
+        sn = board_alias_name((series[-1] or {}).get("name"))
+        if sn not in aliases:
+            continue
+        # Prefer East Money codes over SINA:* when several series share the alias.
+        rank = 1 if str(other_bk).startswith("SINA") else 0
+        candidates.append((rank, str(other_bk), list(series)))
+    if not candidates:
+        return []
+    candidates.sort(key=lambda x: (x[0], x[1]))
+    return candidates[0][2]
+
 def load_board_rows_for_date(trade_date: str) -> list[dict[str, Any]]:
     """Return all board_daily rows for one trade date."""
     day = str(trade_date or "")[:10]

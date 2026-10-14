@@ -63,6 +63,7 @@ from market_desk.db.market import (  # noqa: F401
     load_fund_flow_for_dates,
     load_board_hist_map,
     load_board_rows_for_date,
+    resolve_board_hist,
 )
 from market_desk.db.reputation import (  # noqa: F401
     upsert_theme_reputation,

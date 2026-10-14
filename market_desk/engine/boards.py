@@ -119,7 +119,12 @@ async def _enrich_board(
     zt = ctx.get("zt") or []
     zb = ctx.get("zb") or []
     yzt = ctx.get("yzt") or []
-    hist = (ctx.get("hist") or {}).get(board.get("bk") or "", [])
+    try:
+        from market_desk.db.market import resolve_board_hist
+
+        hist = resolve_board_hist(ctx.get("hist") or {}, board)
+    except Exception:
+        hist = list((ctx.get("hist") or {}).get(board.get("bk") or "", []) or [])
     members = await fetch_board_members(client, board["bk"], weakest=weakest)
     zt_by_code = {x["code"]: x for x in zt}
     zb_codes = {x["code"] for x in zb}
@@ -219,6 +224,10 @@ async def _enrich_board(
     card["spark"] = spark_values(hist, zt_n)
     card["hist"] = hist
     card["note"] = board_note(flags, leader_name, leader_boards, card.get("slot_name"), ice)
+    # Unmapped Sina boards with no merged history stay stage-less (灰态), not 萌芽.
+    if not hist and str(card.get("bk") or "").startswith("SINA:"):
+        card["lifecycle_no_hist"] = True
+        card["note"] = _join_board_note(card.get("note"), "无史·不判阶段")
     card["focus"] = round(zt_n / max(len(zt), 1) * 100.0, 1) if zt else 0.0
     return card
 
@@ -247,19 +256,44 @@ def _stable_mainline_lifecycle(
 ) -> dict[str, Any]:
     """Build the lifecycle panel so columns change at most once per trading day.
 
-    After the close the live classification is final and stored as
-    ``lifecycle_close:{date}``; before that the previous close is reused and
-    ``side_live`` cards refresh frozen boards missing from today's hot list.
+    After the close, ``lifecycle_close:{date}`` is sealed **once**; later
+    refreshes reuse that map (live only decorates). Before the close the
+    previous seal is reused and ``side_live`` refreshes frozen boards missing
+    from today's hot list.
     """
     from market_desk.db import load_setting, save_setting
 
     today = now.strftime("%Y-%m-%d")
+    key = f"lifecycle_close:{today}"
     final = is_trading_day(now) and _minutes(now) >= 15 * 60
     if final:
+        sealed: dict[str, str] | None = None
+        try:
+            got = load_setting(key)
+            sealed = got if isinstance(got, dict) and got else None
+        except Exception:
+            sealed = None
+        if sealed:
+            out = build_mainline_lifecycle(
+                hot_cards,
+                pin_cards,
+                hist_map=hist_map or {},
+                frozen=sealed,
+                final=False,
+                side_live=side_live,
+            )
+            out["mode"] = "close"
+            out["sealed"] = True
+            out["note"] = (
+                "昨收阶段雷达：萌芽 / 主升 / 尖峰观察 / 衰退（非买卖指令）；"
+                "已按今日收盘密封（当日只写一次）"
+            )
+            return out
         out = build_mainline_lifecycle(hot_cards, pin_cards, final=True)
         if out.get("stage_map"):
             try:
-                save_setting(f"lifecycle_close:{today}", out["stage_map"])
+                save_setting(key, out["stage_map"])
+                out["sealed"] = True
             except Exception:
                 log.exception("save lifecycle close failed")
         return out

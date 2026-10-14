@@ -180,7 +180,7 @@
 }
 .switch-list .t { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
 .life-grid {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px; margin-top: 10px;
 }
 .idx-strip {
@@ -208,6 +208,7 @@
 }
 .life-col.start h3 { color: var(--ferm); }
 .life-col.run h3 { color: var(--ice); }
+.life-col.peak h3 { color: #fdba74; }
 .life-col.end h3 { color: var(--warn); }
 .life-item {
   border: 1px solid var(--line); border-radius: 6px;
@@ -228,6 +229,7 @@
 }
 #lifePill.life-start { color: var(--ferm); }
 #lifePill.life-run { color: var(--ice); }
+#lifePill.life-peak, .today-trio .w.stage.life-peak { color: #fdba74; }
 #lifePill.life-end { color: var(--warn); }
 #lifePill.life-tip, .today-trio .w.stage.life-tip { color: #fdba74; }
 .rev-actions { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -39,6 +39,12 @@ function renderMarketBoards(d, v) {
       + freshRows.map((f) => `${f.name || "—"} ${fmtPct(f.pct)}${f.zt_n ? ` · ${f.zt_n}停` : ""}`).join("；")
       + `</div>`
     : "";
+  const noHistRows = life.no_hist || [];
+  const noHistHtml = noHistRows.length
+    ? `<div class="meta" style="margin-top:6px;color:var(--muted)">无史·不判阶段（新浪未并上东财历史）：`
+      + noHistRows.map((f) => `${f.name || "—"}`).join("；")
+      + `</div>`
+    : "";
   const lifeCol = (cls, title, rows, extra = "") => `
         <div class="life-col ${cls}">
           <h3>${title} · ${(rows || []).length}</h3>
@@ -46,8 +52,9 @@ function renderMarketBoards(d, v) {
           ${extra}
         </div>`;
   document.getElementById("lifeGrid").innerHTML =
-    lifeCol("start", "萌芽", life.starting, freshHtml) +
+    lifeCol("start", "萌芽", life.starting, freshHtml + noHistHtml) +
     lifeCol("run", "主升", life.ongoing) +
+    lifeCol("peak", "尖峰观察", life.peak) +
     lifeCol("end", "衰退", life.ending);
   const cg = d.contagion || {};
   const cgEl = document.getElementById("contagion");

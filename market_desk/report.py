@@ -394,12 +394,17 @@ def _eod_tip_peak_line(
     life = str(lifecycle or "").strip()
     st = str(status or "").strip()
     act = str(action or "").strip()
-    life_zh = {"starting": "萌芽", "ongoing": "主升", "ending": "衰退"}.get(life, life)
+    life_zh = {
+        "starting": "萌芽",
+        "ongoing": "主升",
+        "peak": "尖峰观察",
+        "ending": "衰退",
+    }.get(life, life)
     why = str(reason or "").strip()
     if len(why) > 36:
         why = why[:36] + "…"
-    if st == "尖峰禁追" or (life == "ongoing" and st in ("尖峰禁追", "禁追")):
-        base = f"尖峰主升 vs 观察回踩：{board or '主线'} 处主升·尖峰，只观察回踩不当现买"
+    if st == "尖峰禁追" or life == "peak" or (life == "ongoing" and st in ("尖峰禁追", "禁追")):
+        base = f"尖峰观察 vs 观察回踩：{board or '主线'} 处尖峰观察，只观察回踩不当现买"
         return f"{base}（{why}）" if why else base
     if act == "观察回踩":
         base = f"观察回踩：{board or '主线'}（{st or life_zh or '—'}）等回踩/价带"
