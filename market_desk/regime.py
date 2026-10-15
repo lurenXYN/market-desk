@@ -67,16 +67,20 @@ def classify_bench_regime(
             "ma_n": n,
             "asof": str(asof or "")[:10] or None,
             "label": name,
-            "hint": f"{name} 日线不足，大盘尺暂不可用",
+            "short_hint": "日线不足",
+            "hint": f"{name} 日线不足（需≥{n}根），大盘尺暂不可用 · 只提示不关亮灯",
+            "bars": len(pairs),
         }
     window = pairs[-n:]
     last_day, last_px = pairs[-1]
     ma = sum(p[1] for p in window) / float(n)
     side = "above" if last_px >= ma else "below"
     if side == "above":
-        hint = "趋势上：主线回踩为主；尖峰仍只观察"
+        short_hint = "主线回踩为主"
+        hint = "尺上（趋势上）：主线回踩为主；尖峰仍只观察 · 软旁注，不关亮灯"
     else:
-        hint = "趋势下：少做主题回踩，偏日线降/位置型"
+        short_hint = "少做主题回踩 · 偏日线降"
+        hint = "尺下（趋势下）：少做主题回踩/龙头追强，偏日线降与位置型 · 软旁注，不关亮灯"
     return {
         "ok": True,
         "side": side,
@@ -85,8 +89,10 @@ def classify_bench_regime(
         "ma_n": n,
         "asof": last_day,
         "label": name,
+        "short_hint": short_hint,
         "hint": hint,
         "gap_pct": round((last_px / ma - 1.0) * 100.0, 2),
+        "bars": len(pairs),
     }
 
 
@@ -243,7 +249,107 @@ def build_regime_shadow_rows(
                 note="弱市龙头对照",
             )
         )
+
+    by_key = {r["key"]: r for r in out}
+    above_d3 = (by_key.get("尺上·亮过灯") or {}).get("d3")
+    below_d3 = (by_key.get("尺下·亮过灯") or {}).get("d3")
+    down_d3 = (by_key.get("尺下·日线降") or {}).get("d3")
+    if above_d3 is not None and below_d3 is not None:
+        out.append(
+            {
+                "key": "Δ 尺上−尺下（亮过灯）",
+                "side": "delta",
+                "n": None,
+                "days": None,
+                "d3": round(float(above_d3) - float(below_d3), 2),
+                "win": None,
+                "note": "预登记主指标 · 仅记账",
+                "delta": True,
+            }
+        )
+    if down_d3 is not None and below_d3 is not None:
+        out.append(
+            {
+                "key": "Δ 尺下日线降−亮过灯",
+                "side": "delta",
+                "n": None,
+                "days": None,
+                "d3": round(float(down_d3) - float(below_d3), 2),
+                "win": None,
+                "note": "弱市位置型优势 · 仅记账",
+                "delta": True,
+            }
+        )
     return out
+
+
+def regime_card_tag(item: dict[str, Any] | None, market_regime: dict[str, Any] | None) -> dict[str, str] | None:
+    """Return a soft card tag for weak-regime context (display only).
+
+    Below MA60: prefer 日线降 as 「弱市位置型」; lit theme / dragon as 「弱市慎追」.
+    Above / unknown: no tag. Never changes ready.
+    """
+    mr = market_regime if isinstance(market_regime, dict) else {}
+    if not mr.get("ok") or str(mr.get("side") or "") != "below":
+        return None
+    it = item if isinstance(item, dict) else {}
+    if it.get("trend_down"):
+        return {
+            "label": "弱市位置型",
+            "tone": "good",
+            "note": "尺下偏日线降/位置型 · 软旁注，不关亮灯",
+        }
+    src = str(it.get("desk_source") or "")
+    is_dragon = src in ("dragon", "emotion_dragon", "mid_army_dragon") or "dragon" in src
+    lit = bool(it.get("ready") or it.get("near_entry") or it.get("fly_warn"))
+    if is_dragon or lit:
+        return {
+            "label": "弱市慎追",
+            "tone": "warn",
+            "note": "尺下少做主题回踩/龙头追强 · 软旁注，不关亮灯",
+        }
+    return {
+        "label": "弱市观察",
+        "tone": "soft",
+        "note": "尺下少做主题回踩 · 软旁注，不关亮灯",
+    }
+
+
+def annotate_recommend_regime(
+    recommend: dict[str, Any] | None,
+    market_regime: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Stamp ``regime_tag`` on each recommend item (soft UX only)."""
+    rec = dict(recommend or {})
+    items: list[dict[str, Any]] = []
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        item.pop("regime_tag", None)
+        tag = regime_card_tag(item, market_regime)
+        if tag:
+            item["regime_tag"] = tag
+        items.append(item)
+    rec["items"] = items
+    return rec
+
+
+def annotate_verdict_regime(
+    verdict: dict[str, Any] | None,
+    market_regime: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Annotate all recommend pools on a verdict with soft regime tags."""
+    v = dict(verdict or {})
+    for key in (
+        "recommend",
+        "side_recommend",
+        "link_recommend",
+        "dragon_recommend",
+        "independent_recommend",
+        "watch_trial_recommend",
+    ):
+        if isinstance(v.get(key), dict):
+            v[key] = annotate_recommend_regime(v.get(key), market_regime)
+    return v
 
 
 def freeze_market_regime(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:

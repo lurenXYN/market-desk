@@ -83,13 +83,22 @@ function renderDeskHead(d, v) {
   const regimePill = document.getElementById("regimePill");
   if (regimePill) {
     const mr = d.market_regime || {};
-    const side = mr.ok ? String(mr.side || "") : "";
-    if (side === "above" || side === "below") {
+    const side = String(mr.side || "");
+    const short = String(mr.short_hint || "").replace(/[<>&"]/g, "");
+    if (mr.ok && (side === "above" || side === "below")) {
       const lab = side === "above" ? "尺上" : "尺下";
       const gap = mr.gap_pct != null ? ` ${Number(mr.gap_pct) > 0 ? "+" : ""}${Number(mr.gap_pct).toFixed(1)}%` : "";
-      regimePill.innerHTML = `大盘${lab}${gap} <button type="button" class="q" data-term="大盘尺">?</button>`;
+      regimePill.innerHTML = `大盘${lab}${gap}`
+        + (short ? ` · ${short}` : "")
+        + ` <button type="button" class="q" data-term="大盘尺">?</button>`;
       regimePill.title = mr.hint || "中证1000 收盘相对 MA60 · 软旁注，不关亮灯";
       regimePill.className = "meta regime-" + side;
+    } else if (mr.hint || short || side === "unknown") {
+      regimePill.innerHTML = `大盘尺暂不可用`
+        + (short ? ` · ${short}` : "")
+        + ` <button type="button" class="q" data-term="大盘尺">?</button>`;
+      regimePill.title = mr.hint || "中证1000 日线不足 · 软旁注，不关亮灯";
+      regimePill.className = "meta regime-unknown";
     } else {
       regimePill.textContent = "";
       regimePill.title = "";

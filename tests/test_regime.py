@@ -5,9 +5,11 @@ from __future__ import annotations
 import market_desk.db as desk_db
 from market_desk.edge_shadow import build_edge_shadow
 from market_desk.regime import (
+    annotate_recommend_regime,
     build_regime_shadow_rows,
     classify_bench_regime,
     freeze_market_regime,
+    regime_card_tag,
     regime_side_for_row,
 )
 from market_desk.review.record import record_session_signals
@@ -31,17 +33,20 @@ def test_classify_above_and_below():
     above = classify_bench_regime(_closes(70, last=110.0, step=0.2), asof="2026-10-15")
     assert above["ok"] and above["side"] == "above"
     assert "主线回踩" in (above.get("hint") or "")
+    assert above.get("short_hint") == "主线回踩为主"
     # Flat then drop last bar below MA.
     flat = [(f"2026-07-{(i % 28) + 1:02d}", 100.0) for i in range(59)]
     flat.append(("2026-10-15", 90.0))
     below = classify_bench_regime(flat, asof="2026-10-15")
     assert below["ok"] and below["side"] == "below"
     assert "日线降" in (below.get("hint") or "")
+    assert "少做主题回踩" in (below.get("short_hint") or "")
 
 
 def test_classify_unknown_when_short():
     got = classify_bench_regime([("2026-10-15", 100.0)] * 10)
     assert not got["ok"] and got["side"] == "unknown"
+    assert got.get("short_hint") == "日线不足"
 
 
 def test_freeze_and_regime_side_prefers_payload():
@@ -88,6 +93,23 @@ def test_regime_shadow_rows_split_lit_and_weak_subsets():
     assert by["尺下·亮过灯"]["n"] == 1 and by["尺下·亮过灯"]["d3"] == -1.0
     assert by["尺下·日线降"]["n"] == 1 and by["尺下·日线降"]["d3"] == 2.0
     assert by["尺下·龙头"]["n"] == 1 and by["尺下·龙头"]["d3"] == -4.0
+    assert by["Δ 尺上−尺下（亮过灯）"]["d3"] == 4.0
+    assert by["Δ 尺下日线降−亮过灯"]["d3"] == 3.0
+
+
+def test_regime_card_tags_only_when_below():
+    below = {"ok": True, "side": "below"}
+    above = {"ok": True, "side": "above"}
+    assert regime_card_tag({"trend_down": True}, below)["label"] == "弱市位置型"
+    assert regime_card_tag({"ready": True}, below)["label"] == "弱市慎追"
+    assert regime_card_tag({"desk_source": "dragon"}, below)["label"] == "弱市慎追"
+    assert regime_card_tag({"trend_down": True}, above) is None
+    rec = annotate_recommend_regime(
+        {"items": [{"code": "1", "trend_down": True}, {"code": "2", "ready": True}]},
+        below,
+    )
+    assert rec["items"][0]["regime_tag"]["label"] == "弱市位置型"
+    assert rec["items"][1]["regime_tag"]["label"] == "弱市慎追"
 
 
 def test_build_edge_shadow_includes_regime_key():

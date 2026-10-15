@@ -234,6 +234,7 @@
 #lifePill.life-tip, .today-trio .w.stage.life-tip { color: #fdba74; }
 #regimePill.regime-above { color: var(--ferm); }
 #regimePill.regime-below { color: var(--warn); }
+#regimePill.regime-unknown { color: var(--muted); }
 .rev-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .rev-actions .rev-up {
   background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;
@@ -379,6 +380,7 @@
 .rev-today .val { font-size: 16px; font-weight: 700; margin-top: 2px; }
 .rev-today .regime-above { color: var(--ferm); }
 .rev-today .regime-below { color: var(--warn); }
+.rev-today .regime-unknown { color: var(--muted); }
 .rev-today .hd {
   grid-column: 1 / -1;
   font-size: 12px;

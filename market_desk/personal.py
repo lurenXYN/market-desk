@@ -260,6 +260,14 @@ def attach_personal_layer(
             watch_trial["buy"] = False
             watch_trial = finalize_recommend_buy_ux(watch_trial, allow_probe=False)
         out["verdict"]["watch_trial_recommend"] = watch_trial
+        try:
+            from market_desk.regime import annotate_verdict_regime
+
+            out["verdict"] = annotate_verdict_regime(
+                out.get("verdict"), out.get("market_regime")
+            )
+        except Exception:
+            pass
 
         fav_rows = load_favorite_boards(user_id=uid)
         if decorate_favorites:

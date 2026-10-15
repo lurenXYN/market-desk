@@ -67,10 +67,15 @@ function paintEdgeShadow(es) {
     + `<td class="num">${r.ready_n} · ${fmt(r.ready_d3)}</td>`
     + `<td class="num">${r.skip_n}</td>`
     + `<td class="num">${fmt(r.delta)}</td><td>${escAttr(r.verdict)}</td></tr>`);
-  const regime = (es.regime || []).map((r) =>
-    `<tr><td>${escAttr(r.key)}</td><td class="num">${r.n}/${r.days}天</td>`
-    + `<td class="num">${fmt(r.d3)} · ${pct(r.win)}</td>`
-    + `<td>${escAttr(r.note || "")}</td></tr>`);
+  const regime = (es.regime || []).map((r) => {
+    const isDelta = !!r.delta || String(r.key || "").startsWith("Δ");
+    const sample = isDelta ? "—" : `${r.n}/${r.days}天`;
+    const winBit = isDelta ? "" : ` · ${pct(r.win)}`;
+    const cls = isDelta ? ' class="gl-mid"' : "";
+    return `<tr${cls}><td>${escAttr(r.key)}</td><td class="num">${sample}</td>`
+      + `<td class="num">${fmt(r.d3)}${winBit}</td>`
+      + `<td>${escAttr(r.note || "")}</td></tr>`;
+  });
   const earlySince = es.early_half_since ? ` · 早进样本外自 ${escAttr(es.early_half_since)}` : "";
   const regimeSince = es.regime_since ? ` · 大盘尺样本外自 ${escAttr(es.regime_since)}` : "";
   box.hidden = false;
@@ -86,8 +91,8 @@ function paintEdgeShadow(es) {
     + tbl(["口径", "样本", "早进 三日·胜率", "等亮灯 只·三日", "未亮跳过", "早进−等亮", "结论"], early)
     + (regime.length
       ? (`<div class="meta">大盘尺<button type="button" class="q" data-term="大盘尺">?</button>`
-        + `：信号日中证1000≥/&lt;MA60；亮过灯优先。只记账，不关亮灯。</div>`
-        + tbl(["分组", "样本", "三日·胜率", "说明"], regime))
+        + `：信号日中证1000≥/&lt;MA60；亮过灯优先。Δ 行为预登记主指标。只记账，不关亮灯。</div>`
+        + tbl(["分组", "样本", "三日·胜率 / Δ", "说明"], regime))
       : "");
 }
 

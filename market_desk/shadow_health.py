@@ -106,6 +106,22 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
             return round(sum(1 for p in items if p.get(key) is not None) / len(items), 2) if items else None
 
         card_fields = {k: cover(rows, k) for k in CARD_FIELDS}
+        missing = [k for k, v in card_fields.items() if v is not None and v < FIELD_MIN_COVER]
+        # Soft market ruler freeze: only expected on/after REGIME_SHADOW_SINCE.
+        regime_cover = None
+        try:
+            from market_desk.config import REGIME_SHADOW_SINCE
+
+            if day >= str(REGIME_SHADOW_SINCE)[:10] and rows:
+                def _has_regime(p: dict[str, Any]) -> bool:
+                    mr = p.get("market_regime")
+                    return isinstance(mr, dict) and str(mr.get("side") or "") in ("above", "below")
+
+                regime_cover = round(sum(1 for p in rows if _has_regime(p)) / len(rows), 2)
+                if regime_cover < FIELD_MIN_COVER:
+                    missing.append("market_regime")
+        except Exception:
+            pass
         out.append(
             {
                 "date": day,
@@ -113,7 +129,8 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
                 "lit": len(lit),
                 "card_fields": card_fields,
                 "lit_fields": {k: cover(lit, k) for k in LIT_FIELDS},
-                "missing": [k for k, v in card_fields.items() if v is not None and v < FIELD_MIN_COVER],
+                "regime_freeze": regime_cover,
+                "missing": missing,
                 "narrative": narrative.get(day, 0),
                 "narrative_snap": narrative_snap.get(day, 0),
                 "crowd": crowd.get(day, 0),
@@ -142,6 +159,9 @@ def shadow_check(rows: list[dict[str, Any]], narrative_live: dict[str, Any] | No
     if r["missing"]:
         level = "bad"
         parts.append("缺字段：" + "、".join(r["missing"]))
+    rf = r.get("regime_freeze")
+    if rf is not None:
+        parts.append(f"大盘尺冻结{int(round(float(rf) * 100))}%")
     ind = (r.get("crowd_max") or {}).get("industry")
     crowd_why = f"（行业最高 {ind['name']} {ind['share']}% < {CROWD_ABS_EXTREME_PCT}%）" if ind and not r["crowd"] else ""
     parts.append(f"拥挤{r['crowd']}{crowd_why}")

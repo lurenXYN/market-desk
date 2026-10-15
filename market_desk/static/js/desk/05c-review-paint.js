@@ -54,15 +54,21 @@ function paintReview(payload) {
   const tcell = (lab, val, cls) =>
     `<div><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
   const mr = sum.market_regime || {};
+  const mrShort = String(mr.short_hint || "").replace(/[<>&"]/g, "");
   const mrBit = (mr.ok && (mr.side === "above" || mr.side === "below"))
     ? (` · <span class="regime-${mr.side}" title="${String(mr.hint || "").replace(/"/g, "&quot;")}">`
       + `大盘${mr.side === "above" ? "尺上" : "尺下"}`
       + (mr.gap_pct != null
         ? ` ${Number(mr.gap_pct) > 0 ? "+" : ""}${Number(mr.gap_pct).toFixed(1)}%`
         : "")
+      + (mrShort ? ` · ${mrShort}` : "")
       + `</span>`
       + ` <button type="button" class="q" data-term="大盘尺">?</button>`)
-    : "";
+    : (mr.hint || mr.side === "unknown"
+      ? (` · <span class="regime-unknown" title="${String(mr.hint || "").replace(/"/g, "&quot;")}">`
+        + `大盘尺暂不可用${mrShort ? ` · ${mrShort}` : ""}</span>`
+        + ` <button type="button" class="q" data-term="大盘尺">?</button>`)
+      : "");
   document.getElementById("revToday").innerHTML = [
     `<div class="hd">${dayLabel}摘要 · ${today.date || viewDate || "—"} · 相位 ${today.phase || "—"}${mrBit}</div>`,
     tcell("买入", today.buy_n ?? 0),

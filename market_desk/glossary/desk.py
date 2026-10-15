@@ -168,11 +168,12 @@ ENTRIES: dict[str, dict[str, str]] = {
         "样本不足只报不足。不改闸门硬逻辑。",
     },
     "大盘尺": {
-        "mean": "中证1000 收盘相对 MA60：尺上偏主线回踩，尺下少做主题回踩、偏日线降/位置型。只旁注，不关亮灯。",
-        "algo": "classify_bench_regime：REVIEW_BENCH_SYMBOL 日线收盘 vs REGIME_MA_N（60）。\n"
-        "作战台顶栏 / 复盘当日摘要软旁注 hint；买卡首次落盘冻结 payload.market_regime（upsert 不覆盖）。\n"
-        "进场影子自 REGIME_SHADOW_SINCE 按信号日 side 分组记账；无冻结时用基准收盘回算。\n"
-        "门槛见 TODO 节后复盘表；过门槛才允许软排序叠 regime，永不硬切 ready。",
+        "mean": "中证1000 收盘相对 MA60：尺上「主线回踩为主」，尺下「少做主题回踩 · 偏日线降」。只旁注，不关亮灯。",
+        "algo": "classify_bench_regime：REVIEW_BENCH_SYMBOL 日线收盘 vs REGIME_MA_N（60）；short_hint 上顶栏。\n"
+        "尺下卡面软标签：日线降→弱市位置型；亮灯/龙头→弱市慎追（annotate_verdict_regime，不改 soft_rank/ready）。\n"
+        "买卡首次落盘冻结 payload.market_regime；影子账本自检覆盖率（≥REGIME_SHADOW_SINCE）。\n"
+        "进场影子按 side 分组并报 Δ 尺上−尺下、Δ 尺下日线降−亮过灯。\n"
+        "门槛见 TODO；约 10/28 后才允许软排序叠 regime，永不硬切 ready。",
     },
     "软排序": {
         "mean": "作战台买卡在同一就绪档内按「日线降/将飞早窗优先、龙头/日线升靠后」重排；不改是否亮灯。",

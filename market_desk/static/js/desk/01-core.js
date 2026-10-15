@@ -244,6 +244,14 @@ const recCard = (it) => {
     const cls = sr > 0 ? "entry-badge-probe" : "entry-badge-soft";
     return `<span class="entry-badge ${cls}" title="${tip}">软序${sr > 0 ? "+" : ""}${sr}</span>`;
   })();
+  const regimeBadge = (() => {
+    const tag = it.regime_tag;
+    if (!tag || !tag.label) return "";
+    const tip = String(tag.note || "大盘尺软旁注，不关亮灯").replace(/"/g, "");
+    const tone = tag.tone === "good" ? "entry-badge-probe"
+      : tag.tone === "warn" ? "entry-badge-warn" : "entry-badge-soft";
+    return `<span class="entry-badge ${tone}" title="${tip}">${tag.label}</span>`;
+  })();
   const entryBadge = (() => {
     if (fly) {
       return `<span class="entry-badge entry-badge-fly" title="${it.fly_note || "半仓试探窗口，再等可能飞"}">将飞·半仓</span>`;
@@ -306,7 +314,7 @@ const recCard = (it) => {
       ? `<div class="buy-progress"><span class="bp-sum">还差：${(it.confirm_fail || []).slice(0, 3).join(" · ")}</span></div>`
       : "");
   return `<article class="${cardCls}">
-        <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${softRankBadge}${fmtPct(it.pct)}</div>
+        <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${softRankBadge}${regimeBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${absorbBanner}
         ${trendHtml}

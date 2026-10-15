@@ -299,6 +299,7 @@ class RefreshMixin:
                 )
                 await self._ensure_index_bars(client, trade_date_dash, errors=errors)
                 await self._ensure_bench_bars(client, trade_date_dash, errors=errors)
+            market_regime_live = self._build_market_regime(trade_date_dash)
             note_quote_ticks(quotes)
             note_quote_ticks(etfs)
             note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
@@ -714,6 +715,15 @@ class RefreshMixin:
                     attach_mainline_lifecycle_display(verdict, lifecycle)
                 except Exception:
                     log.exception("attach mainline lifecycle display failed")
+                # Soft card tags last (弱市位置型 / 弱市慎追); does not change ready or soft_rank.
+                try:
+                    from market_desk.regime import annotate_verdict_regime
+
+                    annotated = annotate_verdict_regime(verdict, market_regime_live)
+                    verdict.clear()
+                    verdict.update(annotated)
+                except Exception:
+                    log.exception("regime soft tags failed")
                 payload = {
                     "ok": True,
                     "error": None,
@@ -756,7 +766,9 @@ class RefreshMixin:
                         history=history,
                     ),
                     "elliott": self._build_elliott(indices),
-                    "market_regime": self._build_market_regime(trade_date_dash),
+                    "market_regime": market_regime_live
+                    if isinstance(market_regime_live, dict)
+                    else self._build_market_regime(trade_date_dash),
                     "fund_flow": fund_flow,
                     "hot_boards": hot_cards,
                     "pin_boards": pin_cards,
