@@ -490,6 +490,46 @@ class EodMixin:
             if msg not in errors:
                 errors.append(msg)
 
+    async def _ensure_bench_bars(
+        self,
+        client: httpx.AsyncClient,
+        trade_date: str,
+        *,
+        errors: list[str] | None = None,
+    ) -> None:
+        """Load CSI1000 daily bars once per trade day for the soft market ruler."""
+        from market_desk.config import REVIEW_BENCH_SYMBOL
+        from market_desk.tencent import fetch_index_daily_bars
+
+        day = str(trade_date or "")[:10]
+        want = 120
+        if (
+            day
+            and day == self._bench_bars_day
+            and len(self._bench_bars) >= max(80, want - 20)
+        ):
+            return
+        bars = await _safe(
+            fetch_index_daily_bars,
+            client,
+            REVIEW_BENCH_SYMBOL,
+            want,
+            errors=errors,
+            label="bench-k",
+        )
+        if bars and len(bars) >= 60:
+            self._bench_bars = list(bars)
+            self._bench_bars_day = day
+        elif not self._bench_bars:
+            self._bench_bars = list(bars or [])
+            self._bench_bars_day = day
+
+    def _build_market_regime(self, trade_date: str | None = None) -> dict[str, Any]:
+        """Classify CSI1000 vs MA60 for desk hint and signal freeze."""
+        from market_desk.regime import classify_bench_regime
+
+        return classify_bench_regime(self._bench_bars, asof=trade_date)
+
     def _build_elliott(self, indices: list[dict[str, Any]] | None) -> dict[str, Any]:
         """Attach multi-scenario Elliott readout for 上证指数."""
         last = None

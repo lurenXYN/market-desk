@@ -117,6 +117,12 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
     market_gates = normalize_gate_notes(verdict.get("algo_notes"))
     arm_block = block_arm_reasons(verdict)
     stage_by_name = board_stage_lookup(snapshot)
+    try:
+        from market_desk.regime import freeze_market_regime
+
+        market_regime = freeze_market_regime(snapshot)
+    except Exception:
+        market_regime = None
     day_book = _day_book(str(trade_date), verdict)
     n = 0
 
@@ -235,6 +241,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "crowd_block": bool(item.get("crowd_block")),
                         "cf_now": trace_now(item, desk_source=desk_source, arm_block=arm_block),
                         "day_book": day_book,
+                        **({"market_regime": market_regime} if market_regime else {}),
                         **_slip_fields(item),
                     },
                 }

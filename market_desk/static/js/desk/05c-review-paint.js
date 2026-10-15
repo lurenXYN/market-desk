@@ -53,8 +53,18 @@ function paintReview(payload) {
     `<div class="rev-card"><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
   const tcell = (lab, val, cls) =>
     `<div><div class="lab">${lab}</div><div class="val ${cls || ""}">${val ?? "—"}</div></div>`;
+  const mr = sum.market_regime || {};
+  const mrBit = (mr.ok && (mr.side === "above" || mr.side === "below"))
+    ? (` · <span class="regime-${mr.side}" title="${String(mr.hint || "").replace(/"/g, "&quot;")}">`
+      + `大盘${mr.side === "above" ? "尺上" : "尺下"}`
+      + (mr.gap_pct != null
+        ? ` ${Number(mr.gap_pct) > 0 ? "+" : ""}${Number(mr.gap_pct).toFixed(1)}%`
+        : "")
+      + `</span>`
+      + ` <button type="button" class="q" data-term="大盘尺">?</button>`)
+    : "";
   document.getElementById("revToday").innerHTML = [
-    `<div class="hd">${dayLabel}摘要 · ${today.date || viewDate || "—"} · 相位 ${today.phase || "—"}</div>`,
+    `<div class="hd">${dayLabel}摘要 · ${today.date || viewDate || "—"} · 相位 ${today.phase || "—"}${mrBit}</div>`,
     tcell("买入", today.buy_n ?? 0),
     tcell("卖出", today.sell_n ?? 0),
     tcell("未回踩上行", today.miss_pullback_n ?? 0, "mark-miss"),

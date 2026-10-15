@@ -85,6 +85,8 @@ class DeskEngine(
         # Index OHLCV for Elliott scenarios (once per trade day).
         self._index_bars_day: str | None = None
         self._index_bars: list[dict[str, Any]] = []
+        self._bench_bars_day: str | None = None
+        self._bench_bars: list[dict[str, Any]] = []
         # code -> {"day": trade_date, "year": int, "count": int}
         self._zt_ytd_cache: dict[str, dict[str, Any]] = {}
         # Review daily-trend chips: fingerprint -> payload (calendar day + signal set).
@@ -345,6 +347,7 @@ class DeskEngine(
             "phase": snap.get("phase"),
             "temperature": snap.get("temperature"),
             "verdict": snap.get("verdict"),
+            "market_regime": snap.get("market_regime"),
             "desk_gate_summary": snap.get("desk_gate_summary"),
             "health": snap.get("health"),
             "enrich_pending": snap.get("enrich_pending"),

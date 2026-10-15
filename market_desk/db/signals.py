@@ -119,6 +119,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["market_gates"] = old_payload["market_gates"]
         if old_payload.get("board_stage"):
             merged["board_stage"] = old_payload["board_stage"]
+        # Soft market ruler: freeze at first insert (do not refresh / backfill later).
+        if isinstance(old_payload.get("market_regime"), dict):
+            merged["market_regime"] = old_payload["market_regime"]
+        elif existing:
+            merged.pop("market_regime", None)
         # Live price when the signal first fired (``last`` itself is overwritten on refresh).
         if not existing:
             merged["first_last"] = row.get("last")

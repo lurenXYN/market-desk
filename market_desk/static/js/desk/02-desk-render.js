@@ -80,6 +80,22 @@ function renderDeskHead(d, v) {
       ending: "life-end",
     }[lifeStage] || "");
   }
+  const regimePill = document.getElementById("regimePill");
+  if (regimePill) {
+    const mr = d.market_regime || {};
+    const side = mr.ok ? String(mr.side || "") : "";
+    if (side === "above" || side === "below") {
+      const lab = side === "above" ? "尺上" : "尺下";
+      const gap = mr.gap_pct != null ? ` ${Number(mr.gap_pct) > 0 ? "+" : ""}${Number(mr.gap_pct).toFixed(1)}%` : "";
+      regimePill.innerHTML = `大盘${lab}${gap} <button type="button" class="q" data-term="大盘尺">?</button>`;
+      regimePill.title = mr.hint || "中证1000 收盘相对 MA60 · 软旁注，不关亮灯";
+      regimePill.className = "meta regime-" + side;
+    } else {
+      regimePill.textContent = "";
+      regimePill.title = "";
+      regimePill.className = "meta";
+    }
+  }
   const gateEl = document.getElementById("gateHint");
   const gate = d.desk_gate_summary || {};
   if (gateEl) {

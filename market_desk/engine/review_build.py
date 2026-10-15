@@ -346,6 +346,21 @@ class ReviewMixin:
                 self._attach_review_bench(payload, bench_closes, day=day, user_id=user_id)
             except Exception:
                 log.exception("review bench excess failed")
+        # Soft day hint: live ruler for today; historical days classify from bench closes.
+        try:
+            summary = dict(payload.get("summary") or {})
+            mr = None
+            if day == today and isinstance((self.snapshot or {}).get("market_regime"), dict):
+                mr = (self.snapshot or {}).get("market_regime")
+            elif bench_closes:
+                from market_desk.regime import classify_bench_regime
+
+                mr = classify_bench_regime(bench_closes, asof=day)
+            if isinstance(mr, dict) and mr.get("ok"):
+                summary["market_regime"] = mr
+                payload["summary"] = summary
+        except Exception:
+            pass
         payload["trends_fp"] = review_trends_fingerprint(
             day, day_rows or load_signals_for_date(day), calendar_day=today
         )
@@ -408,6 +423,14 @@ class ReviewMixin:
             max_days=int(REVIEW_BENCH_SUMMARY_DAYS),
             view_day=day,
         )
+        # Rebuild edge shadow with bench closes so pre-freeze cards can backfill
+        # regime side; frozen payload.market_regime still wins per row.
+        try:
+            from market_desk.edge_shadow import build_edge_shadow
+
+            summary["edge_shadow"] = build_edge_shadow(wide, bench_closes=closes)
+        except Exception:
+            pass
         payload["summary"] = summary
 
     def clear_review_cache(self) -> None:

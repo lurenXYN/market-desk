@@ -298,6 +298,7 @@ class RefreshMixin:
                     label="pos",
                 )
                 await self._ensure_index_bars(client, trade_date_dash, errors=errors)
+                await self._ensure_bench_bars(client, trade_date_dash, errors=errors)
             note_quote_ticks(quotes)
             note_quote_ticks(etfs)
             note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
@@ -755,6 +756,7 @@ class RefreshMixin:
                         history=history,
                     ),
                     "elliott": self._build_elliott(indices),
+                    "market_regime": self._build_market_regime(trade_date_dash),
                     "fund_flow": fund_flow,
                     "hot_boards": hot_cards,
                     "pin_boards": pin_cards,

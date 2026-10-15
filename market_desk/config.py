@@ -369,6 +369,10 @@ PICK_AUDIT_CACHE_SEC = 300.0
 REVIEW_BENCH_SYMBOL = "sh000852"
 REVIEW_BENCH_LABEL = "中证1000"
 REVIEW_BENCH_SUMMARY_DAYS = 20
+# Soft market ruler: CSI1000 close vs MA60 (desk hint + signal freeze + edge shadow).
+# Does not gate ready. Out-of-sample evidence for the regime hypothesis starts here.
+REGIME_MA_N = 60
+REGIME_SHADOW_SINCE = "2026-10-15"
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8

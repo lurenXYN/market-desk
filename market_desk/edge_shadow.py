@@ -463,6 +463,7 @@ def build_edge_shadow(
     *,
     since: str | None = None,
     days: int | None = None,
+    bench_closes: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Build the edge shadow ledgers over scored paper buys.
 
@@ -471,19 +472,25 @@ def build_edge_shadow(
             non-trading-day rows are ignored, one card per date and code.
         since: First out-of-sample trade date (defaults to config).
         days: Rolling out-of-sample window in scored trade dates.
+        bench_closes: Optional CSI1000 closes for regime backfill when a row
+            has no frozen ``payload.market_regime``.
 
     Returns:
         Dict with ``ok``, ``since``, ``oos_days`` / ``oos_n``, ``reclaim`` /
-        ``breaker`` / ``reweight`` / ``early_half`` row lists and a note.
+        ``breaker`` / ``reweight`` / ``early_half`` / ``regime`` row lists
+        and a note.
     """
     from market_desk.config import (
         EARLY_HALF_SHADOW_SINCE,
         EDGE_SHADOW_DAYS,
         EDGE_SHADOW_SINCE,
+        REGIME_SHADOW_SINCE,
     )
+    from market_desk.regime import build_regime_shadow_rows
 
     start = str(since or EDGE_SHADOW_SINCE)
     early_since = str(EARLY_HALF_SHADOW_SINCE)
+    regime_since = str(REGIME_SHADOW_SINCE)
     window = int(days or EDGE_SHADOW_DAYS)
     samples = _scored_buys(rows)
     if not samples:
@@ -500,6 +507,7 @@ def build_edge_shadow(
         "ok": True,
         "since": start,
         "early_half_since": early_since,
+        "regime_since": regime_since,
         "oos_days": len(oos_dates),
         "oos_n": len(oos),
         "disc_n": len(disc),
@@ -507,5 +515,6 @@ def build_edge_shadow(
         "breaker": _breaker_rows(oos),
         "reweight": _reweight_rows(oos, disc),
         "early_half": _early_half_rows(samples, since=early_since),
+        "regime": build_regime_shadow_rows(samples, bench_closes, since=regime_since),
         "note": note,
     }
