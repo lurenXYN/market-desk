@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from market_desk.calendar import now_cn
 from market_desk.eastmoney import fetch_daily_bars
 from market_desk.filters import is_chinext_or_star, is_main_board, is_st, normalize_code
 from market_desk.ma_fan.context import (
@@ -103,7 +104,7 @@ async def _score_one(
             got["pos250"] = None if p250 is None else round(p250[0], 3)
         pot = score_pot_bottom(bars or [])
         zt_ytd = (
-            count_limit_ups_ytd_from_bars(bars, name=name, code=code, year=datetime.now().year)
+            count_limit_ups_ytd_from_bars(bars, name=name, code=code, year=now_cn().year)
             if got or pot
             else None
         )
@@ -318,7 +319,7 @@ async def run_ma_fan_scan(
     """
     day = str(trade_date or "")[:10]
     if not day:
-        day = datetime.now().strftime("%Y-%m-%d")
+        day = now_cn().strftime("%Y-%m-%d")
     off = max(0, int(offset))
     lim = max(20, min(int(limit or 400), 500))
     key = str(slice_key or f"{off}-{off + lim}")
@@ -425,7 +426,7 @@ async def run_ma_fan_scan(
         "last_slice": key,
         "last_slice_scanned": len(pool),
         "last_slice_hits": len(chunk),
-        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
         "note": (
             "观察层：粘连→渐进发散；18/20/22 分档扫成交额榜；"
             "标签含额档/主线同主题旁注；复盘仅打交集标不加分；不进 ready。"

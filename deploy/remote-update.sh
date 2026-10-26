@@ -94,6 +94,35 @@ run_root bash -lc "
   .venv/bin/python -m pip install -q -r requirements.txt
 "
 
+SVC_USER="$(run_root systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+if [[ -z "$SVC_USER" || "$SVC_USER" == "-" ]]; then
+  SVC_USER="$(id -un)"
+fi
+
+# Refresh main unit (picks up Environment=TZ=Asia/Shanghai on Etc/UTC VPS).
+MAIN_SRC="${INSTALL_DIR}/deploy/market-desk.service"
+MAIN_DST="/etc/systemd/system/${SERVICE_NAME}.service"
+if [[ -f "$MAIN_SRC" ]]; then
+  echo "==> refresh ${SERVICE_NAME}.service unit"
+  HOST_PORT="$(run_root systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  BIND_HOST="0.0.0.0"
+  BIND_PORT="8765"
+  if [[ "$HOST_PORT" =~ --host[[:space:]]+([^[:space:]]+) ]]; then
+    BIND_HOST="${BASH_REMATCH[1]}"
+  fi
+  if [[ "$HOST_PORT" =~ --port[[:space:]]+([0-9]+) ]]; then
+    BIND_PORT="${BASH_REMATCH[1]}"
+  fi
+  TMP_MAIN="$(mktemp)"
+  sed \
+    -e "s|REPLACE_USER|${SVC_USER}|g" \
+    -e "s|/opt/market-desk|${INSTALL_DIR}|g" \
+    -e "s|--host 0.0.0.0 --port 8765|--host ${BIND_HOST} --port ${BIND_PORT}|g" \
+    "$MAIN_SRC" > "$TMP_MAIN"
+  run_root cp "$TMP_MAIN" "$MAIN_DST"
+  rm -f "$TMP_MAIN"
+fi
+
 # Refresh optional session attribution timer (idempotent; skip if units absent).
 ATTR_SVC="market-desk-attribution.service"
 ATTR_TIMER="market-desk-attribution.timer"
@@ -103,10 +132,6 @@ ATTR_WRAPPER="${INSTALL_DIR}/deploy/run-attribution-session.sh"
 if [[ -f "$ATTR_SRC_SVC" && -f "$ATTR_SRC_TIMER" ]]; then
   echo "==> refresh attribution timer units"
   run_root chmod +x "$ATTR_WRAPPER" || true
-  SVC_USER="$(run_root systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-  if [[ -z "$SVC_USER" || "$SVC_USER" == "-" ]]; then
-    SVC_USER="$(id -un)"
-  fi
   TMP_ATTR="$(mktemp)"
   sed \
     -e "s|REPLACE_USER|${SVC_USER}|g" \
@@ -115,7 +140,10 @@ if [[ -f "$ATTR_SRC_SVC" && -f "$ATTR_SRC_TIMER" ]]; then
   run_root cp "$TMP_ATTR" "/etc/systemd/system/${ATTR_SVC}"
   rm -f "$TMP_ATTR"
   run_root cp "$ATTR_SRC_TIMER" "/etc/systemd/system/${ATTR_TIMER}"
-  run_root systemctl daemon-reload
+fi
+
+run_root systemctl daemon-reload
+if [[ -f "$ATTR_SRC_TIMER" ]]; then
   run_root systemctl enable --now "$ATTR_TIMER" || true
 fi
 

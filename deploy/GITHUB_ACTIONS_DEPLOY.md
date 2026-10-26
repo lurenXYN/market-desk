@@ -81,6 +81,7 @@ journalctl -u market-desk-attribution -n 20 --no-pager
 ```
 
 盘中归因定时器由 `remote-update.sh` 同步安装；休市/窗外会 skip（exit 0），不标失败。
+Timer 的 `OnCalendar` 用 **UTC**（上海盘中 −8h），适配 VPS `Etc/UTC`；脚本内仍用 `TZ=Asia/Shanghai` 判窗口。改 timer 后需 `daemon-reload` + `restart` timer（部署脚本会做）。
 
 也可在 Actions 页点 **Run workflow** 手动部署。
 

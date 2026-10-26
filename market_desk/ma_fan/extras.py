@@ -35,7 +35,9 @@ _RUNNING = False
 
 def closed_through(now: datetime | None = None) -> str:
     """Return the latest date whose daily bar is final (today after the close)."""
-    t = now or datetime.now()
+    from market_desk.calendar import now_cn
+
+    t = now or now_cn()
     today = t.strftime("%Y-%m-%d")
     if (t.hour, t.minute) >= MA_FAN_CLOSE_FINAL:
         return today

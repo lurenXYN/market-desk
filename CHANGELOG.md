@@ -14,6 +14,25 @@
 
 ---
 
+## [v1.10.13] - 2026-10-15
+
+### 【背景与动机（为什么做 · Why）】
+- VPS 系统时区 `Etc/UTC`；归因 timer 写了 `Timezone=Asia/Shanghai` 仍按 UTC 数字触发，打在北京晚间，脚本全部 skip。
+- 发散/锅底 `saved_at` 等用裸 `datetime.now()`，在 UTC 主机上显示成「上午 09:xx」一类错位钟点；收盘后缓存门闩 `(15,5)` 也按 UTC 判，偏晚。
+
+### 【做了什么（What）】
+- **`market-desk-attribution.timer`**：去掉不可靠的 `Timezone=`；`OnCalendar` 改为沪市盘中对应 UTC（01:45 / 02:30 / 03:15 / 05:20 / 06:10 / 06:45）。脚本仍用 `TZ=Asia/Shanghai` 判窗口。
+- **`calendar.now_cn` / `today_cn`**：`is_trading_day()` 无参时用上海日历日；发散/锅底 job·scan·extras 时间戳与缓存门闩改走 `now_cn`。
+- **`market-desk.service`**：`Environment=TZ=Asia/Shanghai`，兜住其余裸 `datetime.now()` / `date.today()`。
+- **`remote-update.sh`**：部署时同步刷新主 unit + 归因 timer（保留原 `--host`/`--port`）。
+
+### 【影响与验证（Impact & Verification）】
+- 部署后：`list-timers` 的 NEXT 应在 UTC 凌晨～上午（对应沪市盘中）；盘中 journal 应出现 `==> audit_attribution`。
+- `systemctl cat market-desk` 应含 `TZ=Asia/Shanghai`；当晚 18:00 起扫描后锅底/发散戳应为上海傍晚。
+- 不改正文算法；历史已落盘的旧 `saved_at` 不会改写。
+
+---
+
 ## [v1.10.12] - 2026-10-15
 
 ### 【背景与动机（为什么做 · Why）】

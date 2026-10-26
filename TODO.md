@@ -222,6 +222,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **复盘页低风险去噪 v1.10.10** — 摘要→主表→审计折叠；命中率去文字双写；同码次通道默认收拢+角标；EOD 不嵌明日看点。不改落库。
 - [x] **大盘尺 regime v1.10.11** — 中证1000 vs MA60 软旁注（作战台/复盘）；买卡冻结 `market_regime`；进场影子分组记账；门槛预登记，不关 ready。样本外自 10/15。
 - [x] **大盘尺纯提示加强 v1.10.12** — short_hint 顶栏；尺下卡面弱市标签；影子 Δ；冻结覆盖自检。仍不改排序 / ready；软排序叠 regime 等约 10/28。
+- [x] **时区收口 v1.10.13** — 归因 timer 改 UTC OnCalendar；`now_cn`/`today_cn`；发散/锅底戳与缓存门闩走上海时间；主服务 `TZ=Asia/Shanghai`。部署后看 timer NEXT + 当晚扫描戳。
 
 - [x] **将飞/可买微信同代码每日一次** — 卡片闪烁会重触页面提示，Server酱 按 `sc_daily_once:{date}` 去重（`fly:` / `buy:`），页面 toast 不变。*(2026-09-24)*
 

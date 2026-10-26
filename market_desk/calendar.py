@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+try:
+    from zoneinfo import ZoneInfo
+
+    CN_TZ: Any = ZoneInfo("Asia/Shanghai")
+except Exception:  # pragma: no cover - Windows without tzdata
+    CN_TZ = timezone(timedelta(hours=8))
 
 # Keep a rolling window of mainland market holidays (no make-up Saturdays here).
 _CN_HOLIDAYS: set[str] = {
@@ -74,10 +82,28 @@ def holiday_set() -> set[str]:
     return set(_CN_HOLIDAYS)
 
 
+def now_cn() -> datetime:
+    """Return the current wall clock in Asia/Shanghai (naive, no tzinfo).
+
+    Prefer this over bare ``datetime.now()`` on UTC VPS hosts so stamps and
+    schedule gates match the A-share session.
+    """
+    return datetime.now(CN_TZ).replace(tzinfo=None)
+
+
+def today_cn() -> date:
+    """Return today's calendar date in Asia/Shanghai."""
+    return now_cn().date()
+
+
 def is_trading_day(day: date | datetime | str | None = None) -> bool:
-    """Return True when the A-share market is expected to open that calendar day."""
+    """Return True when the A-share market is expected to open that calendar day.
+
+    When ``day`` is omitted, uses the Asia/Shanghai calendar date (not the
+    host's local ``date.today()``, which is wrong on ``Etc/UTC`` VPS overnight).
+    """
     if day is None:
-        day = date.today()
+        day = today_cn()
     if isinstance(day, datetime):
         day = day.date()
     if isinstance(day, str):

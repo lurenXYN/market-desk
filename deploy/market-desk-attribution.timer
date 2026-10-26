@@ -2,14 +2,17 @@
 Description=牛来-作战台 盘中归因审计定时器（交易日东财可拉板 K 窗口）
 
 [Timer]
-# Asia/Shanghai wall clock. Wrapper still skips holidays and off-window fires.
-Timezone=Asia/Shanghai
-OnCalendar=Mon-Fri *-*-* 09:45:00
-OnCalendar=Mon-Fri *-*-* 10:30:00
-OnCalendar=Mon-Fri *-*-* 11:15:00
-OnCalendar=Mon-Fri *-*-* 13:20:00
-OnCalendar=Mon-Fri *-*-* 14:10:00
-OnCalendar=Mon-Fri *-*-* 14:45:00
+# Wall times below are UTC (= Asia/Shanghai − 8h, no DST).
+# Do NOT use Timezone=Asia/Shanghai here: on Etc/UTC VPS some systemd builds
+# still schedule OnCalendar in local UTC, so Shanghai labels fire after close
+# and the wrapper only skip-exits. The script itself uses TZ=Asia/Shanghai.
+# Shanghai 09:45/10:30/11:15/13:20/14:10/14:45 → UTC 01:45/02:30/03:15/05:20/06:10/06:45.
+OnCalendar=Mon-Fri *-*-* 01:45:00
+OnCalendar=Mon-Fri *-*-* 02:30:00
+OnCalendar=Mon-Fri *-*-* 03:15:00
+OnCalendar=Mon-Fri *-*-* 05:20:00
+OnCalendar=Mon-Fri *-*-* 06:10:00
+OnCalendar=Mon-Fri *-*-* 06:45:00
 Persistent=false
 Unit=market-desk-attribution.service
 

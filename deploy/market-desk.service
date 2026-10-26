@@ -10,6 +10,9 @@ User=REPLACE_USER
 Group=REPLACE_USER
 WorkingDirectory=/opt/market-desk
 Environment=PYTHONUNBUFFERED=1
+# A-share wall clock: VPS hosts are often Etc/UTC; bare datetime.now()/date.today()
+# must still mean Asia/Shanghai for stamps, calendars, and evening scan gates.
+Environment=TZ=Asia/Shanghai
 # Bind 0.0.0.0 for LAN; use 127.0.0.1 for local-only.
 ExecStart=/opt/market-desk/.venv/bin/uvicorn market_desk.app:app --host 0.0.0.0 --port 8765 --log-level info
 Restart=always

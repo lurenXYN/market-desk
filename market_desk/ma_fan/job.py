@@ -7,6 +7,8 @@ import time
 from datetime import datetime
 from typing import Any
 
+from market_desk.calendar import now_cn
+
 
 # Outbound pacing. Sina rank pages and Tencent/East Money daily bars are free
 # public endpoints that ban bursty clients; this layer is nightly-grade, so
@@ -32,7 +34,7 @@ _SCORE_CACHE: dict[str, tuple[str, dict[str, Any] | None, int | None, dict[str, 
 
 def _score_cache_day(now: datetime | None = None) -> str | None:
     """Return today's cache key when bars are final (after the close), else None."""
-    t = now or datetime.now()
+    t = now or now_cn()
     if (t.hour, t.minute) < MA_FAN_CACHE_FROM:
         return None
     return t.strftime("%Y-%m-%d")
@@ -157,7 +159,7 @@ def try_claim_scan(kind: str, trade_date: str) -> bool:
             "hits": 0,
             "fails": 0,
             "error": None,
-            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "started_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
             "finished_at": None,
             "_t0": time.monotonic(),
         }
@@ -174,7 +176,7 @@ def release_scan(*, error: str | None = None) -> None:
             "running": False,
             "phase": "error" if error else "done",
             "error": error,
-            "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
             "elapsed_s": round(time.monotonic() - t0, 1),
         }
     )
