@@ -76,6 +76,7 @@ function pickAuditHtml(a) {
 
 /**
  * Same-day lit-card float: the day effect the per-stock checklist cannot see.
+ * Renders a summary chip plus one button per lit name (worst float first).
  */
 function pickDayBookHtml(b, isToday) {
   if (!b || !b.n || b.avg_pct == null) return "";
@@ -83,8 +84,22 @@ function pickDayBookHtml(b, isToday) {
   const tone = avg <= -2 ? "bad" : (avg < 0 ? "mid" : "good");
   const lab = isToday ? "今日已亮卡" : "当日已亮卡";
   const tip = "按首次亮灯价算的浮动盈亏，同代码只算一次（历史日期用最后一次刷新价）。"
-    + "好坏日扎堆：已亮卡整体在亏的日子，新买点也容易亏；「进场影子·当日熔断」在检验 −1/−2/−3% 档。只提示，不拦截。";
-  return `<span class="rev-daybook db-${tone}" title="${escAttr(tip)}">${lab} ${b.n} 只 · 均 ${pickSigned(avg)}% · 最差 ${pickSigned(b.worst_pct)}%</span>`;
+    + "好坏日扎堆：已亮卡整体在亏的日子，新买点也容易亏；「进场影子·当日熔断」在检验 −1/−2/−3% 档。只提示，不拦截。"
+    + "点名单可打开该卡参考分并滚到复盘行。";
+  const head = `<span class="rev-daybook db-${tone}" title="${escAttr(tip)}">${lab} ${b.n} 只 · 均 ${pickSigned(avg)}% · 最差 ${pickSigned(b.worst_pct)}%</span>`;
+  const items = Array.isArray(b.items) ? b.items : [];
+  const links = items.map((it) => {
+    const pct = it.pct == null ? "" : pickSigned(Number(it.pct)) + "%";
+    const at = it.at ? String(it.at).slice(11, 16) : "";
+    const title = [it.code, at ? ("首次亮灯 " + at) : "", pct ? ("浮动 " + pct) : ""]
+      .filter(Boolean).join(" · ");
+    const pctTone = it.pct == null ? "" : (Number(it.pct) < 0 ? " lit-down" : (Number(it.pct) > 0 ? " lit-up" : ""));
+    return `<button type="button" class="rev-lit-pick${pctTone}" data-id="${escAttr(String(it.id))}" title="${escAttr(title)}">`
+      + `${escAttr(it.name || it.code)}`
+      + (pct ? ` <b>${escAttr(pct)}</b>` : "")
+      + `</button>`;
+  }).join("");
+  return head + (links ? `<span class="lab">名单</span>${links}` : "");
 }
 
 function revTopPicksHtml(viewDate, isToday) {
@@ -98,6 +113,22 @@ function revTopPicksHtml(viewDate, isToday) {
     + `${escAttr(t.name || t.code)}${t.plus_n ? ` <b>+${t.plus_n}</b>` : ""}</button>`
   ).join("");
   return `<div class="rev-top-picks">${book}${top.length ? `<span class="lab">${lab}</span>${links}` : ""}</div>`;
+}
+
+/** Scroll the review table to a signal row (score button or pick checkbox). */
+function focusReviewSignal(id) {
+  const sid = String(id || "").trim();
+  if (!sid) return;
+  const anchor = document.querySelector(
+    `.rev-score-btn[data-id="${CSS.escape(sid)}"], .rev-pick-chk[data-id="${CSS.escape(sid)}"], .rev-trade[data-id="${CSS.escape(sid)}"]`
+  );
+  if (!anchor) return;
+  const row = anchor.closest("tr");
+  if (row) {
+    row.classList.add("rev-flash");
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => row.classList.remove("rev-flash"), 1600);
+  }
 }
 
 async function loadReviewScores(date) {
@@ -177,6 +208,21 @@ function showScorePop(anchor, id) {
 }
 
 document.addEventListener("click", (ev) => {
+  const lit = ev.target.closest(".rev-lit-pick");
+  if (lit) {
+    ev.stopPropagation();
+    const id = lit.getAttribute("data-id");
+    focusReviewSignal(id);
+    const open = document.getElementById("revScorePop");
+    if (open && open.dataset.id === id) {
+      closeScorePop();
+      return;
+    }
+    showScorePop(lit, id);
+    const pop = document.getElementById("revScorePop");
+    if (pop) pop.dataset.id = id || "";
+    return;
+  }
   const btn = ev.target.closest(".rev-score-btn, .rev-top-pick");
   if (btn) {
     ev.stopPropagation();

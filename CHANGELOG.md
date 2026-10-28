@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.15] - 2026-10-28
+
+### 【背景与动机（为什么做 · Why）】
+- 摘要只写「已亮卡 N 只」，看不到具体哪几张，易和「无风险项」胶囊混淆。
+
+### 【做了什么（What）】
+- **Changed** `day_lit_book`：返回 `items`（id/代码/名/浮动/首次亮灯时刻）。
+- **Changed** 复盘摘要「已亮卡」展开可点名单（滚到复盘行 + 参考分弹层）。
+
+### 【影响与验证（Impact & Verification）】
+- 不改亮灯/闸门；硬刷新复盘页后摘要旁应出现「名单」胶囊。
+- `pytest tests/test_edge_shadow.py::test_day_book_frozen_at_first_sight_and_first_light` 通过。
+
+---
+
 ## [v1.10.14] - 2026-10-28
 
 ### 【背景与动机（为什么做 · Why）】

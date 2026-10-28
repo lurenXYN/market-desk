@@ -259,24 +259,26 @@ def day_lit_book(trade_date: str, live_last: dict[str, Any] | None = None) -> di
         live_last: Optional ``code -> last`` from the current refresh.
 
     Returns:
-        ``{"n", "avg_pct", "worst_pct"}``; percentages are None when nothing lit.
+        ``{"n", "avg_pct", "worst_pct", "items"}`` where ``items`` list
+        ``{id, code, name, pct, at}`` sorted worst-first; percentages are None
+        when nothing lit.
     """
     from market_desk.numbers import num
 
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT code, price, last, payload FROM signals
+            SELECT id, code, name, price, last, payload FROM signals
             WHERE trade_date = ? AND COALESCE(owner_user_id, 0) = 0
               AND signal_type LIKE 'buy%'
             ORDER BY id
             """,
             (trade_date,),
         ).fetchall()
-    floats: dict[str, float] = {}
+    items_by_code: dict[str, dict[str, Any]] = {}
     for row in rows:
         code = str(row["code"] or "")
-        if not code or code in floats:
+        if not code or code in items_by_code:
             continue
         try:
             payload = json.loads(row["payload"] or "{}")
@@ -288,14 +290,24 @@ def day_lit_book(trade_date: str, live_last: dict[str, Any] | None = None) -> di
         mark = num((live_last or {}).get(code)) or num(row["last"])
         if not entry or not mark or entry <= 0 or mark <= 0:
             continue
-        floats[code] = (mark / entry - 1.0) * 100.0
-    if not floats:
-        return {"n": 0, "avg_pct": None, "worst_pct": None}
-    vals = list(floats.values())
+        pct = round((mark / entry - 1.0) * 100.0, 2)
+        at = str(payload.get("first_ready_at") or "")[:19] or None
+        items_by_code[code] = {
+            "id": int(row["id"]),
+            "code": code,
+            "name": str(row["name"] or code),
+            "pct": pct,
+            "at": at,
+        }
+    if not items_by_code:
+        return {"n": 0, "avg_pct": None, "worst_pct": None, "items": []}
+    items = sorted(items_by_code.values(), key=lambda x: (float(x["pct"]), str(x["code"])))
+    vals = [float(x["pct"]) for x in items]
     return {
         "n": len(vals),
         "avg_pct": round(sum(vals) / len(vals), 2),
         "worst_pct": round(min(vals), 2),
+        "items": items,
     }
 
 

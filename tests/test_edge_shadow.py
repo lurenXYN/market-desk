@@ -38,7 +38,7 @@ def _row(day: str, code: str, d3: float, *, at: str = "09:40", sig: str = "buy",
 
 def test_day_book_frozen_at_first_sight_and_first_light(monkeypatch, tmp_path):
     _db(monkeypatch, tmp_path)
-    assert desk_db.day_lit_book("2026-10-08") == {"n": 0, "avg_pct": None, "worst_pct": None}
+    assert desk_db.day_lit_book("2026-10-08") == {"n": 0, "avg_pct": None, "worst_pct": None, "items": []}
     _up("600001", "2026-10-08 09:35:00", 10.0, day_book={"n": 0, "avg_pct": None, "worst_pct": None})
     _up("600001", "2026-10-08 09:40:00", 10.1, ready=1, day_book={"n": 1, "avg_pct": -2.0, "worst_pct": -2.0})
     _up("600001", "2026-10-08 09:50:00", 9.8, ready=1, day_book={"n": 1, "avg_pct": -5.0, "worst_pct": -5.0})
@@ -49,6 +49,7 @@ def test_day_book_frozen_at_first_sight_and_first_light(monkeypatch, tmp_path):
     assert "day_book" not in p
     book = desk_db.day_lit_book("2026-10-08", {"600001": 9.09})
     assert book["n"] == 1 and book["avg_pct"] == -10.0
+    assert book["items"] and book["items"][0]["code"] == "600001" and book["items"][0]["pct"] == -10.0
     assert desk_db.day_lit_book("2026-10-08")["avg_pct"] == -2.97
 
 
