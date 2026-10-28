@@ -282,6 +282,8 @@ ENTRIES: dict[str, dict[str, str]] = {
         "mean": "东财按 IP 和请求量限流（不是只在交易时间开放）：行情族接口会被直接断开连接，涨停池和数据中心通常不受影响。",
         "algo": "所有东财请求按「域名/接口」（push2/clist、push2his/kline、push2ex 等）每小时记成功 / 失败 / 空数据；"
         "连续 3 次失败记「被拦」，首次成功记「恢复」；push2 三个域名共用节流（请求起点间隔 ≥0.15 秒）。\n"
-        "管理员 GET /api/ops/em-avail?days=7：by_hour 按钟点看失败率（集中在固定钟点才是时段规则），events 为被拦/恢复时刻；保留 30 天。",
+        "管理员 GET /api/ops/em-avail?days=7：by_hour 按钟点看失败率（集中在固定钟点才是时段规则），events 为被拦/恢复时刻；保留 30 天。\n"
+        "复盘素材免截图：GET /api/ops/review-check（进场影子/大盘尺/叙事/拥挤 + 可选 What-If 闸门）；?cf=false 跳过日线拉取。",
+
     },
 }

@@ -326,6 +326,37 @@ def ops_shadows(
     return {"ok": True, "days": shadow_health(days)}
 
 
+@router.get("/api/ops/review-check")
+async def ops_review_check(
+    cf: bool = Query(default=True, description="Include What-If counterfactual (needs klines; slower)"),
+    cf_days: int = Query(default=20, ge=5, le=60),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Paste-friendly 10/28-style review checklist (edge / regime / narrative / gates).
+
+    Prefer this over screenshots: curl once and paste the JSON into chat.
+    ``cf=false`` skips the kline-backed What-If block for a faster edge-only dump.
+    """
+    del user
+    from market_desk.engine import engine
+    from market_desk.review_check import build_review_check_sync, merge_counterfactual
+
+    base = build_review_check_sync()
+    if not cf:
+        base["counterfactual"] = {"ok": False, "skipped": True}
+        base["curl"] = "GET /api/ops/review-check  （加 ?cf=false 可跳过闸门 What-If）"
+        return base
+    try:
+        audit = await engine.build_counterfactual(days=cf_days, strict=True)
+    except Exception as exc:
+        base["counterfactual"] = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
+        base["curl"] = "GET /api/ops/review-check"
+        return base
+    out = merge_counterfactual(base, audit)
+    out["curl"] = "GET /api/ops/review-check  （加 ?cf=false 可跳过闸门 What-If）"
+    return out
+
+
 @router.get("/api/ops/em-avail")
 def ops_em_avail(
     days: int = Query(default=7, ge=1, le=30),

@@ -14,6 +14,25 @@
 
 ---
 
+## [v1.10.14] - 2026-10-28
+
+### 【背景与动机（为什么做 · Why）】
+- 10/28 复盘靠截图粘贴太重；运维已有 `/api/ops/check`，复盘素材同样需要「一条 curl 贴 JSON」。
+- 从公开解盘吸「未确认止跌 / 涨停占比接班」两条纪律，先锁门槛再写影子，避免对着实盘事后找理由。
+
+### 【做了什么（What）】
+- **Added** `GET /api/ops/review-check`：汇总进场影子（站回/熔断/降权/将飞/大盘尺）、叙事、拥挤；默认附带 What-If 闸门 / ATR / 入场敏感度 / cf 未明（`?cf=false` 可跳过日线拉取）。
+- **Added** `market_desk/review_check.py` + `tests/test_review_check.py`。
+- **TODO**：预登记 `deep_v_bounce`、`zt_board_share`；复盘前自检改为优先贴 review-check JSON。
+- **glossary**：运维/复盘词条注明该接口。
+
+### 【影响与验证（Impact & Verification）】
+- 不改亮灯、闸门、排序；只读聚合。
+- 部署后：`curl -s 'http://127.0.0.1:8765/api/ops/review-check?cf=false'`（需管理员会话）应返回 `items`。
+- `pytest tests/test_review_check.py` 通过。
+
+---
+
 ## [v1.10.13] - 2026-10-15
 
 ### 【背景与动机（为什么做 · Why）】
