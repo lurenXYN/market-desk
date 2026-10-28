@@ -492,9 +492,21 @@ def is_serverchan_alert(key: str) -> bool:
     if k.startswith("ops:health:"):
         return False
     if not SERVERCHAN_EVENT_PUSH:
-        return k.startswith(("eod:", "morning:"))
+        # Stage-0 sim digest is for 复盘党 (not desk watchers); keep with eod/morning.
+        return k.startswith(("eod:", "morning:", "sim:"))
     return k.startswith(
-        ("buy:", "fly:", "sell:", "lhb:", "eod:", "morning:", "ops:", "crowd:", "pulse:")
+        (
+            "buy:",
+            "fly:",
+            "sell:",
+            "lhb:",
+            "eod:",
+            "morning:",
+            "ops:",
+            "crowd:",
+            "pulse:",
+            "sim:",
+        )
     )
 
 

@@ -627,6 +627,9 @@ def init_db() -> None:
         _ensure_auth_and_user_scope(conn)
         _ensure_backtest_tables(conn)
         _ensure_ma_fan_tables(conn)
+        from market_desk.db.sim_desk import ensure_sim_desk_tables
+
+        ensure_sim_desk_tables(conn)
         conn.commit()
 
 

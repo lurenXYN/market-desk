@@ -300,16 +300,60 @@ def build_review_check_sync() -> dict[str, Any]:
             skip=True,
         )
     )
+    sim_gate: dict[str, Any] | None = None
+    try:
+        from market_desk.sim_desk import start_gate_snapshot
+
+        sim_gate = start_gate_snapshot()
+        cum = sim_gate.get("cum_pnl_pct")
+        acct = sim_gate.get("account") or {}
+        items.append(
+            _item(
+                id="sim_desk_gate",
+                title="模拟操盘开工闸",
+                since=None,
+                sample=_sample(None, sim_gate.get("closed_n") or 0, min_days=1, min_n=1),
+                metrics={
+                    "cum_pnl_pct": cum,
+                    "equity": acct.get("equity") or sim_gate.get("equity"),
+                    "cash": acct.get("cash") or sim_gate.get("cash"),
+                    "realized_pnl_cny": sim_gate.get("realized_pnl_cny"),
+                    "closed_n": sim_gate.get("closed_n"),
+                    "open_n": sim_gate.get("open_n"),
+                    "gate_ok": sim_gate.get("gate_ok"),
+                    "gate_label": sim_gate.get("gate_label"),
+                    "recent": sim_gate.get("recent"),
+                },
+                ui_verdict=sim_gate.get("gate_label"),
+                hint="权益相对初始>0 且已有平仓才写券商对接；Tab「模拟」或 GET /api/sim-desk",
+                level="ok" if sim_gate.get("gate_ok") else "warn",
+            )
+        )
+    except Exception as exc:
+        items.append(
+            _item(
+                id="sim_desk_gate",
+                title="模拟操盘开工闸",
+                since=None,
+                sample=_sample(0, 0, min_days=1, min_n=1),
+                metrics={"error": f"{type(exc).__name__}: {exc}"[:120]},
+                hint="GET /api/ops/sim-desk",
+                level="warn",
+            )
+        )
+
     return {
         "ok": True,
         "asof": today_cn(),
         "edge_note": edge.get("note"),
         "edge_oos_days": edge.get("oos_days"),
         "edge_oos_n": edge.get("oos_n"),
+        "sim_desk": sim_gate,
         "items": items,
         "note": (
             "UI verdict 用闸门账本口径（天数/张数/幅度），不等于 TODO 的 |t|≥2+两半同号。"
             "闸门 What-If / ATR / 入场敏感度在 counterfactual 段（需拉日线，可能稍慢）。"
+            "开工闸看 sim_desk / sim_desk_gate（可买→卖点组合累计）。"
         ),
     }
 

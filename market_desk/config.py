@@ -59,6 +59,9 @@ TOAST_ENABLED = True
 TOAST_COOLDOWN_SECONDS = 180
 # Flat commission (CNY): once per buy and once per sell (per position / day).
 TRADE_FEE_CNY = 5.0
+# Paper sim desk: starting cash and max notional per full-size open (fraction of equity).
+SIM_INITIAL_CASH = 20000.0
+SIM_MAX_POS_FRAC = 0.25
 
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
 ZT_UT = "7eea3edcaed734bea9cbfc24409ed989"

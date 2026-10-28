@@ -78,6 +78,7 @@
       <button type="button" class="nav-sec" data-main="watch">观察<span class="hint">异动</span></button>
       <button type="button" class="nav-sec" data-main="auction">竞价<span class="hint">策略</span></button>
       <button type="button" class="nav-core" data-main="pos">仓位</button>
+      <button type="button" class="nav-core" data-main="sim">模拟<span class="hint">纸面</span></button>
       <button type="button" class="nav-core" data-main="review">复盘<span class="hint">信号</span></button>
       <button type="button" class="nav-sec" data-main="mafan">发散<span class="hint">均线</span></button>
       <button type="button" class="nav-sec" data-main="pot">锅底<span class="hint">观察</span></button>
@@ -656,6 +657,42 @@
         <div class="pos-sum" id="aucStratSum" style="margin-bottom:10px"></div>
         <div id="aucStratBody">
           <div class="meta">等待快照…</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="panel-sim" hidden>
+      <section class="card">
+        <h2 style="text-transform:none">模拟操盘<button type="button" class="q" data-term="模拟操盘账本">?</button>
+          <span class="mod-stamp" id="simStamp" title="模拟账本刷新时间"></span>
+        </h2>
+        <p class="meta">纸面账户初始 2 万；亮过可买且可成交才开仓，卖点且可卖出才平仓；买卖各扣 5 元手续费。权益相对初始转正后才允许写券商对接。</p>
+        <div class="pos-sum" id="simSum"></div>
+        <div class="risk-box" id="simGate" style="margin:8px 0"></div>
+        <h3 style="margin:14px 0 6px;font-size:14px">持仓</h3>
+        <div class="rev-table-wrap">
+          <table class="rev-table" id="simPosTable">
+            <thead>
+              <tr>
+                <th>代码</th><th>名称</th><th>档</th><th>股数</th>
+                <th>成本</th><th>现价</th><th>市值</th><th>浮盈</th><th>开仓日</th>
+              </tr>
+            </thead>
+            <tbody id="simPosBody"><tr><td colspan="9" class="meta">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <h3 style="margin:16px 0 6px;font-size:14px">交易日志</h3>
+        <div class="rev-table-wrap">
+          <table class="rev-table" id="simLogTable">
+            <thead>
+              <tr>
+                <th>时间</th><th>方向</th><th>代码</th><th>名称</th>
+                <th>数量</th><th>成交价</th><th>名义</th><th>手续费</th>
+                <th>盈亏</th><th>现金</th><th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="simLogBody"><tr><td colspan="11" class="meta">加载中…</td></tr></tbody>
+          </table>
         </div>
       </section>
     </section>

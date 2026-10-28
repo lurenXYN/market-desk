@@ -282,6 +282,33 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
         checks.append(
             {"id": "shadows", "title": "影子账本", "level": "warn", "detail": f"{type(exc).__name__}: {exc}"[:120]}
         )
+    try:
+        from market_desk.sim_desk import start_gate_snapshot
+
+        gate = start_gate_snapshot()
+        cum = gate.get("cum_pnl_pct")
+        cum_s = f"{cum:+.2f}%" if cum is not None else "—"
+        checks.append(
+            {
+                "id": "sim_desk",
+                "title": "模拟操盘开工闸",
+                "level": "ok" if gate.get("gate_ok") else "warn",
+                "detail": (
+                    f"{gate.get('gate_label')} · 平仓{gate.get('closed_n', 0)} · "
+                    f"持仓{gate.get('open_n', 0)} · 累计{cum_s}"
+                ),
+                "gate": gate,
+            }
+        )
+    except Exception as exc:
+        checks.append(
+            {
+                "id": "sim_desk",
+                "title": "模拟操盘开工闸",
+                "level": "warn",
+                "detail": f"{type(exc).__name__}: {exc}"[:120],
+            }
+        )
     nr = snap.get("news_radar") if isinstance(snap.get("news_radar"), dict) else {}
     if nr.get("enabled"):
         st = str(nr.get("status") or "")
@@ -324,6 +351,42 @@ def ops_shadows(
     from market_desk.shadow_health import shadow_health
 
     return {"ok": True, "days": shadow_health(days)}
+
+
+@router.get("/api/ops/sim-desk")
+def ops_sim_desk(
+    backfill: bool = Query(default=False),
+    replay: bool = Query(default=False),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Paper book + auto-order start gate (ever-ready → sell signal)."""
+    del user
+    from market_desk.sim_desk import (
+        backfill_open_from_db,
+        recent_trades,
+        replay_exits_from_sell_signals,
+        start_gate_snapshot,
+    )
+    from market_desk.db import load_open_sim_lots, load_sim_lots
+
+    opened = 0
+    replayed = 0
+    if backfill:
+        opened = backfill_open_from_db()
+    if replay:
+        replayed = replay_exits_from_sell_signals()
+    gate = start_gate_snapshot()
+    return {
+        "ok": True,
+        "backfilled": opened,
+        "replayed": replayed,
+        "gate": gate,
+        "account": gate.get("account"),
+        "open_lots": load_open_sim_lots()[:40],
+        "recent_lots": load_sim_lots(limit=40),
+        "trades": recent_trades(80),
+        "curl": "GET /api/ops/sim-desk  （?backfill=true 开仓；?replay=true 用历史卖点回放平仓）",
+    }
 
 
 @router.get("/api/ops/review-check")

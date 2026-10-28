@@ -207,6 +207,17 @@ ENTRIES: dict[str, dict[str, str]] = {
         "algo": "来自 _sell_item.next_action。现卖 clear/half 用建议卖价；反悔窗/已减未现卖 → watch，\n"
         "触发=破减仓价（last_sell_price）或深回撤线（peak×(1−pb_deep)）；未触发则 hold，触发=止损/目标。",
     },
+    "模拟操盘账本": {
+        "mean": "纸面资金账户：初始 2 万，亮过可买进、卖点出；用来计量自动下单开工闸，不写真实仓位。",
+        "algo": "成交纪律：连续竞价 09:30–11:30 / 13:00–15:00；买得进/卖得出、T+1、一字板、开盘软卖缓冲。\n"
+        "资金：满仓名义≤权益×25%×权重，100 股整手；买卖各扣 TRADE_FEE_CNY（默认 5 元）；现金不足跳过。\n"
+        "假仓位走 build_sell_advice；交易日志见「模拟」Tab。开工闸=已有卖出且权益/初始−1>0。\n"
+        "API：GET /api/sim-desk；管理端 /api/ops/sim-desk?backfill=true&replay=true；日终 sim:digest。",
+    },
+    "开工闸": {
+        "mean": "自动下单阶段 1–3 的开关：模拟账户权益相对初始必须转正，且至少一笔卖出。",
+        "algo": "见「模拟操盘账本」。未过线禁止写券商对接。",
+    },
     "减半价": {
         "mean": "今日已减仓时记下的成交价；破此价是反悔窗允许再清的锚之一。",
         "algo": "positions.last_sell_price → half_anchor_price；仓位表「已减价」列与卖卡明示。",

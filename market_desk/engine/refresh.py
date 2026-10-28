@@ -290,6 +290,12 @@ class RefreshMixin:
                 purge_stale_closed_positions(trade_date_dash)
                 # Multi-user: fetch marks for every book's codes; never load rows here.
                 need_codes = load_all_book_codes()
+                try:
+                    from market_desk.db import list_open_sim_codes
+
+                    need_codes = sorted(set(need_codes) | set(list_open_sim_codes()))
+                except Exception:
+                    log.exception("sim open codes merge failed")
                 pos_quote_map = await _safe(
                     fetch_quotes,
                     client,
@@ -880,12 +886,30 @@ class RefreshMixin:
                     record_session_signals(payload)
                 except Exception:
                     log.exception("signal record failed")
+                try:
+                    from market_desk.sim_desk import sync_from_engine
+
+                    payload["sim_desk"] = sync_from_engine(
+                        payload, book_quotes=self._book_quotes
+                    )
+                except Exception:
+                    log.exception("sim_desk sync failed")
+                    payload["sim_desk"] = {"ok": False}
                 self.snapshot = payload
                 self._maybe_capture_pick_scores(now)
                 try:
                     self._push_personal_sells(now)
                 except Exception:
                     log.exception("personal sell push failed")
+                try:
+                    self._maybe_sim_desk_digest(now, payload)
+                except Exception:
+                    log.exception("sim_desk digest failed")
+                try:
+                    # Digests queue after the main toast emit; drain same round.
+                    self._drain_pending_ops_alerts(payload)
+                except Exception:
+                    log.exception("ops pending drain failed")
 
                 # Phase B: slow enrich (holders / trial trends / favorite) after UI can paint.
                 try:

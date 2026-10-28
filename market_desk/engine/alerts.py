@@ -83,6 +83,53 @@ class AlertsMixin:
         self._ops_latched.add(key)
         self._pending_ops_alerts.append((key, title, body))
 
+    def _drain_pending_ops_alerts(self, current: dict[str, Any]) -> None:
+        """Emit ops alerts queued after the main toast pass (same refresh)."""
+        if not self._pending_ops_alerts:
+            return
+        from market_desk.notify import (
+            filter_alerts_for_policy,
+            notify_windows,
+            push_serverchan_alerts,
+            select_toasts_for_round,
+        )
+
+        now = datetime.now(CN_TZ)
+        now_ts = now.timestamp()
+        pending = list(self._pending_ops_alerts)
+        self._pending_ops_alerts = []
+        alerts = filter_alerts_for_policy(
+            pending,
+            pre_match=False,
+            decision_alerts=True,
+            quiet_buy=False,
+        )
+        chosen, latched = select_toasts_for_round(
+            alerts,
+            latched=self._toast_latched,
+            sent_at=self._toast_sent,
+            now_ts=now_ts,
+            cooldown=0.0,
+            max_n=4,
+        )
+        self._toast_latched = latched
+        win_on = bool(setting("toast_enabled", True))
+        stamp = now.strftime("%H:%M:%S")
+        for key, title, body in chosen:
+            self._toast_sent[key] = now_ts
+            self._toast_feed.insert(
+                0, {"ts": stamp, "key": key, "title": title, "body": body}
+            )
+            self._toast_feed = self._toast_feed[:12]
+            if win_on:
+                notify_windows(title, body)
+        if chosen:
+            current["recent_toasts"] = list(self._toast_feed)
+            try:
+                push_serverchan_alerts(chosen, current)
+            except Exception:
+                log.exception("serverchan ops-drain failed")
+
     def _maybe_ops_health_alert(self, payload: dict[str, Any]) -> None:
         """Fire once when health flips to degraded on a trading day."""
         health = payload.get("health") if isinstance(payload.get("health"), dict) else {}
@@ -95,6 +142,33 @@ class AlertsMixin:
             f"ops:health:{day}",
             "数据降级",
             body[:200],
+            day=day,
+        )
+
+    def _maybe_sim_desk_digest(self, now: datetime, payload: dict[str, Any]) -> None:
+        """Stage-0 once-per-day toast: today's sim opens / closes + start-gate line."""
+        from market_desk.sim_desk import day_alert_lines, start_gate_snapshot
+
+        day = str(payload.get("trade_date") or now.strftime("%Y-%m-%d"))
+        if len(day) == 8 and day.isdigit():
+            day = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+        # Prefer late session so the day has opens/closes; still once via latch.
+        hm = now.hour * 100 + now.minute
+        if hm < 1450:
+            return
+        lines = day_alert_lines(trade_date=day)
+        gate = start_gate_snapshot()
+        cum = gate.get("cum_pnl_pct")
+        cum_s = f"{cum:+.2f}%" if cum is not None else "—"
+        head = (
+            f"模拟账本 · 平仓{gate.get('closed_n', 0)} · 持仓{gate.get('open_n', 0)} · "
+            f"累计{cum_s} · {gate.get('gate_label')}"
+        )
+        body = head if not lines else head + "；" + "；".join(lines[:6])
+        self._queue_ops_alert(
+            f"sim:digest:{day}",
+            "模拟操盘日终",
+            body[:280],
             day=day,
         )
 

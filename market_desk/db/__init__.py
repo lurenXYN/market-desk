@@ -185,6 +185,24 @@ from market_desk.db.radar import (  # noqa: F401
     save_etf_pulse,
     upsert_narrative_shadow,
 )
+from market_desk.db.sim_desk import (  # noqa: F401
+    ensure_sim_desk_tables,
+    ensure_sim_account,
+    get_sim_account,
+    set_sim_cash,
+    list_open_sim_codes,
+    insert_sim_lot,
+    update_sim_lot_marks,
+    apply_sim_buy_fill,
+    apply_sim_sell_fill,
+    load_open_sim_lots,
+    load_sim_lots,
+    load_sim_fills,
+    load_sim_fills_for_lot,
+    count_sim_sell_fills,
+    sum_sim_realized_pnl_cny,
+    sim_lot_exists,
+)
 from market_desk.db.backtest import (  # noqa: F401
     BACKTEST_RUN_KEEP_DEFAULT,
     _FILL_CORE_KEYS,

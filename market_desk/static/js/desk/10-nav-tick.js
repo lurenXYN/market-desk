@@ -41,10 +41,11 @@ function applyMain(tab) {
     moreBtn.textContent = inMore ? (moreLabels[currentMain] || "更多") : "更多";
   }
   closeNavMore();
-  ["desk", "market", "boards", "funds", "watch", "auction", "pos", "review", "mafan", "pot", "backtest"].forEach((name) => {
+  ["desk", "market", "boards", "funds", "watch", "auction", "pos", "sim", "review", "mafan", "pot", "backtest"].forEach((name) => {
     const el = document.getElementById("panel-" + name);
     if (el) el.hidden = name !== currentMain;
   });
+  if (currentMain === "sim" && typeof loadSimDesk === "function") loadSimDesk(false);
   if (currentMain === "review") loadReview(false);
   if (currentMain === "mafan") {
     loadMaFan(false);
@@ -92,7 +93,7 @@ function paintClock() {
 }
 function tickIntervalMs(live) {
   const tab = currentMain || "desk";
-  if (tab === "review") return live ? 60000 : 120000;
+  if (tab === "review" || tab === "sim") return live ? 60000 : 120000;
   if (tab === "funds") return live ? 45000 : 90000;
   if (tab === "market" || tab === "boards") return live ? 30000 : 90000;
   // Auction tab: fast only in 09:15–09:30; after open, 1.5min is enough
