@@ -1,0 +1,56 @@
+# One-shot: wipe paper sim book on VPS (epoch SIM_BOOK_SINCE) then backfill+replay.
+name: Reset sim desk
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: reset-sim-desk
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wipe + backfill + replay over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            cd /opt/market-desk
+            .venv/bin/python - <<'PY'
+            from market_desk.config import SIM_BOOK_SINCE, SIM_INITIAL_CASH
+            from market_desk.db.sim_desk import (
+                wipe_sim_book,
+                get_sim_account,
+                get_sim_account_epoch,
+                load_sim_fills,
+            )
+            from market_desk.sim_desk import (
+                backfill_open_from_db,
+                replay_exits_from_sell_signals,
+                account_snapshot,
+                portfolio_stats,
+            )
+
+            wipe_sim_book(initial_cash=SIM_INITIAL_CASH, epoch=str(SIM_BOOK_SINCE)[:10])
+            acct = get_sim_account(SIM_INITIAL_CASH)
+            print("epoch", get_sim_account_epoch(), "cash", acct["cash"])
+            opened = backfill_open_from_db()
+            replayed = replay_exits_from_sell_signals()
+            snap = account_snapshot()
+            stats = portfolio_stats()
+            buys = len(load_sim_fills(side="buy", limit=500))
+            sells = len(load_sim_fills(side="sell", limit=500))
+            print(
+                f"backfill={opened} replay={replayed} open={stats.get('open_n')} "
+                f"closed={stats.get('closed_n')} equity={round(snap['equity'], 2)} "
+                f"gate={stats.get('gate_ok')} buy_fills={buys} sell_fills={sells}"
+            )
+            PY
