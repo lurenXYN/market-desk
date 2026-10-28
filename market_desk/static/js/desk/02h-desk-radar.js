@@ -49,7 +49,7 @@ function renderDeskRadar(d) {
     );
   }
   (narr.clusters || []).filter((c) => c.hidden).slice(0, 2).forEach((c) => {
-    const tip = `影子模式（只展示与记录）\n概念：${(c.concepts || []).join("、")}`
+    const tip = `图谱影子：扩展观察里软荐簇内龙头（不自动亮灯）\n概念：${(c.concepts || []).join("、")}`
       + `\n行业：${(c.industry_names || []).join("、")}\n龙头：${(c.leaders || []).join("、")}`;
     bits.push(
       `<span class="radar-chip narr" title="${attr(tip)}">图谱·影子 ${c.label} ${c.zt_n}停/${c.industries}行业`

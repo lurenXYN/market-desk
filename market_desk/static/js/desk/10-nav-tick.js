@@ -3,7 +3,7 @@ function syncDeskFoldHints() {
   if (!fold) return;
   const sum = fold.querySelector("summary");
   if (!sum) return;
-  const ids = ["dragonbox", "sidebox", "linkbox", "trialbox", "indepbox", "favDesk"];
+  const ids = ["dragonbox", "sidebox", "linkbox", "trialbox", "indepbox", "narrbox", "favDesk"];
   const n = ids.filter((id) => {
     const el = document.getElementById(id);
     return el && !el.hidden;

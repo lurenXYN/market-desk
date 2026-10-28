@@ -8,11 +8,16 @@ from market_desk.radar.crowding import (
     market_turnover,
 )
 from market_desk.radar.etf_pulse import market_pulse_event, minute_baseline, scan_pulses
-from market_desk.radar.narrative import build_narrative_clusters, summarize_leads
+from market_desk.radar.narrative import (
+    build_narrative_clusters,
+    build_narrative_recommend,
+    summarize_leads,
+)
 
 __all__ = [
     "apply_crowding_gate",
     "build_narrative_clusters",
+    "build_narrative_recommend",
     "climax_confirm",
     "compute_crowding",
     "evaluate_board",

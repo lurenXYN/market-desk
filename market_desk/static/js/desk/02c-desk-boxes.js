@@ -187,6 +187,25 @@ function renderDeskBoxes(d, v) {
       document.getElementById("indepItems").innerHTML = "";
     }
   }
+  const narrRec = v.narrative_recommend || null;
+  const narrBox = document.getElementById("narrbox");
+  if (narrBox) {
+    const narrItems = (narrRec && narrRec.items) || [];
+    if (narrItems.length) {
+      narrBox.hidden = false;
+      document.getElementById("narrline").textContent =
+        narrRec.text || narrRec.title || "图谱·影子荐";
+      document.getElementById("narrmeta").textContent =
+        narrRec.size_note || "隐形概念簇龙头·观察卡，不自动亮灯";
+      const nn = document.getElementById("narrNote");
+      if (nn) nn.textContent = `· ${narrItems.length}只`;
+      document.getElementById("narrItems").innerHTML =
+        narrItems.map(recCard).join("");
+    } else {
+      narrBox.hidden = true;
+      document.getElementById("narrItems").innerHTML = "";
+    }
+  }
   registerDeskChartContext(v);
   const favDesk = d.favorite_desk || {};
   const favDeskEl = document.getElementById("favDesk");

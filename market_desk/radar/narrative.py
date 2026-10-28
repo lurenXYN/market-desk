@@ -128,6 +128,20 @@ def build_narrative_clusters(
                 "industries": len(inds),
                 "industry_names": inds[:5],
                 "leaders": [str(r.get("name") or r.get("code") or "") for r in leaders],
+                "leader_rows": [
+                    {
+                        "code": str(r.get("code") or "").zfill(6),
+                        "name": str(r.get("name") or r.get("code") or ""),
+                        "last": r.get("price") or r.get("last"),
+                        "pct": r.get("pct"),
+                        "high": r.get("high"),
+                        "low": r.get("low"),
+                        "first_seal": r.get("first_seal"),
+                        "boards": r.get("boards"),
+                    }
+                    for r in leaders
+                    if str(r.get("code") or "").strip()
+                ],
                 "hidden": not is_main,
                 "score": round(len(codes) + 0.5 * len(inds), 1),
             }
@@ -172,4 +186,86 @@ def summarize_leads(rows: list[dict[str, Any]] | None) -> dict[str, Any]:
         "hits": len(leads),
         "median_lead_min": med,
         "hit_rate": round(len(leads) / len(hidden), 2) if hidden else None,
+    }
+
+
+def _px(value: Any, digits: int = 2) -> float | None:
+    """Round a price-like value, or None when missing."""
+    try:
+        if value is None or value == "":
+            return None
+        return round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_narrative_recommend(
+    clusters: list[dict[str, Any]] | None,
+    *,
+    skip_codes: set[str] | None = None,
+    max_items: int = 4,
+) -> dict[str, Any] | None:
+    """Soft-recommend limit-up leaders from hidden narrative clusters.
+
+    Observe cards only (``ready=False``): surfaces names for the desk fold so the
+    graph shadow can auto-list candidates without bypassing buy gates.
+    """
+    skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for cluster in clusters or []:
+        if not cluster.get("hidden"):
+            continue
+        label = str(cluster.get("label") or "")
+        for row in cluster.get("leader_rows") or []:
+            code = normalize_code(row.get("code"))
+            if not code or code in skip or code in seen:
+                continue
+            seen.add(code)
+            last = row.get("last") or row.get("price")
+            items.append(
+                {
+                    "kind": "stock",
+                    "kind_label": "个股",
+                    "role": "alt",
+                    "role_label": f"图谱·{label}" if label else "图谱·影子",
+                    "code": code,
+                    "name": row.get("name") or code,
+                    "last": _px(last, 2),
+                    "pct": None if row.get("pct") is None else round(float(row["pct"]), 2),
+                    "buy_price": _px(last, 2),
+                    "wait_price": _px(row.get("low") or last, 2),
+                    "stop_price": _px(
+                        (float(last) * 0.97) if last not in (None, 0) else None, 2
+                    ),
+                    "chase_price": _px(
+                        (float(last) * 1.03) if last not in (None, 0) else None, 2
+                    ),
+                    "ready": False,
+                    "narrative_shadow": True,
+                    "desk_source": "narrative",
+                    "source_board": label,
+                    "reason": (
+                        f"图谱隐形簇「{label}」龙头观察 · "
+                        f"{cluster.get('zt_n') or '?'}停/"
+                        f"{cluster.get('industries') or '?'}行业"
+                    ),
+                    "qty": 100,
+                    "high": row.get("high"),
+                    "low": row.get("low"),
+                }
+            )
+            if len(items) >= max(1, int(max_items)):
+                break
+        if len(items) >= max(1, int(max_items)):
+            break
+    if not items:
+        return None
+    return {
+        "title": "图谱·影子荐",
+        "text": f"图谱影子荐 · {len(items)}只",
+        "buy": False,
+        "shadow": True,
+        "size_note": "隐形概念簇龙头·只观察不自动亮灯；过门槛后可再升软提示",
+        "items": items,
     }

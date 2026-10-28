@@ -357,18 +357,28 @@ def ops_shadows(
 def ops_sim_desk(
     backfill: bool = Query(default=False),
     replay: bool = Query(default=False),
+    reset: bool = Query(default=False, description="Wipe book and reset cash to SIM_INITIAL_CASH"),
     user: dict = Depends(current_admin_required),
 ) -> dict:
     """Paper book + auto-order start gate (ever-ready → sell signal)."""
     del user
+    from market_desk.config import SIM_BOOK_SINCE, SIM_INITIAL_CASH
+    from market_desk.db.sim_desk import get_sim_account_epoch, wipe_sim_book
+    from market_desk.db import load_open_sim_lots, load_sim_lots
     from market_desk.sim_desk import (
         backfill_open_from_db,
+        ensure_sim_book_epoch,
         recent_trades,
         replay_exits_from_sell_signals,
         start_gate_snapshot,
     )
-    from market_desk.db import load_open_sim_lots, load_sim_lots
 
+    wiped = False
+    if reset:
+        wipe_sim_book(initial_cash=SIM_INITIAL_CASH, epoch=str(SIM_BOOK_SINCE)[:10])
+        wiped = True
+    else:
+        ensure_sim_book_epoch()
     opened = 0
     replayed = 0
     if backfill:
@@ -378,6 +388,9 @@ def ops_sim_desk(
     gate = start_gate_snapshot()
     return {
         "ok": True,
+        "reset": wiped,
+        "since": SIM_BOOK_SINCE,
+        "epoch": get_sim_account_epoch(),
         "backfilled": opened,
         "replayed": replayed,
         "gate": gate,
@@ -385,7 +398,10 @@ def ops_sim_desk(
         "open_lots": load_open_sim_lots()[:40],
         "recent_lots": load_sim_lots(limit=40),
         "trades": recent_trades(80),
-        "curl": "GET /api/ops/sim-desk  （?backfill=true 开仓；?replay=true 用历史卖点回放平仓）",
+        "curl": (
+            "GET /api/ops/sim-desk  "
+            "（?reset=true 清零；?backfill=true 仅自 SIM_BOOK_SINCE；?replay=true 回放卖点）"
+        ),
     }
 
 

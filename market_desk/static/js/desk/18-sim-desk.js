@@ -19,9 +19,12 @@ function _simPct(v) {
 
 function _simSideZh(side, mode) {
   if (side === "buy") return "买入";
-  if (mode === "half") return "减半";
-  if (mode === "clear") return "清仓";
-  return side === "sell" ? "卖出" : String(side || "—");
+  if (side === "sell") {
+    if (mode === "half") return "卖出·减半";
+    if (mode === "clear") return "卖出·清仓";
+    return "卖出";
+  }
+  return String(side || "—");
 }
 
 function paintSimDesk(data) {
@@ -88,9 +91,12 @@ function paintSimDesk(data) {
         const side = String(t.side || "");
         const pnl = t.pnl_cny;
         const cls = Number(pnl) > 0 ? "up" : Number(pnl) < 0 ? "down" : "";
+        const sideCls = side === "buy" ? "up" : side === "sell" ? "down" : "";
+        const cash = t.cash_after;
+        const cashShow = side === "buy" && Number(cash) === 0 ? "—" : _simNum(cash);
         return `<tr>
           <td>${(t.filled_at || t.trade_date || "").toString().slice(0, 19)}</td>
-          <td>${_simSideZh(side, t.exit_mode)}</td>
+          <td class="${sideCls}"><b>${_simSideZh(side, t.exit_mode)}</b></td>
           <td>${t.code || ""}</td>
           <td>${t.name || ""}</td>
           <td>${t.qty || "—"}</td>
@@ -98,7 +104,7 @@ function paintSimDesk(data) {
           <td>${_simNum(t.notional)}</td>
           <td>${_simNum(t.fee)}</td>
           <td class="${cls}">${side === "sell" ? _simNum(pnl) : "—"}</td>
-          <td>${_simNum(t.cash_after)}</td>
+          <td>${cashShow}</td>
           <td class="meta">${t.note || t.role_label || ""}</td>
         </tr>`;
       }).join("");

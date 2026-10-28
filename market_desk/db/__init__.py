@@ -188,6 +188,7 @@ from market_desk.db.radar import (  # noqa: F401
 from market_desk.db.sim_desk import (  # noqa: F401
     ensure_sim_desk_tables,
     ensure_sim_account,
+    wipe_sim_book,
     get_sim_account,
     set_sim_cash,
     list_open_sim_codes,

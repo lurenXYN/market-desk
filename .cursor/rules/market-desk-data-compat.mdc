@@ -1,12 +1,12 @@
 ---
 description: market-desk — schema/formula changes must keep old SQLite data compatible
-globs: **/*
+globs: apps/market-desk/**
 alwaysApply: false
 ---
 
 # market-desk 老数据兼容（硬要求）
 
-每次改持久化结构、计分公式、枚举含义、默认字段时，必须先想清楚：**现网 / 本地已有 `data/desk.db` 怎么办**。禁止假设「空库重装」。
+每次改 `apps/market-desk/` 的**持久化结构、计分公式、枚举含义、默认字段**时，必须先想清楚：**现网 / 本地已有 `data/desk.db` 怎么办**。禁止假设「空库重装」。
 
 ## 必须做
 

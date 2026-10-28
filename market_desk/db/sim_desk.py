@@ -18,10 +18,14 @@ def ensure_sim_desk_tables(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY CHECK (id = 1),
             initial_cash REAL NOT NULL,
             cash REAL NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            epoch TEXT
         )
         """
     )
+    acols = _table_cols(conn, "sim_account")
+    if "epoch" not in acols:
+        conn.execute("ALTER TABLE sim_account ADD COLUMN epoch TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sim_lot (
@@ -107,6 +111,57 @@ def _now_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def wipe_sim_book(*, initial_cash: float, epoch: str | None = None) -> None:
+    """Delete all lots/fills and reset cash to ``initial_cash``."""
+    init = float(initial_cash)
+    stamp = _now_stamp()
+    with _connect() as conn:
+        ensure_sim_desk_tables(conn)
+        conn.execute("DELETE FROM sim_fill")
+        conn.execute("DELETE FROM sim_lot")
+        row = conn.execute("SELECT 1 FROM sim_account WHERE id = 1").fetchone()
+        if row:
+            conn.execute(
+                """
+                UPDATE sim_account
+                SET initial_cash = ?, cash = ?, updated_at = ?, epoch = COALESCE(?, epoch)
+                WHERE id = 1
+                """,
+                (init, init, stamp, epoch),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO sim_account(id, initial_cash, cash, updated_at, epoch)
+                VALUES (1, ?, ?, ?, ?)
+                """,
+                (init, init, stamp, epoch),
+            )
+        conn.commit()
+
+
+def get_sim_account_epoch() -> str:
+    """Return the book epoch stamped on the singleton account."""
+    with _connect() as conn:
+        ensure_sim_desk_tables(conn)
+        row = conn.execute("SELECT epoch FROM sim_account WHERE id = 1").fetchone()
+    return str((row["epoch"] if row else "") or "")[:10]
+
+
+def set_sim_account_epoch(epoch: str) -> None:
+    """Stamp the book epoch without wiping cash."""
+    stamp = _now_stamp()
+    with _connect() as conn:
+        ensure_sim_desk_tables(conn)
+        row = conn.execute("SELECT 1 FROM sim_account WHERE id = 1").fetchone()
+        if row:
+            conn.execute(
+                "UPDATE sim_account SET epoch = ?, updated_at = ? WHERE id = 1",
+                (str(epoch)[:10], stamp),
+            )
+        conn.commit()
+
+
 def ensure_sim_account(initial_cash: float) -> dict[str, Any]:
     """Return the singleton paper account, creating it when missing."""
     init = float(initial_cash)
@@ -117,8 +172,8 @@ def ensure_sim_account(initial_cash: float) -> dict[str, Any]:
             stamp = _now_stamp()
             conn.execute(
                 """
-                INSERT INTO sim_account(id, initial_cash, cash, updated_at)
-                VALUES (1, ?, ?, ?)
+                INSERT INTO sim_account(id, initial_cash, cash, updated_at, epoch)
+                VALUES (1, ?, ?, ?, NULL)
                 """,
                 (init, init, stamp),
             )
@@ -127,11 +182,13 @@ def ensure_sim_account(initial_cash: float) -> dict[str, Any]:
                 "initial_cash": init,
                 "cash": init,
                 "updated_at": stamp,
+                "epoch": None,
             }
         return {
             "initial_cash": float(row["initial_cash"]),
             "cash": float(row["cash"]),
             "updated_at": str(row["updated_at"] or ""),
+            "epoch": str(row["epoch"] or "")[:10] or None,
         }
 
 

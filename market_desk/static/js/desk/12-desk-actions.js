@@ -215,7 +215,7 @@ async function onDeskRecClick(ev) {
     alert("钉自选失败");
   }
 }
-["buybox", "dragonbox", "sidebox", "linkbox", "trialbox", "indepbox", "favDesk"].forEach((id) => {
+["buybox", "dragonbox", "sidebox", "linkbox", "trialbox", "indepbox", "narrbox", "favDesk"].forEach((id) => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("click", onDeskRecClick);
 });

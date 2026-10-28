@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from market_desk.config import (
+    SIM_BOOK_SINCE,
     SIM_INITIAL_CASH,
     SIM_MAX_POS_FRAC,
     TRADE_FEE_CNY,
@@ -24,11 +25,13 @@ from market_desk.db.sim_desk import (
     list_open_sim_codes,
     load_open_sim_lots,
     load_sim_fills,
+    load_sim_fills_for_lot,
     load_sim_lots,
     set_sim_cash,
     sim_lot_exists,
     sum_sim_realized_pnl_cny,
     update_sim_lot_marks,
+    wipe_sim_book,
 )
 from market_desk.filters import normalize_code
 
@@ -307,8 +310,27 @@ def mark_to_market(lots: list[dict[str, Any]] | None = None) -> float:
     return total
 
 
+def ensure_sim_book_epoch() -> bool:
+    """Wipe pre-epoch backfill once when ``SIM_BOOK_SINCE`` advances. Return True if wiped."""
+    from market_desk.db.sim_desk import get_sim_account_epoch, set_sim_account_epoch
+
+    epoch = str(SIM_BOOK_SINCE or "")[:10]
+    if not epoch:
+        return False
+    # Ensure row exists first without wiping.
+    get_sim_account(SIM_INITIAL_CASH)
+    prev = get_sim_account_epoch()
+    if prev == epoch:
+        return False
+    wipe_sim_book(initial_cash=SIM_INITIAL_CASH, epoch=epoch)
+    set_sim_account_epoch(epoch)
+    log.info("sim book epoch reset to %s (was %s)", epoch, prev or "—")
+    return True
+
+
 def account_snapshot() -> dict[str, Any]:
     """Cash + MTM equity for the paper account."""
+    ensure_sim_book_epoch()
     acct = get_sim_account(SIM_INITIAL_CASH)
     lots = load_open_sim_lots()
     mtm = mark_to_market(lots)
@@ -402,7 +424,42 @@ def recent_closed(limit: int = 8) -> list[dict[str, Any]]:
 
 def recent_trades(limit: int = 80) -> list[dict[str, Any]]:
     """Full trade log (buys + sells) newest first."""
+    backfill_missing_buy_fills()
     return load_sim_fills(limit=max(1, min(int(limit), 300)))
+
+
+def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
+    """Insert opening buy rows for lots that lack a buy fill (legacy / test opens)."""
+    added = 0
+    for lot in load_sim_lots(limit=max(1, min(int(limit), 8000))):
+        lid = int(lot.get("id") or 0)
+        if lid <= 0:
+            continue
+        fills = load_sim_fills_for_lot(lid)
+        if any(str(f.get("side") or "") == "buy" for f in fills):
+            continue
+        qty = int(lot.get("qty_open") or 0) or int(lot.get("qty") or 0)
+        px = _f(lot.get("open_px")) or 0.0
+        day = str(lot.get("open_date") or "")[:10]
+        if qty <= 0 or px <= 0 or not day:
+            continue
+        fee = _f(lot.get("buy_fee"))
+        if fee is None:
+            fee = FEE
+        ok = apply_sim_buy_fill(
+            lot_id=lid,
+            trade_date=day,
+            filled_at=str(lot.get("open_at") or "")[:19] or None,
+            px=float(px),
+            qty=qty,
+            fee=float(fee),
+            cash_after=0.0,
+            weight=float(lot.get("open_weight") or 1.0),
+            note="backfill_buy_log",
+        )
+        if ok:
+            added += 1
+    return added
 
 
 def start_gate_snapshot() -> dict[str, Any]:
@@ -444,6 +501,9 @@ def open_lots_from_signals(
         code = normalize_code(row.get("code"))
         day = str(row.get("trade_date") or "")[:10]
         if not code or not day:
+            continue
+        since = str(SIM_BOOK_SINCE or "")[:10]
+        if since and day < since:
             continue
         if sim_lot_exists(day, code, sig_type):
             continue
@@ -1015,7 +1075,9 @@ def sync_from_engine(
 ) -> dict[str, Any]:
     """Engine-refresh entry: open lit cards + try exits. Never raises."""
     try:
+        ensure_sim_book_epoch()
         get_sim_account(SIM_INITIAL_CASH)
+        backfill_missing_buy_fills()
         return sync_exits_from_snapshot(snapshot, book_quotes=book_quotes)
     except Exception as exc:
         log.exception("sim_desk sync failed")
@@ -1023,7 +1085,7 @@ def sync_from_engine(
 
 
 def day_alert_lines(*, trade_date: str | None = None) -> list[str]:
-    """Stage-0 digest lines: today's new opens / closes (for Server酱 / toast)."""
+    """Stage-0 digest lines: today's buys and sells (for Server酱 / toast)."""
     day = (trade_date or "")[:10]
     if not day:
         try:
@@ -1033,23 +1095,24 @@ def day_alert_lines(*, trade_date: str | None = None) -> list[str]:
         except Exception:
             day = datetime.now().strftime("%Y-%m-%d")
     lines: list[str] = []
-    for lot in load_sim_lots(limit=120):
-        if str(lot.get("open_date") or "")[:10] != day:
-            continue
-        tag = lot.get("size_tag") or "full"
-        lines.append(
-            f"模拟开仓 {lot.get('code')} {lot.get('name') or ''} · {tag} · "
-            f"{lot.get('open_px')}"
-        )
-    for fill in load_sim_fills(limit=120):
+    # Newest-first fills; keep buys and sells both, never mislabel buys as 平仓.
+    for fill in load_sim_fills(limit=200):
         if str(fill.get("trade_date") or "")[:10] != day:
             continue
-        pnl = fill.get("pnl_pct")
-        pnl_s = f"{float(pnl):+.2f}%" if pnl is not None else "—"
-        lines.append(
-            f"模拟平仓 {fill.get('code')} {fill.get('name') or ''} · "
-            f"{fill.get('exit_mode')} · {pnl_s}"
-        )
+        side = str(fill.get("side") or "").lower()
+        code = fill.get("code") or ""
+        name = fill.get("name") or ""
+        qty = fill.get("qty") or "—"
+        px = fill.get("px")
+        if side == "buy":
+            tag = fill.get("size_tag") or "买入"
+            lines.append(f"模拟买入 {code} {name} · {tag} · {qty}股 · {px}")
+        elif side == "sell":
+            mode = fill.get("exit_mode") or "clear"
+            mode_zh = "减半" if mode == "half" else "清仓"
+            pnl = fill.get("pnl_pct")
+            pnl_s = f"{float(pnl):+.2f}%" if pnl is not None else "—"
+            lines.append(f"模拟卖出 {code} {name} · {mode_zh} · {qty}股 · {pnl_s}")
     return lines[:20]
 
 

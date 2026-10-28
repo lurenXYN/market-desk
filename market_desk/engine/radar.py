@@ -245,8 +245,29 @@ class RadarMixin:
                 trade_date_dash=trade_date_dash,
                 mainline=mainline,
             )
+            from market_desk.filters import normalize_code
+            from market_desk.radar import build_narrative_recommend
+
+            skip: set[str] = set()
+            for key in (
+                "recommend",
+                "side_recommend",
+                "link_recommend",
+                "dragon_recommend",
+                "independent_recommend",
+            ):
+                for it in ((verdict.get(key) or {}).get("items") or []):
+                    c = normalize_code(it.get("code"))
+                    if c:
+                        skip.add(c)
+            narr_rec = build_narrative_recommend(
+                out["narrative"].get("clusters"), skip_codes=skip, max_items=4
+            )
+            verdict["narrative_recommend"] = narr_rec
+            out["narrative"]["recommend_n"] = len((narr_rec or {}).get("items") or [])
         except Exception:
             log.exception("narrative graph failed")
+            verdict["narrative_recommend"] = None
         return out
 
     def _narrative_snap_concepts(self, trade_date_dash: str) -> list[dict[str, Any]]:
