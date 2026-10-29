@@ -130,6 +130,39 @@ class OrderData:
             "is_active": self.is_active,
         }
 
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> "OrderData | None":
+        """Rebuild from a persisted ``to_dict`` payload; return None if invalid."""
+        if not isinstance(raw, dict):
+            return None
+        oid = str(raw.get("orderid") or "")
+        code = str(raw.get("code") or "")
+        if not oid or not code:
+            return None
+        try:
+            direction = Direction(str(raw.get("direction") or "LONG"))
+            offset = Offset(str(raw.get("offset") or "OPEN"))
+            status = Status(str(raw.get("status") or "SUBMITTING"))
+            order_type = OrderType(str(raw.get("order_type") or "LIMIT"))
+        except ValueError:
+            return None
+        return cls(
+            code=code,
+            orderid=oid,
+            direction=direction,
+            offset=offset,
+            volume=int(raw.get("volume") or 0),
+            traded=int(raw.get("traded") or 0),
+            price=float(raw.get("price") or 0),
+            status=status,
+            order_type=order_type,
+            name=str(raw.get("name") or ""),
+            reference=str(raw.get("reference") or ""),
+            gateway=str(raw.get("gateway") or "paper"),
+            datetime=str(raw.get("datetime") or "")[:19],
+            message=str(raw.get("message") or ""),
+        )
+
 
 @dataclass
 class TradeData:

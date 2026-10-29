@@ -362,6 +362,23 @@ def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
     return get_exec_engine().snapshot()
 
 
+@router.get("/api/ops/exec-triggers")
+def ops_exec_triggers(user: dict = Depends(current_admin_required)) -> dict:
+    """Map current sell advice into unified exec trigger intents."""
+    del user
+    from market_desk.exec import get_exec_engine
+
+    eng = get_exec_engine()
+    triggers = eng.sell_triggers()
+    return {
+        "ok": True,
+        "n": len(triggers),
+        "executable_n": sum(1 for t in triggers if t.get("executable")),
+        "triggers": triggers,
+        "circuit": eng.circuit.to_dict(),
+    }
+
+
 @router.get("/api/ops/fill-rules")
 def ops_fill_rules(user: dict = Depends(current_admin_required)) -> dict:
     """Sim ? backtest ? cf fill-rule parity map (vnpy mid-priority)."""

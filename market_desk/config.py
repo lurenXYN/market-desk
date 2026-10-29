@@ -68,6 +68,11 @@ SIM_BOOK_SINCE = "2026-10-28"
 EXEC_MAX_POS_FRAC = SIM_MAX_POS_FRAC  # single-name notional / equity
 EXEC_MAX_GROSS_FRAC = 0.95  # sum(position notional) / equity after this order
 EXEC_SESSION_GUARD = True  # reject outside continuous auction when guard on
+# Circuit breakers (opens only; hard sells still allowed through).
+EXEC_CIRCUIT_ENABLED = True
+EXEC_DAY_LOSS_FRAC = 0.03  # trip when equity <= day-start * (1 - this)
+EXEC_REJECT_STREAK_MAX = 5  # consecutive gateway rejects -> trip until next day
+EXEC_ORDER_PERSIST_LIMIT = 80  # OrderBook rows kept across restarts
 
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
 ZT_UT = "7eea3edcaed734bea9cbfc24409ed989"

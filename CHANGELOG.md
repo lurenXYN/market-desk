@@ -14,6 +14,23 @@
 
 ---
 
+## [v1.10.22] - 2026-10-29
+
+### 【背景与动机（为什么做 · Why）】
+- 吸收 vnpy 闸前三项：日损/连拒熔断、订单跨日恢复、卖点与执行层条件触发语义统一（仍不部署 VeighNa）。
+
+### 【做了什么（What）】
+- **Added** `CircuitBreaker`：日损 `EXEC_DAY_LOSS_FRAC`、连拒 `EXEC_REJECT_STREAK_MAX`；只拦开仓，硬卖可过。
+- **Added** `exec_order` / `exec_circuit` 持久化；`OrderBook.restore` 重启恢复。
+- **Added** `sell_item_to_trigger`（immediate / price_stop / deferred / blocked）；`GET /api/ops/exec-triggers`；`/api/ops/exec-desk` 含 circuit。
+- **Docs** TODO vnpy 清单勾选 0.7。
+
+### 【影响与验证（Impact & Verification）】
+- 纸面默认挂熔断；真券商仍须 `gate_ok`。
+- `pytest tests/test_exec_gateway.py`。
+
+---
+
 ## [v1.10.21] - 2026-10-29
 
 ### 【背景与动机（为什么做 · Why）】

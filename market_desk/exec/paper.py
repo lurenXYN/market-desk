@@ -17,6 +17,7 @@ from market_desk.db.sim_desk import (
     set_sim_cash,
 )
 from market_desk.exec.gateway import BaseGateway
+from market_desk.exec.circuit import is_open_intent
 from market_desk.exec.risk import check_order
 from market_desk.exec.types import (
     AccountData,
@@ -50,9 +51,14 @@ class PaperGateway(BaseGateway):
 
     ``send_order`` writes through to the paper book (manual / test path).
     Live engine sync still owns signal-driven opens via ``sim_desk.sync_from_engine``.
+    Attach a ``CircuitBreaker`` via ``circuit`` so day-loss / reject streak apply.
     """
 
     default_name = "paper"
+
+    def __init__(self, gateway_name: str | None = None, *, circuit: Any = None) -> None:
+        super().__init__(gateway_name)
+        self.circuit = circuit
 
     def connect(self, setting: dict[str, Any] | None = None) -> bool:
         """Ensure the sim account row exists."""
@@ -159,24 +165,52 @@ class PaperGateway(BaseGateway):
             account=self.query_account(),
             positions=self.query_positions(),
             session_guard=False,
+            circuit=self.circuit,
         )
+        open_intent = is_open_intent(req)
         if not verdict.ok:
             base.status = Status.REJECTED
             base.message = verdict.reason
+            self._note_reject(verdict.reason, is_open=open_intent)
             return base
         try:
             if req.direction == Direction.LONG and req.offset == Offset.OPEN:
-                return self._fill_buy(base, req)
-            if req.direction == Direction.SHORT and req.offset == Offset.CLOSE:
-                return self._fill_sell(base, req)
-            base.status = Status.REJECTED
-            base.message = "unsupported_side"
-            return base
+                filled = self._fill_buy(base, req)
+            elif req.direction == Direction.SHORT and req.offset == Offset.CLOSE:
+                filled = self._fill_sell(base, req)
+            else:
+                base.status = Status.REJECTED
+                base.message = "unsupported_side"
+                filled = base
+            if filled.status == Status.REJECTED:
+                self._note_reject(filled.message, is_open=open_intent)
+            elif filled.status == Status.ALLTRADED:
+                self._note_fill()
+            return filled
         except Exception as exc:
             log.exception("paper send_order failed")
             base.status = Status.REJECTED
             base.message = str(exc)[:160]
+            self._note_reject(base.message, is_open=open_intent)
             return base
+
+    def _note_reject(self, reason: str, *, is_open: bool = True) -> None:
+        """Feed consecutive-reject circuit (open attempts only)."""
+        if self.circuit is None or not is_open:
+            return
+        try:
+            self.circuit.note_reject(reason)
+        except Exception:
+            log.debug("circuit note_reject failed", exc_info=True)
+
+    def _note_fill(self) -> None:
+        """Reset reject streak after a successful paper fill."""
+        if self.circuit is None:
+            return
+        try:
+            self.circuit.note_fill()
+        except Exception:
+            log.debug("circuit note_fill failed", exc_info=True)
 
     def cancel_order(self, req: CancelRequest) -> bool:
         """Paper fills are immediate — nothing to cancel."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from market_desk.config import (
     EXEC_MAX_GROSS_FRAC,
@@ -20,6 +20,9 @@ from market_desk.exec.types import (
     Status,
 )
 from market_desk.filters import normalize_code
+
+if TYPE_CHECKING:
+    from market_desk.exec.circuit import CircuitBreaker
 
 
 @dataclass
@@ -134,6 +137,25 @@ def check_position_limits(
     return RiskVerdict(ok=True, reason="limits_ok")
 
 
+def check_circuit_open(
+    req: OrderRequest,
+    *,
+    circuit: "CircuitBreaker | None" = None,
+    equity: float | None = None,
+) -> RiskVerdict:
+    """Block long-opens when day-loss / reject-streak breakers are tripped."""
+    if circuit is None:
+        return RiskVerdict(ok=True, reason="circuit_skip")
+    from market_desk.exec.circuit import is_open_intent
+
+    if not is_open_intent(req):
+        return RiskVerdict(ok=True, reason="circuit_skip_close")
+    ok, reason = circuit.check_open(equity=equity)
+    if not ok:
+        return RiskVerdict(ok=False, reason=reason, status=Status.REJECTED)
+    return RiskVerdict(ok=True, reason=reason)
+
+
 def check_order(
     req: OrderRequest,
     *,
@@ -142,14 +164,19 @@ def check_order(
     positions: Iterable[PositionData] | None = None,
     session_now: datetime | None = None,
     session_guard: bool | None = None,
+    circuit: "CircuitBreaker | None" = None,
 ) -> RiskVerdict:
-    """Run start-gate → basics → session → position limits."""
+    """Run start-gate → basics → circuit → session → position limits."""
     gate = require_start_gate(live=live)
     if not gate.ok:
         return gate
     basic = check_order_basics(req)
     if not basic.ok:
         return basic
+    equity = float(account.balance) if account is not None else None
+    circ = check_circuit_open(req, circuit=circuit, equity=equity)
+    if not circ.ok:
+        return circ
     # Session guard applies to live always; paper only when explicitly requested.
     guard = session_guard
     if guard is None:

@@ -271,6 +271,10 @@ Agents: **at the start of each session involving this app, read this file before
     - [x] **订单状态机**：本地 OrderBook（提交/部成/全成/拒/撤）
     - [x] **独立风控**：单票上限 / 总仓上限 / 时段（与策略 if 分离）
     - [x] **对账骨架**：本地仓 vs 远端仓/成交 diff（纸面自洽；真券商接阶段 1）
+  - [x] **0.7 闸前吸收（参考 vnpy）** *(v1.10.22)*
+    - [x] **日损 / 连拒熔断**：`CircuitBreaker`（只拦开仓；`EXEC_DAY_LOSS_FRAC` / `EXEC_REJECT_STREAK_MAX`）
+    - [x] **订单跨日持久**：`exec_order` + `OrderBook.restore`
+    - [x] **卖点条件触发语义**：`sell_item_to_trigger` + `GET /api/ops/exec-triggers`
   - [ ] **1 只读**：券商持仓/成交对账 — **须组合累计 >0**（接 `BaseGateway.query_*` + reconcile；仍不装完整 vnpy）
   - [ ] **2 一键**：可买卡一键送单（人确认）— **须 1**
   - [ ] **3 全自动**：ready/卖点直达 — **须 2 + 用户再点头 + 限额/熔断**
@@ -278,6 +282,7 @@ Agents: **at the start of each session involving this app, read this file before
   - **vnpy 学习清单（不部署整仓）**
     - 高：风控独立、订单状态机、持仓/成交对账 ← 见 0.6 / 1
     - 高：决策与执行分离 ← 已 0.5
+    - [x] 高：日损/连拒熔断、订单恢复、卖点触发语义 ← 见 0.7
     - [x] 中：规则/策略可回放同构（sim + backtest）*(v1.10.21)*：`fill_rules_parity` + backtest `open_date` T+1；`GET /api/ops/fill-rules`
     - [x] 中：行情录制与补数 *(v1.10.21)*：`market_bar_daily` 缓存 + `find_bar_gaps`；拉日线自动 upsert；`GET /api/ops/bars-cache`
     - 低：算法单、完整 EventEngine、Alpha ML
