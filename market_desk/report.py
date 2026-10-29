@@ -515,13 +515,24 @@ def _eod_worth_review_buys(
 
 
 def _eod_curate_push(bullets: list[str], *, cap: int = 8) -> list[str]:
-    """Pick a push-sized subset that always keeps the day P&L bullet first."""
+    """Pick a push-sized subset that always keeps P&L / discipline / sim first."""
     if not bullets:
         return []
-    head = ("今日盈亏", "纪律分")
-    pnl = [b for k in head for b in bullets if str(b).startswith(k)]
-    rest = [b for b in bullets if not str(b).startswith(head)]
-    ordered = pnl + rest
+    head = ("今日盈亏", "纪律分", "模拟账本", "模拟买入", "模拟卖出")
+    pinned = [b for k in head for b in bullets if str(b).startswith(k)]
+    # Dedupe while preserving order (pinned may list the same row twice).
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for b in pinned:
+        if b in seen:
+            continue
+        seen.add(b)
+        ordered.append(b)
+    for b in bullets:
+        if b in seen:
+            continue
+        seen.add(b)
+        ordered.append(b)
     return ordered[: max(1, int(cap))]
 
 
@@ -587,6 +598,16 @@ def build_eod_onepager(
     disc = summary.get("discipline") if isinstance(summary.get("discipline"), dict) else {}
     if disc.get("ok") and disc.get("score") is not None and disc.get("line"):
         bullets.append(str(disc["line"]))
+
+    # Merge paper-sim digest into the same EOD card (no separate Server酱 sim: push).
+    try:
+        from market_desk.sim_desk import format_sim_digest_bullets
+
+        for sim_line in format_sim_digest_bullets(trade_date=str(day)[:10], fill_cap=2):
+            if sim_line and sim_line not in bullets:
+                bullets.append(sim_line)
+    except Exception:
+        pass
 
     diary_line = _eod_diary_line(diary_rows)
     if diary_line:

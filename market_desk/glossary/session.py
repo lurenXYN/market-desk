@@ -213,7 +213,8 @@ ENTRIES: dict[str, dict[str, str]] = {
         "algo": "成交纪律：连续竞价 09:30–11:30 / 13:00–15:00；买得进/卖得出、T+1、一字板、开盘软卖缓冲。\n"
         "资金：满仓名义≤权益×25%×权重，100 股整手；买卖各扣 TRADE_FEE_CNY（默认 5 元）；现金不足跳过。\n"
         "假仓位走 build_sell_advice；交易日志见「模拟」Tab。开工闸=已有卖出且权益/初始−1>0。\n"
-        "API：GET /api/sim-desk；管理端 /api/ops/sim-desk?backfill=true&replay=true；日终 sim:digest。",
+        "API：GET /api/sim-desk；管理端 /api/ops/sim-desk?backfill=true&replay=true；"
+        "日终页内 toast 仍为 sim:digest，微信并入 15:05 收盘一页纸（不再单独占 Server酱 额度）。",
     },
     "开工闸": {
         "mean": "自动下单阶段 1–3 的开关：模拟账户权益相对初始必须转正，且至少一笔卖出。",

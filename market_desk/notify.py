@@ -485,15 +485,18 @@ def is_serverchan_alert(key: str) -> bool:
     Only scheduled ``eod:`` / ``morning:`` pushes pass while
     ``SERVERCHAN_EVENT_PUSH`` is off; otherwise buy/sell/lhb/ops alerts too.
     Health/degraded banners stay on-page only — ``ops:health:`` is never WeChat-pushed.
+    ``sim:`` is page-toast only: sim digest is folded into the 15:05 ``eod:`` body
+    so the free 5/day Server酱 quota is not burned by a second push.
     """
     from market_desk.config import SERVERCHAN_EVENT_PUSH
 
     k = str(key or "")
     if k.startswith("ops:health:"):
         return False
+    if k.startswith("sim:"):
+        return False
     if not SERVERCHAN_EVENT_PUSH:
-        # Stage-0 sim digest is for 复盘党 (not desk watchers); keep with eod/morning.
-        return k.startswith(("eod:", "morning:", "sim:"))
+        return k.startswith(("eod:", "morning:"))
     return k.startswith(
         (
             "buy:",
@@ -505,7 +508,6 @@ def is_serverchan_alert(key: str) -> bool:
             "ops:",
             "crowd:",
             "pulse:",
-            "sim:",
         )
     )
 

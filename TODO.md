@@ -264,7 +264,7 @@ Agents: **at the start of each session involving this app, read this file before
   - [x] **通往开工闸 · 缺口（都要做）** *(v1.10.16–17)*
     - [x] **模拟操盘账本**：初始 2 万 + 买卖各扣手续费；`sim_lot`/`sim_fill` 交易日志；可买进→卖点出
     - [x] **卖点配对 / 回放**：假仓位 → `build_sell_advice`；`?replay=true` 用历史卖点补平
-    - [x] **0 提醒**：日终 `sim:digest`（同轮 drain）
+    - [x] **0 提醒**：日终 `sim:digest`（同轮 drain；**v1.10.23** 微信并入 15:05 `eod:`，不再单独占额度）
     - [x] **开工闸仪表**：主导航 **模拟** Tab + `/api/sim-desk` + ops/review-check
   - [x] **0.5 执行分层（参考 vnpy · 不部署）** *(v1.10.19)*：`market_desk/exec/` PaperGateway + `gate_ok` 硬拦 live；`/api/ops/exec-desk`
   - [x] **0.6 高优先（参考 vnpy · 闸前可做）** *(v1.10.20)*

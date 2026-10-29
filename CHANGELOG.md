@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.23] - 2026-10-29
+
+### 【背景与动机（为什么做 · Why）】
+- Server酱免费日额约 5 次；模拟仓 `sim:digest` 与 15:05 收盘一页纸各推一次，额度不够。
+
+### 【做了什么（What）】
+- **Changed** 模拟账本摘要并入 `build_eod_onepager` / 收盘微信正文（`format_sim_digest_bullets`）。
+- **Changed** `sim:` 不再走 Server酱（页内 toast 仍保留）；`is_serverchan_alert` 只放行 `eod:` / `morning:`（事件推送关时）。
+
+### 【影响与验证（Impact & Verification）】
+- 每日微信少占 1 次额度；模拟内容仍出现在收盘一页纸前几行。
+- `pytest tests/test_eod_onepager.py tests/test_serverchan_quota.py tests/test_sim_digest_merge.py`。
+
+---
+
 ## [v1.10.22] - 2026-10-29
 
 ### 【背景与动机（为什么做 · Why）】

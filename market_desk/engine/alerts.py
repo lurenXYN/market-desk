@@ -146,8 +146,12 @@ class AlertsMixin:
         )
 
     def _maybe_sim_desk_digest(self, now: datetime, payload: dict[str, Any]) -> None:
-        """Stage-0 once-per-day toast: today's sim opens / closes + start-gate line."""
-        from market_desk.sim_desk import day_alert_lines, start_gate_snapshot
+        """Stage-0 once-per-day *page* toast for the paper sim book.
+
+        WeChat no longer gets a separate ``sim:`` push (quota): the same content
+        is folded into the 15:05 ``eod:`` one-pager via ``format_sim_digest_bullets``.
+        """
+        from market_desk.sim_desk import format_sim_digest_bullets
 
         day = str(payload.get("trade_date") or now.strftime("%Y-%m-%d"))
         if len(day) == 8 and day.isdigit():
@@ -156,19 +160,14 @@ class AlertsMixin:
         hm = now.hour * 100 + now.minute
         if hm < 1450:
             return
-        lines = day_alert_lines(trade_date=day)
-        gate = start_gate_snapshot()
-        cum = gate.get("cum_pnl_pct")
-        cum_s = f"{cum:+.2f}%" if cum is not None else "—"
-        head = (
-            f"模拟账本 · 平仓{gate.get('closed_n', 0)} · 持仓{gate.get('open_n', 0)} · "
-            f"累计{cum_s} · {gate.get('gate_label')}"
-        )
-        body = head if not lines else head + "；" + "；".join(lines[:6])
+        bullets = format_sim_digest_bullets(trade_date=day, fill_cap=6)
+        if not bullets:
+            return
+        body = "；".join(bullets)[:280]
         self._queue_ops_alert(
             f"sim:digest:{day}",
             "模拟操盘日终",
-            body[:280],
+            body,
             day=day,
         )
 

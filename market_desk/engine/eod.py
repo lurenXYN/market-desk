@@ -234,9 +234,11 @@ class EodMixin:
             push_list = ubrief.get("push_bullets")
             if not isinstance(push_list, list) or not push_list:
                 raw = [str(b) for b in (ubrief.get("bullets") or []) if b]
-                pnl = [b for b in raw if b.startswith(("今日盈亏", "纪律分"))]
-                rest = [b for b in raw if not b.startswith(("今日盈亏", "纪律分"))]
-                push_list = (pnl + rest)[:8]
+                pin_pfx = ("今日盈亏", "纪律分", "模拟账本", "模拟买入", "模拟卖出")
+                pinned = [b for p in pin_pfx for b in raw if b.startswith(p)]
+                seen = set(pinned)
+                rest = [b for b in raw if b not in seen]
+                push_list = (pinned + rest)[:8]
             body_lines = [str(ubrief.get("focus") or "").strip()]
             for b in push_list[:8]:
                 body_lines.append(f"· {b}")

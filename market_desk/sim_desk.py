@@ -1085,7 +1085,7 @@ def sync_from_engine(
 
 
 def day_alert_lines(*, trade_date: str | None = None) -> list[str]:
-    """Stage-0 digest lines: today's buys and sells (for Server酱 / toast)."""
+    """Stage-0 digest lines: today's buys and sells (for page toast / EOD merge)."""
     day = (trade_date or "")[:10]
     if not day:
         try:
@@ -1114,6 +1114,45 @@ def day_alert_lines(*, trade_date: str | None = None) -> list[str]:
             pnl_s = f"{float(pnl):+.2f}%" if pnl is not None else "—"
             lines.append(f"模拟卖出 {code} {name} · {mode_zh} · {qty}股 · {pnl_s}")
     return lines[:20]
+
+
+def format_sim_digest_bullets(
+    *,
+    trade_date: str | None = None,
+    fill_cap: int = 2,
+) -> list[str]:
+    """Compact sim-book bullets for the 15:05 EOD WeChat (merged, not a 2nd push).
+
+    Returns a gate headline plus up to ``fill_cap`` today's fills. Empty when the
+    paper book has never been used (no opens/closes and equity still at initial).
+    """
+    day = (trade_date or "")[:10]
+    if not day:
+        try:
+            from market_desk.calendar import today_cn
+
+            day = today_cn()
+        except Exception:
+            day = datetime.now().strftime("%Y-%m-%d")
+    try:
+        gate = start_gate_snapshot()
+    except Exception:
+        return []
+    closed_n = int(gate.get("closed_n") or 0)
+    open_n = int(gate.get("open_n") or 0)
+    fills = day_alert_lines(trade_date=day)
+    if closed_n <= 0 and open_n <= 0 and not fills:
+        return []
+    cum = gate.get("cum_pnl_pct")
+    cum_s = f"{float(cum):+.2f}%" if cum is not None else "—"
+    head = (
+        f"模拟账本 · 平仓{closed_n} · 持仓{open_n} · 累计{cum_s} · "
+        f"{gate.get('gate_label') or '—'}"
+    )
+    out = [head]
+    for line in fills[: max(0, int(fill_cap))]:
+        out.append(line)
+    return out
 
 
 # Re-export quote helper list for engine refresh.
