@@ -1,4 +1,4 @@
-# Dump /api/ops/review-check JSON from VPS for the 10/28 checklist.
+# Dump review-check JSON from VPS for the 10/28 checklist.
 name: Review check dump
 
 on:
@@ -8,6 +8,10 @@ on:
         description: "Include counterfactual (true/false)"
         required: false
         default: "false"
+      cf_days:
+        description: "Counterfactual lookback days"
+        required: false
+        default: "20"
 
 concurrency:
   group: review-check-dump
@@ -16,7 +20,7 @@ concurrency:
 jobs:
   dump:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Dump review-check over SSH
         uses: appleboy/ssh-action@v1.2.2
@@ -25,24 +29,36 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          command_timeout: 12m
+          command_timeout: 25m
           script: |
             set -euo pipefail
             CF="${{ github.event.inputs.cf || 'false' }}"
+            CF_DAYS="${{ github.event.inputs.cf_days || '20' }}"
             cd /opt/market-desk
             .venv/bin/python - <<PY
+            import asyncio
             import json
             from market_desk.review_check import build_review_check_sync, merge_counterfactual
 
             base = build_review_check_sync()
             if "${CF}".lower() in ("1", "true", "yes"):
-                import asyncio
-                out = asyncio.run(merge_counterfactual(base, cf_days=20))
+                from market_desk.engine import engine
+
+                async def _run():
+                    try:
+                        return await engine.build_counterfactual(days=int("${CF_DAYS}"), strict=True)
+                    except Exception as exc:
+                        return {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:200]}
+
+                audit = asyncio.run(_run())
+                out = merge_counterfactual(base, audit)
+                out["counterfactual_ok"] = bool((audit or {}).get("ok"))
             else:
                 out = base
-            # Compact summary for Actions log
+                out["counterfactual"] = {"ok": False, "skipped": True}
             print("ASOF", out.get("asof"))
             print("OOS_DAYS", out.get("edge_oos_days"), "OOS_N", out.get("edge_oos_n"))
+            print("CF_OK", out.get("counterfactual_ok"), out.get("counterfactual", {}).get("skipped"))
             for it in out.get("items") or []:
                 samp = it.get("sample") or {}
                 print(
@@ -56,7 +72,6 @@ jobs:
                 json.dump(out, f, ensure_ascii=False, indent=2, default=str)
             print("WROTE", path, "bytes", __import__("os").path.getsize(path))
             PY
-            # Print key metrics snippets (truncate huge cf)
             .venv/bin/python - <<'PY'
             import json
             from pathlib import Path
@@ -65,5 +80,5 @@ jobs:
                 m = it.get("metrics") or {}
                 keys = list(m.keys())[:12]
                 slim = {k: m[k] for k in keys}
-                print("METRICS", it.get("id"), json.dumps(slim, ensure_ascii=False, default=str)[:800])
+                print("METRICS", it.get("id"), json.dumps(slim, ensure_ascii=False, default=str)[:900])
             PY

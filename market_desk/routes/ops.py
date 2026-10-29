@@ -434,7 +434,7 @@ def ops_sim_desk(
         "trades": recent_trades(80),
         "curl": (
             "GET /api/ops/sim-desk  "
-            "（?reset=true 清零；?backfill=true 仅自 SIM_BOOK_SINCE；?replay=true 回放卖点）"
+            "(?reset=true wipe; ?backfill=true since SIM_BOOK_SINCE; ?replay=true sell replay)"
         ),
     }
 
@@ -457,7 +457,7 @@ async def ops_review_check(
     base = build_review_check_sync()
     if not cf:
         base["counterfactual"] = {"ok": False, "skipped": True}
-        base["curl"] = "GET /api/ops/review-check  （加 ?cf=false 可跳过闸门 What-If）"
+        base["curl"] = "GET /api/ops/review-check  (?cf=false skips gate What-If)"
         return base
     try:
         audit = await engine.build_counterfactual(days=cf_days, strict=True)
@@ -466,7 +466,7 @@ async def ops_review_check(
         base["curl"] = "GET /api/ops/review-check"
         return base
     out = merge_counterfactual(base, audit)
-    out["curl"] = "GET /api/ops/review-check  （加 ?cf=false 可跳过闸门 What-If）"
+    out["curl"] = "GET /api/ops/review-check  (?cf=false skips gate What-If)"
     return out
 
 
