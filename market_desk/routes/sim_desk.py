@@ -17,13 +17,19 @@ def sim_desk_book(
     """Paper account, open lots, trade log and start-gate snapshot."""
     del user
     from market_desk.db import load_open_sim_lots
-    from market_desk.sim_desk import account_snapshot, recent_trades, start_gate_snapshot
+    from market_desk.sim_desk import (
+        account_snapshot,
+        build_sim_attribution,
+        recent_trades,
+        start_gate_snapshot,
+    )
 
     gate = start_gate_snapshot()
     return {
         "ok": True,
         "account": account_snapshot(),
         "gate": gate,
+        "attribution": build_sim_attribution(limit=trades),
         "open_lots": load_open_sim_lots(),
         "trades": recent_trades(trades),
     }

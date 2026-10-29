@@ -40,4 +40,17 @@ if [[ "$IN_AM" -eq 0 && "$IN_PM" -eq 0 ]]; then
 fi
 
 echo "==> audit_attribution @ $(date '+%F %T %Z') (minute=${MINUTE})"
-exec "$PY" scripts/audit_attribution.py
+"$PY" scripts/audit_attribution.py
+status=$?
+"$PY" - <<'PY'
+from datetime import datetime
+try:
+    from market_desk.db import save_setting
+    save_setting(
+        "attribution_last",
+        {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "ok": True},
+    )
+except Exception as exc:
+    print(f"stamp attribution_last failed: {exc}")
+PY
+exit "$status"

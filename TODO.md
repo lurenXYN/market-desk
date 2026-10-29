@@ -75,6 +75,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] 运维自检：同 workflow — `market-desk` **active**；轻量 review/fill-rules/bars 摘要 OK（完整 `/api/ops/check` 仍建议浏览器看一眼）
 - [x] **复盘素材 JSON（优先，免截图）**：2026-10-29 `cf=false` 已拉；`cf=true` 已修 workflow 并重跑（见 Actions）。
 - [ ] （可选）复盘页扫一眼核对；叙事/拥挤细节以 JSON 为准
+- [x] **观测包 v1.10.25**：review-check 补卖点/参考分/已亮卡进度；模拟归因；Server酱额度；exec circuit_view；ops/check 日线缓存+归因戳
 
 > **2026-10-29 总判**：样本外天数够看的项里，**无一达到「改代码」门槛**（叙事命中率不够；regime/早进不足 10 日；熔断空）。模拟开工闸 **未过线**（closed=2，权益≈19932，gate_ok=false）。**本日不改 ready/排序/硬闸。**
 

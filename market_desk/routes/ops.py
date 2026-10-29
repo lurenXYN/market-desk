@@ -329,6 +329,91 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
                 "detail": "未启用（软关）",
             }
         )
+    try:
+        from market_desk.notify import serverchan_quota_snapshot
+
+        q = serverchan_quota_snapshot()
+        checks.append(
+            {
+                "id": "serverchan_quota",
+                "title": "Server酱额度",
+                "level": q.get("level") or "ok",
+                "detail": (
+                    f"今日 {q.get('used')}/{q.get('cap')} · 剩 {q.get('remaining')}"
+                    + (f" · flags {','.join(q.get('flags') or [])}" if q.get("flags") else "")
+                ),
+                "quota": q,
+            }
+        )
+    except Exception as exc:
+        checks.append(
+            {
+                "id": "serverchan_quota",
+                "title": "Server酱额度",
+                "level": "warn",
+                "detail": f"{type(exc).__name__}: {exc}"[:120],
+            }
+        )
+    try:
+        from market_desk.db.bars_cache import bars_cache_stats
+
+        st = bars_cache_stats()
+        rows = int(st.get("rows") or 0)
+        codes = int(st.get("codes") or 0)
+        lvl = "ok" if rows > 0 and codes > 0 else "warn"
+        checks.append(
+            {
+                "id": "bars_cache",
+                "title": "日线缓存",
+                "level": lvl,
+                "detail": (
+                    f"{codes} 码 · {rows} 行 · "
+                    f"{st.get('min_date') or '—'}→{st.get('max_date') or '—'}"
+                ),
+                "stats": st,
+            }
+        )
+    except Exception as exc:
+        checks.append(
+            {
+                "id": "bars_cache",
+                "title": "日线缓存",
+                "level": "warn",
+                "detail": f"{type(exc).__name__}: {exc}"[:120],
+            }
+        )
+    try:
+        from market_desk.db import load_setting
+
+        attr = load_setting("attribution_last")
+        if isinstance(attr, dict) and attr.get("at"):
+            checks.append(
+                {
+                    "id": "attribution_timer",
+                    "title": "归因审计",
+                    "level": "ok",
+                    "detail": f"最近 {attr.get('at')}",
+                    "last": attr,
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "id": "attribution_timer",
+                    "title": "归因审计",
+                    "level": "warn",
+                    "detail": "尚无 attribution_last 戳（timer 跑过后写入）",
+                }
+            )
+    except Exception as exc:
+        checks.append(
+            {
+                "id": "attribution_timer",
+                "title": "归因审计",
+                "level": "warn",
+                "detail": f"{type(exc).__name__}: {exc}"[:120],
+            }
+        )
     bad_n = sum(1 for c in checks if c.get("level") == "bad")
     warn_n = sum(1 for c in checks if c.get("level") == "warn")
     overall = "ok" if bad_n == 0 and warn_n == 0 else ("bad" if bad_n else "warn")
@@ -360,6 +445,15 @@ def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
     from market_desk.exec import get_exec_engine
 
     return get_exec_engine().snapshot()
+
+
+@router.get("/api/ops/serverchan-quota")
+def ops_serverchan_quota(user: dict = Depends(current_admin_required)) -> dict:
+    """Today's desk Server酱 usage vs free daily cap."""
+    del user
+    from market_desk.notify import serverchan_quota_snapshot
+
+    return serverchan_quota_snapshot()
 
 
 @router.get("/api/ops/exec-triggers")

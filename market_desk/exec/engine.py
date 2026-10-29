@@ -154,6 +154,20 @@ class ExecEngine:
         """Ops / review dump: gate + paper + orders + circuit + self-reconcile."""
         gate = start_gate_snapshot()
         stats = portfolio_stats()
+        circ = self.circuit.to_dict()
+        tripped = bool(circ.get("tripped"))
+        triggers = []
+        try:
+            triggers = self.sell_triggers()
+        except Exception:
+            triggers = []
+        by_mode: dict[str, int] = {}
+        exec_n = 0
+        for t in triggers:
+            mode = str(t.get("mode") or "?")
+            by_mode[mode] = by_mode.get(mode, 0) + 1
+            if t.get("executable"):
+                exec_n += 1
         return {
             "ok": True,
             "stage": "0.7_circuit_persist_triggers",
@@ -161,7 +175,43 @@ class ExecEngine:
             "gate": gate,
             "paper": self.paper.snapshot(),
             "orders": self.orders.to_dict(),
-            "circuit": self.circuit.to_dict(),
+            "circuit": circ,
+            "circuit_view": {
+                "tone": (
+                    "bad"
+                    if tripped
+                    else (
+                        "warn"
+                        if int(circ.get("reject_streak") or 0) > 0
+                        else "ok"
+                    )
+                ),
+                "label": (
+                    "日损熔断·拦开仓"
+                    if circ.get("day_loss_tripped")
+                    else (
+                        "连拒熔断·拦开仓"
+                        if circ.get("reject_tripped")
+                        else (
+                            f"连拒 {circ.get('reject_streak')}/{circ.get('reject_streak_max')}"
+                            if int(circ.get("reject_streak") or 0) > 0
+                            else "熔断未触发"
+                        )
+                    )
+                ),
+                "tripped": tripped,
+                "day_start_equity": circ.get("day_start_equity"),
+                "reject_streak": circ.get("reject_streak"),
+                "reject_streak_max": circ.get("reject_streak_max"),
+                "last_reject_reason": circ.get("last_reject_reason"),
+            },
+            "triggers_summary": {
+                "n": len(triggers),
+                "executable_n": exec_n,
+                "by_mode": by_mode,
+                "top": triggers[:12],
+                "sample": triggers[:8],
+            },
             "self_check": self_check_gateway(self.paper),
             "live": (
                 {

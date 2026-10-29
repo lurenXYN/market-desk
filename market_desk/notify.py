@@ -605,7 +605,72 @@ def format_serverchan_desp(
     return "\n".join(lines)
 
 
-def notify_serverchan(sendkey: str, title: str, desp: str) -> bool:
+def _record_serverchan_push(*, title: str, source: str = "desk") -> None:
+    """Append one successful desk-side push to today's usage log."""
+    try:
+        from market_desk.calendar import today_cn
+        from market_desk.db import load_setting, save_setting
+
+        day = today_cn()
+        store = f"sc_push_log:{day}"
+        cur = list(load_setting(store) or [])
+        cur.append(
+            {
+                "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "title": str(title or "")[:80],
+                "source": str(source or "desk")[:32],
+            }
+        )
+        save_setting(store, cur[-60:])
+    except Exception:
+        log.debug("record serverchan push failed", exc_info=True)
+
+
+def serverchan_quota_snapshot() -> dict[str, Any]:
+    """Desk-visible Server酱 usage vs free daily cap (radar may share the key)."""
+    from market_desk.calendar import today_cn
+    from market_desk.config import SERVERCHAN_DAILY_CAP
+
+    day = today_cn()
+    cap = int(SERVERCHAN_DAILY_CAP or 5)
+    log_rows: list[dict[str, Any]] = []
+    flags: list[str] = []
+    try:
+        from market_desk.db import load_setting
+
+        raw = load_setting(f"sc_push_log:{day}") or []
+        if isinstance(raw, list):
+            log_rows = [r for r in raw if isinstance(r, dict)]
+        if load_setting(f"eod_pushed:{day}"):
+            flags.append("eod")
+        if load_setting(f"morning_pushed:{day}"):
+            flags.append("morning")
+        if load_setting(f"sim_digest_done:{day}"):
+            flags.append("sim_toast_only")
+    except Exception:
+        pass
+    used = len(log_rows)
+    # If log empty but flags exist (older builds), estimate from flags that mean WeChat.
+    if used == 0:
+        used = sum(1 for f in flags if f in ("eod", "morning"))
+    remaining = max(0, cap - used)
+    return {
+        "ok": True,
+        "day": day,
+        "cap": cap,
+        "used": used,
+        "remaining": remaining,
+        "level": "ok" if remaining >= 2 else ("warn" if remaining >= 1 else "bad"),
+        "flags": flags,
+        "log": log_rows[-12:],
+        "note": (
+            "仅统计作战台成功 POST；新闻雷达若共用同一 SendKey 也会占额度但未必写入本日志。"
+            "sim: 微信已并入 eod，不再单独计数。"
+        ),
+    }
+
+
+def notify_serverchan(sendkey: str, title: str, desp: str, *, source: str = "desk") -> bool:
     """POST one message to Server酱³. Return True on HTTP success."""
     import json
     import urllib.error
@@ -639,6 +704,7 @@ def notify_serverchan(sendkey: str, title: str, desp: str) -> bool:
                 return False
         except json.JSONDecodeError:
             pass
+        _record_serverchan_push(title=str(title or ""), source=source)
         return True
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         log.warning("serverchan failed: %s", exc)

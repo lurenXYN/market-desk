@@ -300,6 +300,8 @@ def build_review_check_sync() -> dict[str, Any]:
             skip=True,
         )
     )
+    items.extend(_extra_review_items(rows))
+
     sim_gate: dict[str, Any] | None = None
     try:
         from market_desk.sim_desk import start_gate_snapshot
@@ -322,6 +324,7 @@ def build_review_check_sync() -> dict[str, Any]:
                     "open_n": sim_gate.get("open_n"),
                     "gate_ok": sim_gate.get("gate_ok"),
                     "gate_label": sim_gate.get("gate_label"),
+                    "to_green_cny": sim_gate.get("to_green_cny"),
                     "recent": sim_gate.get("recent"),
                 },
                 ui_verdict=sim_gate.get("gate_label"),
@@ -354,8 +357,152 @@ def build_review_check_sync() -> dict[str, Any]:
             "UI verdict 用闸门账本口径（天数/张数/幅度），不等于 TODO 的 |t|≥2+两半同号。"
             "闸门 What-If / ATR / 入场敏感度在 counterfactual 段（需拉日线，可能稍慢）。"
             "开工闸看 sim_desk / sim_desk_gate（可买→卖点组合累计）。"
+            "卖点/参考分/已亮卡见 sell_fly / pick_audit / lit_float。"
         ),
     }
+
+
+def _extra_review_items(buy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """TODO #6 / #11 / #12 paste rows (sell fly, lit float sample, pick audit)."""
+    out: list[dict[str, Any]] = []
+    # #6 卖点类型
+    try:
+        from market_desk.db import load_signals
+        from market_desk.review.bias import build_sell_fly_board
+
+        sells = [r for r in load_signals(limit=4000) if str(r.get("signal_type") or "") == "sell"]
+        board = build_sell_fly_board(sells)
+        by_rule = list(board.get("by_rule") or [])[:12]
+        out.append(
+            _item(
+                id="sell_fly",
+                title="卖点类型·卖飞看板",
+                since=None,
+                sample=_sample(1 if int(board.get("n") or 0) else 0, board.get("n") or 0, min_days=1, min_n=15),
+                metrics={
+                    "n": board.get("n"),
+                    "fly_rate": board.get("fly_rate"),
+                    "early_rate": board.get("early_rate"),
+                    "hit_rate": board.get("hit_rate"),
+                    "by_rule": by_rule,
+                },
+                ui_verdict=(
+                    f"卖飞{board.get('fly_rate')}% · 偏早{board.get('early_rate')}%"
+                    if board.get("n")
+                    else "无已打分卖点"
+                ),
+                hint="每类 ≥15；省下中位<0 且卖飞>60%（两半）才考虑放宽一档",
+                level="ok" if int(board.get("n") or 0) >= 15 else "warn",
+            )
+        )
+    except Exception as exc:
+        out.append(
+            _item(
+                id="sell_fly",
+                title="卖点类型·卖飞看板",
+                since=None,
+                sample=_sample(0, 0, min_n=15),
+                metrics={"error": f"{type(exc).__name__}: {exc}"[:120]},
+                hint="build_sell_fly_board 失败",
+                level="warn",
+            )
+        )
+
+    # #12 参考分自检
+    try:
+        from market_desk.config import PICK_AUDIT_SINCE
+        from market_desk.db import load_pick_audit_rows
+        from market_desk.pick_score import pick_self_audit
+
+        audit_rows = load_pick_audit_rows(str(PICK_AUDIT_SINCE))
+        audit = pick_self_audit(audit_rows)
+        out.append(
+            _item(
+                id="pick_audit",
+                title="参考分自检",
+                since=str(audit.get("since") or PICK_AUDIT_SINCE),
+                sample=_sample(audit.get("days"), audit.get("n"), min_n=1),
+                metrics={
+                    "status": audit.get("status"),
+                    "ic": audit.get("ic"),
+                    "ic_t": audit.get("ic_t"),
+                    "top_minus_bottom": audit.get("top_minus_bottom"),
+                    "clean_minus_flagged": audit.get("clean_minus_flagged"),
+                    "label": audit.get("label"),
+                },
+                ui_verdict=str(audit.get("label") or audit.get("status") or ""),
+                hint="满 10 天再判有效/无效；失败则分数只存档不作排序",
+                level="ok" if audit.get("status") in ("works", "weak", "fails") else "warn",
+            )
+        )
+    except Exception as exc:
+        out.append(
+            _item(
+                id="pick_audit",
+                title="参考分自检",
+                since=None,
+                sample=_sample(0, 0, min_n=1),
+                metrics={"error": f"{type(exc).__name__}: {exc}"[:120]},
+                hint="pick_self_audit 失败",
+                level="warn",
+            )
+        )
+
+    # #11 已亮卡浮动：轻量样本日计数（完整秩相关仍跑 scripts/replay_intraday.py）
+    try:
+        from market_desk.config import EDGE_SHADOW_SINCE
+
+        day_map: dict[str, list[str]] = {}
+        for r in buy_rows:
+            day = str(r.get("trade_date") or "")[:10]
+            if not day or day < str(EDGE_SHADOW_SINCE)[:10]:
+                continue
+            payload = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+            at = str(payload.get("first_ready_at") or "")
+            if len(at) < 16:
+                continue
+            hm = at[11:16]
+            if hm <= "11:00":
+                code = str(r.get("code") or "")
+                if code:
+                    day_map.setdefault(day, [])
+                    if code not in day_map[day]:
+                        day_map[day].append(code)
+        qual_days = sorted(d for d, codes in day_map.items() if len(codes) >= 2)
+        out.append(
+            _item(
+                id="lit_float",
+                title="已亮卡浮动样本日",
+                since=str(EDGE_SHADOW_SINCE),
+                sample=_sample(len(qual_days), sum(len(day_map[d]) for d in qual_days), min_days=10, min_n=1),
+                metrics={
+                    "qual_days": len(qual_days),
+                    "need_days": 10,
+                    "recent_days": qual_days[-8:],
+                    "note": "11:00 前≥2 张已亮的交易日；秩相关请跑 replay_intraday",
+                },
+                ui_verdict=(
+                    f"{len(qual_days)}/10 个合格日"
+                    if qual_days is not None
+                    else "无"
+                ),
+                hint="满 10 个合格日后再看浮动−大盘秩相关；本接口只报样本日进度",
+                level="ok" if len(qual_days) >= 10 else "warn",
+            )
+        )
+    except Exception as exc:
+        out.append(
+            _item(
+                id="lit_float",
+                title="已亮卡浮动样本日",
+                since=None,
+                sample=_sample(0, 0, min_days=10, min_n=1),
+                metrics={"error": f"{type(exc).__name__}: {exc}"[:120]},
+                hint="lit_float 统计失败",
+                level="warn",
+            )
+        )
+    return out
 
 
 def merge_counterfactual(base: dict[str, Any], cf: dict[str, Any] | None) -> dict[str, Any]:

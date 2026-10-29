@@ -465,14 +465,152 @@ def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
 def start_gate_snapshot() -> dict[str, Any]:
     """Ops / review one-liner for the auto-order start gate."""
     stats = portfolio_stats()
+    acct = account_snapshot()
+    initial = float(acct.get("initial_cash") or SIM_INITIAL_CASH or 0)
+    equity = float(acct.get("equity") or 0)
+    to_green_cny = None
+    if initial > 0 and equity <= initial:
+        to_green_cny = round(initial - equity + 0.01, 2)
     return {
         **stats,
-        "account": account_snapshot(),
+        "account": acct,
         "recent": recent_closed(8),
+        "to_green_cny": to_green_cny,
         "rule": (
             "初始2万纸面资金；亮过可买且可成交→扣款+手续费开仓；"
             "卖点且可卖出→回款+手续费平仓；权益相对初始>0 且已有平仓才允许券商阶段1–3"
         ),
+    }
+
+
+def build_sim_attribution(*, limit: int = 80) -> dict[str, Any]:
+    """Explain paper-book P&L buckets (fees / losers / winners) without changing rules.
+
+    Buckets on closed sells:
+      - fee_drag: round-trip fee vs notional
+      - loser / winner by pnl_cny
+      - t1_note: opens that could not sell same day (informational)
+    Also returns a simple equity path proxy from fill ``cash_after`` + open MTM.
+    """
+    fills = load_sim_fills(limit=max(1, min(int(limit), 300)))
+    sells = [f for f in fills if str(f.get("side") or "").lower() == "sell"]
+    buys = [f for f in fills if str(f.get("side") or "").lower() == "buy"]
+    fee_buy = sum(float(f.get("fee") or 0) for f in buys)
+    fee_sell = sum(float(f.get("fee") or 0) for f in sells)
+    fee_total = fee_buy + fee_sell
+    win = [f for f in sells if float(f.get("pnl_cny") or 0) > 0]
+    lose = [f for f in sells if float(f.get("pnl_cny") or 0) < 0]
+    flat = [f for f in sells if float(f.get("pnl_cny") or 0) == 0]
+    win_cny = sum(float(f.get("pnl_cny") or 0) for f in win)
+    lose_cny = sum(float(f.get("pnl_cny") or 0) for f in lose)
+    # Same-day open+close impossible under T+1 — flag sells whose open_date == trade_date
+    # (should be rare / replay); and open lots still t+1 locked today.
+    today = datetime.now().strftime("%Y-%m-%d")
+    t1_open = [
+        lot
+        for lot in load_open_sim_lots()
+        if str(lot.get("open_date") or "")[:10] >= today
+    ]
+    # Equity path: chronological fills with cash_after when present.
+    path: list[dict[str, Any]] = []
+    chron = sorted(
+        fills,
+        key=lambda f: (
+            str(f.get("filled_at") or f.get("trade_date") or ""),
+            int(f.get("id") or 0),
+        ),
+    )
+    for f in chron:
+        ca = f.get("cash_after")
+        if ca is None:
+            continue
+        path.append(
+            {
+                "at": str(f.get("filled_at") or f.get("trade_date") or "")[:19],
+                "side": f.get("side"),
+                "code": f.get("code"),
+                "cash_after": round(float(ca), 2),
+                "pnl_cny": f.get("pnl_cny"),
+            }
+        )
+    gate = start_gate_snapshot()
+    buckets = [
+        {
+            "id": "fee",
+            "label": "手续费合计",
+            "n": len(buys) + len(sells),
+            "cny": round(-fee_total, 2),
+            "note": f"买{round(fee_buy, 2)} + 卖{round(fee_sell, 2)}",
+        },
+        {
+            "id": "winners",
+            "label": "盈利平仓",
+            "n": len(win),
+            "cny": round(win_cny, 2),
+            "note": "pnl_cny>0",
+        },
+        {
+            "id": "losers",
+            "label": "亏损平仓",
+            "n": len(lose),
+            "cny": round(lose_cny, 2),
+            "note": "pnl_cny<0",
+        },
+        {
+            "id": "flat",
+            "label": "打平平仓",
+            "n": len(flat),
+            "cny": 0.0,
+            "note": "pnl_cny=0",
+        },
+        {
+            "id": "t1_locked",
+            "label": "T+1 锁定持仓",
+            "n": len(t1_open),
+            "cny": None,
+            "note": "今日开仓、隔日才可卖",
+        },
+    ]
+    return {
+        "ok": True,
+        "buckets": buckets,
+        "fee_total": round(fee_total, 2),
+        "realized_pnl_cny": gate.get("realized_pnl_cny"),
+        "cum_pnl_pct": gate.get("cum_pnl_pct"),
+        "to_green_cny": gate.get("to_green_cny"),
+        "gate_ok": gate.get("gate_ok"),
+        "gate_label": gate.get("gate_label"),
+        "closed_n": gate.get("closed_n"),
+        "open_n": gate.get("open_n"),
+        "cash_path": path[-40:],
+        "worst_sells": sorted(
+            (
+                {
+                    "code": f.get("code"),
+                    "name": f.get("name"),
+                    "pnl_cny": f.get("pnl_cny"),
+                    "pnl_pct": f.get("pnl_pct"),
+                    "trade_date": f.get("trade_date"),
+                    "role_label": f.get("role_label"),
+                }
+                for f in lose
+            ),
+            key=lambda x: float(x.get("pnl_cny") or 0),
+        )[:5],
+        "best_sells": sorted(
+            (
+                {
+                    "code": f.get("code"),
+                    "name": f.get("name"),
+                    "pnl_cny": f.get("pnl_cny"),
+                    "pnl_pct": f.get("pnl_pct"),
+                    "trade_date": f.get("trade_date"),
+                    "role_label": f.get("role_label"),
+                }
+                for f in win
+            ),
+            key=lambda x: -float(x.get("pnl_cny") or 0),
+        )[:5],
     }
 
 

@@ -47,12 +47,36 @@ function paintSimDesk(data) {
   const gateEl = document.getElementById("simGate");
   if (gateEl) {
     const ok = !!gate.gate_ok;
+    const toGreen = gate.to_green_cny;
     gateEl.innerHTML =
       `<div><b>开工闸</b> · ${gate.gate_label || "—"}`
-      + ` · 平仓${gate.closed_n || 0} · 持仓${gate.open_n || 0}</div>`
+      + ` · 平仓${gate.closed_n || 0} · 持仓${gate.open_n || 0}`
+      + (toGreen != null && !ok ? ` · 距转正约 ${_simNum(toGreen)} 元` : "")
+      + `</div>`
       + `<div class="meta">${gate.rule || ""}</div>`;
     gateEl.classList.toggle("ok", ok);
     gateEl.classList.toggle("warn", !ok);
+  }
+  const attrEl = document.getElementById("simAttr");
+  if (attrEl) {
+    const attr = (data && data.attribution) || {};
+    const buckets = attr.buckets || [];
+    if (!buckets.length) {
+      attrEl.innerHTML = "";
+    } else {
+      const bits = buckets.map((b) => {
+        const cny = b.cny == null ? "" : ` ${_simNum(b.cny)}`;
+        return `${b.label || b.id}×${b.n || 0}${cny}`;
+      });
+      const worst = (attr.worst_sells || []).slice(0, 3).map((w) =>
+        `${w.code || ""} ${w.name || ""} ${_simNum(w.pnl_cny)}`
+      );
+      attrEl.innerHTML =
+        `<div><b>归因</b> · 手续费合计 ${_simNum(attr.fee_total)} · ${bits.join(" · ")}</div>`
+        + (worst.length
+          ? `<div class="meta">最差平仓：${worst.join("；")}</div>`
+          : "");
+    }
   }
   const posBody = document.getElementById("simPosBody");
   if (posBody) {

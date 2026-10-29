@@ -14,6 +14,24 @@
 
 ---
 
+## [v1.10.25] - 2026-10-29
+
+### 【背景与动机（为什么做 · Why）】
+- 策略门槛未过时仍要工程可观测：复盘 dump 缺口、模拟归因、Server酱额度、执行层一眼、数据源健康。
+
+### 【做了什么（What）】
+- **Added** review-check：`sell_fly` / `pick_audit` / `lit_float`（TODO #6/#12/#11 进度）。
+- **Added** `build_sim_attribution` + 模拟 Tab 归因条 / 距转正金额。
+- **Added** `serverchan_quota_snapshot`、`/api/ops/serverchan-quota`；`ops/check` 含额度 / 日线缓存 / 归因 timer 戳。
+- **Changed** `exec-desk`：`circuit_view` 红黄绿 + `triggers_summary`。
+- **Changed** attribution 脚本跑完写 `attribution_last`。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / 硬闸；只增强观测与运维。
+- `pytest tests/test_obs_bundle.py tests/test_review_check.py tests/test_sim_digest_merge.py`。
+
+---
+
 ## [v1.10.24] - 2026-10-29
 
 ### 【背景与动机（为什么做 · Why）】

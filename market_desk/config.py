@@ -9,6 +9,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 HOST = "127.0.0.1"
 PORT = 8765
+# Free Server酱³ daily cap shared by desk + news-radar (same SendKey).
+SERVERCHAN_DAILY_CAP = 5
 # Browser open URL (same as bind host when LAN is off).
 BROWSER_HOST = "127.0.0.1"
 # Hit East Money / Tencent only in session; idle loop just waits for the next open.
