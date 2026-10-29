@@ -36,6 +36,30 @@ def test_sim_key_not_serverchan() -> None:
     assert [k for k, _t, _b in kept] == ["eod:2026-10-29"]
 
 
+def test_sim_daily_once_belt(monkeypatch) -> None:
+    from market_desk import notify
+
+    store: dict = {}
+    monkeypatch.setattr(
+        "market_desk.db.load_setting",
+        lambda k: store.get(k),
+    )
+    monkeypatch.setattr(
+        "market_desk.db.save_setting",
+        lambda k, v: store.__setitem__(k, v),
+    )
+    alerts = [
+        ("sim:digest:2026-10-29", "模拟操盘日终", "a"),
+        ("sim:digest:2026-10-29", "模拟操盘日终", "b"),
+    ]
+    kept, marked = notify.drop_daily_repeats(alerts, trade_date="2026-10-29")
+    assert len(kept) == 1
+    assert marked == ["sim:digest:2026-10-29"]
+    notify._mark_daily_once("2026-10-29", marked)
+    kept2, _ = notify.drop_daily_repeats(alerts, trade_date="2026-10-29")
+    assert kept2 == []
+
+
 def test_format_sim_digest_empty_unused_book(tmp_path, monkeypatch) -> None:
     _init_db(tmp_path, monkeypatch)
     assert format_sim_digest_bullets(trade_date="2026-10-29") == []

@@ -646,9 +646,12 @@ def notify_serverchan(sendkey: str, title: str, desp: str) -> bool:
 
 
 def _daily_once_key(alert_key: str) -> str:
-    """Return the per-day dedupe id for buy/fly WeChat alerts, or ``""``."""
+    """Return the per-day dedupe id for WeChat alerts, or ``""``.
+
+    ``buy:`` / ``fly:`` are per-code; ``sim:`` is whole-day (belt if filter regresses).
+    """
     k = str(alert_key or "")
-    if k.startswith(("buy:", "fly:")):
+    if k.startswith(("buy:", "fly:", "sim:")):
         return k
     return ""
 

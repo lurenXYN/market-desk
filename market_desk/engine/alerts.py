@@ -150,7 +150,10 @@ class AlertsMixin:
 
         WeChat no longer gets a separate ``sim:`` push (quota): the same content
         is folded into the 15:05 ``eod:`` one-pager via ``format_sim_digest_bullets``.
+        Latch is persisted (``sim_digest_done:{day}``) so a Deploy restart after
+        14:50 cannot queue a second toast the way in-memory ``_ops_latched`` did.
         """
+        from market_desk.db import load_setting, save_setting
         from market_desk.sim_desk import format_sim_digest_bullets
 
         day = str(payload.get("trade_date") or now.strftime("%Y-%m-%d"))
@@ -160,6 +163,12 @@ class AlertsMixin:
         hm = now.hour * 100 + now.minute
         if hm < 1450:
             return
+        flag = f"sim_digest_done:{day}"
+        try:
+            if load_setting(flag):
+                return
+        except Exception:
+            pass
         bullets = format_sim_digest_bullets(trade_date=day, fill_cap=6)
         if not bullets:
             return
@@ -170,6 +179,13 @@ class AlertsMixin:
             body,
             day=day,
         )
+        try:
+            save_setting(
+                flag,
+                {"at": now.strftime("%Y-%m-%d %H:%M:%S"), "body": body[:160]},
+            )
+        except Exception:
+            log.exception("persist sim_digest_done failed")
 
     def _emit_toasts(
         self,
