@@ -1,0 +1,79 @@
+# Sim book backfill/replay + light ops self-check on VPS (no full wipe).
+name: Ops sim and check
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: "Wipe sim book first (true/false)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: ops-sim-and-check
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Sim backfill/replay + self-check over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 12m
+          script: |
+            set -euo pipefail
+            RESET="${{ github.event.inputs.reset || 'false' }}"
+            cd /opt/market-desk
+            echo "==> attribution timer (last 40)"
+            journalctl -u market-desk-attribution -n 40 --no-pager || true
+            echo "==> market-desk service"
+            systemctl is-active market-desk || true
+            .venv/bin/python - <<PY
+            from market_desk.config import SIM_BOOK_SINCE, SIM_INITIAL_CASH
+            from market_desk.db.sim_desk import wipe_sim_book, get_sim_account_epoch
+            from market_desk.sim_desk import (
+                backfill_open_from_db,
+                replay_exits_from_sell_signals,
+                start_gate_snapshot,
+                ensure_sim_book_epoch,
+            )
+            from market_desk.review_check import build_review_check_sync
+            from market_desk.db.bars_cache import bars_cache_stats
+            from market_desk.fill_rules import fill_rules_parity
+
+            reset = "${RESET}".lower() in ("1", "true", "yes")
+            if reset:
+                wipe_sim_book(initial_cash=SIM_INITIAL_CASH, epoch=str(SIM_BOOK_SINCE)[:10])
+                print("WIPED epoch", get_sim_account_epoch())
+            else:
+                ensure_sim_book_epoch()
+            opened = backfill_open_from_db()
+            replayed = replay_exits_from_sell_signals()
+            gate = start_gate_snapshot()
+            acct = gate.get("account") or {}
+            print(
+                f"SIM backfill={opened} replay={replayed} "
+                f"open={gate.get('open_n')} closed={gate.get('closed_n')} "
+                f"equity={acct.get('equity') or gate.get('equity')} "
+                f"gate_ok={gate.get('gate_ok')} label={gate.get('gate_label')}"
+            )
+            print("BARS", bars_cache_stats())
+            fr = fill_rules_parity()
+            print("FILL_RULES t1_aligned", (fr.get("t1") or {}).get("aligned"),
+                  "fees_note", (fr.get("fees") or {}).get("sim_flat_cny_per_side"))
+            base = build_review_check_sync()
+            print("REVIEW_ASOF", base.get("asof"), "oos_days", base.get("edge_oos_days"))
+            for it in base.get("items") or []:
+                if it.get("id") in ("sim_desk_gate", "narrative", "regime", "early_half"):
+                    s = it.get("sample") or {}
+                    print(
+                        f"ITEM {it.get('id')} level={it.get('level')} "
+                        f"enough={s.get('enough_for_todo')} verdict={it.get('ui_verdict')}"
+                    )
+            PY
