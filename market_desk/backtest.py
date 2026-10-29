@@ -513,16 +513,26 @@ def simulate_sell_fill(
     look_ahead: int = 3,
     slip_pct: float = DEFAULT_SLIP_PCT,
     gap_pct: float = DEFAULT_GAP_PCT,
+    open_date: str | None = None,
 ) -> dict[str, Any] | None:
     """Simulate a sell: take-profit if high ≥ sell, else stop if low ≤ stop.
 
     Gap-down open through stop fills at open. Slippage worsens exits. A sealed
     limit-down session (one-字 bar) has no bids, so the exit rolls to the next
     session (one extra look-ahead day per sealed bar, noted 一字跌停顺延).
+
+    When ``open_date`` is set (sim T+1 parity), never exit on that calendar day —
+    search starts the next session after open.
     """
     day0 = str(trade_date or "")[:10]
     if not day0 or not bars_by_day:
         return None
+    opened = str(open_date or "")[:10]
+    if opened and day0 <= opened:
+        later = sorted(d for d in bars_by_day if d > opened)
+        if not later:
+            return None
+        day0 = later[0]
     all_days = sorted(d for d in bars_by_day if d >= day0)
     budget = max(1, int(look_ahead) + 1)
     limit_skips = 0

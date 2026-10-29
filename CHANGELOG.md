@@ -14,6 +14,23 @@
 
 ---
 
+## [v1.10.21] - 2026-10-29
+
+### 【背景与动机（为什么做 · Why）】
+- vnpy 中项：sim/backtest 成交规则要对齐可对照；日线只拉不存则补数/回测缺本地底账。
+- 10/29 复盘：用 Actions 拉 VPS `review-check`，结论写入 TODO（本日不改闸门）。
+
+### 【做了什么（What）】
+- **Added** `fill_rules_parity` + `simulate_sell_fill(open_date=)` T+1；`GET /api/ops/fill-rules`。
+- **Added** `market_bar_daily` 缓存、`find_bar_gaps`；`fetch_daily_bars` 成功后 upsert；`GET /api/ops/bars-cache`。
+- **Added** CI `Review check dump`；TODO 填 10/29 复盘结论。
+
+### 【影响与验证（Impact & Verification）】
+- 费用模型仍异单位（¥ vs 滑点% vs cf%），parity 报告写明换算；日线缓存随行情拉取增长。
+- `pytest tests/test_fill_rules_bars.py`。
+
+---
+
 ## [v1.10.20] - 2026-10-29
 
 ### 【背景与动机（为什么做 · Why）】

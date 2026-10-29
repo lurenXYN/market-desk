@@ -217,3 +217,10 @@ from market_desk.db.backtest import (  # noqa: F401
     clear_backtest_runs,
     compare_backtest_runs,
 )
+from market_desk.db.bars_cache import (  # noqa: F401
+    ensure_bars_cache_tables,
+    upsert_daily_bars,
+    load_daily_bars,
+    find_bar_gaps,
+    bars_cache_stats,
+)

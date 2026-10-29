@@ -127,6 +127,13 @@ async def fetch_daily_bars(
             bars = sina
     except Exception:
         pass
+    if bars:
+        try:
+            from market_desk.db.bars_cache import upsert_daily_bars
+
+            upsert_daily_bars(c, bars, source="fetch_daily_bars")
+        except Exception:
+            pass
     return bars
 
 

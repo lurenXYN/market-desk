@@ -362,6 +362,31 @@ def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
     return get_exec_engine().snapshot()
 
 
+@router.get("/api/ops/fill-rules")
+def ops_fill_rules(user: dict = Depends(current_admin_required)) -> dict:
+    """Sim ? backtest ? cf fill-rule parity map (vnpy mid-priority)."""
+    del user
+    from market_desk.fill_rules import fill_rules_parity
+
+    return fill_rules_parity()
+
+
+@router.get("/api/ops/bars-cache")
+def ops_bars_cache(
+    code: str | None = Query(default=None),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Daily bar cache stats; optional per-code recent rows."""
+    del user
+    from market_desk.db.bars_cache import bars_cache_stats, load_daily_bars
+
+    out: dict[str, Any] = {"ok": True, "stats": bars_cache_stats()}
+    if code:
+        out["code"] = str(code).zfill(6)
+        out["bars"] = load_daily_bars(str(code), limit=40)
+    return out
+
+
 @router.get("/api/ops/sim-desk")
 def ops_sim_desk(
     backfill: bool = Query(default=False),
