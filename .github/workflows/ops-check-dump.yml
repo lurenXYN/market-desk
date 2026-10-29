@@ -1,0 +1,47 @@
+# Dump GET /api/ops/check equivalent on VPS (bypasses cookie; same handler body).
+name: Ops check dump
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ops-check-dump
+  cancel-in-progress: true
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dump ops/check over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            cd /opt/market-desk
+            echo "==> public curl (expect 401 without cookie)"
+            curl -sS -m 15 -o /tmp/ops-check-public.json -w "public_http=%{http_code}\n" \
+              "http://127.0.0.1:8765/api/ops/check" || true
+            head -c 200 /tmp/ops-check-public.json; echo
+            echo "==> handler body (admin bypass)"
+            .venv/bin/python - <<'PY'
+            import json
+            from market_desk.routes.ops import ops_check
+
+            out = ops_check(user={"id": 1, "is_admin": True, "role": "admin"})
+            path = "/tmp/ops-check.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2, default=str)
+            print("ok", out.get("ok"), "checks", len(out.get("checks") or []))
+            for c in out.get("checks") or []:
+                print(
+                    f"CHECK {c.get('id')}\tlevel={c.get('level')}\t"
+                    f"title={c.get('title')}\tdetail={str(c.get('detail') or '')[:160]}"
+                )
+            print("WROTE", path)
+            PY
