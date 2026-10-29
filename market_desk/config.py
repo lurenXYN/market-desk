@@ -64,6 +64,10 @@ SIM_INITIAL_CASH = 20000.0
 SIM_MAX_POS_FRAC = 0.25
 # Only open / keep lots on or after this trade date (epoch wipe resets older backfill).
 SIM_BOOK_SINCE = "2026-10-28"
+# Execution-layer risk (vnpy-style independent gates; paper + future live).
+EXEC_MAX_POS_FRAC = SIM_MAX_POS_FRAC  # single-name notional / equity
+EXEC_MAX_GROSS_FRAC = 0.95  # sum(position notional) / equity after this order
+EXEC_SESSION_GUARD = True  # reject outside continuous auction when guard on
 
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
 ZT_UT = "7eea3edcaed734bea9cbfc24409ed989"

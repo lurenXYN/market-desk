@@ -264,10 +264,22 @@ Agents: **at the start of each session involving this app, read this file before
     - [x] **卖点配对 / 回放**：假仓位 → `build_sell_advice`；`?replay=true` 用历史卖点补平
     - [x] **0 提醒**：日终 `sim:digest`（同轮 drain）
     - [x] **开工闸仪表**：主导航 **模拟** Tab + `/api/sim-desk` + ops/review-check
-  - [ ] **1 只读**：券商持仓/成交对账 — **须组合累计 >0**
+  - [x] **0.5 执行分层（参考 vnpy · 不部署）** *(v1.10.19)*：`market_desk/exec/` PaperGateway + `gate_ok` 硬拦 live；`/api/ops/exec-desk`
+  - [x] **0.6 高优先（参考 vnpy · 闸前可做）** *(v1.10.20)*
+    - [x] **订单状态机**：本地 OrderBook（提交/部成/全成/拒/撤）
+    - [x] **独立风控**：单票上限 / 总仓上限 / 时段（与策略 if 分离）
+    - [x] **对账骨架**：本地仓 vs 远端仓/成交 diff（纸面自洽；真券商接阶段 1）
+  - [ ] **1 只读**：券商持仓/成交对账 — **须组合累计 >0**（接 `BaseGateway.query_*` + reconcile；仍不装完整 vnpy）
   - [ ] **2 一键**：可买卡一键送单（人确认）— **须 1**
   - [ ] **3 全自动**：ready/卖点直达 — **须 2 + 用户再点头 + 限额/熔断**
-  - 组合未转正前 **不写 1–3**；闪电复制仍作过渡。
+  - 组合未转正前 **不写 1–3**；闪电复制仍作过渡；低配 VPS **不**部署 VeighNa。
+  - **vnpy 学习清单（不部署整仓）**
+    - 高：风控独立、订单状态机、持仓/成交对账 ← 见 0.6 / 1
+    - 高：决策与执行分离 ← 已 0.5
+    - 中：规则/策略可回放同构（sim + backtest）
+    - 中：行情录制与补数
+    - 低：算法单、完整 EventEngine、Alpha ML
+    - 不做：Qt 交易端、迁决策层到 vnpy
 - [ ] **大改主线打分** — 宜先回测对照。
 - [ ] **AI 荐股进 ready** — 仅旁路叙事。
 - [ ] **全市场选股引擎** — 与主线哲学冲突；均线发散仅作夜间观察层。

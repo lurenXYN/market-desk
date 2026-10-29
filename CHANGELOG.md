@@ -14,6 +14,37 @@
 
 ---
 
+## [v1.10.20] - 2026-10-29
+
+### 【背景与动机（为什么做 · Why）】
+- vnpy 高优先三项（订单状态机 / 独立风控 / 对账）闸前可做；记入待办后先落地骨架，真券商仍等 `gate_ok`。
+
+### 【做了什么（What）】
+- **Added** `OrderBook` 订单状态跟踪；风控单票/总仓（`EXEC_MAX_*`）+ 可选时段闸。
+- **Added** `reconcile_positions` / `self_check_gateway`；`/api/ops/exec-desk` 带 orders + self_check。
+- **Docs** TODO：vnpy 学习清单 + 0.6 高优先项勾完。
+
+### 【影响与验证（Impact & Verification）】
+- 超单票上限拒单；纸面自洽对账 ok；不部署 vnpy。
+- `pytest tests/test_exec_gateway.py`。
+
+---
+
+## [v1.10.19] - 2026-10-28
+
+### 【背景与动机（为什么做 · Why）】
+- 参考 vnpy 开干自动下单，但低配 VPS 不部署完整 VeighNa；须先落「决策 / 执行」分层与开工闸硬拦。
+
+### 【做了什么（What）】
+- **Added** `market_desk/exec/`：Order/Trade/Position、`BaseGateway`、`PaperGateway`（接 `sim_*`）、`ExecEngine`、风控 `require_start_gate`（live 须 `gate_ok`）。
+- **Added** `GET /api/ops/exec-desk` 执行层快照；**不**安装/部署 vnpy。
+
+### 【影响与验证（Impact & Verification）】
+- 真券商 `attach_live` 在闸门未绿时拒绝；纸面买卖走原模拟账本。
+- `pytest tests/test_exec_gateway.py tests/test_sim_desk.py`。
+
+---
+
 ## [v1.10.18] - 2026-10-28
 
 ### 【背景与动机（为什么做 · Why）】

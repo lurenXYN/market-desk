@@ -353,6 +353,15 @@ def ops_shadows(
     return {"ok": True, "days": shadow_health(days)}
 
 
+@router.get("/api/ops/exec-desk")
+def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
+    """vnpy-style execution facade snapshot (paper now; live after gate_ok)."""
+    del user
+    from market_desk.exec import get_exec_engine
+
+    return get_exec_engine().snapshot()
+
+
 @router.get("/api/ops/sim-desk")
 def ops_sim_desk(
     backfill: bool = Query(default=False),
