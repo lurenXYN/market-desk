@@ -1,0 +1,50 @@
+# One-shot: why did 「模拟操盘日终」 hit Server酱 after the merge fix?
+name: Ops sim push diag
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ops-sim-push-diag
+  cancel-in-progress: true
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Diagnose sim WeChat path over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            cd /opt/market-desk
+            echo "==> git HEAD"
+            git log -1 --oneline || true
+            echo "==> is_serverchan_alert(sim:)"
+            .venv/bin/python - <<'PY'
+            from market_desk.notify import is_serverchan_alert, serverchan_quota_snapshot
+            print("sim:digest blocked?", is_serverchan_alert("sim:digest:2026-10-30") is False)
+            print("eod allowed?", is_serverchan_alert("eod:2026-10-30") is True)
+            q = serverchan_quota_snapshot()
+            print("quota", q.get("used"), "/", q.get("cap"), "flags", q.get("flags"))
+            for row in q.get("log") or []:
+                print("LOG", row)
+            PY
+            echo "==> settings sim_digest_done / sc_push_log"
+            .venv/bin/python - <<'PY'
+            from market_desk.db import load_setting
+            from market_desk.calendar import today_cn
+            day = today_cn()
+            print("today", day)
+            print("sim_digest_done", load_setting(f"sim_digest_done:{day}"))
+            print("sc_push_log", load_setting(f"sc_push_log:{day}"))
+            print("eod_pushed", load_setting(f"eod_pushed:{day}"))
+            PY
+            echo "==> journal serverchan / sim around morning"
+            journalctl -u market-desk --since "2026-10-30 09:00:00" --until "2026-10-30 10:00:00" -n 80 --no-pager 2>/dev/null | grep -E "serverchan|sim:|模拟|digest" || echo "(no journal matches)"
