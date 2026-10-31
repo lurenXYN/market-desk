@@ -7,6 +7,7 @@ from market_desk.edge_shadow import build_edge_shadow
 from market_desk.regime import (
     annotate_recommend_regime,
     build_regime_shadow_rows,
+    build_regime_survival,
     classify_bench_regime,
     freeze_market_regime,
     regime_card_tag,
@@ -124,7 +125,44 @@ def test_build_edge_shadow_includes_regime_key():
     ]
     out = build_edge_shadow(rows)
     assert out["ok"] and "regime" in out and out["regime_since"] == "2026-10-15"
+    assert "regime_survival" in out
     assert any(r["side"] == "above" for r in out["regime"])
+
+
+def test_regime_survival_abs_vs_xs():
+    closes = [
+        ("2026-10-15", 100.0),
+        ("2026-10-16", 99.0),
+        ("2026-10-17", 98.0),
+        ("2026-10-20", 97.0),
+        ("2026-10-21", 96.0),
+    ]
+    rows = [
+        {
+            "trade_date": "2026-10-15",
+            "code": "600001",
+            "signal_type": "buy",
+            "outcome_day3_pct": -1.0,  # abs lose, but bench -3% → xs +2
+            "skipped": 0,
+            "ready": 1,
+            "payload": {"ever_ready": True, "market_regime": {"side": "below"}},
+        },
+        {
+            "trade_date": "2026-10-15",
+            "code": "600002",
+            "signal_type": "buy",
+            "outcome_day3_pct": -4.0,  # abs lose, xs -1
+            "skipped": 0,
+            "trend_down": True,
+            "payload": {"trend_down": True, "market_regime": {"side": "below"}},
+        },
+    ]
+    surv = build_regime_survival(rows, closes, since="2026-10-15")
+    assert surv["ok"] is True
+    below = surv["groups"]["below_all"]
+    assert below["n"] == 2
+    assert below["abs_win"] == 0.0
+    assert below["xs_win"] == 50.0
 
 
 def test_market_regime_frozen_on_first_insert(monkeypatch, tmp_path):

@@ -486,7 +486,8 @@ def build_edge_shadow(
         EDGE_SHADOW_SINCE,
         REGIME_SHADOW_SINCE,
     )
-    from market_desk.regime import build_regime_shadow_rows
+    from market_desk.dual_score import load_bench_closes
+    from market_desk.regime import build_regime_shadow_rows, build_regime_survival
 
     start = str(since or EDGE_SHADOW_SINCE)
     early_since = str(EARLY_HALF_SHADOW_SINCE)
@@ -499,6 +500,8 @@ def build_edge_shadow(
     keep = set(oos_dates)
     oos = [r for r in samples if _day(r) in keep]
     disc = [r for r in samples if _day(r) < start]
+    # Prefer caller-provided closes; cache-only fallback (no HTTP in unit tests).
+    closes = list(bench_closes) if bench_closes is not None else load_bench_closes(allow_http=False)
     if oos:
         note = f"样本外：{start} 起 {len(oos_dates)} 日 {len(oos)} 张已打分买卡"
     else:
@@ -515,6 +518,7 @@ def build_edge_shadow(
         "breaker": _breaker_rows(oos),
         "reweight": _reweight_rows(oos, disc),
         "early_half": _early_half_rows(samples, since=early_since),
-        "regime": build_regime_shadow_rows(samples, bench_closes, since=regime_since),
+        "regime": build_regime_shadow_rows(samples, closes, since=regime_since),
+        "regime_survival": build_regime_survival(samples, closes, since=regime_since),
         "note": note,
     }

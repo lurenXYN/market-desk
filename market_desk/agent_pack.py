@@ -234,6 +234,14 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "pid": ops.get("pid"),
         },
         "sim": {"gate": gate, "attribution": attr, "vs_bench": vs_bench},
+        "regime_survival": next(
+            (
+                (it.get("metrics") or {}).get("survival")
+                for it in (review.get("items") or [])
+                if isinstance(it, dict) and it.get("id") == "regime"
+            ),
+            None,
+        ),
         "deep_v": {"today": deep_v_today, "shadow": deep_v_shadow},
         "zt_share": zt_share,
         "shadows": shadows,

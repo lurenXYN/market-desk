@@ -173,6 +173,7 @@ ENTRIES: dict[str, dict[str, str]] = {
         "尺下卡面软标签：日线降→弱市位置型；亮灯/龙头→弱市慎追（annotate_verdict_regime，不改 soft_rank/ready）。\n"
         "买卡首次落盘冻结 payload.market_regime；影子账本自检覆盖率（≥REGIME_SHADOW_SINCE）。\n"
         "进场影子按 side 分组并报 Δ 尺上−尺下、Δ 尺下日线降−亮过灯。\n"
+        "尺下存活压力：abs_win（三日%>0）与 xs_win（超额>0）并排；只旁注，不改 ready。\n"
         "门槛见 TODO；约 10/28 后才允许软排序叠 regime，永不硬切 ready。",
     },
     "软排序": {

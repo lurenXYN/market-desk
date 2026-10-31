@@ -283,6 +283,100 @@ def build_regime_shadow_rows(
     return out
 
 
+def build_regime_survival(
+    samples: list[dict[str, Any]] | None,
+    closes: Iterable[Any] | None = None,
+    *,
+    since: str | None = None,
+) -> dict[str, Any]:
+    """Below-MA survival pressure: absolute win vs excess win (display only).
+
+    Answers 「弱市是策略烂还是大盘在砸」 without changing ready / soft_rank.
+    """
+    from market_desk.config import REGIME_SHADOW_SINCE, REVIEW_BENCH_LABEL
+    from market_desk.dual_score import dual_from_pairs, load_bench_closes
+    from market_desk.filters import normalize_code
+    from market_desk.review.bench import attach_bench_excess
+    from market_desk.review.outcome import OUTCOME_HORIZON_SESSIONS
+
+    start = str(since or REGIME_SHADOW_SINCE)[:10]
+    pairs = list(closes) if closes is not None else load_bench_closes(allow_http=True)
+    if len(pairs) < 4:
+        return {
+            "ok": False,
+            "since": start,
+            "bench": REVIEW_BENCH_LABEL,
+            "note": f"无{REVIEW_BENCH_LABEL}日线，尺下存活压力暂不可算",
+        }
+
+    attached = attach_bench_excess(list(samples or []), pairs)
+    seen: set[tuple[str, str]] = set()
+    buckets: dict[str, tuple[list[float], list[float]]] = {
+        "below_all": ([], []),
+        "below_lit": ([], []),
+        "below_down": ([], []),
+        "above_lit": ([], []),
+    }
+    days_below: set[str] = set()
+
+    for r in attached:
+        d3 = num(r.get("outcome_day3_pct"))
+        xs = num(r.get("excess_d3_pct"))
+        if d3 is None or xs is None:
+            continue
+        if int(r.get("bench_sessions") or 0) < OUTCOME_HORIZON_SESSIONS:
+            continue
+        if int(r.get("skipped") or 0):
+            continue
+        day = str(r.get("trade_date") or "")[:10]
+        if not day or day < start:
+            continue
+        key = (day, normalize_code(r.get("code")))
+        if key in seen:
+            continue
+        seen.add(key)
+        side = regime_side_for_row(r, pairs)
+        lit = _row_lit(r)
+        if side == "above" and lit:
+            buckets["above_lit"][0].append(float(d3))
+            buckets["above_lit"][1].append(float(xs))
+        if side != "below":
+            continue
+        days_below.add(day)
+        buckets["below_all"][0].append(float(d3))
+        buckets["below_all"][1].append(float(xs))
+        if lit:
+            buckets["below_lit"][0].append(float(d3))
+            buckets["below_lit"][1].append(float(xs))
+        if _row_trend_down(r):
+            buckets["below_down"][0].append(float(d3))
+            buckets["below_down"][1].append(float(xs))
+
+    labels = {
+        "below_all": "尺下·全部买卡",
+        "below_lit": "尺下·亮过灯",
+        "below_down": "尺下·日线降",
+        "above_lit": "尺上·亮过灯（对照）",
+    }
+    groups = {
+        k: dual_from_pairs(a, x, label=labels[k])
+        for k, (a, x) in buckets.items()
+    }
+    below_n = int(groups["below_all"].get("n") or 0)
+    return {
+        "ok": bool(below_n or groups["above_lit"].get("n")),
+        "since": start,
+        "bench": REVIEW_BENCH_LABEL,
+        "below_days": len(days_below),
+        "groups": groups,
+        "note": (
+            "存活压力：尺下 abs_win=三日%>0，xs_win=超额>0。"
+            "xs 仍正而 abs 很差 = 市场拖累；两者都差才怀疑边。"
+            "只旁注，不改 ready / 软排序。"
+        ),
+    }
+
+
 def regime_card_tag(item: dict[str, Any] | None, market_regime: dict[str, Any] | None) -> dict[str, str] | None:
     """Return a soft card tag for weak-regime context (display only).
 

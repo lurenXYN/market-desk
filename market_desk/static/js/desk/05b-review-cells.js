@@ -92,8 +92,40 @@ function paintEdgeShadow(es) {
     + (regime.length
       ? (`<div class="meta">大盘尺<button type="button" class="q" data-term="大盘尺">?</button>`
         + `：信号日中证1000≥/&lt;MA60；亮过灯优先。Δ 行为预登记主指标。只记账，不关亮灯。</div>`
-        + tbl(["分组", "样本", "三日·胜率 / Δ", "说明"], regime))
+        + tbl(["分组", "样本", "三日·胜率 / Δ", "说明"], regime)
+        + paintRegimeSurvival(es.regime_survival))
       : "");
+}
+
+/**
+ * Render below-MA survival pressure (abs vs excess win rates; display only).
+ * @param {object|null} surv - edge_shadow.regime_survival
+ * @returns {string} HTML fragment
+ */
+function paintRegimeSurvival(surv) {
+  const fmt = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const pct = (v) => (v == null ? "—" : `${v}%`);
+  if (!surv || !surv.ok) {
+    return surv && surv.note
+      ? `<div class="meta">尺下存活压力：${escAttr(surv.note)}</div>`
+      : "";
+  }
+  const groups = surv.groups || {};
+  const order = ["below_all", "below_lit", "below_down", "above_lit"];
+  const rows = order.map((k) => {
+    const g = groups[k];
+    if (!g || !g.n) return "";
+    return `<tr><td>${escAttr(g.label || k)}</td>`
+      + `<td class="num">${g.n}</td>`
+      + `<td class="num">${pct(g.abs_win)}</td>`
+      + `<td class="num">${pct(g.xs_win)}</td>`
+      + `<td class="num">${fmt(g.mean_abs)} / ${fmt(g.mean_xs)}</td></tr>`;
+  }).filter(Boolean).join("");
+  if (!rows) return "";
+  return `<div class="meta">尺下存活压力<button type="button" class="q" data-term="大盘尺">?</button>`
+    + `：abs=三日%>0，xs=超额>0；xs 仍正而 abs 差≈市场拖累。只旁注，不改亮灯。</div>`
+    + `<table class="gl-tbl"><thead><tr><th>分组</th><th>样本</th><th>绝对胜率</th><th>超额胜率</th><th>均值 abs/xs</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
 }
 
 /**

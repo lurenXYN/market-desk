@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.30] - 2026-10-31
+
+### 【背景与动机（为什么做 · Why）】
+- 尺下样本已满 10 日但尺上亮过灯仍空；需要一眼区分「弱市拖累」与「策略没边」，且不能因此叠 soft_rank。
+
+### 【做了什么（What）】
+- **Added** `regime_survival`：尺下（全部/亮过灯/日线降）+ 尺上亮过灯对照的 `abs_win` / `xs_win`；进场影子、review-check、agent-pack、复盘页旁注。
+- **Changed** `load_bench_closes(allow_http=…)`：单测走缓存-only，避免误打外网。
+
+### 【影响与验证（Impact & Verification）】
+- 只展示；不改 ready / 软排序 / gate_ok。
+- `pytest tests/test_regime.py tests/test_dual_score.py tests/test_agent_pack.py`
+
+---
+
 ## [v1.10.29] - 2026-10-31
 
 ### 【背景与动机（为什么做 · Why）】

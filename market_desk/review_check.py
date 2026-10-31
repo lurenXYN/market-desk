@@ -172,6 +172,7 @@ def _edge_items(edge: dict[str, Any]) -> list[dict[str, Any]]:
             )
         )
     regime_rows = list(edge.get("regime") or [])
+    survival = edge.get("regime_survival") if isinstance(edge.get("regime_survival"), dict) else {}
     lit = next((r for r in regime_rows if str(r.get("key") or "") == "尺下·亮过灯"), None)
     pos = next((r for r in regime_rows if str(r.get("key") or "") == "尺下·日线降"), None)
     delta_rows = [r for r in regime_rows if r.get("delta")]
@@ -198,9 +199,10 @@ def _edge_items(edge: dict[str, Any]) -> list[dict[str, Any]]:
                     if not r.get("delta")
                 ][:8],
                 "deltas": [{"key": r.get("key"), "d3": r.get("d3"), "note": r.get("note")} for r in delta_rows],
+                "survival": survival,
             },
-            ui_verdict="样本不足" if days_r < TODO_MIN_DAYS else "见 metrics.deltas",
-            hint="自 10/15 起满 10 交易日才判软排序/提示升级；不足则只记账",
+            ui_verdict="样本不足" if days_r < TODO_MIN_DAYS else "见 metrics.deltas / survival",
+            hint="自 10/15 起满 10 交易日才判软排序；survival=尺下 abs/xs 存活压力（只旁注）",
             level="warn" if days_r < TODO_MIN_DAYS else "ok",
         )
     )

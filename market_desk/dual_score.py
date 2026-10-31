@@ -75,8 +75,14 @@ def _fetch_bench_closes_http(sym: str, limit: int) -> list[tuple[str, float]]:
     return out
 
 
-def load_bench_closes(*, limit: int = 240) -> list[tuple[str, float]]:
-    """Load CSI1000 closes from the daily bar cache, with a sync HTTP fallback."""
+def load_bench_closes(*, limit: int = 240, allow_http: bool = True) -> list[tuple[str, float]]:
+    """Load CSI1000 closes from the daily bar cache, optionally via HTTP.
+
+    Args:
+        limit: Max bars to read / fetch.
+        allow_http: When the cache is thin, hit QQ day-line (disable in unit tests
+            that do not pass explicit closes).
+    """
     from market_desk.db import load_daily_bars
 
     want = max(40, min(int(limit), 2000))
@@ -89,7 +95,7 @@ def load_bench_closes(*, limit: int = 240) -> list[tuple[str, float]]:
         d = str(b.get("trade_date") or b.get("date") or "")[:10]
         if c is not None and d:
             out.append((d, float(c)))
-    if len(out) >= 4:
+    if len(out) >= 4 or not allow_http:
         return out
     return _fetch_bench_closes_http(sym, want)
 
