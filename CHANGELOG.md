@@ -14,6 +14,22 @@
 
 ---
 
+## [v1.10.29] - 2026-10-31
+
+### 【背景与动机（为什么做 · Why）】
+- 恶劣市把「没边」和「跟大盘一起亏」揉成一个胜率；`action=judge` 又易被误读成「该改代码」。需要双轨胜率 + 更克制的 proposals + 模拟账本相对大盘解释线。
+
+### 【做了什么（What）】
+- **Added** `dual_score`：`abs_win` / `xs_win`（三日%>0 vs 超额>0）；review-check / agent-pack 顶层 `dual_wins`（样本外买卡 + 亮过灯子集）。
+- **Changed** agent-pack schema → `agent_pack.v2`：`proposals` 改为 `sample=thin|ready` + `verdict=watch|hold|soft_candidate`（默认 hold；仅已知 TODO 形似过线才 soft_candidate）。
+- **Added** `sim_vs_bench`：模拟权益累计 vs 中证1000 同窗；挂在 `start_gate_snapshot.vs_bench`；**不改** `gate_ok`。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / 硬闸 / 排序 / 开工闸定义。
+- `pytest tests/test_dual_score.py tests/test_agent_pack.py tests/test_sim_desk.py`
+
+---
+
 ## [v1.10.28] - 2026-10-31
 
 ### 【背景与动机（为什么做 · Why）】

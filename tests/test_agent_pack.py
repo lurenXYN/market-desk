@@ -20,7 +20,7 @@ def _init_db(tmp_path, monkeypatch):
     set_sim_account_epoch(str(SIM_BOOK_SINCE)[:10])
 
 
-def test_item_proposal_watch_vs_judge():
+def test_item_proposal_sample_verdict():
     watch = _item_proposal(
         {
             "id": "edge_reclaim",
@@ -29,8 +29,8 @@ def test_item_proposal_watch_vs_judge():
             "ui_verdict": "不足",
         }
     )
-    assert watch and watch["action"] == "watch"
-    judge = _item_proposal(
+    assert watch and watch["sample"] == "thin" and watch["verdict"] == "watch"
+    hold = _item_proposal(
         {
             "id": "edge_reclaim",
             "title": "站回",
@@ -38,10 +38,20 @@ def test_item_proposal_watch_vs_judge():
             "sample": {"enough_for_todo": True, "days": 12, "n": 40},
             "ui_verdict": "站回更优",
             "hint": "并表",
-            "metrics": {"delta": 1.2},
+            "metrics": {"delta": 1.2, "abs_win": 40.0},
         }
     )
-    assert judge and judge["action"] == "judge" and judge["metrics"]["delta"] == 1.2
+    assert hold and hold["sample"] == "ready" and hold["verdict"] == "hold"
+    assert hold["wins"]["abs_win"] == 40.0
+    soft = _item_proposal(
+        {
+            "id": "narrative",
+            "title": "叙事",
+            "sample": {"enough_for_todo": True, "days": 14, "n": 100},
+            "metrics": {"hit_rate": 0.55, "median_lead_min": 30, "days_with_cluster": 10},
+        }
+    )
+    assert soft and soft["verdict"] == "soft_candidate"
     assert _item_proposal({"skip": True, "id": "x"}) is None
 
 
@@ -54,7 +64,8 @@ def test_build_agent_pack_sync(tmp_path, monkeypatch):
     pack = build_agent_pack_sync()
     assert pack["ok"] is True
     assert pack["schema"] == AGENT_PACK_SCHEMA
-    assert "proposals" in pack and "review_check" in pack and "ops_check" in pack
-    assert "sim" in pack and "deep_v" in pack and "zt_share" in pack
+    assert "proposals" in pack and "review_check" in pack and "dual_wins" in pack
+    assert "sim" in pack and pack["sim"].get("vs_bench") is not None
     assert any(p.get("id") == "sim_desk_gate" for p in pack["proposals"])
+    assert "proposals_hold" in pack["summary"]
     assert pack["curl"]["admin"].startswith("GET /api/ops/agent-pack")

@@ -19,6 +19,7 @@ from market_desk.sim_desk import (
     quote_sealed_limit_down,
     quote_sealed_limit_up,
     recent_trades,
+    sim_vs_bench,
     size_from_payload,
     start_gate_snapshot,
 )
@@ -234,3 +235,22 @@ def test_cash_skip_when_broke(tmp_path, monkeypatch):
     ]
     assert open_lots_from_signals(signals) == 0
     assert abs(account_snapshot()["cash"] - 50.0) < 1e-6
+
+
+def test_sim_vs_bench_display_only(tmp_path, monkeypatch):
+    _init_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "market_desk.dual_score.load_bench_closes",
+        lambda limit=240: [
+            ("2026-10-28", 100.0),
+            ("2026-10-29", 99.0),
+            ("2026-10-30", 98.0),
+        ],
+    )
+    vs = sim_vs_bench(cum_pnl_pct=-0.128, epoch="2026-10-28")
+    assert vs["ok"] is True
+    assert vs["bench_cum_pct"] == -2.0
+    assert vs["excess_cum_pct"] == round(-0.128 - (-2.0), 3)
+    snap = start_gate_snapshot()
+    assert "vs_bench" in snap
+    assert snap["gate_ok"] is False  # absolute gate unchanged

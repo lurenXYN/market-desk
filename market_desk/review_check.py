@@ -85,6 +85,9 @@ def _edge_items(edge: dict[str, Any]) -> list[dict[str, Any]]:
                     "reclaim_d3": reclaim.get("reclaim_d3"),
                     "delta": reclaim.get("delta"),
                     "reclaim_n": reclaim.get("reclaim_n"),
+                    "abs_win": reclaim.get("touch_win"),
+                    "reclaim_abs_win": reclaim.get("reclaim_win"),
+                    "wins_note": "此处 abs_win=触价三日>0；站回对照见 reclaim_abs_win（非减大盘）",
                 },
                 ui_verdict=str(reclaim.get("verdict") or ""),
                 hint="并表看站回/熔断/降权后再挑一条软改；UI 结论≠TODO 的 |t|/两半",
@@ -376,10 +379,11 @@ def build_review_check_sync() -> dict[str, Any]:
                     "gate_ok": sim_gate.get("gate_ok"),
                     "gate_label": sim_gate.get("gate_label"),
                     "to_green_cny": sim_gate.get("to_green_cny"),
+                    "vs_bench": sim_gate.get("vs_bench"),
                     "recent": sim_gate.get("recent"),
                 },
                 ui_verdict=sim_gate.get("gate_label"),
-                hint="权益相对初始>0 且已有平仓才写券商对接；Tab「模拟」或 GET /api/sim-desk",
+                hint="权益相对初始>0 且已有平仓才写券商对接；vs_bench=相对中证1000（不改 gate_ok）",
                 level="ok" if sim_gate.get("gate_ok") else "warn",
             )
         )
@@ -396,18 +400,28 @@ def build_review_check_sync() -> dict[str, Any]:
             )
         )
 
+    dual_wins: dict[str, Any]
+    try:
+        from market_desk.dual_score import oos_buy_dual_wins
+
+        dual_wins = oos_buy_dual_wins(rows)
+    except Exception as exc:
+        dual_wins = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
+
     return {
         "ok": True,
         "asof": today_cn(),
         "edge_note": edge.get("note"),
         "edge_oos_days": edge.get("oos_days"),
         "edge_oos_n": edge.get("oos_n"),
+        "dual_wins": dual_wins,
         "sim_desk": sim_gate,
         "items": items,
         "note": (
             "UI verdict 用闸门账本口径（天数/张数/幅度），不等于 TODO 的 |t|≥2+两半同号。"
+            "dual_wins：abs_win=三日%>0，xs_win=超额>0；改规则看相对，开不开工看绝对。"
             "闸门 What-If / ATR / 入场敏感度在 counterfactual 段（需拉日线，可能稍慢）。"
-            "开工闸看 sim_desk / sim_desk_gate（可买→卖点组合累计）。"
+            "开工闸看 sim_desk / sim_desk_gate（可买→卖点组合累计；vs_bench 相对大盘）。"
             "卖点/参考分/已亮卡见 sell_fly / pick_audit / lit_float。"
         ),
     }

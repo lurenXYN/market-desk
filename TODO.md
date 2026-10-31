@@ -80,6 +80,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-10-31：用户改定**决策代理**——复盘数据交给 Agent，按本表门槛独立判软/硬并改代码，取消「须用户点头」；仅真券商首次接通保留一句确认。
 - 2026-10-31（v1.10.28）：学习包 API 上线——Agent 优先自拉 `agent-pack`（含 proposals），不再依赖用户贴截图。
 - 2026-10-31：VPS `agent-pack` 自治复盘——judge 六项均未过全门槛；结论写入上表；**不改代码**（仅修 proposals 去重）。
+- 2026-10-31（v1.10.29）：复盘双胜率（绝对 / 跑赢大盘）+ proposals 降级为 hold/soft_candidate + 模拟相对大盘线。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -97,6 +98,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **工程包 v1.10.26**：Server酱 host/pid 溯源 + MUTE；复盘清单 #6/#11/#12 页内条；叙事新浪快照回退；纪律扛单次日代价；新浪板块涨跌家数
 - [x] **影子包 v1.10.27**：`deep_v_bounce` + `zt_board_share` 只记账（样本外自 10/31）
 - [x] **学习包 v1.10.28**：`GET /api/ops/agent-pack` + localhost `/api/internal/agent-pack` + Actions `Agent pack dump`（proposals watch/judge）
+- [x] **双轨评分 v1.10.29**：`dual_wins`（abs_win/xs_win）；proposals `sample+verdict`；模拟 `vs_bench`（相对中证1000，不改 gate_ok）
 
 > **2026-10-29 总判**：样本外天数够看的项里，**无一达到「改代码」门槛**（叙事命中率不够；regime/早进不足 10 日；熔断空）。模拟开工闸 **未过线**（closed=2，权益≈19932，gate_ok=false）。**本日不改 ready/排序/硬闸。**
 >

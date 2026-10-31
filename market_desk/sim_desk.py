@@ -462,6 +462,59 @@ def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
     return added
 
 
+def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) -> dict[str, Any]:
+    """Paper-book return vs CSI1000 over the same epoch window (display only).
+
+    Does not change ``gate_ok`` (absolute equity still owns the start gate).
+    """
+    from market_desk.config import REVIEW_BENCH_LABEL
+    from market_desk.db.sim_desk import get_sim_account_epoch
+    from market_desk.dual_score import load_bench_closes
+    from market_desk.numbers import num
+
+    start = str(epoch or get_sim_account_epoch() or SIM_BOOK_SINCE or "")[:10]
+    closes = load_bench_closes(limit=240)
+    if not start or len(closes) < 2:
+        return {
+            "ok": False,
+            "bench": REVIEW_BENCH_LABEL,
+            "note": "无账本起点或指数日线缓存",
+        }
+    # Anchor: last index close on/before epoch; end: latest cached close.
+    start_px = None
+    start_day = None
+    for d, c in closes:
+        if d <= start:
+            start_px, start_day = c, d
+        else:
+            break
+    if start_px is None:
+        # Epoch before first cached bar — use first bar.
+        start_day, start_px = closes[0][0], closes[0][1]
+    end_day, end_px = closes[-1][0], closes[-1][1]
+    if not start_px or start_px <= 0:
+        return {"ok": False, "bench": REVIEW_BENCH_LABEL, "note": "指数锚点无效"}
+    bench_pct = round((float(end_px) / float(start_px) - 1.0) * 100.0, 3)
+    book = num(cum_pnl_pct)
+    if book is None:
+        book = num(portfolio_stats().get("cum_pnl_pct"))
+    excess = round(float(book) - bench_pct, 3) if book is not None else None
+    return {
+        "ok": True,
+        "bench": REVIEW_BENCH_LABEL,
+        "epoch": start,
+        "bench_from": start_day,
+        "bench_to": end_day,
+        "bench_cum_pct": bench_pct,
+        "book_cum_pct": round(float(book), 3) if book is not None else None,
+        "excess_cum_pct": excess,
+        "note": (
+            "相对大盘 = 账本权益累计% − 中证1000同窗%；"
+            "gate_ok 仍只看绝对权益>0，本字段仅解释「没绿是策略还是市场」。"
+        ),
+    }
+
+
 def start_gate_snapshot() -> dict[str, Any]:
     """Ops / review one-liner for the auto-order start gate."""
     stats = portfolio_stats()
@@ -471,14 +524,20 @@ def start_gate_snapshot() -> dict[str, Any]:
     to_green_cny = None
     if initial > 0 and equity <= initial:
         to_green_cny = round(initial - equity + 0.01, 2)
+    try:
+        vs_bench = sim_vs_bench(cum_pnl_pct=stats.get("cum_pnl_pct"))
+    except Exception as exc:
+        vs_bench = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
     return {
         **stats,
         "account": acct,
         "recent": recent_closed(8),
         "to_green_cny": to_green_cny,
+        "vs_bench": vs_bench,
         "rule": (
             "初始2万纸面资金；亮过可买且可成交→扣款+手续费开仓；"
-            "卖点且可卖出→回款+手续费平仓；权益相对初始>0 且已有平仓才允许券商阶段1–3"
+            "卖点且可卖出→回款+手续费平仓；权益相对初始>0 且已有平仓才允许券商阶段1–3；"
+            "vs_bench 为相对中证1000（不改 gate_ok）"
         ),
     }
 

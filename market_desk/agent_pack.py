@@ -8,43 +8,89 @@ review-check items, ops health, sim gate, deep-V / zt-share ledgers, and a
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from market_desk.calendar import now_cn
 
 
-AGENT_PACK_SCHEMA = "agent_pack.v1"
+AGENT_PACK_SCHEMA = "agent_pack.v2"
 
 
 def _item_proposal(item: dict[str, Any]) -> dict[str, Any] | None:
-    """Map one review-check row into an actionable proposal (or None)."""
+    """Map one review-check row into a sample/verdict proposal (or None).
+
+    ``sample=ready`` only means days/n cleared the TODO floor.
+    ``verdict=hold`` is the default when ready; ``soft_candidate`` only when
+    metrics clearly pass a known TODO shape (still needs Agent to ship).
+    """
     if item.get("skip"):
         return None
+    from market_desk.dual_score import soft_candidate_hint
+
     samp = item.get("sample") or {}
     enough = bool(samp.get("enough_for_todo"))
     level = str(item.get("level") or "")
     iid = str(item.get("id") or "")
     title = str(item.get("title") or iid)
     hint = str(item.get("hint") or "")
-    verdict = str(item.get("ui_verdict") or "")
+    ui = str(item.get("ui_verdict") or "")
+    metrics = item.get("metrics") or {}
+    wins = {
+        k: metrics.get(k)
+        for k in ("abs_win", "xs_win", "reclaim_abs_win", "wins_note")
+        if metrics.get(k) is not None
+    }
+    # Start gate owns its own readiness (equity > 0), not the 10d/30n floor.
+    if iid == "sim_desk_gate":
+        gate_ok = bool(metrics.get("gate_ok"))
+        vs = metrics.get("vs_bench")
+        if gate_ok:
+            return {
+                "id": iid,
+                "title": title,
+                "sample": "ready",
+                "verdict": "soft_candidate",
+                "reason": "gate_ok=true · 可按排期推进券商只读（首次真钱仍须一句确认）",
+                "metrics": metrics,
+                "wins": wins or None,
+            }
+        return {
+            "id": iid,
+            "title": title,
+            "sample": "thin",
+            "verdict": "watch",
+            "reason": f"未过线 · {ui or hint}",
+            "metrics": {"vs_bench": vs} if vs else metrics,
+            "wins": wins or None,
+        }
     if not enough:
         return {
             "id": iid,
             "title": title,
-            "action": "watch",
-            "reason": f"样本不足（days={samp.get('days')} n={samp.get('n')}）· {verdict or hint}",
+            "sample": "thin",
+            "verdict": "watch",
+            "reason": f"样本不足（days={samp.get('days')} n={samp.get('n')}）· {ui or hint}",
+            "wins": wins or None,
         }
-    # Enough sample: Agent must still apply TODO thresholds (t / halves / direction).
-    # Pack only flags readiness — never auto-claims "ship soft" without metrics.
+    candidate = soft_candidate_hint(item if isinstance(item, dict) else {})
+    verdict = "soft_candidate" if candidate else "hold"
     return {
         "id": iid,
         "title": title,
-        "action": "judge",
-        "reason": f"样本够门槛 · level={level} · {verdict or hint}",
+        "sample": "ready",
+        "verdict": verdict,
+        "reason": (
+            f"样本够门槛 · level={level} · "
+            + (
+                "指标形似过门槛·仍须 Agent 对照 TODO 全条件再改"
+                if candidate
+                else f"默认 hold · {ui or hint}"
+            )
+        ),
         "hint": hint,
-        "metrics": item.get("metrics") or {},
-        "ui_verdict": verdict,
+        "metrics": metrics,
+        "ui_verdict": ui,
+        "wins": wins or None,
     }
 
 
@@ -112,16 +158,19 @@ def build_agent_pack_sync() -> dict[str, Any]:
 
     # Sim gate fallback when review-check omitted the row.
     if "sim_desk_gate" not in seen:
+        vs = gate.get("vs_bench") if isinstance(gate.get("vs_bench"), dict) else {}
         if gate.get("gate_ok"):
             proposals.append(
                 {
                     "id": "sim_desk_gate",
                     "title": "模拟开工闸",
-                    "action": "judge",
+                    "sample": "ready",
+                    "verdict": "soft_candidate",
                     "reason": "gate_ok=true · 可按排期推进券商只读（首次真钱仍须一句确认）",
                     "metrics": {
                         "cum_pnl_pct": gate.get("cum_pnl_pct"),
                         "closed_n": gate.get("closed_n"),
+                        "vs_bench": vs,
                     },
                 }
             )
@@ -130,13 +179,19 @@ def build_agent_pack_sync() -> dict[str, Any]:
                 {
                     "id": "sim_desk_gate",
                     "title": "模拟开工闸",
-                    "action": "watch",
+                    "sample": "thin",
+                    "verdict": "watch",
                     "reason": f"未过线 · {gate.get('gate_label') or 'gate_ok=false'}",
+                    "metrics": {"vs_bench": vs} if vs else None,
                 }
             )
 
-    judge_n = sum(1 for p in proposals if p.get("action") == "judge")
-    watch_n = sum(1 for p in proposals if p.get("action") == "watch")
+    ready_n = sum(1 for p in proposals if p.get("sample") == "ready")
+    hold_n = sum(1 for p in proposals if p.get("verdict") == "hold")
+    soft_n = sum(1 for p in proposals if p.get("verdict") == "soft_candidate")
+    watch_n = sum(1 for p in proposals if p.get("verdict") == "watch")
+    dual = review.get("dual_wins") if isinstance(review.get("dual_wins"), dict) else {}
+    vs_bench = gate.get("vs_bench") if isinstance(gate.get("vs_bench"), dict) else {}
 
     return {
         "ok": True,
@@ -154,14 +209,23 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "ops_overall": ops.get("overall"),
             "sim_gate_ok": bool(gate.get("gate_ok")),
             "sim_cum_pnl_pct": gate.get("cum_pnl_pct"),
-            "proposals_judge": judge_n,
+            "sim_vs_bench": vs_bench,
+            "dual_wins": {
+                "all": (dual.get("all") or {}) if dual.get("ok") else dual,
+                "lit": (dual.get("lit") or {}) if dual.get("ok") else None,
+            },
+            "proposals_ready": ready_n,
+            "proposals_hold": hold_n,
+            "proposals_soft_candidate": soft_n,
             "proposals_watch": watch_n,
             "note": (
-                "action=judge 表示样本够门槛，Agent 须对照 TODO 逐项阈值再决定软/硬；"
-                "action=watch 继续攒样本。一次最多改一处。"
+                "sample=ready 只表示天数/张数够看；verdict=hold 默认不改；"
+                "soft_candidate 仅形似过门槛，仍须对照 TODO 全条件。一次最多改一处。"
+                "abs_win=绝对胜率，xs_win=跑赢大盘胜率。"
             ),
         },
         "proposals": proposals,
+        "dual_wins": dual,
         "review_check": review,
         "ops_check": {
             "overall": ops.get("overall"),
@@ -169,7 +233,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "host": ops.get("host"),
             "pid": ops.get("pid"),
         },
-        "sim": {"gate": gate, "attribution": attr},
+        "sim": {"gate": gate, "attribution": attr, "vs_bench": vs_bench},
         "deep_v": {"today": deep_v_today, "shadow": deep_v_shadow},
         "zt_share": zt_share,
         "shadows": shadows,
