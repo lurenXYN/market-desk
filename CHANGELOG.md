@@ -14,6 +14,22 @@
 
 ---
 
+## [v1.10.28] - 2026-10-31
+
+### 【背景与动机（为什么做 · Why）】
+- 决策代理约定要求 Agent 自行拉数判软/硬；此前只能拆拉 review-check / ops 或多截图，缺少一份可自学改进的聚合学习包。
+
+### 【做了什么（What）】
+- **Added** `agent_pack`：`build_agent_pack` 聚合 review-check、ops/check、sim gate/归因、deep_v、zt_share、shadows、Server酱额度，并输出 `proposals`（`watch` / `judge`）。
+- **Added** `GET /api/ops/agent-pack`（管理员）与 `GET /api/internal/agent-pack`（localhost）；`build_ops_check` 抽出供复用。
+- **Added** Actions `Agent pack dump`（SSH 直调 `build_agent_pack`，默认可 `cf=false`）。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / 硬闸 / 排序；`action=judge` 仅表示样本够门槛，仍须对照 TODO 阈值再改。
+- `pytest tests/test_agent_pack.py`
+
+---
+
 ## [v1.10.27] - 2026-10-31
 
 ### 【背景与动机（为什么做 · Why）】

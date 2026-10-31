@@ -318,7 +318,7 @@ ENTRIES: dict[str, dict[str, str]] = {
     },
     "运维自检": {
         "mean": "管理员账号面板一页看：库完整性、desk.db、快照新鲜度、clist 冷却、主板行情源、板块源、自动备份年龄、新闻雷达。",
-        "algo": "GET /api/ops/check；账号管理 → 运维自检。复盘素材贴 JSON：GET /api/ops/review-check（?cf=false 更快）。\n"
+        "algo": "GET /api/ops/check；账号管理 → 运维自检。复盘学习包优先：GET /api/ops/agent-pack（?cf=false 更快）；亦可 review-check。\n"
         "主板行情源：东财 clist 整体失败（部分 IP 会被东财断连）时暂停东财 10 分钟，改用腾讯批量行情；"
         "主板代码表每天从新浪取一次并存库（东财完整拉取成功时也会更新），失败日志含各东财节点探测结果。\n"
         "板块源：东财板块列表拉空时同样暂停东财 10 分钟，热点板块 / 当日资金流 / 成分股改走新浪"

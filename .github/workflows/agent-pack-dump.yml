@@ -1,0 +1,68 @@
+# Dump Agent learning pack from VPS (review + ops + sim + shadows + proposals).
+name: Agent pack dump
+
+on:
+  workflow_dispatch:
+    inputs:
+      cf:
+        description: "Include counterfactual (true/false)"
+        required: false
+        default: "false"
+      cf_days:
+        description: "Counterfactual lookback days"
+        required: false
+        default: "20"
+
+concurrency:
+  group: agent-pack-dump
+  cancel-in-progress: true
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Dump agent-pack over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 25m
+          script: |
+            set -euo pipefail
+            CF="${{ github.event.inputs.cf || 'false' }}"
+            CF_DAYS="${{ github.event.inputs.cf_days || '20' }}"
+            cd /opt/market-desk
+            .venv/bin/python - <<PY
+            import asyncio
+            import json
+            from market_desk.agent_pack import build_agent_pack
+
+            async def _run():
+                return await build_agent_pack(
+                    cf="${CF}".lower() in ("1", "true", "yes"),
+                    cf_days=int("${CF_DAYS}"),
+                )
+
+            out = asyncio.run(_run())
+            summary = out.get("summary") or {}
+            print("ASOF", out.get("asof"))
+            print("SCHEMA", out.get("schema"))
+            print(
+                "OPS", summary.get("ops_overall"),
+                "GATE", summary.get("sim_gate_ok"),
+                "JUDGE", summary.get("proposals_judge"),
+                "WATCH", summary.get("proposals_watch"),
+            )
+            for p in out.get("proposals") or []:
+                print(
+                    f"PROP {p.get('id')}\taction={p.get('action')}\t"
+                    f"{(p.get('reason') or '')[:120]}"
+                )
+            path = "/tmp/agent-pack.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2, default=str)
+            print("WROTE", path, "bytes", __import__("os").path.getsize(path))
+            PY

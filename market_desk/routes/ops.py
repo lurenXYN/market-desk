@@ -140,10 +140,8 @@ def ops_client_error(
     return {"ok": True}
 
 
-@router.get("/api/ops/check")
-def ops_check(user: dict = Depends(current_admin_required)) -> dict:
-    """One-shot VPS / deploy health checklist for admins."""
-    del user
+def build_ops_check() -> dict:
+    """Build the ops health checklist payload (shared by HTTP and agent-pack)."""
     import os
     from pathlib import Path
 
@@ -476,6 +474,13 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
     }
 
 
+@router.get("/api/ops/check")
+def ops_check(user: dict = Depends(current_admin_required)) -> dict:
+    """One-shot VPS / deploy health checklist for admins."""
+    del user
+    return build_ops_check()
+
+
 @router.get("/api/ops/shadows")
 def ops_shadows(
     days: int = Query(default=10, ge=1, le=40),
@@ -629,6 +634,38 @@ async def ops_review_check(
     out = merge_counterfactual(base, audit)
     out["curl"] = "GET /api/ops/review-check  (?cf=false skips gate What-If)"
     return out
+
+
+@router.get("/api/ops/agent-pack")
+async def ops_agent_pack(
+    cf: bool = Query(default=False, description="Include What-If counterfactual (slower)"),
+    cf_days: int = Query(default=20, ge=5, le=60),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """One-shot Agent learning pack for autonomous review / soft-hard decisions.
+
+    Aggregates review-check, ops health, sim gate, deep-V, zt-share, shadows and
+    a ``proposals`` list (``watch`` vs ``judge``). Prefer this over screenshots.
+    """
+    del user
+    from market_desk.agent_pack import build_agent_pack
+
+    return await build_agent_pack(cf=bool(cf), cf_days=int(cf_days))
+
+
+@router.get("/api/internal/agent-pack")
+async def internal_agent_pack(
+    request: Request,
+    cf: bool = Query(default=False),
+    cf_days: int = Query(default=20, ge=5, le=60),
+) -> dict:
+    """Localhost-only agent pack for SSH / CI dumps (no login cookie)."""
+    host = (request.client.host if request.client else "") or ""
+    if host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "localhost only")
+    from market_desk.agent_pack import build_agent_pack
+
+    return await build_agent_pack(cf=bool(cf), cf_days=int(cf_days))
 
 
 @router.get("/api/ops/em-avail")
