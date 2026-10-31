@@ -23,6 +23,8 @@
 - **Added** `agent_pack`：`build_agent_pack` 聚合 review-check、ops/check、sim gate/归因、deep_v、zt_share、shadows、Server酱额度，并输出 `proposals`（`watch` / `judge`）。
 - **Added** `GET /api/ops/agent-pack`（管理员）与 `GET /api/internal/agent-pack`（localhost）；`build_ops_check` 抽出供复用。
 - **Added** Actions `Agent pack dump`（SSH 直调 `build_agent_pack`，默认可 `cf=false`）。
+- **Fixed** `proposals` 去重（`sim_desk_gate` 不再双写）。
+- **Changed** TODO：写入 2026-10-31 VPS agent-pack 自治复盘结论（无一过全门槛 → 不改 ready/排序）。
 
 ### 【影响与验证（Impact & Verification）】
 - 不改 ready / 硬闸 / 排序；`action=judge` 仅表示样本够门槛，仍须对照 TODO 阈值再改。

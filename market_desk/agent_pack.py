@@ -98,34 +98,42 @@ def build_agent_pack_sync() -> dict[str, Any]:
         quota = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
 
     proposals = []
+    seen: set[str] = set()
     for it in review.get("items") or []:
         p = _item_proposal(it if isinstance(it, dict) else {})
-        if p:
-            proposals.append(p)
+        if not p:
+            continue
+        iid = str(p.get("id") or "")
+        if iid and iid in seen:
+            continue
+        if iid:
+            seen.add(iid)
+        proposals.append(p)
 
-    # Sim gate is a special proposal.
-    if gate.get("gate_ok"):
-        proposals.append(
-            {
-                "id": "sim_desk_gate",
-                "title": "模拟开工闸",
-                "action": "judge",
-                "reason": "gate_ok=true · 可按排期推进券商只读（首次真钱仍须一句确认）",
-                "metrics": {
-                    "cum_pnl_pct": gate.get("cum_pnl_pct"),
-                    "closed_n": gate.get("closed_n"),
-                },
-            }
-        )
-    else:
-        proposals.append(
-            {
-                "id": "sim_desk_gate",
-                "title": "模拟开工闸",
-                "action": "watch",
-                "reason": f"未过线 · {gate.get('gate_label') or 'gate_ok=false'}",
-            }
-        )
+    # Sim gate fallback when review-check omitted the row.
+    if "sim_desk_gate" not in seen:
+        if gate.get("gate_ok"):
+            proposals.append(
+                {
+                    "id": "sim_desk_gate",
+                    "title": "模拟开工闸",
+                    "action": "judge",
+                    "reason": "gate_ok=true · 可按排期推进券商只读（首次真钱仍须一句确认）",
+                    "metrics": {
+                        "cum_pnl_pct": gate.get("cum_pnl_pct"),
+                        "closed_n": gate.get("closed_n"),
+                    },
+                }
+            )
+        else:
+            proposals.append(
+                {
+                    "id": "sim_desk_gate",
+                    "title": "模拟开工闸",
+                    "action": "watch",
+                    "reason": f"未过线 · {gate.get('gate_label') or 'gate_ok=false'}",
+                }
+            )
 
     judge_n = sum(1 for p in proposals if p.get("action") == "judge")
     watch_n = sum(1 for p in proposals if p.get("action") == "watch")
