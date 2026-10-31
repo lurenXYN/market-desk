@@ -585,6 +585,21 @@ def build_review_payload(
     except Exception:
         summary["todo_strip"] = {"ok": False, "rows": [], "note": "清单进度暂不可用"}
     try:
+        from market_desk.deep_v import build_deep_v_shadow
+
+        summary["deep_v_shadow"] = build_deep_v_shadow(wide_rows)
+    except Exception:
+        summary["deep_v_shadow"] = {"ok": False, "note": "深V影子暂不可用"}
+    try:
+        from market_desk.config import ZT_SHARE_SHADOW_SINCE
+        from market_desk.db import load_zt_board_share
+        from market_desk.zt_share import build_zt_share_review
+
+        since = str(ZT_SHARE_SHADOW_SINCE)[:10]
+        summary["zt_board_share"] = build_zt_share_review(load_zt_board_share(since))
+    except Exception:
+        summary["zt_board_share"] = {"ok": False, "note": "涨停占比表暂不可用"}
+    try:
         from market_desk.adapt import make_trade_context
 
         live_ctx = make_trade_context(

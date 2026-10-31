@@ -124,6 +124,16 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["market_regime"] = old_payload["market_regime"]
         elif existing:
             merged.pop("market_regime", None)
+        # Deep-V bounce shadow: freeze day / lag / metrics; chase may flip True later.
+        for _dv_key in ("deep_v_day", "deep_v_lag1", "deep_v_dd", "deep_v_recover"):
+            if _dv_key in old_payload:
+                merged[_dv_key] = old_payload[_dv_key]
+            elif existing and _dv_key not in incoming:
+                merged.pop(_dv_key, None)
+        if old_payload.get("deep_v_chase") or incoming.get("deep_v_chase"):
+            merged["deep_v_chase"] = True
+        elif existing:
+            merged.pop("deep_v_chase", None)
         # Live price when the signal first fired (``last`` itself is overwritten on refresh).
         if not existing:
             merged["first_last"] = row.get("last")
@@ -146,6 +156,16 @@ def upsert_signal(row: dict[str, Any]) -> None:
                     merged["first_ready_px"] = row.get("last")
                 if isinstance(day_book, dict):
                     merged["book_ready"] = day_book
+                # Deep-V chase: stamp when the card first lights at/after 14:00.
+                try:
+                    from market_desk.config import DEEP_V_CHASE_HHMM
+
+                    at = str(merged.get("first_ready_at") or "")
+                    hhmm = at[11:16] if len(at) >= 16 else ""
+                    if merged.get("deep_v_day") and hhmm >= str(DEEP_V_CHASE_HHMM):
+                        merged["deep_v_chase"] = True
+                except Exception:
+                    pass
             else:
                 merged["first_ready_at"] = old_payload.get("first_ready_at")
         else:

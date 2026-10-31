@@ -97,6 +97,59 @@ function paintEdgeShadow(es) {
 }
 
 /**
+ * Render deep-V chase vs wait shadow (display only).
+ * @param {object} dv - summary.deep_v_shadow
+ */
+function paintDeepVShadow(dv) {
+  const box = document.getElementById("revDeepVShadow");
+  if (!box) return;
+  if (!dv || !dv.ok) {
+    box.innerHTML = `<div class="meta">${escAttr((dv && dv.note) || "深V影子暂不可用")}</div>`;
+    return;
+  }
+  const fmt = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const a = dv.a || {};
+  const b = dv.b || {};
+  box.innerHTML =
+    `<div class="hd">深 V 反抽<button type="button" class="q" data-term="进场影子">?</button>`
+    + ` · ${escAttr(dv.verdict || "")}</div>`
+    + `<div class="meta">${escAttr(dv.note || "")}</div>`
+    + `<table class="gl-tbl"><thead><tr><th>组</th><th>样本</th><th>三日超额</th><th>胜率</th></tr></thead><tbody>`
+    + `<tr><td>A 深V日14:00后亮灯</td><td class="num">${a.n || 0}/${a.days || 0}天</td>`
+    + `<td class="num">${fmt(a.d3)}</td><td class="num">${a.win == null ? "—" : a.win + "%"}</td></tr>`
+    + `<tr><td>B 深V次日亮灯</td><td class="num">${b.n || 0}/${b.days || 0}天</td>`
+    + `<td class="num">${fmt(b.d3)}</td><td class="num">${b.win == null ? "—" : b.win + "%"}</td></tr>`
+    + `<tr class="gl-mid"><td>A−B</td><td>—</td><td class="num">${fmt(dv.delta)}</td><td>—</td></tr>`
+    + `</tbody></table>`;
+}
+
+/**
+ * Render limit-up board-share lift table (display only; never tips codes).
+ * @param {object} zs - summary.zt_board_share
+ */
+function paintZtBoardShare(zs) {
+  const box = document.getElementById("revZtBoardShare");
+  if (!box) return;
+  if (!zs || !zs.ok) {
+    box.innerHTML = `<div class="meta">${escAttr((zs && zs.note) || "涨停占比表暂不可用")}</div>`;
+    return;
+  }
+  const rows = (zs.top || []).slice(0, 10).map((r) =>
+    `<tr><td>${escAttr(String(r.day || "").slice(5))}</td><td>${escAttr(r.board || "")}</td>`
+    + `<td>${escAttr(r.kind === "concept" ? "概念" : "行业")}</td>`
+    + `<td class="num">${r.n ?? "—"}</td><td class="num">${r.share == null ? "—" : r.share + "%"}</td>`
+    + `<td class="num">${r.z == null ? "—" : Number(r.z).toFixed(2)}</td></tr>`
+  ).join("");
+  box.innerHTML =
+    `<div class="hd">涨停占比接班 · ${escAttr(zs.verdict || "")}</div>`
+    + `<div class="meta">${escAttr(zs.note || "")}</div>`
+    + (rows
+      ? `<table class="gl-tbl"><thead><tr><th>日</th><th>板块</th><th>类</th><th>只数</th><th>占比</th><th>z</th></tr></thead>`
+        + `<tbody>${rows}</tbody></table>`
+      : `<div class="meta">尚无抬升日</div>`);
+}
+
+/**
  * Render TODO #6 / #11 / #12 progress strip (sell fly / lit float / pick audit).
  * @param {object} strip - summary.todo_strip from /api/review.
  */

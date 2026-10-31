@@ -212,6 +212,41 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS deep_v_day (
+                trade_date TEXT PRIMARY KEY,
+                ok INTEGER NOT NULL DEFAULT 0,
+                deep_v INTEGER NOT NULL DEFAULT 0,
+                dd_pct REAL,
+                recover REAL,
+                open_px REAL,
+                low_px REAL,
+                close_px REAL,
+                n INTEGER,
+                provisional INTEGER NOT NULL DEFAULT 1,
+                at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS zt_board_share (
+                trade_date TEXT NOT NULL,
+                board TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                total INTEGER NOT NULL,
+                share REAL NOT NULL,
+                mean REAL,
+                std REAL,
+                z REAL,
+                lift INTEGER NOT NULL DEFAULT 0,
+                at TEXT,
+                PRIMARY KEY (trade_date, board, kind)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS board_members_snap (
                 source TEXT NOT NULL,
                 key TEXT NOT NULL,

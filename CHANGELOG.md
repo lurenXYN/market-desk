@@ -14,6 +14,22 @@
 
 ---
 
+## [v1.10.27] - 2026-10-31
+
+### 【背景与动机（为什么做 · Why）】
+- 2026-10-28 预登记的深 V 反抽 / 涨停占比接班影子此前「未上线·跳过」，样本无法起算；需只记账落盘，不改 ready/闸门。
+
+### 【做了什么（What）】
+- **Added** `deep_v`：中证1000 分时深 V 日分类（回撤≥1.5% 且回补≥50%）；`deep_v_day` 表；买卡冻结 `deep_v_day` / `deep_v_chase` / `deep_v_lag1`；复盘 A−B 三日超额；ops 一行。
+- **Added** `zt_board_share`：涨停池行业/概念占比日表 + 近 20 日 z 抬升标记；复盘/ops 展示；永不荐股。
+- **Changed** review-check #15/#16 由 skip 改为真实进度；样本外自 `DEEP_V_SHADOW_SINCE` / `ZT_SHARE_SHADOW_SINCE`=2026-10-31。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / 硬闸 / 排序；软提示仍须过预登记门槛。
+- `pytest tests/test_deep_v_zt_share.py`
+
+---
+
 ## [v1.10.26] - 2026-10-30
 
 ### 【背景与动机（为什么做 · Why）】

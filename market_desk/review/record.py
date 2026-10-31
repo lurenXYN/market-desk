@@ -123,8 +123,43 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         market_regime = freeze_market_regime(snapshot)
     except Exception:
         market_regime = None
+    deep_v_day_row = None
+    prev_deep = False
+    try:
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        from market_desk.calendar import is_trading_day as _is_td
+        from market_desk.db import load_deep_v_day
+
+        deep_v_day_row = load_deep_v_day(str(trade_date)[:10])
+        cur = _date.fromisoformat(str(trade_date)[:10])
+        for _ in range(15):
+            cur = cur - _td(days=1)
+            if _is_td(cur):
+                prev_row = load_deep_v_day(cur.isoformat())
+                prev_deep = bool(prev_row and prev_row.get("ok") and prev_row.get("deep_v"))
+                break
+    except Exception:
+        deep_v_day_row = None
+        prev_deep = False
     day_book = _day_book(str(trade_date), verdict)
     n = 0
+
+    def deep_v_fields(*, ready: bool) -> dict:
+        """Freeze deep-V chase / lag flags into a new buy payload."""
+        try:
+            from market_desk.deep_v import freeze_deep_v_fields
+
+            return freeze_deep_v_fields(
+                trade_date=str(trade_date)[:10],
+                signaled_at=signaled_at,
+                ready=ready,
+                day_row=deep_v_day_row,
+                prev_deep=prev_deep,
+            )
+        except Exception:
+            return {}
 
     def _log_buy_items(
         items: list[dict[str, Any]] | None,
@@ -243,6 +278,9 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "day_book": day_book,
                         **({"market_regime": market_regime} if market_regime else {}),
                         **_slip_fields(item),
+                        **deep_v_fields(
+                            ready=bool(item.get("ready")),
+                        ),
                     },
                 }
             )

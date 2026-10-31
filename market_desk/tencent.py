@@ -295,7 +295,16 @@ async def fetch_minute_trends(client: httpx.AsyncClient, code: str) -> list[dict
     c = str(code or "").strip().zfill(6)
     if len(c) != 6 or not c.isdigit():
         return []
-    sym = tencent_symbol(c)
+    return await fetch_symbol_minute_trends(client, tencent_symbol(c))
+
+
+async def fetch_symbol_minute_trends(
+    client: httpx.AsyncClient, symbol: str
+) -> list[dict[str, Any]]:
+    """Fetch today's minute points for a full Tencent symbol (e.g. ``sh000852``)."""
+    sym = str(symbol or "").strip().lower()
+    if len(sym) < 8 or not sym[:2] in ("sh", "sz"):
+        return []
     try:
         node = await _get_minute_node(client, _MINUTE_URL.format(sym=sym), sym)
     except Exception:

@@ -307,3 +307,124 @@ def load_narrative_shadow(since: str, until: str | None = None) -> list[dict[str
             item["concepts"] = []
         out.append(item)
     return out
+
+
+def save_deep_v_day(trade_date: str, row: dict[str, Any], *, provisional: bool = True) -> None:
+    """Upsert one CSI1000 deep-V day classification."""
+    day = str(trade_date or "")[:10]
+    if not day or not isinstance(row, dict):
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO deep_v_day(
+                trade_date, ok, deep_v, dd_pct, recover, open_px, low_px, close_px, n, provisional, at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_date) DO UPDATE SET
+                ok=excluded.ok,
+                deep_v=excluded.deep_v,
+                dd_pct=excluded.dd_pct,
+                recover=excluded.recover,
+                open_px=excluded.open_px,
+                low_px=excluded.low_px,
+                close_px=excluded.close_px,
+                n=excluded.n,
+                provisional=excluded.provisional,
+                at=excluded.at
+            """,
+            (
+                day,
+                1 if row.get("ok") else 0,
+                1 if row.get("deep_v") else 0,
+                row.get("dd_pct"),
+                row.get("recover"),
+                row.get("open"),
+                row.get("low"),
+                row.get("close"),
+                int(row.get("n") or 0),
+                1 if provisional else 0,
+                str(row.get("at") or ""),
+            ),
+        )
+        conn.commit()
+
+
+def load_deep_v_day(trade_date: str) -> dict[str, Any] | None:
+    """Return one deep-V day row or None."""
+    day = str(trade_date or "")[:10]
+    if not day:
+        return None
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM deep_v_day WHERE trade_date = ?", (day,)).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    return {
+        "ok": bool(item.get("ok")),
+        "deep_v": bool(item.get("deep_v")),
+        "dd_pct": item.get("dd_pct"),
+        "recover": item.get("recover"),
+        "open": item.get("open_px"),
+        "low": item.get("low_px"),
+        "close": item.get("close_px"),
+        "n": item.get("n"),
+        "provisional": bool(item.get("provisional")),
+        "at": item.get("at"),
+        "trade_date": day,
+    }
+
+
+def save_zt_board_share(trade_date: str, rows: list[dict[str, Any]], *, at: str = "") -> int:
+    """Replace one day's limit-up board-share rows."""
+    day = str(trade_date or "")[:10]
+    if not day:
+        return 0
+    data = [
+        (
+            day,
+            str(r.get("board") or ""),
+            str(r.get("kind") or ""),
+            int(r.get("n") or 0),
+            int(r.get("total") or 0),
+            float(r.get("share") or 0.0),
+            r.get("mean"),
+            r.get("std"),
+            r.get("z"),
+            1 if r.get("lift") else 0,
+            at,
+        )
+        for r in rows or []
+        if r.get("board") and r.get("kind")
+    ]
+    with _connect() as conn:
+        conn.execute("DELETE FROM zt_board_share WHERE trade_date = ?", (day,))
+        if data:
+            conn.executemany(
+                """
+                INSERT INTO zt_board_share(
+                    trade_date, board, kind, n, total, share, mean, std, z, lift, at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                data,
+            )
+        conn.commit()
+    return len(data)
+
+
+def load_zt_board_share(
+    since: str,
+    until: str | None = None,
+    *,
+    lifts_only: bool = False,
+) -> list[dict[str, Any]]:
+    """Return zt board-share rows oldest→newest."""
+    lo = str(since or "")[:10]
+    hi = str(until or "9999-12-31")[:10]
+    sql = (
+        "SELECT * FROM zt_board_share WHERE trade_date >= ? AND trade_date <= ?"
+        + (" AND lift = 1" if lifts_only else "")
+        + " ORDER BY trade_date ASC, share DESC"
+    )
+    with _connect() as conn:
+        rows = conn.execute(sql, (lo, hi)).fetchall()
+    return [dict(r) for r in rows]

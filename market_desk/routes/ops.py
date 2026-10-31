@@ -273,14 +273,64 @@ def ops_check(user: dict = Depends(current_admin_required)) -> dict:
                 "detail": "尚无自动备份文件",
             }
         )
+    radar = snap.get("radar") if isinstance(snap.get("radar"), dict) else {}
     try:
         from market_desk.shadow_health import shadow_check, shadow_health
 
-        radar = snap.get("radar") if isinstance(snap.get("radar"), dict) else {}
         checks.append(shadow_check(shadow_health(1), radar.get("narrative")))
     except Exception as exc:
         checks.append(
             {"id": "shadows", "title": "影子账本", "level": "warn", "detail": f"{type(exc).__name__}: {exc}"[:120]}
+        )
+    try:
+        from market_desk.calendar import today_cn
+        from market_desk.db import load_deep_v_day
+
+        day = today_cn().isoformat() if hasattr(today_cn(), "isoformat") else str(today_cn())[:10]
+        dv = load_deep_v_day(day) or radar.get("deep_v")
+        if isinstance(dv, dict) and dv.get("ok"):
+            detail = (
+                f"{'深V' if dv.get('deep_v') else '非深V'} · 回撤{dv.get('dd_pct')}%"
+                f" · 回补{dv.get('recover')}"
+                + (" · 盘中暂定" if dv.get("provisional") else "")
+            )
+            checks.append({"id": "deep_v", "title": "深V日（中证1000）", "level": "ok", "detail": detail})
+        else:
+            checks.append(
+                {
+                    "id": "deep_v",
+                    "title": "深V日（中证1000）",
+                    "level": "ok",
+                    "detail": (dv or {}).get("note") if isinstance(dv, dict) else "尚无分类",
+                }
+            )
+    except Exception as exc:
+        checks.append(
+            {"id": "deep_v", "title": "深V日（中证1000）", "level": "warn", "detail": f"{type(exc).__name__}: {exc}"[:120]}
+        )
+    try:
+        zs = radar.get("zt_share") if isinstance(radar, dict) else None
+        if isinstance(zs, dict) and zs.get("ok"):
+            checks.append(
+                {
+                    "id": "zt_share",
+                    "title": "涨停占比抬升",
+                    "level": "ok",
+                    "detail": f"今日表 {zs.get('n')} 行 · 抬升 {zs.get('lift_n')}",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "id": "zt_share",
+                    "title": "涨停占比抬升",
+                    "level": "ok",
+                    "detail": (zs or {}).get("note") if isinstance(zs, dict) else "尚无日表",
+                }
+            )
+    except Exception as exc:
+        checks.append(
+            {"id": "zt_share", "title": "涨停占比抬升", "level": "warn", "detail": f"{type(exc).__name__}: {exc}"[:120]}
         )
     try:
         from market_desk.sim_desk import start_gate_snapshot

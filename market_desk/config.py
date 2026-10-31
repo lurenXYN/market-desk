@@ -389,6 +389,19 @@ REVIEW_BENCH_SUMMARY_DAYS = 20
 # Does not gate ready. Out-of-sample evidence for the regime hypothesis starts here.
 REGIME_MA_N = 60
 REGIME_SHADOW_SINCE = "2026-10-15"
+# Deep-V bounce shadow (display only; pre-registered 2026-10-28). Sample starts
+# the day this code ships — days before SINCE do not count as evidence.
+DEEP_V_SHADOW_SINCE = "2026-10-31"
+DEEP_V_DD_PCT = 1.5                     # CSI1000 max drawdown from open (%)
+DEEP_V_RECOVER_FRAC = 0.5               # close rebound / drawdown ≥ this
+DEEP_V_CHASE_HHMM = "14:00"             # first ready at/after → chase group A
+DEEP_V_FETCH_SEC = 180                  # refresh CSI1000 minutes cadence
+# Limit-up board-share lift table (display only; never recommends codes).
+ZT_SHARE_SHADOW_SINCE = "2026-10-31"
+ZT_SHARE_LOOKBACK = 20                  # trading days for mean / σ
+ZT_SHARE_Z = 1.0                        # lift when share ≥ mean + Z·σ
+ZT_SHARE_MIN_N = 3                      # and board has ≥ this many limit-ups
+ZT_SHARE_TOP = 12                       # rows kept per kind per day
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
 LIFECYCLE_SIDE_MAX = 8

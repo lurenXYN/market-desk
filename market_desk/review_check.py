@@ -278,28 +278,79 @@ def build_review_check_sync() -> dict[str, Any]:
     items = _edge_items(edge) if edge.get("ok") else []
     items.append(_narrative_item())
     items.append(_crowd_item())
-    items.append(
-        _item(
-            id="deep_v_bounce",
-            title="深 V 反抽确认",
-            since=None,
-            sample=_sample(0, 0),
-            hint="影子未上线；跳过",
-            level="skip",
-            skip=True,
+    try:
+        from market_desk.config import DEEP_V_SHADOW_SINCE
+        from market_desk.deep_v import build_deep_v_shadow
+
+        dv = build_deep_v_shadow(rows)
+        a, b = dv.get("a") or {}, dv.get("b") or {}
+        items.append(
+            _item(
+                id="deep_v_bounce",
+                title="深 V 反抽确认",
+                since=str(dv.get("since") or DEEP_V_SHADOW_SINCE),
+                sample=_sample(
+                    max(int(a.get("days") or 0), int(b.get("days") or 0)),
+                    int(a.get("n") or 0) + int(b.get("n") or 0),
+                ),
+                metrics={
+                    "a": a,
+                    "b": b,
+                    "delta": dv.get("delta"),
+                    "verdict": dv.get("verdict"),
+                },
+                ui_verdict=str(dv.get("verdict") or ""),
+                hint="A−B≤−0.5% 且 |t|≥2、两半同号才软提示；样本未齐只记账",
+                level="ok" if (a.get("n") or 0) + (b.get("n") or 0) else "warn",
+            )
         )
-    )
-    items.append(
-        _item(
-            id="zt_board_share",
-            title="涨停占比接班",
-            since=None,
-            sample=_sample(0, 0),
-            hint="影子未上线；跳过",
-            level="skip",
-            skip=True,
+    except Exception as exc:
+        items.append(
+            _item(
+                id="deep_v_bounce",
+                title="深 V 反抽确认",
+                since=None,
+                sample=_sample(0, 0),
+                metrics={"error": f"{type(exc).__name__}: {exc}"[:120]},
+                hint="deep_v 统计失败",
+                level="warn",
+            )
         )
-    )
+    try:
+        from market_desk.config import ZT_SHARE_SHADOW_SINCE
+        from market_desk.db import load_zt_board_share
+        from market_desk.zt_share import build_zt_share_review
+
+        zs = build_zt_share_review(load_zt_board_share(str(ZT_SHARE_SHADOW_SINCE)[:10]))
+        items.append(
+            _item(
+                id="zt_board_share",
+                title="涨停占比接班",
+                since=str(zs.get("since") or ZT_SHARE_SHADOW_SINCE),
+                sample=_sample(zs.get("lift_days"), zs.get("lift_n") or 0, min_n=1),
+                metrics={
+                    "lift_days": zs.get("lift_days"),
+                    "forward_hit_rate": zs.get("forward_hit_rate"),
+                    "top": (zs.get("top") or [])[:6],
+                    "verdict": zs.get("verdict"),
+                },
+                ui_verdict=str(zs.get("verdict") or ""),
+                hint="抬升→主线命中≥50% 且提前中位≥0 才软提示；永不荐股",
+                level="ok" if int(zs.get("lift_days") or 0) else "warn",
+            )
+        )
+    except Exception as exc:
+        items.append(
+            _item(
+                id="zt_board_share",
+                title="涨停占比接班",
+                since=None,
+                sample=_sample(0, 0),
+                metrics={"error": f"{type(exc).__name__}: {exc}"[:120]},
+                hint="zt_share 统计失败",
+                level="warn",
+            )
+        )
     items.extend(_extra_review_items(rows))
 
     sim_gate: dict[str, Any] | None = None

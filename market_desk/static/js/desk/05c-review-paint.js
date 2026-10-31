@@ -203,6 +203,8 @@ function paintReview(payload) {
   }
   paintGateLedger(sum.gate_ledger || {});
   paintEdgeShadow(sum.edge_shadow || {});
+  paintDeepVShadow(sum.deep_v_shadow || {});
+  paintZtBoardShare(sum.zt_board_share || {});
   paintTodoStrip(sum.todo_strip || {});
   paintDiscipline(sum.discipline || {});
   paintChaseCost(sum.chase_cost || {});

@@ -268,7 +268,121 @@ class RadarMixin:
         except Exception:
             log.exception("narrative graph failed")
             verdict["narrative_recommend"] = None
+        try:
+            out["deep_v"] = await self._radar_deep_v(
+                client, now=now, trade_date_dash=trade_date_dash
+            )
+        except Exception:
+            log.exception("deep_v radar failed")
+            out["deep_v"] = {"ok": False}
+        try:
+            out["zt_share"] = self._radar_zt_share(
+                zt,
+                boards=boards,
+                cards=cards,
+                now=now,
+                trade_date_dash=trade_date_dash,
+            )
+        except Exception:
+            log.exception("zt_share radar failed")
+            out["zt_share"] = {"ok": False}
         return out
+
+    async def _radar_deep_v(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        now: datetime,
+        trade_date_dash: str,
+    ) -> dict[str, Any]:
+        """Classify CSI1000 deep-V day and persist for buy-card freeze."""
+        from market_desk.config import DEEP_V_FETCH_SEC, DEEP_V_SHADOW_SINCE, REVIEW_BENCH_SYMBOL
+        from market_desk.db import load_deep_v_day, save_deep_v_day
+        from market_desk.deep_v import classify_deep_v_day
+        from market_desk.tencent import fetch_symbol_minute_trends
+
+        day = str(trade_date_dash or "")[:10]
+        if not day or day < str(DEEP_V_SHADOW_SINCE)[:10]:
+            return {"ok": False, "note": "未到样本日起点", "since": DEEP_V_SHADOW_SINCE}
+        if not is_trading_day(now):
+            cached = load_deep_v_day(day)
+            return cached or {"ok": False, "note": "非交易日"}
+        mono = time.monotonic()
+        hit = getattr(self, "_deep_v_cache", None)
+        if hit and hit[0] == day and mono - hit[1] < float(DEEP_V_FETCH_SEC):
+            return hit[2]
+        sym = str(REVIEW_BENCH_SYMBOL or "sh000852").lower()
+        if not sym.startswith(("sh", "sz")):
+            sym = f"sh{sym.zfill(6)}"
+        points = await fetch_symbol_minute_trends(client, sym)
+        classified = classify_deep_v_day(points)
+        classified["at"] = now.strftime("%H:%M:%S")
+        provisional = now.hour * 100 + now.minute < 1505
+        if classified.get("ok"):
+            try:
+                save_deep_v_day(day, classified, provisional=provisional)
+            except Exception:
+                log.exception("save deep_v_day failed")
+        classified["provisional"] = provisional
+        classified["trade_date"] = day
+        self._deep_v_cache = (day, mono, classified)
+        return classified
+
+    def _radar_zt_share(
+        self,
+        zt: list[dict[str, Any]] | None,
+        *,
+        boards: list[dict[str, Any]] | None,
+        cards: list[dict[str, Any]],
+        now: datetime,
+        trade_date_dash: str,
+    ) -> dict[str, Any]:
+        """Build and persist today's limit-up board-share lift table."""
+        from market_desk.config import (
+            ZT_SHARE_SHADOW_SINCE,
+            ZT_SHARE_TOP,
+        )
+        from market_desk.db import load_zt_board_share, save_zt_board_share
+        from market_desk.zt_share import annotate_lifts, count_zt_by_board
+
+        day = str(trade_date_dash or "")[:10]
+        if not day or day < str(ZT_SHARE_SHADOW_SINCE)[:10]:
+            return {"ok": False, "note": "未到样本日起点", "since": ZT_SHARE_SHADOW_SINCE}
+        if not zt:
+            return {"ok": False, "note": "涨停池空"}
+        concepts = [c for c in (cards or []) if c.get("kind") == "concept"]
+        industries = [c for c in (cards or []) if c.get("kind") == "industry"]
+        # Also use raw board list when cards are thin.
+        for b in boards or []:
+            if b.get("kind") == "concept" and b.get("name"):
+                concepts.append(b)
+            if b.get("kind") == "industry" and b.get("name"):
+                industries.append(b)
+        today = count_zt_by_board(zt, concept_boards=concepts, industry_boards=industries)
+        since = (datetime.strptime(day, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
+        hist = [r for r in load_zt_board_share(since, day) if str(r.get("trade_date"))[:10] < day]
+        annotated = annotate_lifts(today, hist)
+        # Persist top shares per kind so the table stays small.
+        keep: list[dict[str, Any]] = []
+        for kind in ("industry", "concept"):
+            part = [r for r in annotated if r.get("kind") == kind]
+            keep.extend(part[: int(ZT_SHARE_TOP)])
+            keep.extend([r for r in part[int(ZT_SHARE_TOP) :] if r.get("lift")])
+        at = now.strftime("%H:%M:%S")
+        try:
+            save_zt_board_share(day, keep, at=at)
+        except Exception:
+            log.exception("save zt_board_share failed")
+        lifts = [r for r in keep if r.get("lift")]
+        return {
+            "ok": True,
+            "trade_date": day,
+            "n": len(keep),
+            "lift_n": len(lifts),
+            "top": keep[:8],
+            "lifts": lifts[:8],
+            "at": at[:5],
+        }
 
     def _narrative_snap_concepts(
         self, trade_date_dash: str

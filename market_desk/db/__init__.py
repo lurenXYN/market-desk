@@ -178,11 +178,15 @@ from market_desk.db.em_avail import (  # noqa: F401
 from market_desk.db.radar import (  # noqa: F401
     load_board_crowding_history,
     load_crowd_shadow,
+    load_deep_v_day,
     load_etf_pulse,
     load_narrative_shadow,
+    load_zt_board_share,
     save_board_crowding,
     save_crowd_shadow,
+    save_deep_v_day,
     save_etf_pulse,
+    save_zt_board_share,
     upsert_narrative_shadow,
 )
 from market_desk.db.sim_desk import (  # noqa: F401
