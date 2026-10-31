@@ -229,6 +229,30 @@ async def _enrich_board(
         card["lifecycle_no_hist"] = True
         card["note"] = _join_board_note(card.get("note"), "无史·不判阶段")
     card["focus"] = round(zt_n / max(len(zt), 1) * 100.0, 1) if zt else 0.0
+    if int(card.get("up_count") or 0) + int(card.get("down_count") or 0) == 0:
+        try:
+            from market_desk.board_breadth import (
+                breadth_from_codes,
+                fill_card_breadth_from_members,
+            )
+
+            qmap = ctx.get("quotes") or {}
+            if isinstance(qmap, list):
+                qmap = {
+                    str(q.get("code") or "").zfill(6): q
+                    for q in qmap
+                    if isinstance(q, dict) and q.get("code")
+                }
+            codes = [str(m.get("code") or "").zfill(6) for m in members if m.get("code")]
+            ups, downs, known = breadth_from_codes(codes, qmap if isinstance(qmap, dict) else {})
+            if known >= 3:
+                card["up_count"] = ups
+                card["down_count"] = downs
+                card["breadth_from"] = "member_quotes"
+            else:
+                fill_card_breadth_from_members(card)
+        except Exception:
+            log.debug("card breadth fill failed", exc_info=True)
     return card
 
 

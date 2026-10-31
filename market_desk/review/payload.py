@@ -577,6 +577,14 @@ def build_review_payload(
     except Exception:
         summary["sell_fly_board"] = {"ok": False, "n": 0, "note": "卖飞看板暂不可用"}
     try:
+        from market_desk.review_check import build_todo_strip
+
+        summary["todo_strip"] = build_todo_strip(
+            [r for r in wide_rows if str(r.get("signal_type") or "") == "buy"]
+        )
+    except Exception:
+        summary["todo_strip"] = {"ok": False, "rows": [], "note": "清单进度暂不可用"}
+    try:
         from market_desk.adapt import make_trade_context
 
         live_ctx = make_trade_context(

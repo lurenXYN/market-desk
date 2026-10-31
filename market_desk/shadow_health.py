@@ -68,7 +68,9 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
         if not dates:
             return []
         narrative = _count_by_day(conn, "narrative_shadow", dates)
-        narrative_snap = _count_by_day(conn, "narrative_shadow", dates, "pool = 'snap'")
+        narrative_snap = _count_by_day(
+            conn, "narrative_shadow", dates, "pool IN ('snap', 'sina_snap')"
+        )
         crowd = _count_by_day(conn, "crowd_shadow", dates)
         auction = _count_by_day(conn, "auction_lock", dates)
         pulse = _count_by_day(conn, "etf_pulse_log", dates)
@@ -167,11 +169,18 @@ def shadow_check(rows: list[dict[str, Any]], narrative_live: dict[str, Any] | No
     parts.append(f"拥挤{r['crowd']}{crowd_why}")
     pool = str((narrative_live or {}).get("pool") or "")
     concepts = (narrative_live or {}).get("concepts")
-    pool_txt = f"（概念池 {'快照' if pool == 'snap' else '实时'} {concepts} 个）" if concepts is not None else ""
+    pool_meta = (narrative_live or {}).get("pool_meta") if isinstance(narrative_live, dict) else None
+    pool_zh = {"snap": "东财快照", "sina_snap": "新浪快照", "live": "实时"}.get(pool, pool or "实时")
+    pool_txt = f"（概念池 {pool_zh} {concepts} 个）" if concepts is not None else ""
+    if isinstance(pool_meta, dict) and pool_meta.get("em_concepts") is not None:
+        pool_txt += (
+            f"·EM{pool_meta.get('em_concepts')}/{pool_meta.get('em_min')}"
+            f"·新浪{pool_meta.get('sina_concepts')}/{pool_meta.get('sina_min')}"
+        )
     snap_n = int(r.get("narrative_snap") or 0)
     split = f"（快照池 {snap_n}）" if snap_n and snap_n != r["narrative"] else ""
     parts.append(f"叙事{r['narrative']}{split}{pool_txt}")
-    if not r["narrative"] and pool != "snap" and level == "ok":
+    if not r["narrative"] and pool not in ("snap", "sina_snap") and level == "ok":
         level = "warn"
     parts.append(f"竞价锁{r['auction']}·脉冲{r['pulse']}")
     return {"id": "shadows", "title": "影子账本", "level": level, "detail": " · ".join(parts)}

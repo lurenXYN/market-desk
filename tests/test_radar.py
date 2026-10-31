@@ -347,7 +347,7 @@ def test_narrative_preopen_result_does_not_hold_throttle(monkeypatch) -> None:
     zt = [_zt("600001", "通信设备"), _zt("600002", "通信设备"), _zt("600003", "电力设备"), _zt("600004", "电力设备")]
 
     async def _concepts(self, client, boards, cards, trade_date_dash=""):
-        return concepts
+        return concepts, {"chosen": "live", "em_concepts": 0, "sina_concepts": 0}
 
     monkeypatch.setattr(DeskEngine, "_narrative_concepts", _concepts)
     eng = DeskEngine()
@@ -380,8 +380,13 @@ def test_narrative_concepts_prefer_full_snapshot(monkeypatch) -> None:
         "BK4": {"name": "通信设备", "kind": "industry", "n": 2, "at": "", "codes": {"600001", "600002"}},
     }
     calls: list[int] = []
-    monkeypatch.setattr(desk_db, "load_board_members_snap", lambda source, **k: calls.append(1) or snaps)
+    def _load(source, **k):
+        calls.append(source)
+        return snaps if source == "em" else {}
+
+    monkeypatch.setattr(desk_db, "load_board_members_snap", _load)
     monkeypatch.setattr(cfg, "NARR_SNAP_MIN_BOARDS", 2)
+    monkeypatch.setattr(cfg, "NARR_SINA_SNAP_MIN_BOARDS", 2)
 
     async def _no_fetch(*a, **k):
         raise AssertionError("snapshot pool must not fetch live members")
@@ -390,12 +395,13 @@ def test_narrative_concepts_prefer_full_snapshot(monkeypatch) -> None:
     eng = DeskEngine()
     boards = [{"name": "热门", "kind": "concept", "bk": "BK9", "pct": 9.0}]
     cards = [{"name": "算力", "kind": "concept", "pool": [{"code": "600001"}]}]
-    out = asyncio.run(eng._narrative_concepts(None, boards, cards, "2026-10-09"))
+    out, meta = asyncio.run(eng._narrative_concepts(None, boards, cards, "2026-10-09"))
     by_name = {c["name"]: c for c in out}
     assert set(by_name) == {"算力", "液冷"}
     assert len(by_name["算力"]["members"]) == 3 and by_name["算力"]["src"] == "snap"
+    assert meta.get("chosen") == "em"
     asyncio.run(eng._narrative_concepts(None, boards, cards, "2026-10-09"))
-    assert calls == [1]
+    assert calls == ["em", "sina"]
 
 
 def test_summarize_leads_counts_hidden_hits() -> None:

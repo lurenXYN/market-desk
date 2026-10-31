@@ -47,8 +47,9 @@ def test_serverchan_quota_snapshot(tmp_path, monkeypatch):
     assert q["cap"] >= 1
     assert q["used"] == 0
     assert q["remaining"] == q["cap"]
+    assert "host" in (q.get("origin") or {})
     store["sc_push_log:2026-10-29"] = [
-        {"at": "10:00:00", "title": "收盘一页纸", "source": "eod"},
+        {"at": "10:00:00", "title": "收盘一页纸", "source": "eod", "host": "vps"},
         {"at": "12:00:00", "title": "新闻", "source": "radar"},
     ]
     q2 = serverchan_quota_snapshot()
@@ -59,3 +60,12 @@ def test_serverchan_quota_snapshot(tmp_path, monkeypatch):
 def test_sample_min_n_for_sell_fly():
     assert _sample(1, 14, min_days=1, min_n=15)["enough_for_todo"] is False
     assert _sample(1, 15, min_days=1, min_n=15)["enough_for_todo"] is True
+
+
+def test_todo_strip_rows():
+    from market_desk.review_check import build_todo_strip
+
+    strip = build_todo_strip([])
+    assert strip["ok"] is True
+    ids = {r["id"] for r in strip["rows"]}
+    assert {"sell_fly", "pick_audit", "lit_float"} <= ids

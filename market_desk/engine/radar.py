@@ -48,7 +48,7 @@ class RadarMixin:
     _pulse_base: tuple[str, dict[str, tuple[dict[str, float], float | None]]] | None = None
     _pulse_cache: tuple[float, dict[str, Any]] | None = None
     _narr_cache: tuple[float, str, dict[str, Any]] | None = None
-    _narr_snap_cache: tuple[str, list[dict[str, Any]]] | None = None
+    _narr_snap_cache: tuple[str, list[dict[str, Any]], dict[str, Any]] | None = None
 
     def _radar_crowding(
         self,
@@ -270,31 +270,68 @@ class RadarMixin:
             verdict["narrative_recommend"] = None
         return out
 
-    def _narrative_snap_concepts(self, trade_date_dash: str) -> list[dict[str, Any]]:
-        """East Money concept boards with full constituents from the off-hours snapshot (cached per day)."""
-        from market_desk.config import NARR_SNAP_MAX_MEMBERS
+    def _narrative_snap_concepts(
+        self, trade_date_dash: str
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Concept boards with full constituents from EM/Sina member snapshots.
+
+        Returns ``(rows, meta)`` where ``meta`` reports EM/Sina concept coverage so
+        ops/check can show why the pool is snap vs live.
+        """
+        from market_desk.config import (
+            NARR_SNAP_MAX_MEMBERS,
+            NARR_SNAP_MIN_BOARDS,
+            NARR_SINA_SNAP_MIN_BOARDS,
+        )
         from market_desk.db import load_board_members_snap
 
         hit = self._narr_snap_cache
-        if hit and hit[0] == trade_date_dash:
-            return hit[1]
+        if hit and hit[0] == trade_date_dash and len(hit) >= 3:
+            return hit[1], hit[2]
+
+        def _rows(snaps: dict[str, Any], src: str) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for s in (snaps or {}).values():
+                if s.get("kind") != "concept" or not s.get("name"):
+                    continue
+                n = int(s.get("n") or len(s.get("codes") or []) or 0)
+                if n <= 0 or n > int(NARR_SNAP_MAX_MEMBERS):
+                    continue
+                codes = list(s.get("codes") or [])
+                out.append(
+                    {
+                        "name": s["name"],
+                        "kind": "concept",
+                        "src": src,
+                        "members": [{"code": c} for c in codes],
+                    }
+                )
+            return out
+
+        em_rows: list[dict[str, Any]] = []
+        sina_rows: list[dict[str, Any]] = []
         try:
-            snaps = load_board_members_snap("em")
+            em_rows = _rows(load_board_members_snap("em"), "snap")
         except Exception:
-            log.exception("narrative snapshot load failed")
-            snaps = {}
-        rows = [
-            {
-                "name": s["name"],
-                "kind": "concept",
-                "src": "snap",
-                "members": [{"code": c} for c in s["codes"]],
-            }
-            for s in snaps.values()
-            if s.get("kind") == "concept" and s.get("name") and 0 < s.get("n", 0) <= int(NARR_SNAP_MAX_MEMBERS)
-        ]
-        self._narr_snap_cache = (trade_date_dash, rows)
-        return rows
+            log.exception("narrative EM snapshot load failed")
+        try:
+            sina_rows = _rows(load_board_members_snap("sina"), "sina_snap")
+        except Exception:
+            log.exception("narrative Sina snapshot load failed")
+        meta = {
+            "em_concepts": len(em_rows),
+            "sina_concepts": len(sina_rows),
+            "em_min": int(NARR_SNAP_MIN_BOARDS),
+            "sina_min": int(NARR_SINA_SNAP_MIN_BOARDS),
+        }
+        if len(em_rows) >= int(NARR_SNAP_MIN_BOARDS):
+            rows, meta["chosen"] = em_rows, "em"
+        elif len(sina_rows) >= int(NARR_SINA_SNAP_MIN_BOARDS):
+            rows, meta["chosen"] = sina_rows, "sina"
+        else:
+            rows, meta["chosen"] = [], "none"
+        self._narr_snap_cache = (trade_date_dash, rows, meta)
+        return rows, meta
 
     async def _narrative_concepts(
         self,
@@ -302,27 +339,33 @@ class RadarMixin:
         boards: list[dict[str, Any]] | None,
         cards: list[dict[str, Any]],
         trade_date_dash: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Concept boards with members for the narrative graph.
 
-        Prefers full constituents from the East Money snapshot, so concepts are picked
-        by limit-up coverage rather than by today's pct rank, and no live fetch is
-        needed. Without enough snapshot boards it falls back to enriched cards (top
-        members only) plus live members of the top-pct concepts.
+        Prefers full constituents from the East Money snapshot; if EM coverage is
+        thin, falls back to Sina concept snaps; otherwise uses enriched cards plus
+        live members of the top-pct concepts.
         """
-        from market_desk.config import NARR_EXTRA_CONCEPTS, NARR_SNAP_MIN_BOARDS
+        from market_desk.config import NARR_EXTRA_CONCEPTS, NARR_SNAP_MIN_BOARDS, NARR_SINA_SNAP_MIN_BOARDS
 
         out: dict[str, dict[str, Any]] = {}
-        snap = self._narrative_snap_concepts(trade_date_dash) if trade_date_dash else []
-        if len(snap) >= int(NARR_SNAP_MIN_BOARDS):
+        snap: list[dict[str, Any]] = []
+        meta: dict[str, Any] = {"chosen": "none", "em_concepts": 0, "sina_concepts": 0}
+        if trade_date_dash:
+            snap, meta = self._narrative_snap_concepts(trade_date_dash)
+        use_snap = bool(snap) and (
+            (meta.get("chosen") == "em" and len(snap) >= int(NARR_SNAP_MIN_BOARDS))
+            or (meta.get("chosen") == "sina" and len(snap) >= int(NARR_SINA_SNAP_MIN_BOARDS))
+        )
+        if use_snap:
             for c in snap:
                 out.setdefault(str(c["name"]), c)
         for c in cards:
             name = str(c.get("name") or "")
             if name and c.get("kind") == "concept" and c.get("pool") and name not in out:
                 out[name] = c
-        if len(snap) >= int(NARR_SNAP_MIN_BOARDS):
-            return list(out.values())
+        if use_snap:
+            return list(out.values()), meta
         extras = sorted(
             (
                 b
@@ -343,7 +386,9 @@ class RadarMixin:
         for b, members in await asyncio.gather(*(_one(b) for b in extras)):
             if members:
                 out[str(b.get("name"))] = {"name": b.get("name"), "kind": "concept", "members": members}
-        return list(out.values())
+        meta = dict(meta)
+        meta["chosen"] = "live"
+        return list(out.values()), meta
 
     async def _radar_narrative(
         self,
@@ -369,12 +414,21 @@ class RadarMixin:
         out: dict[str, Any] = {"ok": False, "shadow": True, "clusters": [], "stats": {}, "at": None}
         computed = bool(is_trading_day(now) and session_minutes_elapsed(now) is not None and zt)
         if computed:
-            concepts = await self._narrative_concepts(client, boards, cards, trade_date_dash)
+            concepts, pool_meta = await self._narrative_concepts(
+                client, boards, cards, trade_date_dash
+            )
             industries = [c for c in cards if c.get("kind") == "industry"]
             clusters = build_narrative_clusters(
                 concepts, zt, industry_boards=industries, mainline=mainline
             )
-            out["pool"] = "snap" if any(c.get("src") == "snap" for c in concepts) else "live"
+            srcs = {str(c.get("src") or "") for c in concepts}
+            if "snap" in srcs:
+                out["pool"] = "snap"
+            elif "sina_snap" in srcs:
+                out["pool"] = "sina_snap"
+            else:
+                out["pool"] = "live"
+            out["pool_meta"] = pool_meta
             at = now.strftime("%H:%M:%S")
             if clusters:
                 try:

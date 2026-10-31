@@ -14,6 +14,24 @@
 
 ---
 
+## [v1.10.26] - 2026-10-30
+
+### 【背景与动机（为什么做 · Why）】
+- 晨间出现无 desk 日志的「模拟操盘日终」微信，需 host/pid 溯源；复盘清单 #6/#11/#12 仍靠截图；东财概念快照不足时叙事池长期 live；纪律卡扛单缺次日代价；新浪板块涨跌家数为 0 影响排序/冰点。
+
+### 【做了什么（What）】
+- **Added** Server酱 `push_origin`（host/pid/`MARKET_DESK_INSTANCE`）写入 `sc_push_log`、desp 页脚与 quota 快照；`MARKET_DESK_MUTE_SERVERCHAN` 静音本机误推。
+- **Added** 复盘页「清单进度」条（`todo_strip` = sell_fly / lit_float / pick_audit）。
+- **Changed** 叙事概念池：东财快照不足时回退新浪概念快照（`NARR_SINA_SNAP_MIN_BOARDS`）；ops 影子项展示 EM/新浪覆盖。
+- **Added** 纪律审计扛单：`hold_cost_pct`（次日收盘较信号，读日线缓存）。
+- **Added** `board_breadth`：新浪模式下用成分快照 × 行情补 `up_count`/`down_count`。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / 硬闸；微信正文多一行来源指纹。
+- `pytest tests/test_board_breadth.py tests/test_discipline.py tests/test_obs_bundle.py tests/test_radar.py tests/test_sim_digest_merge.py`
+
+---
+
 ## [v1.10.25] - 2026-10-29
 
 ### 【背景与动机（为什么做 · Why）】

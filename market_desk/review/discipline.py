@@ -115,6 +115,74 @@ def _sold_qty(code: str, day: str, diary: list[dict[str, Any]], positions: list[
     return max(by_diary, by_pos)
 
 
+def next_close_vs_signal(code: str, day: str, signal_px: float | None) -> dict[str, Any]:
+    """Return next-session close vs stop-signal price for a held (扛单) name.
+
+    Uses ``market_bar_daily`` cache only (no live fetch). Missing bars yield
+    ``ok=False`` so the UI keeps showing live ``vs_signal`` only.
+    """
+    px = num(signal_px)
+    if not code or px is None or px <= 0:
+        return {"ok": False}
+    from market_desk.calendar import add_trading_days
+    from market_desk.db import load_daily_bars
+
+    nxt = add_trading_days(str(day)[:10], 1)
+    if nxt is None:
+        return {"ok": False}
+    nxt_s = nxt.isoformat()
+    try:
+        bars = load_daily_bars(code, start=str(day)[:10], limit=12)
+    except Exception:
+        return {"ok": False}
+    close = None
+    for b in bars:
+        d = str(b.get("trade_date") or b.get("date") or "")[:10]
+        if d == nxt_s:
+            close = num(b.get("close"))
+            break
+        if d > nxt_s and close is None:
+            # Sparse cache: first bar after the signal day.
+            close = num(b.get("close"))
+            nxt_s = d
+            break
+    if close is None or close <= 0:
+        return {"ok": False, "next_day": nxt_s}
+    pct = round((close / px - 1.0) * 100.0, 2)
+    return {
+        "ok": True,
+        "next_day": nxt_s,
+        "next_close": close,
+        "hold_cost_pct": pct,
+    }
+
+
+def attach_hold_costs(card: dict[str, Any]) -> dict[str, Any]:
+    """Annotate 扛单 stop rows with next-day close vs signal (in place)."""
+    day = str((card or {}).get("day") or "")[:10]
+    if not day:
+        return card
+    for it in (card.get("items") or []):
+        if not isinstance(it, dict) or it.get("label") != "扛单":
+            continue
+        info = next_close_vs_signal(str(it.get("code") or ""), day, it.get("signal_px"))
+        if not info.get("ok"):
+            continue
+        it["hold_cost_pct"] = info.get("hold_cost_pct")
+        it["hold_next_day"] = info.get("next_day")
+        it["hold_next_close"] = info.get("next_close")
+    held = [i for i in (card.get("items") or []) if i.get("label") == "扛单" and i.get("hold_cost_pct") is not None]
+    if held:
+        avg = round(sum(float(i["hold_cost_pct"]) for i in held) / len(held), 2)
+        card["hold_cost_avg"] = avg
+        card["hold_cost_n"] = len(held)
+        line = str(card.get("line") or "")
+        bit = f"扛单次日收盘均 {avg:+g}%"
+        if bit not in line:
+            card["line"] = f"{line}；{bit}" if line else bit
+    return card
+
+
 def build_discipline_card(
     day_rows: list[dict[str, Any]] | None,
     diary: list[dict[str, Any]] | None,
@@ -204,13 +272,14 @@ def build_discipline_card(
         signal_px = num(row.get("price"))
         live = num(row.get("live_last"))
         stop_credit.append(credit)
-        items.append({
+        item = {
             "kind": "stop", "code": code, "name": row.get("name") or code,
             "rule": str(row.get("action") or "止损"), "need": int(need), "sold": sold,
             "signal_px": signal_px, "live": live,
             "vs_signal": round((live / signal_px - 1.0) * 100.0, 2) if live and signal_px else None,
             "label": label, "credit": credit,
-        })
+        }
+        items.append(item)
 
     sections: dict[str, dict[str, Any]] = {}
     for key, credits in (("buy", buy_credit), ("stop", stop_credit), ("rhythm", rhythm_credit)):
@@ -236,7 +305,7 @@ def build_discipline_card(
         if flag_n:
             bits.append(f"节奏扣 {flag_n} 项")
         line = f"纪律分 {score:g}（{grade}）：" + "，".join(bits)
-    return {
+    card = {
         "ok": True,
         "day": day,
         "score": score,
@@ -248,6 +317,7 @@ def build_discipline_card(
         "warn_pct": warn,
         "hard_pct": hard,
     }
+    return attach_hold_costs(card)
 
 
 def record_discipline_history(user_id: int, card: dict[str, Any], *, final: bool) -> list[dict[str, Any]]:

@@ -106,3 +106,23 @@ def test_eod_onepager_puts_discipline_line_after_pnl() -> None:
     assert brief["push_bullets"][1] == card["line"]
     none = build_eod_onepager(snapshot={}, review={"summary": {}}, diary=[])
     assert not any(str(b).startswith("纪律分") for b in none["bullets"])
+
+
+def test_discipline_hold_cost_next_close(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "market_desk.review.discipline.next_close_vs_signal",
+        lambda code, day, signal_px: {
+            "ok": True,
+            "next_day": "2026-10-10",
+            "next_close": 9.0,
+            "hold_cost_pct": -5.26,
+        }
+        if str(code) == "600012"
+        else {"ok": False},
+    )
+    card = _card()
+    stops = {i["code"]: i for i in card["items"] if i["kind"] == "stop"}
+    assert stops["600012"]["label"] == "扛单"
+    assert stops["600012"]["hold_cost_pct"] == pytest.approx(-5.26, abs=0.01)
+    assert card.get("hold_cost_n") == 1
+    assert "扛单次日收盘" in card["line"]

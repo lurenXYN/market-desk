@@ -3,10 +3,30 @@
 from __future__ import annotations
 
 import logging
+import os
+import socket
 from datetime import datetime
 from typing import Any
 
 log = logging.getLogger("market_desk.notify")
+
+
+def push_origin() -> dict[str, str]:
+    """Return host/pid/instance tags so shared SendKey pushes can be traced."""
+    return {
+        "host": (socket.gethostname() or "?")[:48],
+        "pid": str(os.getpid()),
+        "instance": str(os.environ.get("MARKET_DESK_INSTANCE") or "").strip()[:32],
+    }
+
+
+def _origin_tag() -> str:
+    """Short one-line origin for Server酱 desp footers and logs."""
+    o = push_origin()
+    bits = [o["host"], f"pid={o['pid']}"]
+    if o.get("instance"):
+        bits.append(o["instance"])
+    return " · ".join(bits)
 
 # Per-event cooldown seconds (decision toasts use the runtime setting instead).
 COOLDOWN_STOP_SEC = 60.0
@@ -562,7 +582,7 @@ def format_serverchan_desp(
                 body_md,
                 "",
                 "---",
-                f"_交易日 {cur.get('trade_date') or '—'} · market-desk_",
+                f"_交易日 {cur.get('trade_date') or '—'} · market-desk · {_origin_tag()}_",
             ]
         )
     v = cur.get("verdict") or {}
@@ -595,6 +615,7 @@ def format_serverchan_desp(
         f"- 相位：{phase}",
         f"- 阶段：{life_zh}",
         f"- 交易日：{cur.get('trade_date') or '—'}",
+        f"- 来源：{_origin_tag()}",
     ]
     if key_s.startswith("buy:") or key_s.startswith("fly:"):
         rec = v.get("recommend") or {}
@@ -614,11 +635,15 @@ def _record_serverchan_push(*, title: str, source: str = "desk") -> None:
         day = today_cn()
         store = f"sc_push_log:{day}"
         cur = list(load_setting(store) or [])
+        origin = push_origin()
         cur.append(
             {
                 "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "title": str(title or "")[:80],
                 "source": str(source or "desk")[:32],
+                "host": origin.get("host") or "",
+                "pid": origin.get("pid") or "",
+                "instance": origin.get("instance") or "",
             }
         )
         save_setting(store, cur[-60:])
@@ -663,9 +688,11 @@ def serverchan_quota_snapshot() -> dict[str, Any]:
         "level": "ok" if remaining >= 2 else ("warn" if remaining >= 1 else "bad"),
         "flags": flags,
         "log": log_rows[-12:],
+        "origin": push_origin(),
         "note": (
             "仅统计作战台成功 POST；新闻雷达若共用同一 SendKey 也会占额度但未必写入本日志。"
             "sim: 微信已并入 eod，不再单独计数。"
+            "log 含 host/pid：本机拷贝生产库时请清空 serverchan_sendkey 或设 MARKET_DESK_MUTE_SERVERCHAN=1。"
         ),
     }
 
@@ -677,6 +704,14 @@ def notify_serverchan(sendkey: str, title: str, desp: str, *, source: str = "des
     import urllib.parse
     import urllib.request
 
+    if str(os.environ.get("MARKET_DESK_MUTE_SERVERCHAN") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        log.info("serverchan muted (%s) | %s", _origin_tag(), title)
+        return False
     key = str(sendkey or "").strip()
     if not key:
         return False
@@ -705,9 +740,10 @@ def notify_serverchan(sendkey: str, title: str, desp: str, *, source: str = "des
         except json.JSONDecodeError:
             pass
         _record_serverchan_push(title=str(title or ""), source=source)
+        log.info("serverchan ok (%s) | %s", _origin_tag(), title)
         return True
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        log.warning("serverchan failed: %s", exc)
+        log.warning("serverchan failed (%s): %s", _origin_tag(), exc)
         return False
 
 

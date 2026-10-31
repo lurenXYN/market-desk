@@ -266,11 +266,18 @@ class RefreshMixin:
                 fund_flow["refreshed_kind"] = (
                     "full" if fund_flow.get("full_ready") else "day"
                 )
+                try:
+                    from market_desk.board_breadth import apply_board_breadth_from_quotes
+
+                    apply_board_breadth_from_quotes(boards, quotes)
+                except Exception:
+                    log.exception("sina board breadth fill failed")
                 ctx = {
                     "zt": zt,
                     "zb": zb,
                     "yzt": yesterday_zt,
                     "hist": load_board_hist_map(trade_date_dash),
+                    "quotes": quotes,
                 }
                 hot_cards = await self._hot_cards(client, boards, ctx)
                 pin_cards = await self._pin_cards(client, boards, hot_cards, ctx)

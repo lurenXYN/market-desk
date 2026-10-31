@@ -505,6 +505,24 @@ def _extra_review_items(buy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def build_todo_strip(buy_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Compact TODO #6 / #11 / #12 rows for the review page (paste-friendly twin)."""
+    items = _extra_review_items(list(buy_rows or []))
+    rows = [
+        {
+            "id": it.get("id"),
+            "title": it.get("title"),
+            "verdict": it.get("ui_verdict") or "",
+            "hint": it.get("hint") or "",
+            "level": it.get("level") or "ok",
+            "sample": it.get("sample") or {},
+            "metrics": it.get("metrics") or {},
+        }
+        for it in items
+    ]
+    return {"ok": True, "rows": rows, "note": "对应复盘检查清单 #6 卖点 / #11 已亮卡 / #12 参考分"}
+
+
 def merge_counterfactual(base: dict[str, Any], cf: dict[str, Any] | None) -> dict[str, Any]:
     """Append gate / ATR / chase-style rows from a counterfactual audit payload."""
     out = dict(base)

@@ -530,6 +530,7 @@ ETF_PULSE_FETCH_SEC = 60                # minute refetch cadence per ETF
 # Narrative graph (shadow mode): cross-industry clusters of limit-up names.
 NARR_EXTRA_CONCEPTS = 20                # extra top-pct concept boards whose members are fetched
 NARR_SNAP_MIN_BOARDS = 100              # East Money snapshot concepts needed to use the snapshot pool
+NARR_SINA_SNAP_MIN_BOARDS = 40          # Sina concept snaps usable when EM coverage is thin
 NARR_SNAP_MAX_MEMBERS = 600             # skip catch-all concepts (index / margin lists) in the snapshot pool
 NARR_FETCH_EVERY_SEC = 300
 NARR_MIN_SHARED = 2                     # limit-ups a concept needs to join the graph

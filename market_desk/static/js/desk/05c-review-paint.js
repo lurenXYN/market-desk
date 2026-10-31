@@ -203,6 +203,7 @@ function paintReview(payload) {
   }
   paintGateLedger(sum.gate_ledger || {});
   paintEdgeShadow(sum.edge_shadow || {});
+  paintTodoStrip(sum.todo_strip || {});
   paintDiscipline(sum.discipline || {});
   paintChaseCost(sum.chase_cost || {});
   const chip = (lab, rate, n, lowN) =>

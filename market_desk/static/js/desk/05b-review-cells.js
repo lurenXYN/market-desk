@@ -97,6 +97,34 @@ function paintEdgeShadow(es) {
 }
 
 /**
+ * Render TODO #6 / #11 / #12 progress strip (sell fly / lit float / pick audit).
+ * @param {object} strip - summary.todo_strip from /api/review.
+ */
+function paintTodoStrip(strip) {
+  const box = document.getElementById("revTodoStrip");
+  if (!box) return;
+  const rows = (strip && strip.rows) || [];
+  if (!strip || !strip.ok || !rows.length) {
+    box.innerHTML = `<div class="meta">${escAttr((strip && strip.note) || "清单进度暂不可用")}</div>`;
+    return;
+  }
+  const body = rows.map((r) => {
+    const samp = r.sample || {};
+    const enough = samp.enough_for_todo ? "够门槛" : "样本不足";
+    const tone = r.level === "ok" ? "good" : (r.level === "warn" ? "mid" : "bad");
+    return `<tr class="gl-${tone}"><td>${escAttr(r.title || r.id || "")}</td>`
+      + `<td>${escAttr(r.verdict || "—")}</td>`
+      + `<td class="num">${samp.days ?? "—"}天 / n=${samp.n ?? "—"} · ${enough}</td>`
+      + `<td class="meta">${escAttr(r.hint || "")}</td></tr>`;
+  }).join("");
+  box.innerHTML =
+    `<div class="hd">复盘清单进度<button type="button" class="q" data-term="进场影子">?</button>`
+    + ` · ${escAttr(strip.note || "")}</div>`
+    + `<table class="gl-tbl"><thead><tr><th>项</th><th>结论</th><th>样本</th><th>门槛提示</th></tr></thead>`
+    + `<tbody>${body}</tbody></table>`;
+}
+
+/**
  * Render the viewer's daily discipline scorecard (chase / stops / rhythm).
  * @param {object} dc - summary.discipline from /api/review.
  */
@@ -117,10 +145,15 @@ function paintDiscipline(dc) {
   const rows = (dc.items || []).map((it) => {
     const tone = it.credit >= 1 && !(it.flags || []).length ? "good" : it.credit > 0 ? "mid" : "bad";
     if (it.kind === "stop") {
-      const cost = it.label === "扛单" && it.vs_signal != null ? ` · 现价较信号 ${fmt(it.vs_signal)}` : "";
+      let cost = "";
+      if (it.label === "扛单" && it.vs_signal != null) cost += ` · 现价较信号 ${fmt(it.vs_signal)}`;
+      if (it.label === "扛单" && it.hold_cost_pct != null) {
+        cost += ` · 次日收盘较信号 ${fmt(it.hold_cost_pct)}`;
+        if (it.hold_next_day) cost += `（${escAttr(String(it.hold_next_day).slice(5))}）`;
+      }
       return `<tr class="gl-${tone}"><td>止损</td><td>${escAttr(it.name)}</td>`
         + `<td>${escAttr(it.rule || "")}</td><td class="num">${it.sold}/${it.need}</td>`
-        + `<td>${escAttr(it.label + cost)}</td></tr>`;
+        + `<td>${escAttr(it.label)}${cost}</td></tr>`;
     }
     const flags = (it.flags || []).join("、");
     return `<tr class="gl-${tone}"><td>买入</td><td>${escAttr(it.name)}</td>`
