@@ -530,11 +530,23 @@ def ops_exec_triggers(user: dict = Depends(current_admin_required)) -> dict:
 
 @router.get("/api/ops/fill-rules")
 def ops_fill_rules(user: dict = Depends(current_admin_required)) -> dict:
-    """Sim ? backtest ? cf fill-rule parity map (vnpy mid-priority)."""
+    """Sim / backtest / cf fill-rule parity map (vnpy mid-priority)."""
     del user
     from market_desk.fill_rules import fill_rules_parity
 
     return fill_rules_parity()
+
+
+@router.get("/api/ops/gate-replay")
+def ops_gate_replay(
+    days: int = Query(default=20, ge=5, le=90),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """As-of replay of buy confirm gates under baseline/current/env mult scenarios."""
+    del user
+    from market_desk.gate_replay import build_gate_replay_from_db
+
+    return build_gate_replay_from_db(days=int(days))
 
 
 @router.get("/api/ops/bars-cache")

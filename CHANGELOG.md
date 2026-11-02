@@ -14,6 +14,23 @@
 
 ---
 
+## [v1.10.35] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- 回测 Tab 只做信号成交回放，测不了「改闸倍率后亮灯会怎样」；三套成交成本口径也不统一，agent-pack 缺对照。需要 as-of 买闸重放 + 成本对齐 + env 离线 bucket 重算。
+
+### 【做了什么（What）】
+- **Added** `gate_replay.py`：离日高/薄确认/分时 as-of 重放；场景 baseline / current / env_friendly / env_hostile；`GET /api/ops/gate-replay`；agent-pack.`gate_replay`。
+- **Added** 买卡冻结 `high` / `cross_n` / `cross_theme_n` / `thin_confirm`（首插锁定）；缺 high 时日线兜底。
+- **Added** `fill_rules.comparable_roundtrip`（同名义%对照）进 fill-rules API + agent-pack。
+- **Added** `env_gate.replay_env_buckets_from_closes` + `scripts/replay_env_bucket.py`（可 `--compare-lit`）。
+- **Added** `tests/test_gate_replay.py`。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 live ready；默认不开关。pytest `test_gate_replay` + 既有 env 用例通过。desk.db 兼容（新冻结字段向前生效）。
+
+---
+
 ## [v1.10.34] - 2026-11-02
 
 ### 【背景与动机（为什么做 · Why）】

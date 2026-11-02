@@ -681,6 +681,7 @@ def _apply_ready_confirmations(
             except (TypeError, ValueError):
                 pass
         if kind == "stock" and thin_confirm:
+            item["thin_confirm"] = True
             thin_m = max(0.75, min(1.25, thin_mult))
             cross_need = max(1, int(round(float(THIN_CROSS_BOARD_MIN) * thin_m)))
             theme_need = max(1, int(round(float(THIN_CROSS_THEME_MIN) * thin_m)))

@@ -129,6 +129,12 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["env_gate"] = old_payload["env_gate"]
         elif existing:
             merged.pop("env_gate", None)
+        # Gate-replay inputs: keep first high / cross counts / thin_confirm.
+        for _gk in ("high", "cross_n", "cross_theme_n", "thin_confirm"):
+            if old_payload.get(_gk) is not None:
+                merged[_gk] = old_payload[_gk]
+            elif existing and _gk not in incoming:
+                merged.pop(_gk, None)
         # Deep-V bounce shadow: freeze day / lag / metrics; chase may flip True later.
         for _dv_key in ("deep_v_day", "deep_v_lag1", "deep_v_dd", "deep_v_recover"):
             if _dv_key in old_payload:

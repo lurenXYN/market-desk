@@ -40,8 +40,43 @@ def roundtrip_flat_fee_pct(*, entry: float, exit_px: float, qty: int) -> float:
     return buy + sell
 
 
+def comparable_roundtrip_pct(
+    *,
+    entry: float = 10.0,
+    exit_px: float | None = None,
+    qty: int = 100,
+) -> dict[str, Any]:
+    """Express sim / backtest / cf costs in one unit: round-trip return drag (%).
+
+    Backtest models one-side price slip on entry and exit; CF uses a single
+    round-trip percent on return. This table is for ops display, not accounting.
+    """
+    px_out = float(exit_px if exit_px is not None else entry)
+    sim_rt = roundtrip_flat_fee_pct(entry=float(entry), exit_px=px_out, qty=int(qty))
+    slip = _backtest_slip_pct()
+    # Two sides of price slip as % of entry (approx when exit≈entry).
+    bt_rt = float(slip) * 2.0
+    cf_rt = float(CF_ROUNDTRIP_COST_PCT)
+    return {
+        "ok": True,
+        "unit": "roundtrip_pct_of_entry",
+        "entry": float(entry),
+        "exit": px_out,
+        "qty": int(qty),
+        "sim": round(sim_rt, 4),
+        "backtest": round(bt_rt, 4),
+        "cf": round(cf_rt, 4),
+        "spread_pp": {
+            "backtest_minus_sim": round(bt_rt - sim_rt, 4),
+            "cf_minus_sim": round(cf_rt - sim_rt, 4),
+        },
+        "note": "同名义下三套成本的%对照；模拟用固定¥，回测用滑点%，cf用往返%。",
+    }
+
+
 def fill_rules_parity() -> dict[str, Any]:
     """Return a machine-readable map of sim / backtest / cf fill knobs."""
+    comparable = comparable_roundtrip_pct()
     return {
         "ok": True,
         "session": {
@@ -73,7 +108,7 @@ def fill_rules_parity() -> dict[str, Any]:
             "cf_roundtrip_cost_pct": float(CF_ROUNDTRIP_COST_PCT),
             "note": (
                 "Not the same unit: sim=¥/side; backtest=price slip %; cf=round-trip % on return. "
-                "Use flat_fee_as_pct / roundtrip_flat_fee_pct to compare apples-to-apples on a sample trade."
+                "See comparable_roundtrip for one-unit display."
             ),
             "example_100sh_at_10": {
                 "sim_one_side_pct": round(flat_fee_as_pct(px=10.0, qty=100), 4),
@@ -84,6 +119,7 @@ def fill_rules_parity() -> dict[str, Any]:
                 "cf_roundtrip_pct": float(CF_ROUNDTRIP_COST_PCT),
             },
         },
+        "comparable_roundtrip": comparable,
         "sources": {
             "sim": "market_desk.sim_desk.assess_buy_fill / assess_sell_fill",
             "backtest": "market_desk.backtest.simulate_buy_fill / simulate_sell_fill",

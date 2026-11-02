@@ -147,6 +147,22 @@ def build_agent_pack_sync() -> dict[str, Any]:
         env_gate_summary = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
 
     try:
+        from market_desk.gate_replay import build_gate_replay_from_db
+
+        gate_replay = build_gate_replay_from_db(days=20)
+    except Exception as exc:
+        gate_replay = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+
+    try:
+        from market_desk.fill_rules import fill_rules_parity
+
+        fill_rules = fill_rules_parity()
+        fill_comparable = fill_rules.get("comparable_roundtrip")
+    except Exception as exc:
+        fill_rules = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+        fill_comparable = None
+
+    try:
         quota = serverchan_quota_snapshot()
     except Exception as exc:
         quota = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
@@ -254,6 +270,16 @@ def build_agent_pack_sync() -> dict[str, Any]:
         ),
         "env_gate": env_gate_summary,
         "env_lit": (env_gate_summary.get("lit") if isinstance(env_gate_summary, dict) else None),
+        "gate_replay": gate_replay,
+        "fill_rules": {
+            "ok": bool(fill_rules.get("ok")),
+            "comparable_roundtrip": fill_comparable,
+            "aligned": {
+                "t1": (fill_rules.get("t1") or {}).get("aligned"),
+                "session": (fill_rules.get("session") or {}).get("aligned"),
+            },
+            "curl": "GET /api/ops/fill-rules",
+        },
         "deep_v": {"today": deep_v_today, "shadow": deep_v_shadow},
         "zt_share": zt_share,
         "shadows": shadows,
@@ -269,6 +295,8 @@ def build_agent_pack_sync() -> dict[str, Any]:
                 "GET /api/ops/shadows",
                 "GET /api/ops/serverchan-quota",
                 "GET /api/ops/exec-desk",
+                "GET /api/ops/gate-replay",
+                "GET /api/ops/fill-rules",
             ],
         },
     }

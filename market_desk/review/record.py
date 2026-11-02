@@ -232,6 +232,16 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                     "ready": 1 if item.get("ready") else 0,
                     "payload": {
                         "desk_source": desk_source,
+                        # Gate-replay freeze: day-high + thin counts (as-of research).
+                        "high": num(item.get("high")),
+                        "cross_n": int(item["cross_n"]) if item.get("cross_n") is not None else None,
+                        "cross_theme_n": (
+                            int(item["cross_theme_n"])
+                            if item.get("cross_theme_n") is not None
+                            else None
+                        ),
+                        "thin_confirm": bool(item.get("thin_confirm"))
+                        or any("薄确认" in str(x) for x in (item.get("confirm_fail") or [])),
                         "board_stage": stage_by_name.get(
                             source_board or (board_names[0] if board_names else "") or mainline
                         )

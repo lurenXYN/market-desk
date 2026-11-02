@@ -106,6 +106,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **生命周期侧拉 v1.10.32**：未进热门补拉保留 match 身份 + 空 pool 报价兜底，避免整列「上一收盘」
 - [x] **环境闸 v1.10.33 影子骨架**：`env_gate` score/档×ETF|股；道氏/均线/MACD·RSI/ATR/缺口；冻结+pack；`env_gate_live` 默认关
 - [x] **环境闸补齐 v1.10.34**：亮灯率×env×kind 影子；live keys 默认 minute；假杀/真杀 ETF|股分桶；ADX/BOLL/量能；缺口细分+精简K线软标签
+- [x] **证伪工具 v1.10.35**：as-of 买闸重放（gate_replay）+ 成交口径 comparable_roundtrip + env_bucket 离线重算脚本
 
 ### 环境闸 / 技术特征 · 有效清单（2026-11-02）
 
@@ -121,8 +122,14 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] ADX / BOLL 带宽·%B / 量能（有 volume 才计）进 env 特征
 - [x] 缺口细分（突破/普通/竭尽弱标）+ 精简 K 线软标签（吞没/锤头/射击之星/曙光·乌云/早晨之星）
 
+**证伪工具（v1.10.35）**
+- [x] As-of 买闸重放：`GET /api/ops/gate-replay` / agent-pack.`gate_replay`（baseline vs env 倍率翻转到放行）
+- [x] 三套成交口径：`comparable_roundtrip`（sim/backtest/cf 同名义%）
+- [x] env_bucket 离线：`scripts/replay_env_bucket.py`（可 `--compare-lit`）
+
 **下一步（按收益排序，一次一处）**
-- [ ] 影子攒满后：对照 `env_lit.live_recommend` 再决定是否开 `env_gate_live`（仍先 minute）
+- [ ] 影子攒满后：对照 `env_lit.live_recommend` + gate_replay 假杀均值，再决定是否开 `env_gate_live`（仍先 minute）
+- [ ] 模拟账本继续攒 closed_n → 开工闸
 - [ ] 艾略特：保持观察页；可选把 Top1 方向作 env 弱分（多解，权重低）
 
 **明确不做（进主链路）**

@@ -651,6 +651,77 @@ def cache_env_gate(env: dict[str, Any] | None) -> None:
         pass
 
 
+def replay_env_buckets_from_closes(
+    closes: Iterable[Any] | None,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    bars: Iterable[Any] | None = None,
+    min_bars: int = 60,
+) -> dict[str, Any]:
+    """Walk each as-of day and recompute env_bucket from historical closes.
+
+    Uses only data available through that day (no look-ahead). Regime side is
+    inferred from close vs MA60 on the same series. Research / offline only.
+    """
+    pairs = _closes(closes)
+    if len(pairs) < int(min_bars):
+        return {"ok": False, "note": f"closes<{min_bars}", "days": []}
+    ohlc_all = _ohlc_bars(bars) if bars is not None else []
+    cut0 = str(since or "")[:10]
+    cut1 = str(until or "")[:10]
+    days_out: list[dict[str, Any]] = []
+    ma_n = 60
+    try:
+        from market_desk.config import REGIME_MA_N
+
+        ma_n = int(REGIME_MA_N)
+    except Exception:
+        pass
+    for i in range(ma_n - 1, len(pairs)):
+        day = pairs[i][0]
+        if cut0 and day < cut0:
+            continue
+        if cut1 and day > cut1:
+            continue
+        window = pairs[: i + 1]
+        px = [p[1] for p in window]
+        ma = sum(px[-ma_n:]) / float(ma_n)
+        last = px[-1]
+        gap_pct = (last / ma - 1.0) * 100.0 if ma > 0 else 0.0
+        side = "above" if last >= ma else "below"
+        # Crude vol: ATR expansion on trailing window when OHLC aligned by index.
+        sub_bars = ohlc_all[: i + 1] if len(ohlc_all) >= i + 1 else None
+        env = build_env_gate(
+            regime={"ok": True, "side": side, "gap_pct": gap_pct, "asof": day},
+            closes=window,
+            bars=sub_bars,
+            asof=day,
+        )
+        days_out.append(
+            {
+                "date": day,
+                "bucket": env.get("bucket"),
+                "score": env.get("score"),
+                "regime_side": side,
+                "gap_pct": round(gap_pct, 3),
+                "tags": list(env.get("tags") or [])[:6],
+            }
+        )
+    by_bucket: dict[str, int] = {}
+    for d in days_out:
+        b = str(d.get("bucket") or "")
+        by_bucket[b] = by_bucket.get(b, 0) + 1
+    return {
+        "ok": True,
+        "schema": "env_bucket_replay.v1",
+        "n": len(days_out),
+        "by_bucket": by_bucket,
+        "days": days_out,
+        "note": "as-of 重算 env_bucket；不写库、不改 live",
+    }
+
+
 def summarize_env_gate_coverage(rows: list[dict[str, Any]], *, since: str | None = None) -> dict[str, Any]:
     """Shadow coverage helper for ops / agent-pack."""
     from market_desk.config import ENV_GATE_SHADOW_SINCE
