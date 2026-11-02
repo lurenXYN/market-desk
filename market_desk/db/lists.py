@@ -172,6 +172,31 @@ def load_favorite_boards(*, user_id: int | None = None) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def load_all_favorite_boards() -> list[dict[str, Any]]:
+    """Union of every user's favored boards, newest row winning per BK.
+
+    Shared refresh uses this for lifecycle seal / enrich cache only. Per-user
+    flags and the favorite desk are applied later in the personal layer.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, bk, name, kind, note, created_at
+            FROM favorite_boards
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in rows:
+        bk = str(raw["bk"] or "").strip().upper()
+        if not bk or bk in seen:
+            continue
+        seen.add(bk)
+        out.append(dict(raw))
+    return out
+
+
 def delete_favorite_board(item_id: int, *, user_id: int | None = None) -> bool:
     """Delete one favored board by id."""
     with _connect() as conn:

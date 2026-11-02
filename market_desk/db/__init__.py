@@ -146,6 +146,7 @@ from market_desk.db.lists import (  # noqa: F401
     delete_watchlist,
     add_favorite_board,
     load_favorite_boards,
+    load_all_favorite_boards,
     delete_favorite_board,
     delete_favorite_board_by_bk,
     upsert_gap_fade_strike,

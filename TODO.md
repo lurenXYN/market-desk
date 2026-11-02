@@ -108,6 +108,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **环境闸补齐 v1.10.34**：亮灯率×env×kind 影子；live keys 默认 minute；假杀/真杀 ETF|股分桶；ADX/BOLL/量能；缺口细分+精简K线软标签
 - [x] **证伪工具 v1.10.35**：as-of 买闸重放（gate_replay）+ 成交口径 comparable_roundtrip + env_bucket 离线重算脚本
 - [x] **多主线可买 v1.10.36**：支线×0.6 可亮灯（不推送）；无 ETF 概念不当 sticky；成分重合≥0.3 禁并列；池子 `all` 仅影子
+- [x] **看好板块接线 v1.10.40**：按登录用户装饰/取消；未进热门可取消；共享生命周期用全员并集
 
 ### 环境闸 / 技术特征 · 有效清单（2026-11-02）
 

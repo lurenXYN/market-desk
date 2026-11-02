@@ -57,6 +57,7 @@ def test_sina_board_without_history_has_no_stage():
 
 def test_mainline_pool_drops_pseudo_and_joins_concepts_when_thin():
     assert is_pseudo_board("东方财富热股") and is_pseudo_board("QFII重仓") and not is_pseudo_board("半导体")
+    assert is_pseudo_board("追近多板") and is_pseudo_board("破净股")
     thin = [_board("林业Ⅱ", 2), _board("QFII重仓", 12, kind="concept"), _board("CPO概念", 9, kind="concept")]
     names = {b["name"] for b in mainline_pool(thin)}
     assert names == {"林业Ⅱ", "CPO概念"}

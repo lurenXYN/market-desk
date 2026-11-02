@@ -151,6 +151,7 @@ async function tick(force) {
     if (Array.isArray(d.positions)) lastData.positions = d.positions;
     if (Array.isArray(d.watchlist)) lastData.watchlist = d.watchlist;
     if (Array.isArray(d.favorite_boards)) lastData.favorite_boards = d.favorite_boards;
+    if (d.favorite_desk) lastData.favorite_desk = d.favorite_desk;
     if (d.position_summary) lastData.position_summary = d.position_summary;
     if (d.risk_overview) lastData.risk_overview = d.risk_overview;
     if (d.sell_advice) lastData.sell_advice = d.sell_advice;
@@ -159,6 +160,7 @@ async function tick(force) {
       lastData.positions = Array.isArray(d.positions) ? d.positions : [];
       lastData.watchlist = Array.isArray(d.watchlist) ? d.watchlist : [];
       lastData.favorite_boards = Array.isArray(d.favorite_boards) ? d.favorite_boards : [];
+      lastData.favorite_desk = d.favorite_desk || { boards: [] };
       lastData.position_summary = d.position_summary || {};
       lastData.risk_overview = d.risk_overview || lastData.position_summary || {};
       lastData.sell_advice = d.sell_advice || { items: [], text: "" };

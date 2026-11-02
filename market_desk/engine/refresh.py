@@ -15,7 +15,7 @@ from market_desk.db import (
     load_all_book_codes,
     load_board_hist_map,
     load_daily,
-    load_favorite_boards,
+    load_all_favorite_boards,
     load_mainline_switches,
     load_session_segments,
     purge_stale_closed_positions,
@@ -291,11 +291,13 @@ class RefreshMixin:
                     ice_cards = list(prev_snap.get("ice_boards") or []) or ice_cards
                     if hot_cards and "boards:sticky" not in errors:
                         errors.append("boards:sticky")
-                fav_rows = load_favorite_boards()
+                # Union of all users' favorites: lifecycle seal + decorate cache.
+                # Per-user 取消看好 flags / favorite_desk land in attach_personal_layer.
+                fav_rows = load_all_favorite_boards()
                 fav_cards = await self._favorite_cards(client, boards, fav_rows, ctx)
                 if not fav_cards and fav_rows and not boards:
                     fav_cards = list(prev_snap.get("favorite_boards") or [])
-                _mark_favorite_flags(hot_cards + pin_cards + ice_cards + fav_cards, fav_rows)
+                _mark_favorite_flags(hot_cards + pin_cards + ice_cards, [])
                 purge_stale_closed_positions(trade_date_dash)
                 # Multi-user: fetch marks for every book's codes; never load rows here.
                 need_codes = load_all_book_codes()
@@ -715,14 +717,21 @@ class RefreshMixin:
                 except Exception:
                     log.exception("attach_switch_guard failed")
                 lc_hist = ctx.get("hist") if isinstance(ctx, dict) else None
-                lifecycle = _stable_mainline_lifecycle(hot_cards, pin_cards, lc_hist, now=now)
+                lifecycle = _stable_mainline_lifecycle(
+                    hot_cards, pin_cards, lc_hist, now=now, fav_cards=fav_cards
+                )
                 side_window = is_trading_day(now) and 9 * 60 + 25 <= _minutes(now) < 15 * 60
                 if lifecycle.get("mode") == "frozen" and side_window:
                     try:
                         side = await self._lifecycle_side_cards(client, boards, lifecycle, ctx)
                         if side:
                             lifecycle = _stable_mainline_lifecycle(
-                                hot_cards, pin_cards, lc_hist, now=now, side_live=side
+                                hot_cards,
+                                pin_cards,
+                                lc_hist,
+                                now=now,
+                                side_live=side,
+                                fav_cards=fav_cards,
                             )
                     except Exception:
                         log.exception("lifecycle side boards failed")

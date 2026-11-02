@@ -416,6 +416,31 @@ def build_independent_pullback_recommend(
     return _attach_risk_sizing(rec, playbook=playbook, adapt=indep_adapt)
 
 
+def empty_favorite_desk() -> dict[str, Any]:
+    """Placeholder favorite-desk payload with no personal boards."""
+    return {"ok": True, "empty": True, "boards": [], "title": "暂无看好板块"}
+
+
+def merge_favorite_desk_buys(
+    user_desk: dict[str, Any],
+    shared_desk: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Reuse shared-refresh buy enrich (minutes/holders) on matching BKs.
+
+    Sell plans stay on the user desk because they depend on local positions.
+    """
+    shared_by_bk = {
+        str(board.get("bk") or "").upper(): board
+        for board in (shared_desk or {}).get("boards") or []
+        if board.get("bk")
+    }
+    for board in user_desk.get("boards") or []:
+        src = shared_by_bk.get(str(board.get("bk") or "").upper())
+        if src and src.get("buy"):
+            board["buy"] = src["buy"]
+    return user_desk
+
+
 def build_favorite_desk_plans(
     *,
     favorite_boards: list[dict[str, Any]] | None,

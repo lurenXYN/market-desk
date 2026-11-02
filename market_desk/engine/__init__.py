@@ -19,6 +19,9 @@ from market_desk.engine.util import (  # noqa: F401
 from market_desk.engine.boards import (  # noqa: F401
     _pick_pin_board,
     _mark_favorite_flags,
+    _strip_favorite_flags,
+    decorate_favorite_rows,
+    FAV_OFF_HOT_NOTE,
     _join_board_note,
     _rank_ice_boards,
     _enrich_board,

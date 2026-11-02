@@ -130,6 +130,8 @@ from market_desk.verdict.desk import (  # noqa: F401
     build_dragon_recommend,
     build_independent_pullback_recommend,
     build_favorite_desk_plans,
+    empty_favorite_desk,
+    merge_favorite_desk_buys,
 )
 from market_desk.verdict.buy import (  # noqa: F401
     build_verdict,

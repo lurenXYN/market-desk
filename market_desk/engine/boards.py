@@ -52,6 +52,9 @@ def _pick_pin_board(
     return None
 
 
+FAV_OFF_HOT_NOTE = "今日未进热门 · 仅保留名单，可取消看好"
+
+
 def _mark_favorite_flags(
     cards: list[dict[str, Any]],
     rows: list[dict[str, Any]],
@@ -62,14 +65,94 @@ def _mark_favorite_flags(
         for r in rows
         if r.get("bk")
     }
+    by_name = {
+        str(r.get("name") or "").strip(): r
+        for r in rows
+        if str(r.get("name") or "").strip()
+    }
     for card in cards:
         bk = str(card.get("bk") or "").upper()
-        row = by_bk.get(bk)
+        name = str(card.get("name") or "").strip()
+        row = by_bk.get(bk) or (by_name.get(name) if name else None)
         card["in_favorite"] = bool(row)
+        card["fav"] = bool(row)
         if row:
             card["favorite_id"] = row.get("id")
+            card["fav_id"] = row.get("id")
             if row.get("note") and not card.get("favorite_note"):
                 card["favorite_note"] = row.get("note")
+        else:
+            card.pop("favorite_id", None)
+            card.pop("fav_id", None)
+
+
+def _strip_favorite_flags(cards: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Copy cards and clear per-user favorite flags (shared / guest payloads)."""
+    out: list[dict[str, Any]] = []
+    for raw in cards or []:
+        card = dict(raw)
+        card["in_favorite"] = False
+        card["fav"] = False
+        card.pop("favorite_id", None)
+        card.pop("fav_id", None)
+        out.append(card)
+    return out
+
+
+def decorate_favorite_rows(
+    rows: list[dict[str, Any]],
+    pools: list[list[dict[str, Any]]] | None = None,
+    *,
+    hot_universe: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Attach live board cards onto personal favorite rows.
+
+    Boards missing from today's hot / pin / ice universe stay on the list as
+    cancelable stubs with an explicit off-hot note.
+    """
+    by_bk: dict[str, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
+    for pool in pools or []:
+        for card in pool or []:
+            bk = str(card.get("bk") or "").upper()
+            if bk and bk not in by_bk:
+                by_bk[bk] = card
+            name = str(card.get("name") or "").strip()
+            if name and name not in by_name:
+                by_name[name] = card
+    universe: set[str] = set()
+    for card in hot_universe or []:
+        bk = str(card.get("bk") or "").upper()
+        if bk:
+            universe.add(bk)
+        name = str(card.get("name") or "").strip()
+        if name:
+            universe.add(name)
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        bk = str(row.get("bk") or "").upper()
+        name = str(row.get("name") or "").strip()
+        hit = by_bk.get(bk) or (by_name.get(name) if name else None)
+        if hit:
+            card = dict(hit)
+        else:
+            card = {
+                "bk": bk,
+                "name": name or bk,
+                "kind": row.get("kind") or "",
+                "status": "观察",
+            }
+        card["in_favorite"] = True
+        card["favorite_id"] = row.get("id")
+        card["favorite_note"] = row.get("note") or ""
+        card["fav"] = True
+        card["fav_id"] = row.get("id")
+        in_today = (bk and bk in universe) or (name and name in universe)
+        if hot_universe is not None and not in_today:
+            card["off_hot"] = True
+            card["note"] = _join_board_note(card.get("note"), FAV_OFF_HOT_NOTE)
+        out.append(card)
+    return out
 
 
 def _join_board_note(base: Any, extra: str) -> str:
@@ -87,7 +170,13 @@ def _rank_ice_boards(
     boards: list[dict[str, Any]], hot_names: set[str]
 ) -> list[dict[str, Any]]:
     """Pick the coldest industries; hot names are deprioritized but still allowed."""
-    industry = [b for b in boards if b.get("kind") == "industry"]
+    from market_desk.mainline import is_pseudo_board
+
+    industry = [
+        b
+        for b in boards
+        if b.get("kind") == "industry" and not is_pseudo_board(b.get("name"))
+    ]
     ranked = sorted(
         industry,
         key=lambda b: (
@@ -277,16 +366,18 @@ def _stable_mainline_lifecycle(
     *,
     now: datetime,
     side_live: dict[str, dict[str, Any]] | None = None,
+    fav_cards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the lifecycle panel so columns change at most once per trading day.
 
     After the close, ``lifecycle_close:{date}`` is sealed **once**; later
     refreshes reuse that map (live only decorates). Before the close the
     previous seal is reused and ``side_live`` refreshes frozen boards missing
-    from today's hot list.
+    from today's hot list. Cast is hot ∪ pins ∪ favs minus pseudo boards.
     """
     from market_desk.db import load_setting, save_setting
 
+    favs = list(fav_cards or [])
     today = now.strftime("%Y-%m-%d")
     key = f"lifecycle_close:{today}"
     final = is_trading_day(now) and _minutes(now) >= 15 * 60
@@ -301,6 +392,7 @@ def _stable_mainline_lifecycle(
             out = build_mainline_lifecycle(
                 hot_cards,
                 pin_cards,
+                favs=favs,
                 hist_map=hist_map or {},
                 frozen=sealed,
                 final=False,
@@ -310,10 +402,10 @@ def _stable_mainline_lifecycle(
             out["sealed"] = True
             out["note"] = (
                 "昨收阶段雷达：萌芽 / 主升 / 尖峰观察 / 衰退（非买卖指令）；"
-                "已按今日收盘密封（当日只写一次）"
+                "已按今日收盘密封（热门+置顶+看好，去伪板块；当日只写一次）"
             )
             return out
-        out = build_mainline_lifecycle(hot_cards, pin_cards, final=True)
+        out = build_mainline_lifecycle(hot_cards, pin_cards, favs=favs, final=True)
         if out.get("stage_map"):
             try:
                 save_setting(key, out["stage_map"])
@@ -332,6 +424,7 @@ def _stable_mainline_lifecycle(
     return build_mainline_lifecycle(
         hot_cards,
         pin_cards,
+        favs=favs,
         hist_map=hist_map or {},
         frozen=frozen,
         final=False,

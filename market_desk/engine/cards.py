@@ -9,6 +9,7 @@ from market_desk.config import HOT_BOARD_COUNT, ICE_BOARD_COUNT, PIN_INDUSTRY_AL
 
 from market_desk.engine.util import _map_capped
 from market_desk.engine.boards import (
+    FAV_OFF_HOT_NOTE,
     _enrich_board,
     _join_board_note,
     _pick_pin_board,
@@ -27,8 +28,10 @@ class CardsMixin:
         boards: list[dict[str, Any]],
         ctx: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        from market_desk.mainline import drop_pseudo_boards
+
         ranked = sorted(
-            boards,
+            drop_pseudo_boards(boards),
             key=lambda b: (b.get("pct") or 0) * 2 + (b.get("up_count") or 0) * 0.02,
             reverse=True,
         )
@@ -83,7 +86,7 @@ class CardsMixin:
         rows: list[dict[str, Any]],
         ctx: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Enrich personally favored boards from the live board universe."""
+        """Enrich the union of favored boards for lifecycle / decorate cache."""
         if not rows:
             return []
         by_bk = {
@@ -98,34 +101,57 @@ class CardsMixin:
             bk = str(row.get("bk") or "").upper()
             if not bk:
                 return None
-            match = by_bk.get(bk)
-            if not match:
-                match = {
-                    "bk": bk,
-                    "name": row.get("name") or bk,
-                    "kind": row.get("kind") or "industry",
-                    "pct": None,
-                    "amount": None,
-                    "up_count": 0,
-                    "down_count": 0,
-                    "leader_name": "",
-                    "leader_code": "",
-                    "leader_pct": None,
-                }
+            live = by_bk.get(bk)
+            match = live or {
+                "bk": bk,
+                "name": row.get("name") or bk,
+                "kind": row.get("kind") or "industry",
+                "pct": None,
+                "amount": None,
+                "up_count": 0,
+                "down_count": 0,
+                "leader_name": "",
+                "leader_code": "",
+                "leader_pct": None,
+            }
             card = await _enrich_board(client, dict(match), ctx)
             if not card:
                 return None
-            card["favorite_id"] = row.get("id")
-            card["favorite_note"] = row.get("note") or ""
-            card["in_favorite"] = True
+            # Shared cache must not carry another user's 取消看好 flags.
+            card["in_favorite"] = False
+            card["fav"] = False
+            card.pop("favorite_id", None)
+            card.pop("fav_id", None)
             if row.get("note"):
                 card["note"] = _join_board_note(
                     card.get("note"), f"看好备注：{row.get('note')}"
                 )
+            if not live:
+                card["off_hot"] = True
+                card["note"] = _join_board_note(card.get("note"), FAV_OFF_HOT_NOTE)
             return card
 
         enriched = await _map_capped(_one, picked, limit=3)
-        return [card for card in enriched if card]
+        cards = [card for card in enriched if card]
+        seen = {str(c.get("bk") or "").upper() for c in cards}
+        for row in rows:
+            bk = str(row.get("bk") or "").upper()
+            if not bk or bk in seen:
+                continue
+            cards.append(
+                {
+                    "bk": bk,
+                    "name": row.get("name") or bk,
+                    "kind": row.get("kind") or "",
+                    "status": "观察",
+                    "off_hot": True,
+                    "note": FAV_OFF_HOT_NOTE,
+                    "in_favorite": False,
+                    "fav": False,
+                }
+            )
+            seen.add(bk)
+        return cards
 
     async def _lifecycle_side_cards(
         self,

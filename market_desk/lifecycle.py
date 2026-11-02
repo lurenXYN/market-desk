@@ -139,11 +139,20 @@ def _closed_series_for_key(
     return []
 
 
+def _board_is_pseudo(board: dict[str, Any] | None) -> bool:
+    """Return True when a card is a style / flow / index bucket, not a theme."""
+    from market_desk.mainline import is_pseudo_board
+
+    card = board if isinstance(board, dict) else {}
+    return is_pseudo_board(card.get("name")) or is_pseudo_board(card.get("sina_name"))
+
+
 def build_mainline_lifecycle(
     hot: list[dict[str, Any]] | None,
     pins: list[dict[str, Any]] | None = None,
     limit_each: int | None = None,
     *,
+    favs: list[dict[str, Any]] | None = None,
     hist_map: dict[str, list[dict[str, Any]]] | None = None,
     frozen: dict[str, str] | None = None,
     final: bool = True,
@@ -165,23 +174,31 @@ def build_mainline_lifecycle(
     of today's hot list (keyed by ``bk``); they refresh those rows only and
     never feed ``fresh``. Rows still without live data are flagged ``off_hot``.
 
+    Cast is yesterday's sealed real themes (hot ∪ pins ∪ favs at that close),
+    not the full hist dump. Pseudo style/flow boards never occupy columns.
+    Today's new heat not in the seal goes to ``fresh``.
+
     Thresholds soften when recent review hit-rate is weak.
     """
     from market_desk.config import LIFECYCLE_COL_LIMIT
 
     cap = max(1, int(limit_each if limit_each is not None else LIFECYCLE_COL_LIMIT))
     bias = _review_lifecycle_bias()
-    live_rows = [s for s in list(hot or []) + list(pins or []) if isinstance(s, dict)]
+    live_rows = [
+        s
+        for s in list(hot or []) + list(pins or []) + list(favs or [])
+        if isinstance(s, dict) and not _board_is_pseudo(s)
+    ]
     live_index = _index_boards_by_keys(live_rows)
-    # Unique live cards (by id) for final classify / fresh scan.
+    # Unique live cards (stable key) for final classify / fresh scan.
     live_unique: list[dict[str, Any]] = []
-    seen_id: set[int] = set()
+    seen_key: set[str] = set()
     for src in live_rows:
-        sid = id(src)
-        if sid in seen_id:
+        keys = lifecycle_key_candidates(src)
+        if any(k in seen_key for k in keys):
             continue
-        seen_id.add(sid)
         live_unique.append(src)
+        seen_key.update(keys)
 
     side_index = _index_boards_by_keys(
         [c for c in (side_live or {}).values() if isinstance(c, dict)]
@@ -200,24 +217,30 @@ def build_mainline_lifecycle(
     else:
         closed = _closed_series_map(hist_map)
         base: dict[str, str] = {}
-        # Re-key legacy seals (bk / SINA:*) onto stable keys when possible.
-        for raw_key, stage in dict(frozen or {}).items():
+        frozen_map = dict(frozen or {})
+        # Re-key yesterday's seal; do not invent extra names from hist.
+        for raw_key, stage in frozen_map.items():
             key = str(raw_key or "").strip()
             if not key:
                 continue
             series = _closed_series_for_key(closed, key)
+            if series and _board_is_pseudo(series[-1]):
+                continue
             if series:
                 sk = lifecycle_stable_key(
                     {"bk": series[-1].get("bk") or key, "name": series[-1].get("name")}
                 )
                 base.setdefault(sk, str(stage or ""))
             base.setdefault(key, str(stage or ""))
-        for bk, series in closed.items():
-            sk = lifecycle_stable_key(
-                {"bk": bk, "name": (series[-1] or {}).get("name") if series else ""}
-            )
-            if sk not in base and bk not in base:
-                base[sk] = closed_stage_from_hist(series, bias=bias) or ""
+        if not any(str(s or "") for s in frozen_map.values()):
+            # No usable seal yet: hist stages for today's live cast only.
+            for src in live_unique:
+                series = _closed_series_for_key(closed, lifecycle_stable_key(src))
+                if not series:
+                    series = _closed_series_for_key(closed, str(src.get("bk") or ""))
+                stage = closed_stage_from_hist(series, bias=bias) if series else ""
+                if stage:
+                    _put_stage_keys(base, src, stage)
         # Dual-written seals (BK / SINA:* / N:alias) must not duplicate columns.
         emitted: set[str] = set()
         for key, stage in base.items():
@@ -228,12 +251,18 @@ def build_mainline_lifecycle(
             side = side_index.get(key) if card is None else None
             series: list[dict[str, Any]] = []
             if card is not None:
+                if _board_is_pseudo(card):
+                    continue
                 sk = lifecycle_stable_key(card)
             elif side is not None:
+                if _board_is_pseudo(side):
+                    continue
                 sk = lifecycle_stable_key(side)
             else:
                 series = _closed_series_for_key(closed, key)
                 if not series:
+                    continue
+                if _board_is_pseudo(series[-1]):
                     continue
                 sk = lifecycle_stable_key(
                     {"bk": series[-1].get("bk") or key, "name": series[-1].get("name")}
@@ -303,9 +332,9 @@ def build_mainline_lifecycle(
 
     note = "昨收阶段雷达：萌芽 / 主升 / 尖峰观察 / 衰退（非买卖指令）"
     if mode == "frozen":
-        note += "；列按昨收冻结，盘中阶段不一致只旁注，收盘密封后更新"
+        note += "；列=昨收密封演员（热门+置顶+看好，去伪板块），盘中阶段不一致只旁注"
     elif mode == "close":
-        note += "；已按今日收盘密封（当日只写一次）"
+        note += "；已按今日收盘密封（热门+置顶+看好，去伪板块；当日只写一次）"
     note += "；密封键优先 BK / N:规范名，换源可续昨收列"
     if no_hist:
         note += f"；{len(no_hist)} 个新浪板无史·不判阶段"

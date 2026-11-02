@@ -281,6 +281,7 @@ def test_pool_shadow_all_does_not_move_live_sticky() -> None:
 def test_region_and_pseudo_stay_out_of_pool() -> None:
     assert is_blocked_sina("上海本地")
     assert is_pseudo_board("QFII重仓")
+    assert is_pseudo_board("追近多板")
     names = {
         b["name"]
         for b in mainline_pool(

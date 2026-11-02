@@ -89,6 +89,109 @@ def test_tip_peak_is_peak_not_ongoing(monkeypatch):
     assert out["ongoing"] == []
 
 
+def test_hist_does_not_invent_column_members(monkeypatch):
+    _no_bias(monkeypatch)
+    hist_map = {
+        "BK1": _hist("BK1", [("2026-09-23", 4, 2.0, "确认中")]),
+        "BK_JUNK": [
+            {
+                "trade_date": "2026-09-23",
+                "bk": "BK_JUNK",
+                "name": "破净股",
+                "zt_n": 8,
+                "pct": 3.0,
+                "status": "确认中",
+                "leader_boards": 1,
+            }
+        ],
+        "BK9": _hist("BK9", [("2026-09-23", 5, 3.0, "确认中")]),
+    }
+    out = lc.build_mainline_lifecycle(
+        [], [], hist_map=hist_map, frozen={"BK1": "ongoing"}, final=False
+    )
+    names = [r["name"] for col in ("starting", "ongoing", "peak", "ending") for r in out[col]]
+    assert names == ["BK1"]
+    assert out["ongoing"][0]["off_hot"] is True
+
+
+def test_pseudo_frozen_key_dropped(monkeypatch):
+    _no_bias(monkeypatch)
+    hist_map = {
+        "BK_QFII": [
+            {
+                "trade_date": "2026-09-23",
+                "bk": "BK_QFII",
+                "name": "QFII重仓",
+                "zt_n": 6,
+                "pct": 2.0,
+                "status": "确认中",
+                "leader_boards": 1,
+            }
+        ],
+        "BK1": _hist("BK1", [("2026-09-23", 4, 2.0, "确认中")]),
+    }
+    out = lc.build_mainline_lifecycle(
+        [],
+        [],
+        hist_map=hist_map,
+        frozen={"BK_QFII": "ongoing", "BK1": "ongoing"},
+        final=False,
+    )
+    names = [r["name"] for col in ("starting", "ongoing", "peak", "ending") for r in out[col]]
+    assert names == ["BK1"]
+
+
+def test_pseudo_not_sealed_on_close(monkeypatch):
+    _no_bias(monkeypatch)
+    real = {
+        "bk": "BK1",
+        "name": "电子",
+        "status": "确认中",
+        "zt_n": 4,
+        "pct": 2.0,
+        "hist": _hist("BK1", [("2026-09-23", 3, 1.5, "确认中")]),
+        "tags": [{"k": "点火", "on": True}],
+    }
+    junk = {
+        "bk": "BK_QFII",
+        "name": "QFII重仓",
+        "status": "确认中",
+        "zt_n": 8,
+        "pct": 3.0,
+        "hist": _hist("BK_QFII", [("2026-09-23", 6, 2.0, "确认中")]),
+        "tags": [{"k": "点火", "on": True}],
+    }
+    out = lc.build_mainline_lifecycle([real, junk], [], final=True)
+    names = [r["name"] for col in ("starting", "ongoing", "peak", "ending") for r in out[col]]
+    assert "电子" in names
+    assert "QFII重仓" not in names
+
+
+def test_fav_joins_close_cast(monkeypatch):
+    _no_bias(monkeypatch)
+    hot = {
+        "bk": "BK1",
+        "name": "银行",
+        "status": "确认中",
+        "zt_n": 3,
+        "pct": 1.5,
+        "hist": [],
+        "tags": [{"k": "点火", "on": True}],
+    }
+    fav = {
+        "bk": "BK2",
+        "name": "煤炭",
+        "status": "确认中",
+        "zt_n": 4,
+        "pct": 2.0,
+        "hist": [],
+        "tags": [{"k": "点火", "on": True}],
+    }
+    out = lc.build_mainline_lifecycle([hot], [], favs=[fav], final=True)
+    names = [r["name"] for col in ("starting", "ongoing", "peak", "ending") for r in out[col]]
+    assert set(names) == {"银行", "煤炭"}
+
+
 def test_attach_display_prefers_close_column(monkeypatch):
     _no_bias(monkeypatch)
     verdict = {

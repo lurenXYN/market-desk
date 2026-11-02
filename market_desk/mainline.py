@@ -355,6 +355,18 @@ def is_pseudo_board(name: str | None) -> bool:
     return bool(text) and any(k in text for k in PSEUDO_BOARD_KEYWORDS)
 
 
+def drop_pseudo_boards(boards: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return real-theme boards only (no style / flow / index buckets)."""
+    out: list[dict[str, Any]] = []
+    for board in boards or []:
+        if not isinstance(board, dict):
+            continue
+        if is_pseudo_board(board.get("name")) or is_pseudo_board(board.get("sina_name")):
+            continue
+        out.append(board)
+    return out
+
+
 def mainline_pool(
     hot: list[dict[str, Any]] | None,
     *,

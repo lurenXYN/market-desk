@@ -15,7 +15,11 @@ from market_desk.db import (
 )
 from market_desk.glossary import GLOSSARY
 from market_desk.notify import build_alert_feed
-from market_desk.verdict import build_risk_overview, position_summary
+from market_desk.engine.boards import (
+    decorate_favorite_rows,
+    _strip_favorite_flags,
+)
+from market_desk.verdict import build_risk_overview, empty_favorite_desk, position_summary
 
 from market_desk.engine.watch import _decorate_watchlist
 from market_desk.engine.alerts import AlertsMixin
@@ -202,6 +206,7 @@ class DeskEngine(
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
             minutes_for=self._minutes_for_codes,
+            favorite_desk_template=self.snapshot.get("favorite_desk"),
         )
         # Keep shared snapshot free of personal data; caller uses return / layered.
         return list(layered.get("positions") or [])
@@ -219,6 +224,8 @@ class DeskEngine(
         base["position_summary"] = empty_sum
         base["risk_overview"] = empty_risk
         base["sell_advice"] = {"items": [], "text": "", "title": ""}
+        shared_fav_desk = dict(base.get("favorite_desk") or {})
+        base["favorite_desk"] = empty_favorite_desk()
         verdict = dict(base.get("verdict") or {})
         verdict["watch_trial_recommend"] = None
         # size_cap / personal demotions should not stick from another user
@@ -232,6 +239,8 @@ class DeskEngine(
             base["auth_required_personal"] = True
             base["personal_locked"] = True
             base["auth_user"] = None
+            for pool in ("hot_boards", "pin_boards", "ice_boards"):
+                base[pool] = _strip_favorite_flags(base.get(pool))
             return base
         from market_desk.auth import is_guest, public_user
         from market_desk.db import get_user_by_id
@@ -242,6 +251,8 @@ class DeskEngine(
             # Guest shares an empty personal layer; no books / fills.
             base["personal_locked"] = True
             base["auth_user"] = pub
+            for pool in ("hot_boards", "pin_boards", "ice_boards"):
+                base[pool] = _strip_favorite_flags(base.get(pool))
             return base
         from market_desk.personal import attach_personal_layer
 
@@ -255,6 +266,7 @@ class DeskEngine(
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
             minutes_for=self._minutes_for_codes,
+            favorite_desk_template=shared_fav_desk,
         )
         layered["personal_locked"] = False
         layered["auth_user"] = pub
@@ -276,30 +288,21 @@ class DeskEngine(
 
     def _decorate_favorite_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Attach live board cards onto favorite rows (user-scoped)."""
-        cards = list(self.snapshot.get("favorite_boards") or [])
-        by_bk = {str(c.get("bk") or "").upper(): c for c in cards if c.get("bk")}
-        for pool in ("hot_boards", "pin_boards", "ice_boards"):
-            for c in self.snapshot.get(pool) or []:
-                bk = str(c.get("bk") or "").upper()
-                if bk and bk not in by_bk:
-                    by_bk[bk] = c
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            bk = str(row.get("bk") or "").upper()
-            hit = by_bk.get(bk)
-            if hit:
-                card = dict(hit)
-            else:
-                card = {
-                    "bk": bk,
-                    "name": row.get("name") or bk,
-                    "kind": row.get("kind") or "",
-                }
-            card["fav"] = True
-            card["fav_id"] = row.get("id")
-            card["fav_note"] = row.get("note") or ""
-            out.append(card)
-        return out
+        hot_u = (
+            list(self.snapshot.get("hot_boards") or [])
+            + list(self.snapshot.get("pin_boards") or [])
+            + list(self.snapshot.get("ice_boards") or [])
+        )
+        return decorate_favorite_rows(
+            rows,
+            [
+                list(self.snapshot.get("favorite_boards") or []),
+                list(self.snapshot.get("hot_boards") or []),
+                list(self.snapshot.get("pin_boards") or []),
+                list(self.snapshot.get("ice_boards") or []),
+            ],
+            hot_universe=hot_u,
+        )
 
     def sync_watchlist(
         self,

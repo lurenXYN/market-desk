@@ -8,15 +8,19 @@ from typing import Any
 from market_desk.db import load_favorite_boards, load_positions, load_watchlist, touch_position_peaks
 from market_desk.filters import normalize_code
 from market_desk.settings import use_user_settings
+from market_desk.engine.boards import _mark_favorite_flags
 from market_desk.verdict import (
     apply_size_cap_gate,
     attach_position_daily_trends,
     attach_position_sell_hints,
+    build_favorite_desk_plans,
     build_risk_overview,
     build_sell_advice,
     build_watch_trial_recommend,
     decorate_positions,
+    empty_favorite_desk,
     finalize_recommend_buy_ux,
+    merge_favorite_desk_buys,
     position_summary,
     reconcile_buy_sell_conflict,
     _attach_risk_sizing,
@@ -50,6 +54,7 @@ def attach_personal_layer(
     decorate_watchlist=None,
     decorate_favorites=None,
     minutes_for=None,
+    favorite_desk_template=None,
 ) -> dict[str, Any]:
     """Return a deep-copied snapshot with one user's positions / watch / risk.
 
@@ -57,6 +62,7 @@ def attach_personal_layer(
     ``trends_for``, ``decorate_watchlist``, ``decorate_favorites`` are callables
     provided by DeskEngine to reuse its caches / helpers.
     ``minutes_for(codes)`` optionally returns minute series for sell soft-take gates.
+    ``favorite_desk_template`` is the shared union desk (Phase B enrich cache).
     """
     out = copy.deepcopy(snapshot or {})
     uid = int(user_id)
@@ -274,6 +280,38 @@ def attach_personal_layer(
             out["favorite_boards"] = decorate_favorites(fav_rows)
         else:
             out["favorite_boards"] = fav_rows
+        _mark_favorite_flags(
+            list(out.get("hot_boards") or [])
+            + list(out.get("pin_boards") or [])
+            + list(out.get("ice_boards") or [])
+            + list(out.get("favorite_boards") or []),
+            fav_rows,
+        )
+        watch = list(out.get("watch") or [])
+        zt = [w for w in watch if (w.get("group") or "") == "涨停"]
+        zb = [w for w in watch if (w.get("group") or "") == "炸板"]
+        user_desk = build_favorite_desk_plans(
+            favorite_boards=out.get("favorite_boards") or [],
+            etfs=out.get("etfs") or [],
+            zt=zt,
+            zb=zb,
+            positions=out.get("positions") or [],
+            phase=out.get("phase") or "",
+            bans=list((out.get("verdict") or {}).get("bans") or []),
+            stock_block=bool((out.get("verdict") or {}).get("stock_block")),
+            mainline_name=str(
+                ((out.get("verdict") or {}).get("mainline") or {}).get("name") or ""
+            ),
+            trade_date=trade_dash,
+            metrics=out.get("metrics"),
+            hot_boards=out.get("hot_boards"),
+        )
+        template = favorite_desk_template
+        if template is None:
+            template = out.get("favorite_desk")
+        out["favorite_desk"] = merge_favorite_desk_buys(
+            user_desk, template
+        ) if (user_desk.get("boards") or []) else empty_favorite_desk()
 
         out["auth_user_id"] = uid
     return out

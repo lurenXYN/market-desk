@@ -86,10 +86,10 @@ function renderMarketBoards(d, v) {
         + (b.slot_name ? ` · ${termHtml("卡位龙")} ${b.slot_name} ${b.slot_boards || 0}板` : "");
     const prefix = pin ? (b.pin_label + " · ") : "";
     const bk = String(b.bk || "");
-    const favOn = !!b.in_favorite;
+    const favOn = !!(b.in_favorite || b.fav);
     const favBtn = bk.toUpperCase().startsWith("BK")
       ? (favOn
-        ? `<button type="button" class="fav-btn on" data-bk="${bk}" data-id="${b.favorite_id || ""}">取消看好</button>`
+        ? `<button type="button" class="fav-btn on" data-bk="${bk}" data-id="${b.favorite_id || b.fav_id || ""}">取消看好</button>`
         : `<button type="button" class="fav-btn" data-bk="${bk}" data-name="${String(b.name || "").replace(/"/g, "&quot;")}" data-kind="${b.kind || ""}">加入看好</button>`)
       : "";
     return `<article class="board tone-${b.tone || "slate"} ${statusClass(b.status)}${favOn ? " is-fav" : ""}">
