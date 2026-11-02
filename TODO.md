@@ -103,6 +103,30 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **双轨评分 v1.10.29**：`dual_wins`（abs_win/xs_win）；proposals `sample+verdict`；模拟 `vs_bench`（相对中证1000，不改 gate_ok）
 - [x] **尺下存活压力 v1.10.30**：`regime_survival`（尺下 abs/xs 并排旁注；复盘页 + agent-pack；不叠 soft_rank）
 - [x] **2026-11-02 自治复盘**：cf=true pack；结论 hold；v1.10.31 修 survival 指数 HTTP 回退
+- [x] **生命周期侧拉 v1.10.32**：未进热门补拉保留 match 身份 + 空 pool 报价兜底，避免整列「上一收盘」
+- [x] **环境闸 v1.10.33 影子骨架**：`env_gate` score/档×ETF|股；道氏/均线/MACD·RSI/ATR/缺口；冻结+pack；`env_gate_live` 默认关
+- [x] **环境闸补齐 v1.10.34**：亮灯率×env×kind 影子；live keys 默认 minute；假杀/真杀 ETF|股分桶；ADX/BOLL/量能；缺口细分+精简K线软标签
+
+### 环境闸 / 技术特征 · 有效清单（2026-11-02）
+
+> **原则**：坏环境更严、好环境略松；ETF≠个股；先影子→软乘阈值→（门槛后）再谈硬；**永不「仅尺下关 ready」**。形态名录只做**可检验、少而精**的特征，禁止堆缠论/谐波/全套 K 线进闸。
+
+**已落地（v1.10.33 → v1.10.34）**
+- [x] `env_score` + `hostile|neutral|friendly` + ETF/股 `minute/off_high/thin` 倍率
+- [x] 特征：道氏 HH/HL、均线多空/回踩MA20、MACD柱+RSI区、ATR vs ATR_MA、缺口/指数波动
+- [x] 快照 / 买卡冻结 / shadows 覆盖 / agent-pack.`env_gate` / 词条「环境闸」
+- [x] `env_gate_live` 软接 `resolve_gate_mult`（默认关）
+- [x] 影子亮灯率×env×kind（`build_env_lit_shadow`）；满 ≥10 日且 friendly−hostile≥5pp 才 `live_recommend`；`env_gate_live_keys` 默认仅 `minute`
+- [x] 假杀/真杀按 ETF|股分桶（`buy_gate_bias.v2` + `resolve_buy_kind_bias`，镜像卖侧）
+- [x] ADX / BOLL 带宽·%B / 量能（有 volume 才计）进 env 特征
+- [x] 缺口细分（突破/普通/竭尽弱标）+ 精简 K 线软标签（吞没/锤头/射击之星/曙光·乌云/早晨之星）
+
+**下一步（按收益排序，一次一处）**
+- [ ] 影子攒满后：对照 `env_lit.live_recommend` 再决定是否开 `env_gate_live`（仍先 minute）
+- [ ] 艾略特：保持观察页；可选把 Top1 方向作 env 弱分（多解，权重低）
+
+**明确不做（进主链路）**
+- [ ] 缠论一二三买卖、谐波蝴蝶/螃蟹等、全套葛兰威尔绰号、全套 K 线辞典 → 不进 ready/闸门
 
 > **2026-10-29 总判**：样本外天数够看的项里，**无一达到「改代码」门槛**（叙事命中率不够；regime/早进不足 10 日；熔断空）。模拟开工闸 **未过线**（closed=2，权益≈19932，gate_ok=false）。**本日不改 ready/排序/硬闸。**
 >

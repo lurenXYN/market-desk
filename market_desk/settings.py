@@ -30,6 +30,8 @@ USER_PRIVATE_KEYS = frozenset(
         "hit_rate_mode",
         "outcome_standard",
         "adapt_follow_outcome",
+        "env_gate_live",
+        "env_gate_live_keys",
         "ready_style",
         "sell_open_watch_minutes",
         "open_mute_minutes",
@@ -59,6 +61,8 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "hit_rate_mode",
         "outcome_standard",
         "adapt_follow_outcome",
+        "env_gate_live",
+        "env_gate_live_keys",
         "ready_style",
         "sell_open_watch_minutes",
         "morning_push",
@@ -167,6 +171,10 @@ DEFAULTS: dict[str, Any] = {
     "outcome_standard": "classic",
     # Soft adapt always uses persisted classic labels unless True (reserved; v1 still classic).
     "adapt_follow_outcome": False,
+    # Env-gate live: multiply selected keys by env×kind (default shadow-only).
+    "env_gate_live": False,
+    # Comma-separated gate keys that receive live env mults (default minute).
+    "env_gate_live_keys": ",".join(cfg.ENV_GATE_LIVE_KEYS),
     # Ready style: strict | band (near_entry below chase → soft ready).
     "ready_style": str(cfg.READY_STYLE_DEFAULT),
     # Soft-sell open buffer minutes after 09:30 (must-sell ignores this).
@@ -332,6 +340,14 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
         oc = "classic"
     out["outcome_standard"] = oc
     out["adapt_follow_outcome"] = bool(out.get("adapt_follow_outcome"))
+    out["env_gate_live"] = bool(out.get("env_gate_live"))
+    live_keys_raw = str(out.get("env_gate_live_keys") or ",".join(cfg.ENV_GATE_LIVE_KEYS))
+    live_keys = [
+        x.strip()
+        for x in live_keys_raw.replace(";", ",").split(",")
+        if x.strip() in ("minute", "off_high", "thin", "rel_strength")
+    ]
+    out["env_gate_live_keys"] = ",".join(live_keys or list(cfg.ENV_GATE_LIVE_KEYS))
     rs = str(out.get("ready_style") or cfg.READY_STYLE_DEFAULT).strip().lower()
     if rs not in ("strict", "band"):
         rs = str(cfg.READY_STYLE_DEFAULT)

@@ -124,6 +124,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["market_regime"] = old_payload["market_regime"]
         elif existing:
             merged.pop("market_regime", None)
+        # Env-gate shadow: freeze first insert (bucket × kind mults).
+        if isinstance(old_payload.get("env_gate"), dict):
+            merged["env_gate"] = old_payload["env_gate"]
+        elif existing:
+            merged.pop("env_gate", None)
         # Deep-V bounce shadow: freeze day / lag / metrics; chase may flip True later.
         for _dv_key in ("deep_v_day", "deep_v_lag1", "deep_v_dd", "deep_v_recover"):
             if _dv_key in old_payload:

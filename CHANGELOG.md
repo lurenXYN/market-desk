@@ -14,6 +14,53 @@
 
 ---
 
+## [v1.10.34] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- env_gate 骨架已落，但缺：① 满约 10 日的亮灯率×env×kind 证据与 minute-first live 钥匙；② 假杀/真杀仍混桶；③ ADX/BOLL/量能与缺口·K 线软标签未进特征包。
+
+### 【做了什么（What）】
+- **Added** `build_env_lit_shadow`：按 bucket×kind 报 lit_rate / abs_win / xs_win；`live_recommend`（≥10 日且 stock friendly−hostile≥5pp）；`ENV_GATE_LIVE_KEYS` / 设置 `env_gate_live_keys` 默认仅 `minute`。
+- **Added** `buy_gate_bias.v2`：`build_buy_gate_bias_for_kind` + `resolve_buy_kind_bias`（冲突取中）；`build_gate_kill_stats(..., kind=)`；复盘 `gate_kills_by_kind`。
+- **Added** env 特征 ADX / BOLL 带宽·%B / 量能；`pattern_tags.py` 缺口细分 + 精简 K 线软标签。
+- **Changed** `env_gate_mult_for_key` 只乘 live keys；`resolve_gate_mult` 吃分种假杀学习；agent-pack / 词条同步。
+- **Added** `tests/test_env_gate.py` 扩写 + `tests/test_buy_gate_kind_bias.py`。
+
+### 【影响与验证（Impact & Verification）】
+- 默认仍影子；不自动开 live。分种假杀立刻进阈值倍率（有样本才调）。pytest 相关用例通过；desk.db 兼容。
+
+---
+
+## [v1.10.33] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- 买闸对环境过死：坏市收紧后好市也难亮灯；ETF/个股应用同一自适应倍率。需要「坏严好松 + 分种」且先影子、可检验。
+
+### 【做了什么（What）】
+- **Added** `env_gate.py`：`env_score`/`hostile|neutral|friendly`；特征=道氏结构+均线精简+MACD/RSI+ATR扩张+缺口；ETF/股分种倍率表。
+- **Added** 快照 `env_gate`、买卡冻结 `payload.env_gate`、shadows/agent-pack 覆盖、词条「环境闸」、设置 `env_gate_live`（默认关）。
+- **Changed** `resolve_gate_mult(..., kind=)`：live 开启时软乘环境倍率（仍 clamp）；**不因尺单独关 ready**。
+- **Added** `tests/test_env_gate.py`；TODO 登记有效清单与不做清单。
+
+### 【影响与验证（Impact & Verification）】
+- 默认行为：只记账不改亮灯；打开 `env_gate_live` 才动阈值。pytest `test_env_gate` + lifecycle side 通过。
+
+---
+
+## [v1.10.32] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- 盘中生命周期列大量「⏱ 今日未进热门 · 数据为上一收盘」，补拉几乎全失败：密封 BK 覆盖了新浪匹配身份，成分股在东财 clist 暂停时对不上 node；空 pool 又整卡丢弃。
+
+### 【做了什么（What）】
+- **Fixed** `_lifecycle_side_cards`：enrich 保留匹配板的 live bk/sina_node，成功后再 remount 密封 BK/名称；名称按 normalize/alias 查找；无成分但有盘中 pct 时保留报价卡，避免退回昨收。
+- **Changed** 全失败时打 warning 日志；单测覆盖「保留 match bk」与 quote-only 卡。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_lifecycle_side_live.py` + identity/seal 共 10 passed；不改 ready / 硬闸 / 密封列规则，只改善盘中装饰数据。
+
+---
+
 ## [v1.10.31] - 2026-11-02
 
 ### 【背景与动机（为什么做 · Why）】

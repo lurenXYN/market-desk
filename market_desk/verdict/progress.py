@@ -648,6 +648,11 @@ def _apply_ready_confirmations(
         high = item.get("high")
         kind = item.get("kind") or "stock"
         try:
+            off_mult = float(resolve_gate_mult("off_high", 1.0, kind=str(kind)))
+            thin_mult = float(resolve_gate_mult("thin", 1.0, kind=str(kind)))
+        except Exception:
+            pass
+        try:
             if last is not None and high not in (None, 0) and float(high) > 0:
                 from market_desk.config import ETF_OFF_HIGH_MIN, STOCK_OFF_HIGH_MIN
 

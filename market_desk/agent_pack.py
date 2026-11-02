@@ -100,6 +100,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
     from market_desk.config import (
         DEEP_V_SHADOW_SINCE,
         EDGE_SHADOW_SINCE,
+        ENV_GATE_SHADOW_SINCE,
         REGIME_SHADOW_SINCE,
         ZT_SHARE_SHADOW_SINCE,
     )
@@ -137,6 +138,13 @@ def build_agent_pack_sync() -> dict[str, Any]:
         shadows = shadow_check(shadow_health(3))
     except Exception as exc:
         shadows = {"id": "shadows", "level": "warn", "detail": f"{type(exc).__name__}: {exc}"[:120]}
+
+    try:
+        from market_desk.env_gate import summarize_env_gate_coverage
+
+        env_gate_summary = summarize_env_gate_coverage(buy_rows)
+    except Exception as exc:
+        env_gate_summary = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
 
     try:
         quota = serverchan_quota_snapshot()
@@ -202,6 +210,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
         "since": {
             "edge": EDGE_SHADOW_SINCE,
             "regime": REGIME_SHADOW_SINCE,
+            "env_gate": ENV_GATE_SHADOW_SINCE,
             "deep_v": DEEP_V_SHADOW_SINCE,
             "zt_share": ZT_SHARE_SHADOW_SINCE,
         },
@@ -222,6 +231,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
                 "sample=ready 只表示天数/张数够看；verdict=hold 默认不改；"
                 "soft_candidate 仅形似过门槛，仍须对照 TODO 全条件。一次最多改一处。"
                 "abs_win=绝对胜率，xs_win=跑赢大盘胜率。"
+                "env_gate 默认影子；env_gate_live 才软乘阈值（默认仅 minute）。"
             ),
         },
         "proposals": proposals,
@@ -242,6 +252,8 @@ def build_agent_pack_sync() -> dict[str, Any]:
             ),
             None,
         ),
+        "env_gate": env_gate_summary,
+        "env_lit": (env_gate_summary.get("lit") if isinstance(env_gate_summary, dict) else None),
         "deep_v": {"today": deep_v_today, "shadow": deep_v_shadow},
         "zt_share": zt_share,
         "shadows": shadows,

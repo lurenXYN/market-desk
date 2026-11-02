@@ -389,6 +389,16 @@ REVIEW_BENCH_SUMMARY_DAYS = 20
 # Does not gate ready. Out-of-sample evidence for the regime hypothesis starts here.
 REGIME_MA_N = 60
 REGIME_SHADOW_SINCE = "2026-10-15"
+# Environment buy-gate shadow (multi-factor env_score × ETF/stock mults).
+# Default live=off; freeze into buy payloads from ENV_GATE_SHADOW_SINCE.
+ENV_GATE_SHADOW_SINCE = "2026-11-02"
+ENV_GATE_LIT_MIN_DAYS = 10        # shadow days before considering env_gate_live
+ENV_GATE_LIVE_KEYS = ("minute",)  # first live slice; expand after evidence
+ENV_FRIENDLY_GATE = 0.90          # <1 loosens minute/off_high when friendly
+ENV_HOSTILE_GATE = 1.10           # >1 tightens when hostile
+ENV_ETF_SCALE = 0.85              # compress env deviation toward 1.0 for ETF
+ENV_STOCK_SCALE = 1.0
+
 # Deep-V bounce shadow (display only; pre-registered 2026-10-28). Sample starts
 # the day this code ships — days before SINCE do not count as evidence.
 DEEP_V_SHADOW_SINCE = "2026-10-31"

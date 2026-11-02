@@ -71,10 +71,14 @@ def test_side_cards_lookup_and_sina_fallback(monkeypatch):
     async def fake_enrich(client, board, ctx, weakest=False):
         enriched.append(board["bk"])
         pool = [] if board["bk"] == "BK3" else [{"code": "600001"}]
-        return dict(board, zt_n=2, pool=pool)
+        # BK3 has live pct from the board list → quote-only card still kept.
+        return dict(board, zt_n=2 if pool else 0, pool=pool, pct=board.get("pct"))
 
     async def fake_sina(client):
-        return [{"bk": "SINA:x", "name": "二号"}, {"bk": "BK3", "name": "三号"}]
+        return [
+            {"bk": "SINA:x", "name": "二号", "pct": 1.2},
+            {"bk": "BK3", "name": "三号", "pct": 0.8},
+        ]
 
     monkeypatch.setattr(engine_mod, "_enrich_board", fake_enrich)
     monkeypatch.setattr(board_fallback, "fetch_hot_boards_sina", fake_sina)
@@ -89,10 +93,39 @@ def test_side_cards_lookup_and_sina_fallback(monkeypatch):
             {"bk": "BK4", "name": "查无", "off_hot": True},
         ],
     }
-    boards = [{"bk": "bk1", "name": "一号"}]
+    boards = [{"bk": "bk1", "name": "一号", "pct": 2.0}]
     eng = DeskEngine.__new__(DeskEngine)
     out = asyncio.run(eng._lifecycle_side_cards(None, boards, lifecycle, {}))
-    # BK1 from this tick, BK2 matched by name in Sina, BK3 dropped (no members), BK4 unknown.
-    assert set(out) == {"BK1", "BK2"}
-    assert sorted(enriched) == ["BK1", "BK2", "BK3"]
+    # BK1 from this tick, BK2 matched by name in Sina, BK3 quote-only kept, BK4 unknown.
+    assert set(out) == {"BK1", "BK2", "BK3"}
+    # Enrich keeps the matched board's live bk (case / Sina key); seal remount is later.
+    assert {x.upper() for x in enriched} == {"BK1", "BK3", "SINA:X"}
     assert out["BK2"]["bk"] == "BK2"
+    assert out["BK3"]["pool"] == []
+
+
+def test_side_cards_keeps_match_bk_for_enrich(monkeypatch):
+    """Sealed BK must not overwrite the matched board before member fetch."""
+    seen: list[str] = []
+
+    async def fake_enrich(client, board, ctx, weakest=False):
+        seen.append(str(board.get("bk")))
+        assert board.get("sina_node") == "gn_jsq"
+        return dict(board, zt_n=1, pool=[{"code": "600001"}], pct=1.5)
+
+    monkeypatch.setattr(engine_mod, "_enrich_board", fake_enrich)
+    lifecycle = {
+        "ongoing": [{"bk": "BK0816", "name": "减速器", "off_hot": True}],
+    }
+    boards = [{
+        "bk": "SINA:gn_jsq",
+        "name": "减速器概念",
+        "sina_name": "减速器概念",
+        "sina_node": "gn_jsq",
+        "pct": 1.5,
+    }]
+    eng = DeskEngine.__new__(DeskEngine)
+    out = asyncio.run(eng._lifecycle_side_cards(None, boards, lifecycle, {}))
+    assert seen == ["SINA:gn_jsq"]
+    assert set(out) == {"BK0816"}
+    assert out["BK0816"]["name"] == "减速器"

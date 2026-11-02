@@ -136,10 +136,19 @@ class CardsMixin:
         """Enrich frozen lifecycle boards absent from today's hot list, keyed by ``bk``.
 
         Looks each board up in this tick's universe first, then in the cached
-        Sina full list; boards found nowhere keep their last-close row.
+        Sina full list. Member fetch keeps the matched board's live identity
+        (Sina node / BK); the sealed ``bk``/name are restored afterward so the
+        frozen column can remount. Quote-only cards (empty constituents) are
+        kept when the board list already has a live ``pct``.
         """
         from market_desk import board_fallback
+        from market_desk.board_alias import normalize_board_name
         from market_desk.config import LIFECYCLE_SIDE_MAX
+
+        try:
+            from market_desk.db.market import board_alias_name
+        except Exception:  # noqa: BLE001
+            board_alias_name = lambda _n: None  # type: ignore[assignment]
 
         off = [
             r
@@ -150,40 +159,95 @@ class CardsMixin:
         if not off:
             return {}
 
+        def _name_keys(raw: Any) -> list[str]:
+            text = str(raw or "").strip()
+            if not text:
+                return []
+            keys = [text]
+            norm = normalize_board_name(text)
+            if norm and norm not in keys:
+                keys.append(norm)
+            try:
+                alias = board_alias_name(text) or board_alias_name(norm)
+            except Exception:
+                alias = None
+            if alias and alias not in keys:
+                keys.append(alias)
+            return keys
+
         def _index(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
             by_bk = {str(b.get("bk") or "").upper(): b for b in rows if b.get("bk")}
-            by_name = {str(b.get("name") or ""): b for b in rows if b.get("name")}
+            by_name: dict[str, Any] = {}
+            for b in rows:
+                for key in _name_keys(b.get("name")) + _name_keys(b.get("sina_name")):
+                    by_name.setdefault(key, b)
             return by_bk, by_name
+
+        def _lookup(
+            by_bk: dict[str, Any], by_name: dict[str, Any], bk: str, name: str
+        ) -> dict[str, Any] | None:
+            hit = by_bk.get(bk.upper())
+            if hit is not None:
+                return hit
+            for key in _name_keys(name):
+                hit = by_name.get(key)
+                if hit is not None:
+                    return hit
+            return None
 
         by_bk, by_name = _index(boards)
         picks: list[tuple[str, dict[str, Any] | None, str]] = []
         for r in off:
             bk, name = str(r["bk"]), str(r.get("name") or "")
-            picks.append((bk, by_bk.get(bk.upper()) or by_name.get(name), name))
+            picks.append((bk, _lookup(by_bk, by_name, bk, name), name))
         if any(match is None for _, match, _ in picks):
             try:
                 sina_bk, sina_name = _index(await board_fallback.fetch_hot_boards_sina(client))
                 picks = [
-                    (bk, match or sina_bk.get(bk.upper()) or sina_name.get(name), name)
+                    (bk, match or _lookup(sina_bk, sina_name, bk, name), name)
                     for bk, match, name in picks
                 ]
             except Exception as exc:
-                log.debug("lifecycle side boards: sina list failed: %r", exc)
+                log.warning("lifecycle side boards: sina list failed: %r", exc)
 
         async def _one(pick: tuple[str, dict[str, Any] | None, str]) -> dict[str, Any] | None:
-            bk, match, _name = pick
+            seal_bk, match, seal_name = pick
             if match is None:
                 return None
+            # Keep the matched board's bk/sina_node for constituent fetch — do not
+            # overwrite with the sealed BK first (that breaks Sina node lookup when
+            # East Money clist is paused).
+            board = dict(match)
             try:
-                card = await _enrich_board(client, dict(match, bk=bk), ctx)
+                card = await _enrich_board(client, board, ctx)
             except Exception as exc:
-                log.debug("lifecycle side board %s enrich failed: %r", bk, exc)
+                log.warning("lifecycle side board %s enrich failed: %r", seal_bk, exc)
                 return None
-            # No members means zt counts would read 0; keep the last-close row instead.
-            return card if card and card.get("pool") else None
+            if not card:
+                return None
+            if not card.get("pool"):
+                # Board-list pct is still live; better than freezing on last close.
+                if match.get("pct") is None and card.get("pct") is None:
+                    return None
+                card["pool"] = []
+                card["members"] = card.get("members") or []
+            # Remount onto the sealed identity so frozen columns find this card.
+            if str(seal_bk or "").upper().startswith("BK"):
+                card["bk"] = seal_bk
+            if seal_name:
+                card["name"] = seal_name
+            return card
 
         cards = await _map_capped(_one, picks, limit=3)
-        return {str(c["bk"]): c for c in cards if c and c.get("bk")}
+        out = {str(c["bk"]): c for c in cards if c and c.get("bk")}
+        if picks and not out:
+            missing = [f"{bk}/{name}" for bk, match, name in picks if match is None]
+            log.warning(
+                "lifecycle side boards: 0/%s live (unmatched=%s)",
+                len(picks),
+                ",".join(missing[:6]) or "enrich/pool",
+            )
+        return out
 
     async def _ice_cards(
         self,

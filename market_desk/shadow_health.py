@@ -124,6 +124,24 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
                     missing.append("market_regime")
         except Exception:
             pass
+        env_cover = None
+        try:
+            from market_desk.config import ENV_GATE_SHADOW_SINCE
+
+            if day >= str(ENV_GATE_SHADOW_SINCE)[:10] and rows:
+                def _has_env(p: dict[str, Any]) -> bool:
+                    eg = p.get("env_gate")
+                    return isinstance(eg, dict) and str(eg.get("bucket") or "") in (
+                        "hostile",
+                        "neutral",
+                        "friendly",
+                    )
+
+                env_cover = round(sum(1 for p in rows if _has_env(p)) / len(rows), 2)
+                if env_cover < FIELD_MIN_COVER:
+                    missing.append("env_gate")
+        except Exception:
+            pass
         out.append(
             {
                 "date": day,
@@ -132,6 +150,7 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
                 "card_fields": card_fields,
                 "lit_fields": {k: cover(lit, k) for k in LIT_FIELDS},
                 "regime_freeze": regime_cover,
+                "env_gate_freeze": env_cover,
                 "missing": missing,
                 "narrative": narrative.get(day, 0),
                 "narrative_snap": narrative_snap.get(day, 0),
@@ -164,6 +183,9 @@ def shadow_check(rows: list[dict[str, Any]], narrative_live: dict[str, Any] | No
     rf = r.get("regime_freeze")
     if rf is not None:
         parts.append(f"大盘尺冻结{int(round(float(rf) * 100))}%")
+    ef = r.get("env_gate_freeze")
+    if ef is not None:
+        parts.append(f"环境闸冻结{int(round(float(ef) * 100))}%")
     ind = (r.get("crowd_max") or {}).get("industry")
     crowd_why = f"（行业最高 {ind['name']} {ind['share']}% < {CROWD_ABS_EXTREME_PCT}%）" if ind and not r["crowd"] else ""
     parts.append(f"拥挤{r['crowd']}{crowd_why}")

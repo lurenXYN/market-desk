@@ -137,13 +137,16 @@ def build_context_gate_bias(
     }
 
 
-def resolve_gate_mult(gate_key: str, default: float = 1.0) -> float:
-    """Merge global buy-gate bias with contextual overlay for one gate key."""
+def resolve_gate_mult(gate_key: str, default: float = 1.0, *, kind: str = "stock") -> float:
+    """Merge kind-aware buy-gate bias with contextual + optional env overlay.
+
+    ``kind`` selects ETF vs stock kill-learning and env multipliers (live keys).
+    """
     mult = float(default)
     try:
-        from market_desk.review import cached_buy_gate_bias
+        from market_desk.review import cached_buy_gate_bias, resolve_buy_kind_bias
 
-        bias = cached_buy_gate_bias() or {}
+        bias = resolve_buy_kind_bias(cached_buy_gate_bias() or {}, kind=kind)
         gates = bias.get("gates") or {}
         g = gates.get(gate_key) or {}
         if g.get("mult") is not None:
@@ -163,6 +166,15 @@ def resolve_gate_mult(gate_key: str, default: float = 1.0) -> float:
                 # Prefer the more extreme of global vs context when they agree;
                 # otherwise take geometric mean-ish via product then clamp.
                 mult = _clamp(stacked, 1.0 - clamp, 1.0 + clamp)
+    except Exception:
+        pass
+    try:
+        from market_desk.env_gate import env_gate_mult_for_key
+
+        em = float(env_gate_mult_for_key(gate_key, kind=kind, default=1.0))
+        if em != 1.0:
+            clamp = float(ADAPT_TUNE_CLAMP)
+            mult = _clamp(mult * em, 1.0 - clamp, 1.0 + clamp)
     except Exception:
         pass
     return max(0.75, min(1.25, float(mult)))

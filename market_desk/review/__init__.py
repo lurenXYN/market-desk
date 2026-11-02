@@ -90,6 +90,8 @@ from market_desk.review.bias import (  # noqa: F401
     cached_sell_bias_bundle,
     cached_buy_gate_bias,
     build_buy_gate_bias,
+    build_buy_gate_bias_for_kind,
+    resolve_buy_kind_bias,
 )
 from market_desk.review.alerts import (  # noqa: F401
     snapshot_quote_map,

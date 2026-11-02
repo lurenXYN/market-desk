@@ -567,13 +567,17 @@ def build_gate_kill_stats(
     rows: list[dict[str, Any]],
     *,
     hit_mode: str | None = None,
+    kind: str | None = None,
 ) -> list[dict[str, Any]]:
     """Attribute ready kills to confirm_fail history; flag false kills via outcomes.
 
     Kill counts use confirm_fail_hist (same-day gate evolution). False/true kill
     only when the final same-day state stayed ready=0.
+
+    ``kind`` = etf | stock filters the sample; None keeps the mixed window.
     """
     del hit_mode  # Paper outcomes OK for gated cards; final ready state still required.
+    kind_f = str(kind or "").strip().lower()
     kills: dict[str, int] = {}
     false_kills: dict[str, int] = {}
     true_kills: dict[str, int] = {}
@@ -581,6 +585,9 @@ def build_gate_kill_stats(
         if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("skipped") or 0):
+            continue
+        row_kind = "etf" if str(row.get("kind") or "") == "etf" else "stock"
+        if kind_f in ("etf", "stock") and row_kind != kind_f:
             continue
         payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
         fails = [
@@ -612,17 +619,18 @@ def build_gate_kill_stats(
         tk = int(true_kills.get(gate) or 0)
         scored_n = fk + tk
         false_rate = round(100.0 * fk / scored_n, 1) if scored_n else None
-        out.append(
-            {
-                "gate": gate,
-                "kill_n": kn,
-                "false_kill_n": fk,
-                "true_kill_n": tk,
-                "false_kill_rate": false_rate,
-                "note": (
-                    "误杀偏多" if fk >= 3 and (false_rate or 0) >= 50 else
-                    ("挡得住" if tk >= 3 and fk == 0 else "")
-                ),
-            }
-        )
+        row_out: dict[str, Any] = {
+            "gate": gate,
+            "kill_n": kn,
+            "false_kill_n": fk,
+            "true_kill_n": tk,
+            "false_kill_rate": false_rate,
+            "note": (
+                "误杀偏多" if fk >= 3 and (false_rate or 0) >= 50 else
+                ("挡得住" if tk >= 3 and fk == 0 else "")
+            ),
+        }
+        if kind_f in ("etf", "stock"):
+            row_out["kind"] = kind_f
+        out.append(row_out)
     return out[:8]

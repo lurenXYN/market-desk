@@ -539,6 +539,10 @@ def build_review_payload(
         "note": "三标准对照需日线，加载中或暂无样本",
     }
     summary["gate_kills"] = build_gate_kill_stats(global_rows)
+    summary["gate_kills_by_kind"] = {
+        "etf": build_gate_kill_stats(global_rows, kind="etf"),
+        "stock": build_gate_kill_stats(global_rows, kind="stock"),
+    }
     try:
         wide_rows = load_signals(limit=2500)
     except Exception:

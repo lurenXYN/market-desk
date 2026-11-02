@@ -313,6 +313,7 @@ class RefreshMixin:
                 await self._ensure_index_bars(client, trade_date_dash, errors=errors)
                 await self._ensure_bench_bars(client, trade_date_dash, errors=errors)
             market_regime_live = self._build_market_regime(trade_date_dash)
+            env_gate_live: dict[str, Any] | None = None
             note_quote_ticks(quotes)
             note_quote_ticks(etfs)
             note_quote_ticks(pos_quote_map if isinstance(pos_quote_map, dict) else None)
@@ -737,6 +738,17 @@ class RefreshMixin:
                     verdict.update(annotated)
                 except Exception:
                     log.exception("regime soft tags failed")
+                try:
+                    env_gate_live = self._build_env_gate(
+                        trade_date_dash,
+                        metrics=metrics if isinstance(metrics, dict) else None,
+                        regime=market_regime_live
+                        if isinstance(market_regime_live, dict)
+                        else None,
+                    )
+                except Exception:
+                    log.exception("env_gate build failed")
+                    env_gate_live = None
                 payload = {
                     "ok": True,
                     "error": None,
@@ -782,6 +794,17 @@ class RefreshMixin:
                     "market_regime": market_regime_live
                     if isinstance(market_regime_live, dict)
                     else self._build_market_regime(trade_date_dash),
+                    "env_gate": (
+                        env_gate_live
+                        if isinstance(env_gate_live, dict)
+                        else self._build_env_gate(
+                            trade_date_dash,
+                            metrics=metrics if isinstance(metrics, dict) else None,
+                            regime=market_regime_live
+                            if isinstance(market_regime_live, dict)
+                            else None,
+                        )
+                    ),
                     "fund_flow": fund_flow,
                     "hot_boards": hot_cards,
                     "pin_boards": pin_cards,

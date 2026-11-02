@@ -174,7 +174,15 @@ ENTRIES: dict[str, dict[str, str]] = {
         "买卡首次落盘冻结 payload.market_regime；影子账本自检覆盖率（≥REGIME_SHADOW_SINCE）。\n"
         "进场影子按 side 分组并报 Δ 尺上−尺下、Δ 尺下日线降−亮过灯。\n"
         "尺下存活压力：abs_win（三日%>0）与 xs_win（超额>0）并排；只旁注，不改 ready。\n"
-        "门槛见 TODO；约 10/28 后才允许软排序叠 regime，永不硬切 ready。",
+        "门槛见 TODO；约 10/28 后才允许软排序叠 regime，永不硬切 ready。另见「环境闸」。",
+    },
+    "环境闸": {
+        "mean": "把大盘好坏变成买闸软倍率：坏环境更严、好环境略松，并区分 ETF/个股。默认只记账，不关亮灯。",
+        "algo": "build_env_gate：尺上下 + 波动档 + 道氏/均线/MACD·RSI/ATR/ADX/BOLL/量能 + 缺口细分与精简K线软标签 → score → hostile|neutral|friendly。\n"
+        "env_mult_table：friendly≈0.90、hostile≈1.10；ETF 振幅×ENV_ETF_SCALE 向 1 收缩。\n"
+        "买卡冻结 payload.env_gate（分种 mult）；shadows/agent-pack 看覆盖与 lit（亮灯率×env×kind）。\n"
+        "满 ≥ENV_GATE_LIT_MIN_DAYS 且 friendly 亮灯明显高于 hostile 才建议开 live；env_gate_live_keys 默认仅 minute。\n"
+        "假杀/真杀按 ETF|股分桶进 buy_gate_bias.v2。仍禁止「仅尺下→ready=false」；不做缠论/谐波/全套 K 线进闸。",
     },
     "软排序": {
         "mean": "作战台买卡在同一就绪档内按「日线降/将飞早窗优先、龙头/日线升靠后」重排；不改是否亮灯。",

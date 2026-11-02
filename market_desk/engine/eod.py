@@ -532,6 +532,35 @@ class EodMixin:
 
         return classify_bench_regime(self._bench_bars, asof=trade_date)
 
+    def _build_env_gate(
+        self,
+        trade_date: str | None = None,
+        *,
+        metrics: dict[str, Any] | None = None,
+        regime: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build multi-factor env_gate snapshot (shadow; optional soft live)."""
+        from market_desk.env_gate import build_env_gate, cache_env_gate
+        from market_desk.settings import setting
+
+        mr = regime if isinstance(regime, dict) else self._build_market_regime(trade_date)
+        env = build_env_gate(
+            regime=mr,
+            metrics=metrics,
+            closes=self._bench_bars,
+            bars=self._bench_bars,
+            asof=trade_date,
+        )
+        try:
+            live = bool(setting("env_gate_live", False))
+        except Exception:
+            live = False
+        env["live"] = live
+        if live:
+            env["note"] = str(env.get("note") or "").replace("默认不改 ready", "live 软乘闸阈值")
+        cache_env_gate(env)
+        return env
+
     def _build_elliott(self, indices: list[dict[str, Any]] | None) -> dict[str, Any]:
         """Attach multi-scenario Elliott readout for 上证指数."""
         last = None

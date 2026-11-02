@@ -342,9 +342,13 @@ def cached_sell_bias_bundle() -> dict[str, Any]:
         except Exception:
             _REVIEW_BIAS_CACHE["buy_gate"] = {
                 "ok": False,
+                "schema": "buy_gate_bias.v2",
                 "mult": 1.0,
                 "loosen": False,
                 "gates": {},
+                "all": {"ok": False, "mult": 1.0, "loosen": False, "gates": {}},
+                "etf": {"ok": False, "mult": 1.0, "loosen": False, "gates": {}},
+                "stock": {"ok": False, "mult": 1.0, "loosen": False, "gates": {}},
                 "note": "买侧闸门闭环暂不可用",
             }
     return dict(_REVIEW_BIAS_CACHE["sell"] or {})
@@ -353,14 +357,30 @@ def cached_sell_bias_bundle() -> dict[str, Any]:
 def cached_buy_gate_bias() -> dict[str, Any]:
     """Day-scoped buy-gate loosen multipliers from false-kill stats."""
     cached_sell_bias_bundle()  # ensure day cache warm
-    return dict(_REVIEW_BIAS_CACHE.get("buy_gate") or {"ok": False, "mult": 1.0, "loosen": False, "gates": {}})
+    return dict(
+        _REVIEW_BIAS_CACHE.get("buy_gate")
+        or {
+            "ok": False,
+            "schema": "buy_gate_bias.v2",
+            "mult": 1.0,
+            "loosen": False,
+            "gates": {},
+            "all": {"ok": False, "mult": 1.0, "loosen": False, "gates": {}},
+            "etf": {"ok": False, "mult": 1.0, "loosen": False, "gates": {}},
+            "stock": {"ok": False, "mult": 1.0, "loosen": False, "gates": {}},
+        }
+    )
 
 
-def build_buy_gate_bias() -> dict[str, Any]:
-    """Tune tip / minute / thin-confirm thresholds from review kill stats.
+def build_buy_gate_bias_for_kind(
+    rows: list[dict[str, Any]] | None = None,
+    *,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    """Tune tip / minute / thin thresholds from kill stats for one kind slice.
 
-    False-kills loosen (mult < 1); true-kills tighten (mult > 1). Returns
-    per-gate multipliers and a global mult for shared knobs.
+    ``kind`` = etf | stock filters the sample; None uses the full window.
+    False-kills loosen (mult < 1); true-kills tighten (mult > 1).
     """
     from market_desk.config import (
         BUY_GATE_FALSE_KILL_MIN,
@@ -371,12 +391,14 @@ def build_buy_gate_bias() -> dict[str, Any]:
     )
     from market_desk.db import load_signals
 
-    kills = build_gate_kill_stats(load_signals(limit=240))
+    src = rows if rows is not None else load_signals(limit=240)
+    kills = build_gate_kill_stats(src, kind=kind)
     gates: dict[str, dict[str, Any]] = {}
     loosen_any = False
     tighten_any = False
     mult = 1.0
     note_parts: list[str] = []
+    kind_tag = {"etf": "ETF", "stock": "个股"}.get(str(kind or "").lower(), "合计")
     target = {
         "分时": "minute",
         "离日高": "off_high",
@@ -400,10 +422,11 @@ def build_buy_gate_bias() -> dict[str, Any]:
                 "true_kill_n": tk,
                 "kill_n": kn,
                 "mode": "loosen",
+                "kind": kind or "all",
             }
             loosen_any = True
             mult = min(mult, g_mult)
-            note_parts.append(f"{gate}假杀{fk}/{kn}→×{g_mult}")
+            note_parts.append(f"{kind_tag}{gate}假杀{fk}/{kn}→×{g_mult}")
         elif tk >= int(BUY_GATE_TRUE_KILL_MIN) and kn >= int(BUY_GATE_KILL_MIN) and fk <= max(1, tk // 3):
             g_mult = float(BUY_GATE_TIGHTEN_MULT)
             gates[key] = {
@@ -413,15 +436,116 @@ def build_buy_gate_bias() -> dict[str, Any]:
                 "true_kill_n": tk,
                 "kill_n": kn,
                 "mode": "tighten",
+                "kind": kind or "all",
             }
             tighten_any = True
             mult = max(mult, g_mult)
-            note_parts.append(f"{gate}真杀{tk}/{kn}→×{g_mult}")
+            note_parts.append(f"{kind_tag}{gate}真杀{tk}/{kn}→×{g_mult}")
     return {
         "ok": True,
+        "kind": kind or "all",
         "loosen": loosen_any,
         "tighten": tighten_any,
         "mult": mult,
         "gates": gates,
-        "note": "；".join(note_parts) if note_parts else "买侧闸门暂不调参",
+        "note": "；".join(note_parts) if note_parts else f"买侧闸门暂不调参（{kind_tag}）",
+    }
+
+
+def resolve_buy_kind_bias(
+    bundle: dict[str, Any] | None,
+    *,
+    kind: str = "stock",
+) -> dict[str, Any]:
+    """Pick etf/stock buy-gate bias with per-gate conflict damping vs all-sample."""
+    box = bundle or {}
+    # Flat v1 cache (no all/etf/stock) → treat whole dict as the row.
+    if "all" not in box and "gates" in box:
+        return dict(box)
+    k = "etf" if str(kind or "").lower() == "etf" else "stock"
+    kind_row = dict(box.get(k) or {})
+    overall = dict(box.get("all") or {})
+    if kind_row.get("ok"):
+        gates = dict(kind_row.get("gates") or {})
+        dropped = 0
+        if overall.get("ok"):
+            og = overall.get("gates") or {}
+            kept: dict[str, dict[str, Any]] = {}
+            for key, g in gates.items():
+                o = og.get(key) if isinstance(og.get(key), dict) else {}
+                mode = str(g.get("mode") or "")
+                omode = str(o.get("mode") or "")
+                if mode == "loosen" and omode == "tighten":
+                    dropped += 1
+                    continue
+                if mode == "tighten" and omode == "loosen":
+                    dropped += 1
+                    continue
+                kept[key] = g
+            gates = kept
+        loosen = any(g.get("mode") == "loosen" for g in gates.values())
+        tighten = any(g.get("mode") == "tighten" for g in gates.values())
+        mult = 1.0
+        for g in gates.values():
+            m = g.get("mult")
+            if m is None:
+                continue
+            if g.get("mode") == "loosen":
+                mult = min(mult, float(m))
+            elif g.get("mode") == "tighten":
+                mult = max(mult, float(m))
+        note = str(kind_row.get("note") or "")
+        if dropped:
+            tag = f"·{dropped}闸与合计冲突取中"
+            if tag not in note:
+                note = note + tag if note else tag.lstrip("·")
+        return {
+            **kind_row,
+            "gates": gates,
+            "loosen": loosen,
+            "tighten": tighten,
+            "mult": mult,
+            "note": note,
+        }
+    if overall.get("ok"):
+        out = dict(overall)
+        note = str(out.get("note") or "")
+        tag = "·分品种不足用合计"
+        if tag not in note:
+            out["note"] = note + tag if note else "分品种不足用合计"
+        return out
+    return kind_row or overall or {"ok": False, "mult": 1.0, "loosen": False, "gates": {}}
+
+
+def build_buy_gate_bias(
+    rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return all / etf / stock buy-gate biases (mirrors sell kind bias bundle).
+
+    Top-level ``gates`` / ``mult`` stay the all-sample slice for backward
+    compatibility with adapt tune / minute confirm.
+    """
+    from market_desk.db import load_signals
+
+    try:
+        src = rows if rows is not None else load_signals(limit=240)
+    except Exception:
+        src = []
+    overall = build_buy_gate_bias_for_kind(src, kind=None)
+    etf = build_buy_gate_bias_for_kind(src, kind="etf")
+    stock = build_buy_gate_bias_for_kind(src, kind="stock")
+    note = " · ".join(
+        n for n in (etf.get("note"), stock.get("note"), overall.get("note")) if n
+    )
+    return {
+        "ok": True,
+        "schema": "buy_gate_bias.v2",
+        "all": overall,
+        "etf": etf,
+        "stock": stock,
+        "loosen": bool(overall.get("loosen")),
+        "tighten": bool(overall.get("tighten")),
+        "mult": float(overall.get("mult") or 1.0),
+        "gates": dict(overall.get("gates") or {}),
+        "note": note or "买侧闸门暂不调参",
     }

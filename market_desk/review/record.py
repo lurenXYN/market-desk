@@ -123,6 +123,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         market_regime = freeze_market_regime(snapshot)
     except Exception:
         market_regime = None
+    try:
+        from market_desk.env_gate import freeze_env_gate as _freeze_env_gate
+    except Exception:
+        _freeze_env_gate = None  # type: ignore[assignment]
     deep_v_day_row = None
     prev_deep = False
     try:
@@ -277,6 +281,13 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "cf_now": trace_now(item, desk_source=desk_source, arm_block=arm_block),
                         "day_book": day_book,
                         **({"market_regime": market_regime} if market_regime else {}),
+                        **(
+                            (lambda eg: {"env_gate": eg} if eg else {})(
+                                _freeze_env_gate(snapshot, kind=str(kind))
+                                if _freeze_env_gate
+                                else None
+                            )
+                        ),
                         **_slip_fields(item),
                         **deep_v_fields(
                             ready=bool(item.get("ready")),
