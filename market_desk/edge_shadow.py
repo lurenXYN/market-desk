@@ -500,8 +500,9 @@ def build_edge_shadow(
     keep = set(oos_dates)
     oos = [r for r in samples if _day(r) in keep]
     disc = [r for r in samples if _day(r) < start]
-    # Prefer caller-provided closes; cache-only fallback (no HTTP in unit tests).
-    closes = list(bench_closes) if bench_closes is not None else load_bench_closes(allow_http=False)
+    # Prefer caller-provided closes. Production falls back to cache then HTTP so
+    # regime_survival / dual legs can compute; unit tests pass closes explicitly.
+    closes = list(bench_closes) if bench_closes is not None else load_bench_closes(allow_http=True)
     if oos:
         note = f"样本外：{start} 起 {len(oos_dates)} 日 {len(oos)} 张已打分买卡"
     else:

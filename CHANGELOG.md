@@ -14,6 +14,20 @@
 
 ---
 
+## [v1.10.31] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- 11/02 VPS agent-pack：`regime_survival` 报「无中证1000日线」，而同包 `dual_wins`/`vs_bench` 已能算——edge_shadow 缓存-only 回退过严。
+
+### 【做了什么（What）】
+- **Fixed** `build_edge_shadow`：无传入 closes 时允许 HTTP 回退拉指数（单测仍应显式传入 closes）。
+- **Changed** TODO：写入 2026-11-02 cf=true 自治复盘结论（无一 soft_candidate → 不改规则）。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / 硬闸 / 排序；仅让尺下存活压力旁注在生产可算。
+
+---
+
 ## [v1.10.30] - 2026-10-31
 
 ### 【背景与动机（为什么做 · Why）】
