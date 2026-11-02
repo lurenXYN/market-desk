@@ -56,6 +56,75 @@ jobs:
                 "JUDGE", summary.get("proposals_judge"),
                 "WATCH", summary.get("proposals_watch"),
             )
+            # Today buy-card pulse (post env_gate / gate_replay deploy).
+            try:
+                from datetime import datetime
+                from zoneinfo import ZoneInfo
+                from market_desk.db import load_signals_for_date
+                from market_desk.review.signals import is_buy_signal
+                from market_desk.settings import setting
+                day = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+                rows = [
+                    r for r in load_signals_for_date(day)
+                    if is_buy_signal(r.get("signal_type")) and not int(r.get("skipped") or 0)
+                ]
+                ready = [r for r in rows if int(r.get("ready") or 0)]
+                lit = [
+                    r for r in rows
+                    if int(r.get("ready") or 0)
+                    or (
+                        isinstance(r.get("payload"), dict)
+                        and r["payload"].get("ever_ready")
+                    )
+                ]
+                print(
+                    "TODAY", day,
+                    "buys", len(rows),
+                    "ready_now", len(ready),
+                    "ever_lit", len(lit),
+                    "env_live", bool(setting("env_gate_live", False)),
+                    "live_keys", setting("env_gate_live_keys", "minute"),
+                )
+                for r in sorted(ready, key=lambda x: str(x.get("code") or ""))[:20]:
+                    p = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+                    print(
+                        "READY",
+                        r.get("kind"),
+                        r.get("code"),
+                        (r.get("name") or "")[:12],
+                        "env", (p.get("env_gate") or {}).get("bucket"),
+                    )
+                for r in sorted(
+                    [x for x in rows if not int(x.get("ready") or 0)],
+                    key=lambda x: str(x.get("code") or ""),
+                )[:12]:
+                    p = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+                    fails = list(p.get("confirm_fail") or p.get("final_fail") or [])[:2]
+                    print(
+                        "WAIT",
+                        r.get("kind"),
+                        r.get("code"),
+                        (r.get("name") or "")[:12],
+                        "fails", fails,
+                        "ever", bool(p.get("ever_ready")),
+                    )
+                eg = out.get("env_lit") or (out.get("env_gate") or {}).get("lit") or {}
+                print(
+                    "ENV_LIT",
+                    "recommend", eg.get("live_recommend"),
+                    "day_n", eg.get("day_n"),
+                    "note", (eg.get("note") or "")[:100],
+                )
+                gr = out.get("gate_replay") or {}
+                for name, sc in (gr.get("scenarios") or {}).items():
+                    print(
+                        "REPLAY", name,
+                        "flip_pass", sc.get("flip_to_pass"),
+                        "flip_block", sc.get("flip_to_block"),
+                        "mean_abs", sc.get("flip_to_pass_mean_abs"),
+                    )
+            except Exception as exc:
+                print("TODAY_ERR", type(exc).__name__, str(exc)[:160])
             for p in out.get("proposals") or []:
                 print(
                     f"PROP {p.get('id')}\taction={p.get('action')}\t"
