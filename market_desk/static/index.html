@@ -129,6 +129,16 @@
         <label>空闲秒<input id="setIdle" type="number" min="30" max="600" /></label>
         <label>主线迟滞分<input id="setSticky" type="number" min="0" max="40" step="0.5" /></label>
         <label>切换去抖秒<input id="setSwitch" type="number" min="30" max="900" /></label>
+        <label>主线池
+          <select id="setPoolMode" title="all 会改 live sticky，不只是影子对照；默认 industry_first">
+            <option value="industry_first">行业优先（默认）</option>
+            <option value="all">行业+概念（改 live sticky）</option>
+          </select>
+        </label>
+        <label class="settings-check" title="关掉后支线只观察、不亮灯、不占仓">
+          <input id="setSideBuy" type="checkbox" /> 支线可买
+        </label>
+        <label>支线仓位倍数<input id="setSideMult" type="number" min="0.2" max="1" step="0.1" title="相对主线仓位，默认 0.6" /></label>
         <label>通知冷却秒<input id="setToastCd" type="number" min="30" max="900" title="决策类冷却；止损60s/可买带600s/不追300s 固定" /></label>
         <label>开盘静音分<input id="setOpenMute" type="number" min="0" max="30" step="1" title="9:30后静音分钟数，0=关闭；默认5" /></label>
         <label>卖出开盘缓冲分 <button type="button" class="q" data-term="开盘卖出缓冲">?</button>
@@ -360,10 +370,10 @@
             <div class="rec-grid" id="dragonItems"></div>
           </div>
           <div class="sidebox" id="sidebox" hidden>
-            <div class="k">观察支线<button type="button" class="q" data-term="观察支线">?</button>
+            <div class="k">支线<button type="button" class="q" data-term="支线可买">?</button>
               <span class="meta" id="sideGap"></span>
             </div>
-            <div class="buyline" id="sideline">暂无观察支线</div>
+            <div class="buyline" id="sideline">暂无支线</div>
             <div class="buymeta" id="sidemeta"></div>
             <div class="rec-grid" id="sideItems"></div>
           </div>
@@ -582,7 +592,7 @@
       </div>
       <section class="boards" id="ice"></section>
       <div class="sec-title meta">
-        <span>实时热点板块 · 东财行业+概念</span>
+        <span>实时热点板块 · 东财行业+概念 · 最多 16 张</span>
       </div>
       <section class="boards" id="boards"></section>
     </section>

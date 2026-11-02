@@ -142,7 +142,7 @@ def _closed_series_for_key(
 def build_mainline_lifecycle(
     hot: list[dict[str, Any]] | None,
     pins: list[dict[str, Any]] | None = None,
-    limit_each: int = 4,
+    limit_each: int | None = None,
     *,
     hist_map: dict[str, list[dict[str, Any]]] | None = None,
     frozen: dict[str, str] | None = None,
@@ -167,6 +167,9 @@ def build_mainline_lifecycle(
 
     Thresholds soften when recent review hit-rate is weak.
     """
+    from market_desk.config import LIFECYCLE_COL_LIMIT
+
+    cap = max(1, int(limit_each if limit_each is not None else LIFECYCLE_COL_LIMIT))
     bias = _review_lifecycle_bias()
     live_rows = [s for s in list(hot or []) + list(pins or []) if isinstance(s, dict)]
     live_index = _index_boards_by_keys(live_rows)
@@ -286,7 +289,7 @@ def build_mainline_lifecycle(
         }
         for c in live_unique
         if c.get("lifecycle_no_hist")
-    ][:limit_each]
+    ][:cap]
 
     starting = [x for x in pool if x["stage"] == "starting"]
     ongoing = [x for x in pool if x["stage"] == "ongoing"]
@@ -312,11 +315,11 @@ def build_mainline_lifecycle(
         note += f"；复盘命中约 {bias.get('hit_rate')}%，沿用标准阈值"
 
     return {
-        "starting": starting[:limit_each],
-        "ongoing": ongoing[:limit_each],
-        "peak": peak[:limit_each],
-        "ending": ending[:limit_each],
-        "fresh": fresh[:limit_each],
+        "starting": starting[:cap],
+        "ongoing": ongoing[:cap],
+        "peak": peak[:cap],
+        "ending": ending[:cap],
+        "fresh": fresh[:cap],
         "no_hist": no_hist,
         "note": note,
         "mode": mode,

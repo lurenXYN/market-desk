@@ -81,6 +81,11 @@ from market_desk.verdict.branches import (  # noqa: F401
     _pick_link_fallback_board,
     _build_link_branch,
     _recommend_codes,
+    side_buy_enabled,
+    side_observe_only,
+    finalize_side_recommend,
+    dedupe_side_against_main,
+    cap_side_to_daily_budget,
 )
 from market_desk.verdict.tags import (  # noqa: F401
     _position_exempt_yday_weak,

@@ -7,6 +7,11 @@ Maps to ETF vs stock gate multipliers for ``minute`` / ``off_high`` / ``thin``.
 
 Does **not** turn regime alone into ready=false. Live application is off until
 ``env_gate_live`` is enabled after shadow evidence.
+
+``off_high`` is computed in the env multiplier table but stays out of
+``ENV_GATE_LIVE_KEYS``: loosening the day-high distance in a friendly tape
+is the dangerous direction (climax tips). Adapt / fake-kill bias still
+tunes off_high always-on; env overlay waits for lit evidence.
 """
 
 from __future__ import annotations

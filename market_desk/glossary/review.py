@@ -379,9 +379,12 @@ ENTRIES: dict[str, dict[str, str]] = {
         "来自 theme_day_outcome 累计；与题材信誉 auto_adj 同源。",
     },
     "离日高": {
-        "mean": "现价离当日最高价要够远，才算回踩到位；进度灯按距离独立判远/近，不跟「可买」绑死。",
+        "mean": "现价离当日最高价要够远，才算回踩到位；进度灯按距离独立判远/近，不跟「可买」绑死。主线与支线同一把尺。",
         "algo": "dist=(high−last)/high×100。ETF 需≥ETF_OFF_HIGH_MIN（≈0.40%），股≥STOCK_OFF_HIGH_MIN（≈0.75%），\n"
-        "可乘 adapt off_high 闸门乘数。buy_progress.off_high.ok=距离达标；未达标 detail 写「仅x%（需≥y%）」。",
+        "再乘 resolve_gate_mult(\"off_high\", kind=)（夹 0.75–1.25）。假杀学习 / 情景自适应始终可调；\n"
+        "环境闸表里有 hostile×1.10 / friendly×0.90，但 live keys 默认不含 off_high——友好市放松离日高等于放行追尖。\n"
+        "env_gate_live 仍关、env_lit 未满 10 日之前不把 off_high 加进 live keys。\n"
+        "buy_progress.off_high.ok=距离达标；未达标 detail 写「仅x%（需≥y%）」。",
     },
     "股东户数": {
         "mean": "上市公司登记股东账户数。户数下降常被看作筹码更集中，上升则更分散；不是实时散户人数。",

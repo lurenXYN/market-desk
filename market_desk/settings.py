@@ -71,6 +71,10 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "switch_min_seconds",
         "min_stock_mv_yi",
         "side_mainline_gap",
+        "side_buy_enabled",
+        "side_size_mult",
+        "mainline_pool_mode",
+        "concept_join_zt",
         "auto_backup",
         "backup_keep",
     }
@@ -161,6 +165,13 @@ DEFAULTS: dict[str, Any] = {
     "min_stock_mv_yi": float(cfg.MIN_STOCK_MV_YI),
     # Observation side branch: max main−side score gap to surface (0 = off).
     "side_mainline_gap": float(cfg.SIDE_MAINLINE_GAP),
+    # A2: side-branch cards may ready (× side_size_mult). False = observe only.
+    "side_buy_enabled": bool(cfg.SIDE_BUY_ENABLED),
+    "side_size_mult": float(cfg.SIDE_SIZE_MULT),
+    # Live pool: industry_first (default) | all (industry+concept, shadow until flipped).
+    "mainline_pool_mode": str(cfg.MAINLINE_POOL_MODE),
+    # Concepts join industry_first when the strongest industry has fewer seals.
+    "concept_join_zt": int(cfg.CONCEPT_JOIN_ZT),
     # Mute buy pricing / buy toasts for N minutes after 09:30; 0 = off.
     "open_mute_minutes": int(cfg.OPEN_MUTE_MINUTES),
     # Mute buy/decision toasts for N minutes before 15:00; 0 = off. Risk kept.
@@ -329,6 +340,11 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["full_position_cny"] = max(1000.0, min(5_000_000.0, float(out.get("full_position_cny") or 10000.0)))
     out["min_stock_mv_yi"] = max(0.0, min(500.0, float(out["min_stock_mv_yi"])))
     out["side_mainline_gap"] = max(0.0, min(40.0, float(out.get("side_mainline_gap") or 0.0)))
+    out["side_buy_enabled"] = bool(out.get("side_buy_enabled"))
+    out["side_size_mult"] = max(0.2, min(1.0, float(out.get("side_size_mult") or cfg.SIDE_SIZE_MULT)))
+    pool_mode = str(out.get("mainline_pool_mode") or cfg.MAINLINE_POOL_MODE).strip().lower().replace("-", "_")
+    out["mainline_pool_mode"] = "all" if pool_mode in ("all", "both", "industry_concept") else "industry_first"
+    out["concept_join_zt"] = max(0, min(10, int(out.get("concept_join_zt") or cfg.CONCEPT_JOIN_ZT)))
     out["open_mute_minutes"] = max(0, min(30, int(out["open_mute_minutes"])))
     out["tail_mute_minutes"] = max(0, min(90, int(out.get("tail_mute_minutes") or 0)))
     hit_mode = str(out.get("hit_rate_mode") or "traded").strip().lower()

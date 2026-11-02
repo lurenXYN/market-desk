@@ -124,12 +124,29 @@ def build_agent_pack_sync() -> dict[str, Any]:
         attr = build_sim_attribution()
     except Exception as exc:
         attr = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
+    pool_shadow = None
+    try:
+        from market_desk.engine import engine
+
+        pool_shadow = ((engine.snapshot or {}).get("verdict") or {}).get("pool_shadow")
+    except Exception:
+        pool_shadow = None
 
     buy_rows = [
         r
         for r in load_signals(limit=4000)
         if is_buy_signal(r.get("signal_type")) and not _dragon_hide_from_review(r)
     ]
+    try:
+        from market_desk.db.sim_desk import load_sim_fills
+        from market_desk.sim_desk import sim_channel_split
+
+        sim_channels = sim_channel_split(load_sim_fills(limit=300), buy_rows=buy_rows)
+    except Exception as exc:
+        sim_channels = (attr.get("by_channel") if isinstance(attr, dict) else None) or {
+            "ok": False,
+            "note": f"{type(exc).__name__}: {exc}"[:120],
+        }
     deep_v_shadow = build_deep_v_shadow(buy_rows)
     deep_v_today = load_deep_v_day(day) or {"ok": False, "note": "今日未分类"}
     zt_share = build_zt_share_review(load_zt_board_share(str(ZT_SHARE_SHADOW_SINCE)[:10]))
@@ -259,7 +276,13 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "host": ops.get("host"),
             "pid": ops.get("pid"),
         },
-        "sim": {"gate": gate, "attribution": attr, "vs_bench": vs_bench},
+        "sim": {
+            "gate": gate,
+            "attribution": attr,
+            "vs_bench": vs_bench,
+            "by_channel": sim_channels,
+        },
+        "pool_shadow": pool_shadow,
         "regime_survival": next(
             (
                 (it.get("metrics") or {}).get("survival")

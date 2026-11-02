@@ -71,13 +71,16 @@ function renderDeskBoxes(d, v) {
   if (sideBox) {
     if (side && side.name) {
       sideBox.hidden = false;
+      sideBox.classList.toggle("on", !!sideRec.buy);
       const gap = side.score_gap;
       const lifeMap = { starting: "萌芽", ongoing: "主升", peak: "尖峰观察", ending: "衰退" };
       const sideLife = lifeMap[side.lifecycle] || "";
+      const sideKind = boardKindLabel(side.kind);
       document.getElementById("sideline").textContent =
         sideRec.text || sideRec.title || (`观察 · ${side.name}`);
       document.getElementById("sidemeta").textContent =
         (sideRec.size_note || "仅观察回踩，不当现买")
+        + (sideKind ? ` · ${sideKind}` : "")
         + (side.status ? ` · ${side.status}` : "")
         + (side.pct == null ? "" : ` · ${Number(side.pct) > 0 ? "+" : ""}${Number(side.pct).toFixed(2)}%`)
         + (sideLife ? ` · ${sideLife}` : "");

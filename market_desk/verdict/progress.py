@@ -254,7 +254,10 @@ def build_item_buy_progress(item: dict[str, Any] | None) -> dict[str, Any]:
             try:
                 from market_desk.adapt import resolve_gate_mult
 
-                need *= max(0.75, min(1.25, float(resolve_gate_mult("off_high", 1.0))))
+                need *= max(
+                    0.75,
+                    min(1.25, float(resolve_gate_mult("off_high", 1.0, kind=kind))),
+                )
             except Exception:
                 pass
             if dist + 1e-9 < need:
@@ -714,7 +717,13 @@ def _apply_ready_confirmations(
         changed = True
         item["ready"] = False
         _demote_buy_to_wait(item)
-        item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
+        side_card = str(item.get("desk_source") or "") == "side" or str(
+            item.get("role_label") or ""
+        ).startswith("支线")
+        if side_card:
+            item["role_label"] = "支线回踩"
+        else:
+            item["role_label"] = "ETF 盯回踩" if kind == "etf" else "个股盯回踩"
         item["reason"] = (str(item.get("reason") or "") + "；确认失败：" + "、".join(flags)).strip("；")
         item["confirm_fail"] = flags
     if not changed:
@@ -722,7 +731,13 @@ def _apply_ready_confirmations(
     rec["items"] = items
     if rec.get("buy") and not any(x.get("ready") for x in items):
         rec["buy"] = False
-        rec["title"] = "盯回踩价，先不追"
+        side_rec = any(
+            str(x.get("desk_source") or "") == "side"
+            or str(x.get("role_label") or "").startswith("支线")
+            for x in items
+        )
+        if not side_rec:
+            rec["title"] = "盯回踩价，先不追"
         rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "确认条件未过，先等回踩")
     return rec
 

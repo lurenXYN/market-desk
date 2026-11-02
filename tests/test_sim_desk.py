@@ -53,6 +53,8 @@ def test_size_from_payload_full_half_probe():
     assert size_from_payload({"size_mult": 0.5}, ready=True) == (0.5, "half")
     w, tag = size_from_payload({"probe_ok": True}, ready=False)
     assert w == 0.5 and tag == "probe"
+    w6, tag6 = size_from_payload({"size_mult": 0.6}, ready=True)
+    assert abs(w6 - 0.6) < 1e-6 and tag6 == "side"
 
 
 def test_plan_buy_qty_and_fee_math():

@@ -51,7 +51,9 @@ def build_narrative_clusters(
     """
     from market_desk.config import (
         CONCEPT_JUNK_KEYWORDS,
+        NARR_CLUSTER_MAX,
         NARR_EDGE_JACCARD,
+        NARR_LEADERS_PER,
         NARR_MIN_INDUSTRIES,
         NARR_MIN_SHARED,
         NARR_MIN_ZT,
@@ -118,15 +120,15 @@ def build_narrative_clusters(
         leaders = sorted(
             (zt_by_code[c] for c in codes),
             key=lambda r: (-int(r.get("boards") or 1), _seal_key(r.get("first_seal"))),
-        )[:3]
+        )[: max(1, int(NARR_LEADERS_PER))]
         is_main = bool(mainline) and mainline in members
         out.append(
             {
                 "label": members[0],
-                "concepts": members[:6],
+                "concepts": members[:8],
                 "zt_n": len(codes),
                 "industries": len(inds),
-                "industry_names": inds[:5],
+                "industry_names": inds[:8],
                 "leaders": [str(r.get("name") or r.get("code") or "") for r in leaders],
                 "leader_rows": [
                     {
@@ -147,7 +149,7 @@ def build_narrative_clusters(
             }
         )
     out.sort(key=lambda c: (-c["score"], c["label"]))
-    return out[:5]
+    return out[: max(1, int(NARR_CLUSTER_MAX))]
 
 
 def summarize_leads(rows: list[dict[str, Any]] | None) -> dict[str, Any]:
@@ -203,13 +205,16 @@ def build_narrative_recommend(
     clusters: list[dict[str, Any]] | None,
     *,
     skip_codes: set[str] | None = None,
-    max_items: int = 4,
+    max_items: int | None = None,
 ) -> dict[str, Any] | None:
     """Soft-recommend limit-up leaders from hidden narrative clusters.
 
     Observe cards only (``ready=False``): surfaces names for the desk fold so the
     graph shadow can auto-list candidates without bypassing buy gates.
     """
+    from market_desk.config import NARR_REC_MAX
+
+    cap = max(1, int(max_items if max_items is not None else NARR_REC_MAX))
     skip = {normalize_code(c) for c in (skip_codes or set()) if normalize_code(c)}
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -255,9 +260,9 @@ def build_narrative_recommend(
                     "low": row.get("low"),
                 }
             )
-            if len(items) >= max(1, int(max_items)):
+            if len(items) >= cap:
                 break
-        if len(items) >= max(1, int(max_items)):
+        if len(items) >= cap:
             break
     if not items:
         return None

@@ -101,3 +101,23 @@ def test_no_hist_gray_listed_not_starting(monkeypatch):
     assert out["starting"] == []
     assert out["ongoing"] == []
     assert [r["name"] for r in out["no_hist"]] == ["电子信息"]
+
+
+def test_lifecycle_col_limit_keeps_eight(monkeypatch):
+    _no_bias(monkeypatch)
+    cards = [
+        {
+            "bk": f"BK{i:04d}",
+            "name": f"板{i}",
+            "status": "确认中",
+            "zt_n": 3,
+            "pct": 2.0 + i * 0.1,
+            "hist": [],
+            "tags": [{"k": "点火", "on": True}],
+        }
+        for i in range(10)
+    ]
+    out = lc.build_mainline_lifecycle(cards, [], final=True)
+    assert len(out["starting"]) == 8
+    out4 = lc.build_mainline_lifecycle(cards, [], limit_each=4, final=True)
+    assert len(out4["starting"]) == 4

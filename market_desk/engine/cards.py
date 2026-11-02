@@ -32,7 +32,8 @@ class CardsMixin:
             key=lambda b: (b.get("pct") or 0) * 2 + (b.get("up_count") or 0) * 0.02,
             reverse=True,
         )
-        picked = ranked[:12]
+        n = int(HOT_BOARD_COUNT)
+        picked = ranked[: n + 4]
         if not picked:
             return []
         enriched = await _map_capped(
@@ -45,7 +46,7 @@ class CardsMixin:
             key=lambda b: (b.get("zt_n") or 0) * 4 + (b.get("pct") or 0),
             reverse=True,
         )
-        return enriched[:HOT_BOARD_COUNT]
+        return enriched[:n]
 
     async def _pin_cards(
         self,

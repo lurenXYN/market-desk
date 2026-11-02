@@ -5,12 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from market_desk.config import (
+    CONCEPT_JOIN_ZT,
     MAINLINE_ETF_RULES,
     MAINLINE_FADE_SWITCH_MULT,
     MAINLINE_HOLD_SWITCH_MULT,
     MAINLINE_LEADER_MAINBOARD_BONUS,
     MAINLINE_LEADER_PAIR_BONUS,
     MAINLINE_LEADER_STRUCT_BONUS,
+    MAINLINE_POOL_MODE,
     MAINLINE_THEME_FADE_SKIP,
     MAINLINE_THEME_GROUPS,
     MAINLINE_THEME_SWITCH_MULT,
@@ -22,8 +24,10 @@ from market_desk.config import (
     MAINLINE_ZT_TAIL_UNIT,
     MAINLINE_ZT_UNIT,
     PSEUDO_BOARD_KEYWORDS,
+    SIDE_MEMBER_MIN,
+    SIDE_MEMBER_OVERLAP,
 )
-from market_desk.filters import is_main_board
+from market_desk.filters import is_main_board, normalize_code
 from market_desk.settings import setting
 
 
@@ -189,6 +193,77 @@ def same_theme(a: str | None, b: str | None) -> bool:
     return bool(ka and kb and ka == kb)
 
 
+def board_member_codes(board: dict[str, Any] | None) -> set[str]:
+    """Return normalized constituent codes from ``pool`` / ``members``."""
+    out: set[str] = set()
+    for raw in (board or {}).get("pool") or (board or {}).get("members") or []:
+        code = normalize_code(raw.get("code") if isinstance(raw, dict) else raw)
+        if code:
+            out.add(code)
+    return out
+
+
+def member_overlap(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float | None:
+    """Return Jaccard overlap of board members, or None when either side is thin.
+
+    A side with fewer than ``SIDE_MEMBER_MIN`` names is not evidence; callers
+    should fall back to ``same_theme`` name matching in that case.
+    """
+    left = board_member_codes(a)
+    right = board_member_codes(b)
+    floor = int(SIDE_MEMBER_MIN)
+    if len(left) < floor or len(right) < floor:
+        return None
+    union = left | right
+    if not union:
+        return 0.0
+    return len(left & right) / float(len(union))
+
+
+def overlapping_theme(
+    main: dict[str, Any] | None,
+    other: dict[str, Any] | None,
+    *,
+    threshold: float | None = None,
+) -> bool:
+    """Return True when two boards share a theme name or heavy constituents."""
+    main_name = str((main or {}).get("name") or "")
+    other_name = str((other or {}).get("name") or "")
+    if same_theme(main_name, other_name):
+        return True
+    jac = member_overlap(main, other)
+    if jac is None:
+        return False
+    bar = float(SIDE_MEMBER_OVERLAP if threshold is None else threshold)
+    return jac >= bar
+
+
+def sticky_eligible_board(board: dict[str, Any] | None) -> bool:
+    """Return True when a board may become or challenge sticky mainline.
+
+    Unmapped concepts stay tradable as a side branch but never own sticky.
+    Soft ETF maps do not count as exact.
+    """
+    if not board:
+        return False
+    name = str(board.get("name") or "").strip()
+    if not name or is_pseudo_board(name):
+        return False
+    kind = str(board.get("kind") or "")
+    if kind == "concept" and not etf_spec_for_name(name):
+        return False
+    return True
+
+
+def resolve_pool_mode(mode: str | None = None) -> str:
+    """Return ``industry_first`` or ``all`` for the live / shadow pool."""
+    raw = str(mode or setting("mainline_pool_mode", MAINLINE_POOL_MODE) or MAINLINE_POOL_MODE)
+    key = raw.strip().lower().replace("-", "_")
+    if key in ("all", "both", "industry_concept"):
+        return "all"
+    return "industry_first"
+
+
 def switch_margin_need(
     *,
     margin: float | None = None,
@@ -280,22 +355,39 @@ def is_pseudo_board(name: str | None) -> bool:
     return bool(text) and any(k in text for k in PSEUDO_BOARD_KEYWORDS)
 
 
-def mainline_pool(hot: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def mainline_pool(
+    hot: list[dict[str, Any]] | None,
+    *,
+    mode: str | None = None,
+) -> list[dict[str, Any]]:
     """Return mainline candidates: real themes, industries first.
 
-    Concepts join the pool when the strongest industry is thin (fewer than
-    ``concept_join_zt`` limit-ups) so a 1–2 seal niche industry cannot beat a
-    broad concept theme only because of its board kind.
+    Live default is ``industry_first``: concepts join when the strongest
+    industry is thinner than ``concept_join_zt``. ``all`` puts industry and
+    concept in the same pool (shadow / explicit mode only).
     """
     boards = [b for b in (hot or []) if not is_pseudo_board(b.get("name"))] or list(hot or [])
+    if resolve_pool_mode(mode) == "all":
+        return boards
     industries = [b for b in boards if b.get("kind") == "industry"]
     if not industries:
         return boards
-    join_zt = int(setting("concept_join_zt", 3) or 0)
+    join_zt = int(setting("concept_join_zt", CONCEPT_JOIN_ZT) or 0)
     best_ind = max(int(b.get("zt_n") or 0) for b in industries)
     if join_zt > 0 and best_ind < join_zt:
         return boards
     return industries
+
+
+def sticky_pool(
+    hot: list[dict[str, Any]] | None,
+    *,
+    mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return mainline_pool rows that may own sticky (drop unmapped concepts)."""
+    pool = mainline_pool(hot, mode=mode)
+    eligible = [b for b in pool if sticky_eligible_board(b)]
+    return eligible
 
 
 def _since_age(since: str | None, now_text: str | None) -> float | None:
@@ -320,6 +412,7 @@ def pick_mainline(
     confirm_seconds: float = 0.0,
     now_text: str | None = None,
     state_out: dict[str, Any] | None = None,
+    pool_mode: str | None = None,
 ) -> dict[str, Any] | None:
     """Choose the live mainline from hot industry cards, then concepts.
 
@@ -330,8 +423,11 @@ def pick_mainline(
     With ``confirm_seconds`` > 0, a cross-theme challenger that clears the gap
     must keep clearing it for that long (tracked via ``challenger_prev`` →
     ``state_out["challenger"]``) unless the incumbent is already fading.
+
+    Concepts without an exact ETF map never become or challenge sticky; an
+    unmapped sticky concept yields to the best eligible industry immediately.
     """
-    pool = mainline_pool(hot)
+    pool = sticky_pool(hot, mode=pool_mode)
     if state_out is not None:
         state_out["challenger"] = None
     if not pool:
@@ -342,7 +438,8 @@ def pick_mainline(
         return leader
     incumbent = next((b for b in pool if (b.get("name") or "") == sticky), None)
     if not incumbent:
-        # Sticky left the hot pool: prefer a same-theme successor when present.
+        # Sticky left the eligible pool (including unmapped-concept sticky):
+        # prefer a same-theme successor, else take the leader with no margin wait.
         themed = [b for b in pool if same_theme(sticky, b.get("name"))]
         if themed:
             return max(themed, key=mainline_score)
@@ -390,11 +487,13 @@ def pick_side_mainline(
     main: dict[str, Any] | None,
     *,
     max_gap: float | None = None,
+    pool_mode: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return a competitive runner-up board for observation only.
+    """Return a competitive runner-up board that is a true different theme.
 
     Surfaced when its score stays within ``max_gap`` of the live mainline and it
-    is not already in退潮. Never replaces the primary mainline.
+    is not already in退潮. Name-family matches and constituent Jaccard ≥ 0.3
+    are skipped. Never replaces the primary mainline.
     """
     if not main:
         return None
@@ -408,7 +507,7 @@ def pick_side_mainline(
     )
     if gap_limit <= 0:
         return None
-    pool = mainline_pool(hot)
+    pool = mainline_pool(hot, mode=pool_mode)
     if len(pool) < 2:
         return None
     main_score = mainline_score(main)
@@ -417,8 +516,7 @@ def pick_side_mainline(
         name = str(board.get("name") or "").strip()
         if not name or name == main_name:
             continue
-        # Skip same-theme runner-ups; they are not a real side branch.
-        if same_theme(main_name, name):
+        if overlapping_theme(main, board):
             continue
         if (board.get("status") or "") == "退潮":
             continue
@@ -431,6 +529,50 @@ def pick_side_mainline(
         out["score_gap"] = round(main_score - sc, 1)
         return out
     return None
+
+
+def _compact_pick(board: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Shrink a picked board to shadow / pack fields."""
+    if not board:
+        return None
+    name = str(board.get("name") or "").strip()
+    score = board.get("score")
+    if score is None:
+        score = round(mainline_score(board), 1)
+    return {
+        "name": name or None,
+        "kind": board.get("kind"),
+        "bk": board.get("bk"),
+        "score": score,
+        "score_gap": board.get("score_gap"),
+        "zt_n": board.get("zt_n"),
+        "etf_mapped": bool(name and etf_spec_for_name(name)),
+    }
+
+
+def build_pool_shadow(
+    hot: list[dict[str, Any]] | None,
+    *,
+    live_main: dict[str, Any] | None = None,
+    sticky_name: str | None = None,
+    **pick_kw: Any,
+) -> dict[str, Any]:
+    """Score the ``all`` pool in parallel without touching live sticky / ready.
+
+    ``would_switch`` is True when the all-mode main name differs from live.
+    """
+    pick_kw.pop("state_out", None)
+    pick_kw.pop("pool_mode", None)
+    shadow_main = pick_mainline(hot, sticky_name, pool_mode="all", **pick_kw)
+    shadow_side = pick_side_mainline(hot, shadow_main, pool_mode="all")
+    live_name = str((live_main or {}).get("name") or "").strip()
+    shadow_name = str((shadow_main or {}).get("name") or "").strip()
+    return {
+        "mode": "all",
+        "main": _compact_pick(shadow_main),
+        "side": _compact_pick(shadow_side),
+        "would_switch": bool(shadow_name and shadow_name != live_name),
+    }
 
 
 def match_mainline_etf(
@@ -501,7 +643,7 @@ def explain_mainline(
     now_text: str | None = None,
 ) -> dict[str, Any]:
     """Explain why the live mainline is kept or switched (for the desk strip)."""
-    pool = mainline_pool(hot)
+    pool = sticky_pool(hot)
     chosen = chosen or {}
     name = str(chosen.get("name") or "").strip()
     sticky = (sticky_name or "").strip()

@@ -260,8 +260,10 @@ class RadarMixin:
                     c = normalize_code(it.get("code"))
                     if c:
                         skip.add(c)
+            from market_desk.config import NARR_REC_MAX
+
             narr_rec = build_narrative_recommend(
-                out["narrative"].get("clusters"), skip_codes=skip, max_items=4
+                out["narrative"].get("clusters"), skip_codes=skip, max_items=int(NARR_REC_MAX)
             )
             verdict["narrative_recommend"] = narr_rec
             out["narrative"]["recommend_n"] = len((narr_rec or {}).get("items") or [])

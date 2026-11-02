@@ -36,3 +36,14 @@ def test_build_narrative_recommend_from_hidden_cluster():
     rec2 = build_narrative_recommend(clusters, skip_codes={"300750"}, max_items=4)
     assert len(rec2["items"]) == 1
     assert rec2["items"][0]["code"] == "002594"
+
+
+def test_narrative_recommend_default_shows_eight():
+    leaders = [
+        {"code": f"60000{i}", "name": f"票{i}", "last": 10.0 + i, "pct": 9.9}
+        for i in range(10)
+    ]
+    rec = build_narrative_recommend(
+        [{"label": "隐形簇", "hidden": True, "zt_n": 10, "industries": 3, "leader_rows": leaders}]
+    )
+    assert rec and len(rec["items"]) == 8

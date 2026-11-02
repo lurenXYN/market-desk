@@ -14,6 +14,58 @@
 
 ---
 
+## [v1.10.38] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- 热度板只 8 张、生命周期每列 4 张、图谱雷达只露 2 个隐形簇，今天真正热的板和影子簇经常被裁掉，两块板看起来像两套宇宙。
+
+### 【做了什么（What）】
+- **Changed** 热度板 `HOT_BOARD_COUNT` 8→16（仍按涨停×4+涨幅排，先多 enrich 4 张再截）。
+- **Changed** 生命周期每列 `LIFECYCLE_COL_LIMIT` 4→8；未进热门的补拉上限 `LIFECYCLE_SIDE_MAX` 8→16。
+- **Changed** 共振图谱：簇 5→8、每簇龙头 3→5、影子荐 4→8；雷达条最多 6 个簇（含主线簇，不只隐形）。
+
+### 【影响与验证（Impact & Verification）】
+- 不改选股 / ready / sticky。只加展示量。pytest `test_lifecycle_identity`（每列 8）+ `test_narrative_recommend`（默认 8 张）。desk.db 兼容。
+
+---
+
+## [v1.10.37] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- v1.10.36 支线可买后，离日高/薄确认/流出只扫主线 recommend，支线能贴日高仍亮灯。设置面板也还没有三个开关。离日高要不要跟环境闸一起放松/收紧需要定案，避免友好市放行追尖。
+
+### 【做了什么（What）】
+- **Changed** `reconfirm_recommend_ready`：支线可买时对 `side_recommend` 跑同一套 `_apply_ready_confirmations`（载体=支线板+支线 ETF）；降档保留「支线回踩」，不改顶栏。
+- **Changed** 买进度离日高 `resolve_gate_mult(..., kind=)`；支线 `side_info` 带 `main_yi` 才能判板块流出。
+- **Added** 设置面板：`side_buy_enabled` / `side_size_mult` / `mainline_pool_mode`（切 `all` 有确认框：会改 live sticky）。
+- **Changed** 离日高 **不**进 `ENV_GATE_LIVE_KEYS`：环境表仍算 hostile×1.10 / friendly×0.90，但 live 默认只开分时；假杀学习始终可调离日高。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 env_gate_live、不改硬闸底数。pytest `test_side_buy`（贴日高降档）+ `test_env_gate`（live keys 不含 off_high）。desk.db 兼容。
+
+---
+
+## [v1.10.36] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- 主线只有一条，概念/行业用法混在一起；支线永远只观察。需要多主线可买，但概念无精确 ETF 不能占 sticky，也不能把同一批股票当「不同主题」加到 1.6 倍。
+
+### 【做了什么（What）】
+- **Added** 成分 Jaccard≥0.3（两侧≥5 只）视为同主题，`pick_side_mainline` 跳过；主线/支线同码去重。
+- **Added** 无精确 ETF 的概念不能成为 / 挑战 sticky；已是无映射 sticky 时有合格行业立即换下。
+- **Added** `mainline_pool_mode`（默认 `industry_first`）+ 每次 refresh 的 `pool_shadow`（`all` 会选谁，不改 live sticky/ready）。
+- **Added** `side_buy_enabled`（默认开）+ `side_size_mult` 0.6：支线可亮灯，不推送、不升顶栏；`false` 回到只观察。
+- **Added** 主线+支线名义封顶（`target_total_cost`，先砍支线）。
+- **Changed** `size_from_payload`：0.6 / `buy_side` 按真实权重 tag=`side`，不再当成满仓。
+- **Added** 模拟归因 / 开工闸 / agent-pack 按主线 vs 支线拆报（`gate_ok` 仍看组合累计）。
+- **Added** 卡片/热门板 `行业`/`概念` 标签；词条「支线可买」。
+- **Added** `tests/test_side_buy.py`。
+
+### 【影响与验证（Impact & Verification）】
+- live 主线池仍 industry_first；多出来的是影子、kind 标签、支线可买。不改 env_gate / 生命周期 / 硬闸门槛。pytest `test_side_buy` + 主线/雷达/模拟旧测。
+
+---
+
 ## [v1.10.35] - 2026-11-02
 
 ### 【背景与动机（为什么做 · Why）】

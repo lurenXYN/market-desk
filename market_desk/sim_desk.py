@@ -240,25 +240,48 @@ def assess_sell_fill(
     return {"ok": True, "reason": "ok", "fill_px": float(exit_px)}
 
 
-def size_from_payload(payload: dict[str, Any] | None, *, ready: bool = True) -> tuple[float, str]:
+def size_from_payload(
+    payload: dict[str, Any] | None,
+    *,
+    ready: bool = True,
+    signal_type: str = "",
+) -> tuple[float, str]:
     """Infer open weight and tag from a buy-signal payload.
 
     Full ready → 1.0 ``full``. Early-half / soft half / probe-only → 0.5.
+    Side-branch cards honor the real ``size_mult`` (default 0.6, tag ``side``)
+    instead of snapping 0.6 up to full.
     """
     p = payload if isinstance(payload, dict) else {}
     if isinstance(p.get("early_half"), dict):
         return 0.5, "half"
+    st = str(signal_type or p.get("signal_type") or "")
+    desk = str(p.get("desk_source") or "")
+    is_side = st == "buy_side" or desk == "side"
+    raw_mult = p.get("size_mult")
     try:
-        sm = float(p.get("size_mult") or 1.0)
+        sm = float(raw_mult) if raw_mult is not None else 1.0
     except (TypeError, ValueError):
         sm = 1.0
-    if sm <= 0.55:
-        return 0.5, "half"
+    if is_side and raw_mult is None:
+        from market_desk.config import SIDE_SIZE_MULT
+        from market_desk.settings import setting
+
+        try:
+            sm = float(setting("side_size_mult", SIDE_SIZE_MULT) or SIDE_SIZE_MULT)
+        except (TypeError, ValueError):
+            sm = float(SIDE_SIZE_MULT)
     if p.get("probe_ok") and not ready and not p.get("ever_ready"):
         return 0.5, "probe"
     # Lit via probe path only (ever_probe without ever treating as full).
     if p.get("ever_probe") and not p.get("ever_ready") and not ready:
         return 0.5, "probe"
+    if is_side or abs(sm - 0.6) < 0.021:
+        return max(0.05, min(1.0, sm if sm > 0 else 0.6)), "side"
+    if sm <= 0.55:
+        return 0.5, "half"
+    if abs(sm - 1.0) > 0.02:
+        return max(0.05, min(1.0, sm)), "scaled"
     return 1.0, "full"
 
 
@@ -534,11 +557,82 @@ def start_gate_snapshot() -> dict[str, Any]:
         "recent": recent_closed(8),
         "to_green_cny": to_green_cny,
         "vs_bench": vs_bench,
+        "by_channel": sim_channel_split(load_sim_fills(limit=300)),
         "rule": (
             "初始2万纸面资金；亮过可买且可成交→扣款+手续费开仓；"
             "卖点且可卖出→回款+手续费平仓；权益相对初始>0 且已有平仓才允许券商阶段1–3；"
             "vs_bench 为相对中证1000（不改 gate_ok）"
         ),
+    }
+
+
+def _channel_of_row(row: dict[str, Any] | None) -> str:
+    """Return ``side`` or ``main`` from a fill / lot / signal row."""
+    r = row or {}
+    st = str(r.get("signal_type") or "")
+    tag = str(r.get("size_tag") or "")
+    desk = ""
+    payload = r.get("payload")
+    if isinstance(payload, dict):
+        desk = str(payload.get("desk_source") or "")
+        if not st:
+            st = str(payload.get("signal_type") or "")
+    if st == "buy_side" or tag == "side" or desk == "side":
+        return "side"
+    return "main"
+
+
+def sim_channel_split(
+    fills: list[dict[str, Any]] | None = None,
+    *,
+    buy_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Split paper P&L / ready counts into main vs side (does not change gate_ok)."""
+    sells = [f for f in (fills or []) if str(f.get("side") or "").lower() == "sell"]
+    buckets = {
+        "main": {"n": 0, "pnl_cny": 0.0, "weight_pnl": 0.0, "weight_sum": 0.0},
+        "side": {"n": 0, "pnl_cny": 0.0, "weight_pnl": 0.0, "weight_sum": 0.0},
+    }
+    for f in sells:
+        ch = _channel_of_row(f)
+        w = float(f.get("weight") or f.get("open_weight") or 1.0) or 1.0
+        pnl = float(f.get("pnl_cny") or 0.0)
+        buckets[ch]["n"] += 1
+        buckets[ch]["pnl_cny"] += pnl
+        buckets[ch]["weight_pnl"] += pnl * w
+        buckets[ch]["weight_sum"] += w
+    ready = {
+        "main": {"n": 0, "ever_ready": 0},
+        "side": {"n": 0, "ever_ready": 0},
+    }
+    for row in buy_rows or []:
+        st = str(row.get("signal_type") or "")
+        ch = "side" if st == "buy_side" else ("main" if st == "buy" else "")
+        if not ch:
+            continue
+        ready[ch]["n"] += 1
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if payload.get("ever_ready") or row.get("ready"):
+            ready[ch]["ever_ready"] += 1
+    out = {}
+    for ch in ("main", "side"):
+        b = buckets[ch]
+        wsum = b["weight_sum"]
+        out[ch] = {
+            "closed_n": b["n"],
+            "pnl_cny": round(b["pnl_cny"], 2),
+            "weighted_pnl_cny": round(b["weight_pnl"], 2),
+            "weighted_pnl_pct": (
+                round(b["weight_pnl"] / wsum, 4) if wsum else None
+            ),
+            "signal_n": ready[ch]["n"],
+            "ever_ready": ready[ch]["ever_ready"],
+        }
+    return {
+        "ok": True,
+        "note": "gate_ok 仍看组合累计；本表拆主线/支线贡献",
+        "main": out["main"],
+        "side": out["side"],
     }
 
 
@@ -593,6 +687,10 @@ def build_sim_attribution(*, limit: int = 80) -> dict[str, Any]:
             }
         )
     gate = start_gate_snapshot()
+    try:
+        by_channel = sim_channel_split(fills)
+    except Exception:
+        by_channel = {"ok": False}
     buckets = [
         {
             "id": "fee",
@@ -641,6 +739,7 @@ def build_sim_attribution(*, limit: int = 80) -> dict[str, Any]:
         "gate_label": gate.get("gate_label"),
         "closed_n": gate.get("closed_n"),
         "open_n": gate.get("open_n"),
+        "by_channel": by_channel,
         "cash_path": path[-40:],
         "worst_sells": sorted(
             (
@@ -709,7 +808,9 @@ def open_lots_from_signals(
             continue
         px = float(verdict["fill_px"])
         open_at = str(verdict.get("fill_at") or "")[:19] or None
-        weight, tag = size_from_payload(payload, ready=lit or ready_flag)
+        weight, tag = size_from_payload(
+            payload, ready=lit or ready_flag, signal_type=sig_type
+        )
         if not lit and probe:
             weight, tag = 0.5, "probe"
         qty = plan_buy_qty(px=px, open_weight=weight, cash=cash, equity=equity, fee=FEE)

@@ -48,11 +48,15 @@ function renderDeskRadar(d) {
       `<span class="radar-chip" title="量比 ${l.ratio}× · 拉升 ${l.px_move}%">ETF放量 ${l.name || l.code} ${l.at}</span>`
     );
   }
-  (narr.clusters || []).filter((c) => c.hidden).slice(0, 2).forEach((c) => {
-    const tip = `图谱影子：扩展观察里软荐簇内龙头（不自动亮灯）\n概念：${(c.concepts || []).join("、")}`
+  (narr.clusters || []).slice(0, 6).forEach((c) => {  // NARR_STRIP_MAX
+    const shadow = !!c.hidden;
+    const tip = (shadow
+      ? "图谱影子：扩展观察里软荐簇内龙头（不自动亮灯）"
+      : "图谱主线簇：与当前 sticky 同主题，仅展示")
+      + `\n概念：${(c.concepts || []).join("、")}`
       + `\n行业：${(c.industry_names || []).join("、")}\n龙头：${(c.leaders || []).join("、")}`;
     bits.push(
-      `<span class="radar-chip narr" title="${attr(tip)}">图谱·影子 ${c.label} ${c.zt_n}停/${c.industries}行业`
+      `<span class="radar-chip narr" title="${attr(tip)}">${shadow ? "图谱·影子" : "图谱·主线"} ${c.label} ${c.zt_n}停/${c.industries}行业`
       + `${c.first_seen ? " 首见" + c.first_seen : ""}</span>`
     );
   });

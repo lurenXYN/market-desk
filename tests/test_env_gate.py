@@ -105,6 +105,13 @@ def test_live_keys_minute_only(monkeypatch):
     assert eg.env_gate_mult_for_key("off_high", kind="stock") == 1.0
 
 
+def test_off_high_stays_out_of_default_live_keys():
+    from market_desk.config import ENV_GATE_LIVE_KEYS
+
+    assert "minute" in ENV_GATE_LIVE_KEYS
+    assert "off_high" not in ENV_GATE_LIVE_KEYS
+
+
 def test_features_tags_present():
     closes = [1000.0 * (1.001 ** i) for i in range(80)]
     bars = _ohlc_trend(80, up=True)

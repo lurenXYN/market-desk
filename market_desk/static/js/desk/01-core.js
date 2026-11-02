@@ -314,7 +314,11 @@ const recCard = (it) => {
       ? `<div class="buy-progress"><span class="bp-sum">还差：${(it.confirm_fail || []).slice(0, 3).join(" · ")}</span></div>`
       : "");
   return `<article class="${cardCls}">
-        <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}</span>${entryBadge}${softRankBadge}${regimeBadge}${fmtPct(it.pct)}</div>
+        <div class="role"><span>${it.role_label || (kind === "etf" ? "ETF" : "个股")}${
+          (it.size_mult != null && Number(it.size_mult) < 0.999)
+            ? ` ×${Number(it.size_mult).toFixed(1)}`
+            : ""
+        }</span>${entryBadge}${softRankBadge}${regimeBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${absorbBanner}
         ${trendHtml}
@@ -497,6 +501,15 @@ const termHtml = (name) => {
   })[name] || name;
   if (!GLOSSARY[key]) return name;
   return `${name}<button type="button" class="q" data-term="${key}">?</button>`;
+};
+const boardKindLabel = (kind) => {
+  if (kind === "industry") return "行业";
+  if (kind === "concept") return "概念";
+  return "";
+};
+const boardKindTag = (kind) => {
+  const lab = boardKindLabel(kind);
+  return lab ? `<span class="kind-tag">${lab}</span>` : "";
 };
 function paintToastStrip(rows) {
   const el = document.getElementById("toastStrip");

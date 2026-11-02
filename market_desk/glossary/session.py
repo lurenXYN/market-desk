@@ -75,7 +75,8 @@ ENTRIES: dict[str, dict[str, str]] = {
         "簇内涨停≥NARR_MIN_ZT(4) 且横跨≥2 个行业才算候选；不含当前主线的簇标为「隐形」。\n"
         "每 5 分钟重算，首次出现时间/峰值涨停数记入 narrative_shadow；簇后来成为主线时记下时间，"
         "统计「首见→成主线」的中位提前分钟与命中率。\n"
-        "荐股：build_narrative_recommend 取隐形簇涨停龙头 ≤4 只 → verdict.narrative_recommend；ready=false。",
+        "荐股：build_narrative_recommend 取隐形簇涨停龙头 ≤NARR_REC_MAX（8）只 → verdict.narrative_recommend；ready=false。\n"
+        "雷达条展示最多 NARR_STRIP_MAX（6）个簇（含主线簇）；连通簇最多保留 NARR_CLUSTER_MAX（8）。",
     },
     "主线切换": {
         "mean": "今天主线板块确认换防时记一条时间线，方便回看何时从 A 切到 B。",
@@ -85,6 +86,7 @@ ENTRIES: dict[str, dict[str, str]] = {
         "现任已衰退/退潮或现任是前一交易日留下的主线时不等待。\n"
         "候选池：剔除风格/资金/指数类伪概念（热股、题材股、QFII重仓、破发股等）；"
         "最强行业涨停 < concept_join_zt（默认3）时概念板块也进池。\n"
+        "无精确 ETF 的概念不能成为 / 挑战 sticky。live 池默认 industry_first；all 模式写入 pool_shadow，不改 sticky。\n"
         "落库去抖：短时翻转（含经同主题兄弟板块绕回原主线）撤回噪声；短时 A→B→C 合并为一条 A→C。薄确认（涨停<3）打分打折。\n"
         "换防护栏：sticky 刚换后 SWITCH_SELL_GRACE_SECONDS（默认45分钟）内，旧主题注入卖侧观察/退潮集合；\n"
         "新主题强票（相对强/贴尖/日线升）不因软减误砍，止损与深结构清仓仍可卖；verdict.switch_guard 供面板。",
@@ -104,7 +106,7 @@ ENTRIES: dict[str, dict[str, str]] = {
         "历史只取交易日；enrich 用 ``resolve_board_hist`` 按规范名并回东财同名史（优先 BK）；"
         "仍无历史的新浪板标 lifecycle_no_hist「无史·不判阶段」，不进萌芽列。\n"
         "密封键：BK* 优先，否则 N:规范名；读写时双写候选键（含 SINA:* / 原名），换源不丢昨收列。\n"
-        "今日未进热门的列内板块：交易日 9:25–15:00 每轮单独补拉成分股行情（最多 LIFECYCLE_SIDE_MAX 个，默认 8），"
+        "每列最多 LIFECYCLE_COL_LIMIT（默认 8）张。今日未进热门的列内板块：交易日 9:25–15:00 每轮单独补拉成分股行情（最多 LIFECYCLE_SIDE_MAX 个，默认 16），"
         "卡片标「今日未进热门 · 盘中实时」；板块找不到或成分为空时才退回「数据为上一收盘」。",
     },
     "相似日": {

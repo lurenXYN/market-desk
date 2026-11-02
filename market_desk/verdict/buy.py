@@ -8,6 +8,7 @@ from market_desk.config import ETF_BOUNCE_BUY_MIN
 from market_desk.filters import normalize_code
 from market_desk.lifecycle import classify_lifecycle
 from market_desk.mainline import (
+    build_pool_shadow,
     etf_spec_for_name,
     etf_spec_soft_fallback,
     explain_mainline,
@@ -45,7 +46,13 @@ from market_desk.verdict.gates import (
     build_switch_guard,
     inject_switch_from_theme,
 )
-from market_desk.verdict.branches import _build_link_branch, _build_side_branch
+from market_desk.verdict.branches import (
+    _build_link_branch,
+    _build_side_branch,
+    finalize_side_recommend,
+    side_buy_enabled,
+    side_observe_only,
+)
 from market_desk.verdict.sell_theme import build_sell_themes
 from market_desk.verdict.desk import (
     build_dragon_recommend,
@@ -471,7 +478,8 @@ def build_verdict(
         stock_block=stock_block,
     )
     if side_info:
-        algo_notes.append(f"观察支线={side_info.get('name')}")
+        tag = "支线可买" if side_buy_enabled() else "观察支线"
+        algo_notes.append(f"{tag}={side_info.get('name')}")
 
     link_info, link_recommend = _build_link_branch(
         hot=hot or [],
@@ -488,14 +496,19 @@ def build_verdict(
     )
     # High-sim / fallback side absorbed into link → drop duplicate side cards.
     if (
-        link_info
+        side_observe_only()
+        and link_info
         and side_info
         and (
             link_info.get("from_side")
             or str(link_info.get("name") or "") == str(side_info.get("name") or "")
         )
     ):
-        algo_notes = [n for n in algo_notes if not str(n).startswith("观察支线=")]
+        algo_notes = [
+            n
+            for n in algo_notes
+            if not str(n).startswith("观察支线=") and not str(n).startswith("支线可买=")
+        ]
         algo_notes.append(f"支线并入联动={link_info.get('name')}")
         side_info = None
         side_recommend = None
@@ -541,15 +554,20 @@ def build_verdict(
     if life_stage:
         narrative = narrative.rstrip("。") + f"；生命周期{ {'starting':'萌芽','ongoing':'主升','ending':'衰退'}.get(life_stage, life_stage) }。"
     if side_info and side_info.get("name"):
+        side_clause = (
+            "支线可买（×仓位倍率，不改顶栏）"
+            if side_buy_enabled()
+            else "只盯回踩不当现买"
+        )
         narrative = (
             narrative.rstrip("。")
-            + f"；观察支线「{side_info.get('name')}」"
+            + f"；{'支线' if side_buy_enabled() else '观察支线'}「{side_info.get('name')}」"
             + (
                 f"（分差{side_info.get('score_gap')}）"
                 if side_info.get("score_gap") is not None
                 else ""
             )
-            + "，只盯回踩不当现买。"
+            + f"，{side_clause}。"
         )
     if link_info and link_info.get("name"):
         sim_pct = int(round(float(link_info.get("sim") or 0) * 100))
@@ -655,6 +673,18 @@ def build_verdict(
         "stock_block": stock_block,
         "similar": similar or {},
         "adapt": adapt_bundle,
+        "pool_shadow": build_pool_shadow(
+            hot,
+            live_main=main,
+            sticky_name=sticky,
+            margin=sticky_margin,
+            sticky_held_seconds=sticky_held,
+            challenger_prev=(
+                prev_ml.get("challenger") if isinstance(prev_ml.get("challenger"), dict) else None
+            ),
+            confirm_seconds=confirm_s,
+            now_text=now_text,
+        ),
     }
     block_arm = (
         bool(seg.get("open_mute"))
@@ -665,7 +695,9 @@ def build_verdict(
         out.get("recommend"), block_arm=block_arm
     )
     out["side_recommend"] = mark_pullback_entries(
-        out.get("side_recommend"), observe_only=True, block_arm=block_arm
+        out.get("side_recommend"),
+        observe_only=side_observe_only(),
+        block_arm=block_arm,
     )
     out["link_recommend"] = mark_pullback_entries(
         out.get("link_recommend"), observe_only=True, block_arm=block_arm
@@ -756,6 +788,7 @@ def build_verdict(
     except Exception:
         out["independent_recommend"] = None
     out = reconfirm_recommend_ready(out, metrics)
+    out = finalize_side_recommend(out)
     return align_action_with_ready(out)
 
 
@@ -775,11 +808,31 @@ def _hero_buy_locked(verdict: dict[str, Any]) -> bool:
     return False
 
 
+def _side_vehicle_from_verdict(verdict: dict[str, Any]) -> dict[str, Any]:
+    """Build a carrier-shaped dict for side-branch confirmation gates."""
+    info = verdict.get("side_mainline") or {}
+    rec = verdict.get("side_recommend") or {}
+    etf = next(
+        (x for x in (rec.get("items") or []) if (x.get("kind") or "") == "etf"),
+        None,
+    ) or {}
+    return {
+        "code": info.get("carrier_code") or etf.get("code"),
+        "name": info.get("carrier_name") or etf.get("name"),
+        "pct": etf.get("pct"),
+        "amount": etf.get("amount"),
+    }
+
+
 def reconfirm_recommend_ready(
     verdict: dict[str, Any] | None,
     metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Re-run day-high / flow / thin-confirm gates after near-entry arming."""
+    """Re-run day-high / flow / thin-confirm gates after near-entry arming.
+
+    Side-branch cards use the same gates when buys are enabled, keyed off the
+    side board (thin / flow) and side vehicle (relative strength).
+    """
     v = dict(verdict or {})
     carrier = v.get("carrier") or {}
     main = v.get("mainline") or {}
@@ -789,6 +842,13 @@ def reconfirm_recommend_ready(
         metrics,
         main=main,
     )
+    if not side_observe_only() and v.get("side_recommend"):
+        v["side_recommend"] = _apply_ready_confirmations(
+            v.get("side_recommend") or {},
+            _side_vehicle_from_verdict(v),
+            metrics,
+            main=v.get("side_mainline") or {},
+        )
     return v
 
 

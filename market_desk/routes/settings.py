@@ -39,6 +39,11 @@ class SettingsIn(BaseModel):
     risk_pct_per_trade: float | None = None
     full_position_cny: float | None = None
     min_stock_mv_yi: float | None = None
+    side_mainline_gap: float | None = None
+    side_buy_enabled: bool | None = None
+    side_size_mult: float | None = None
+    mainline_pool_mode: str | None = None
+    concept_join_zt: int | None = None
     # Review hit-rate: traded (executed only) | all (paper signals too).
     hit_rate_mode: str | None = None
     # Review outcome standard: classic | same_day_plan.

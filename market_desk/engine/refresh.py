@@ -70,9 +70,11 @@ from market_desk.verdict import (
     build_verdict,
     build_watch_trial_recommend,
     finalize_recommend_buy_ux,
+    finalize_side_recommend,
     mark_pullback_entries,
     position_summary,
     reconfirm_recommend_ready,
+    side_observe_only,
 )
 
 from market_desk.engine.util import (
@@ -553,7 +555,7 @@ class RefreshMixin:
                 )
                 verdict["side_recommend"] = mark_pullback_entries(
                     verdict.get("side_recommend"),
-                    observe_only=True,
+                    observe_only=side_observe_only(),
                     block_arm=block_arm,
                 )
                 verdict["link_recommend"] = mark_pullback_entries(
@@ -583,7 +585,7 @@ class RefreshMixin:
                 )
                 verdict["side_recommend"] = mark_pullback_entries(
                     verdict.get("side_recommend"),
-                    observe_only=True,
+                    observe_only=side_observe_only(),
                     block_arm=block_arm,
                 )
                 verdict["link_recommend"] = mark_pullback_entries(
@@ -617,6 +619,7 @@ class RefreshMixin:
                     )
                 except Exception:
                     log.exception("crowding gate failed")
+                verdict = finalize_side_recommend(verdict)
                 aligned = align_action_with_ready(verdict)
                 verdict.clear()
                 verdict.update(aligned)

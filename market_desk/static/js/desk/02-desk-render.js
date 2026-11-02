@@ -144,7 +144,10 @@ function renderDeskHead(d, v) {
   const trioMain = document.getElementById("trioMain");
   const trioStage = document.getElementById("trioStage");
   if (trioPhase) trioPhase.textContent = (phase && phase !== "—") ? phase : "相位未明";
-  if (trioMain) trioMain.textContent = ml || "主线未明";
+  if (trioMain) {
+    const kLab = boardKindLabel((v.mainline || {}).kind);
+    trioMain.textContent = (ml || "主线未明") + (kLab ? ` · ${kLab}` : "");
+  }
   if (trioStage) {
     trioStage.textContent = lifeLabel || "阶段未明";
     trioStage.title = lifeHint
@@ -161,6 +164,7 @@ function renderDeskHead(d, v) {
   const noExactEtf = !!(v.mainline && v.mainline.etf_mapped === false && !softEtf);
   document.getElementById("headline").innerHTML =
     `${termHtml("实时主线")} · ${ml}`
+    + boardKindTag((v.mainline || {}).kind)
     + (softEtf
       ? `<span class="soft-etf-badge">近似ETF</span>`
       : (noExactEtf ? `<span class="no-etf-badge">无ETF映射</span>` : ""));

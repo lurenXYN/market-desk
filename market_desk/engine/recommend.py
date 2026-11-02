@@ -126,15 +126,18 @@ class RecommendMixin:
             rec, closes_by_code, fetch_ok_by_code
         )
         if side_rec.get("items"):
+            from market_desk.verdict.branches import side_observe_only
+
             verdict["side_recommend"] = apply_stock_daily_trends(
                 side_rec, closes_by_code, fetch_ok_by_code
             )
-            # Side branch stays observation-only even if trend looks up.
-            for item in (verdict["side_recommend"].get("items") or []):
-                item["ready"] = False
-                if item.get("wait_price") is not None:
-                    item["buy_price"] = item.get("wait_price")
-            verdict["side_recommend"]["buy"] = False
+            if side_observe_only():
+                # Side branch stays observation-only even if trend looks up.
+                for item in (verdict["side_recommend"].get("items") or []):
+                    item["ready"] = False
+                    if item.get("wait_price") is not None:
+                        item["buy_price"] = item.get("wait_price")
+                verdict["side_recommend"]["buy"] = False
         if link_rec.get("items"):
             verdict["link_recommend"] = apply_stock_daily_trends(
                 link_rec, closes_by_code, fetch_ok_by_code

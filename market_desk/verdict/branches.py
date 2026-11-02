@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from market_desk.config import SIDE_BUY_ENABLED, SIDE_SIZE_MULT
 from market_desk.filters import normalize_code
 from market_desk.lifecycle import classify_lifecycle
 from market_desk.mainline import (
@@ -19,8 +20,27 @@ from market_desk.verdict.common import (
     _demote_buy_to_wait,
     _join_hint,
     _pool_codes_from_board,
+    _scale_item_qty,
 )
-from market_desk.verdict.scoring import _build_recommend, _stock_candidates
+from market_desk.verdict.scoring import _attach_risk_sizing, _build_recommend, _stock_candidates
+
+
+def side_buy_enabled() -> bool:
+    """Return True when the side branch may arm ready buys."""
+    return bool(setting("side_buy_enabled", SIDE_BUY_ENABLED))
+
+
+def side_observe_only() -> bool:
+    """Return True when side cards must stay watch-only (legacy A0)."""
+    return not side_buy_enabled()
+
+
+def side_size_mult() -> float:
+    """Return the extra size damp applied to side-branch cards."""
+    try:
+        return max(0.2, min(1.0, float(setting("side_size_mult", SIDE_SIZE_MULT) or SIDE_SIZE_MULT)))
+    except (TypeError, ValueError):
+        return float(SIDE_SIZE_MULT)
 
 
 def _build_side_branch(
@@ -33,7 +53,7 @@ def _build_side_branch(
     bans: list[str],
     stock_block: bool,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Build an observation-only side branch; never marks ready buys."""
+    """Build the side-branch recommend; ready only when ``side_buy_enabled``."""
     side = pick_side_mainline(hot, main)
     if not side:
         return None, None
@@ -69,7 +89,7 @@ def _build_side_branch(
         bounce = (float(price) / float(low) - 1.0) * 100.0
     allow_stocks = not stock_block and not _blocks_chi_star_stocks(side_name)
     stocks = _stock_candidates(side, zt, zb, boards=hot) if allow_stocks else []
-    # Always observation path: wait prices only, never ready.
+    buy_on = side_buy_enabled()
     rec = _build_recommend("观察回踩", side, vehicle, bounce, stocks, bans)
     if setting("side_require_member", True):
         members = {
@@ -82,17 +102,36 @@ def _build_side_branch(
             for it in rec.get("items") or []
             if (it.get("kind") or "stock") == "etf" or normalize_code(it.get("code")) in members
         ]
-    for item in rec.get("items") or []:
-        item["ready"] = False
-        _demote_buy_to_wait(item)
-        kind = item.get("kind") or "stock"
-        item["role_label"] = "支线ETF盯回踩" if kind == "etf" else "支线个股盯回踩"
-    rec["buy"] = False
-    rec["title"] = f"观察支线 · {side_name}"
-    rec["size_note"] = _join_hint(
-        "仅观察回踩，不当现买主推；买卖仍跟实时主线",
-        f"分差 {side.get('score_gap')}" if side.get("score_gap") is not None else "",
-    )
+    if buy_on:
+        rec = _attach_risk_sizing(rec, playbook=None, adapt={"side_branch": True})
+        mult = side_size_mult()
+        for item in rec.get("items") or []:
+            _scale_item_qty(item, mult, f"支线×{mult:g}")
+            try:
+                prev = float(item.get("size_mult") or 1.0)
+            except (TypeError, ValueError):
+                prev = 1.0
+            item["size_mult"] = round(prev * mult, 3)
+            item["role_label"] = "支线回踩"
+            item["desk_source"] = "side"
+        rec["buy"] = False
+        rec["title"] = f"观察支线 · {side_name}"
+        rec["size_note"] = _join_hint(
+            f"支线可买（仓位×{mult:g}），不改顶栏主结论",
+            f"分差 {side.get('score_gap')}" if side.get("score_gap") is not None else "",
+        )
+    else:
+        for item in rec.get("items") or []:
+            item["ready"] = False
+            _demote_buy_to_wait(item)
+            kind = item.get("kind") or "stock"
+            item["role_label"] = "支线ETF盯回踩" if kind == "etf" else "支线个股盯回踩"
+        rec["buy"] = False
+        rec["title"] = f"观察支线 · {side_name}"
+        rec["size_note"] = _join_hint(
+            "仅观察回踩，不当现买主推；买卖仍跟实时主线",
+            f"分差 {side.get('score_gap')}" if side.get("score_gap") is not None else "",
+        )
     if soft and vehicle.get("name"):
         rec["size_note"] = _join_hint(
             str(rec.get("size_note") or ""),
@@ -120,9 +159,191 @@ def _build_side_branch(
         "etf_soft": soft,
         "carrier_code": vehicle.get("code"),
         "carrier_name": vehicle.get("name"),
+        "main_yi": side.get("main_yi"),
         "pool_codes": _pool_codes_from_board(side),
     }
     return info, rec
+
+
+def _item_notional(item: dict[str, Any] | None) -> float:
+    """Return planned notional for one recommend card."""
+    it = item or {}
+    try:
+        qty = int(it.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    try:
+        px = float(it.get("buy_price") or it.get("last") or 0)
+    except (TypeError, ValueError):
+        px = 0.0
+    if qty <= 0 or px <= 0:
+        return 0.0
+    return float(qty) * px
+
+
+def dedupe_side_against_main(
+    recommend: dict[str, Any] | None,
+    side_recommend: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Drop side cards whose code already appears on the mainline recommend."""
+    if not side_recommend:
+        return side_recommend
+    rec = dict(side_recommend)
+    taken = {
+        normalize_code(it.get("code"))
+        for it in (recommend or {}).get("items") or []
+        if it.get("code")
+    }
+    taken.discard("")
+    if not taken:
+        return rec
+    kept = [
+        it
+        for it in rec.get("items") or []
+        if normalize_code(it.get("code")) not in taken
+    ]
+    rec["items"] = kept
+    return rec
+
+
+def cap_side_to_daily_budget(
+    recommend: dict[str, Any] | None,
+    side_recommend: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Cut side ready first so main+side notional stays within ``target_total_cost``.
+
+    Mainline cards are never scaled. Open book cost is subtracted from the cap.
+    """
+    if not side_recommend:
+        return side_recommend
+    rec = dict(side_recommend)
+    from market_desk.config import POSITION_MAX_TOTAL_COST
+
+    cap = float(setting("target_total_cost", POSITION_MAX_TOTAL_COST) or POSITION_MAX_TOTAL_COST)
+    open_cost = 0.0
+    try:
+        from market_desk.db import load_positions
+
+        for row in load_positions() or []:
+            if int(row.get("qty") or 0) <= 0:
+                continue
+            try:
+                open_cost += float(row.get("cost") or 0)
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        open_cost = 0.0
+    remaining = max(0.0, cap - open_cost)
+    main_cost = sum(
+        _item_notional(it)
+        for it in (recommend or {}).get("items") or []
+        if it.get("ready") and not it.get("block_ready")
+    )
+    budget = max(0.0, remaining - main_cost)
+    items: list[dict[str, Any]] = []
+    used = 0.0
+    cut = False
+    for raw in rec.get("items") or []:
+        item = dict(raw)
+        if not (item.get("ready") and not item.get("block_ready")):
+            items.append(item)
+            continue
+        need = _item_notional(item)
+        if need <= 0:
+            items.append(item)
+            continue
+        if used + need <= budget + 1e-6:
+            used += need
+            items.append(item)
+            continue
+        room = budget - used
+        px = 0.0
+        try:
+            px = float(item.get("buy_price") or item.get("last") or 0)
+        except (TypeError, ValueError):
+            px = 0.0
+        new_qty = 0
+        if px > 0 and room >= px * 100:
+            new_qty = max(100, int(room / px / 100.0) * 100)
+        if new_qty > 0 and new_qty < int(item.get("qty") or 0):
+            item["qty"] = new_qty
+            plan = item.get("risk_plan")
+            if isinstance(plan, dict):
+                plan = dict(plan)
+                plan["qty"] = new_qty
+                item["risk_plan"] = plan
+            used += new_qty * px
+            cut = True
+            items.append(item)
+            continue
+        item["ready"] = False
+        item["block_ready"] = True
+        _demote_buy_to_wait(item)
+        item["role_label"] = "支线回踩"
+        fails = list(item.get("confirm_fail") or [])
+        if "支线仓位封顶" not in fails:
+            fails.append("支线仓位封顶")
+        item["confirm_fail"] = fails
+        cut = True
+        items.append(item)
+    rec["items"] = items
+    if cut:
+        rec["size_note"] = _join_hint(str(rec.get("size_note") or ""), "支线仓位封顶，先保主线")
+        if not any(it.get("ready") and not it.get("block_ready") for it in items):
+            rec["buy"] = False
+    return rec
+
+
+def retitle_side_recommend(
+    side_recommend: dict[str, Any] | None,
+    *,
+    side_name: str = "",
+) -> dict[str, Any] | None:
+    """Set 支线可买 vs 观察支线 from whether any card is ready."""
+    if not side_recommend:
+        return side_recommend
+    rec = dict(side_recommend)
+    name = str(side_name or "").strip()
+    any_ready = any(
+        bool(it.get("ready")) and not it.get("block_ready")
+        for it in rec.get("items") or []
+    )
+    if any_ready and side_buy_enabled():
+        rec["buy"] = True
+        rec["title"] = f"支线可买 · {name}" if name else "支线可买"
+        if rec.get("text") and "观察支线" in str(rec.get("text")):
+            rec["text"] = str(rec["text"]).replace("观察支线", "支线可买", 1)
+    else:
+        rec["buy"] = False
+        if name and (not rec.get("title") or "支线可买" in str(rec.get("title") or "")):
+            rec["title"] = f"观察支线 · {name}"
+    return rec
+
+
+def finalize_side_recommend(verdict: dict[str, Any] | None) -> dict[str, Any]:
+    """Dedupe codes, cap side notional, and retitle after pullback arming."""
+    v = dict(verdict or {})
+    side = v.get("side_recommend")
+    if not side:
+        return v
+    rec = v.get("recommend") or {}
+    side = dedupe_side_against_main(rec, side)
+    if side_buy_enabled():
+        side = cap_side_to_daily_budget(rec, side)
+    else:
+        items = []
+        for raw in (side or {}).get("items") or []:
+            item = dict(raw)
+            item["ready"] = False
+            _demote_buy_to_wait(item)
+            items.append(item)
+        if side is not None:
+            side = dict(side)
+            side["items"] = items
+            side["buy"] = False
+    name = str((v.get("side_mainline") or {}).get("name") or "")
+    v["side_recommend"] = retitle_side_recommend(side, side_name=name)
+    return v
 
 
 def _mainline_needs_link(recommend: dict[str, Any] | None) -> tuple[bool, str]:
@@ -224,7 +445,8 @@ def _pick_link_fallback_board(
     }
     side_name = str((side_info or {}).get("name") or "").strip()
     # 1) Side runner-up with real or theme similarity → absorb into link.
-    if side_name:
+    # Skip when side buys are live so A2 cards are not demoted to observe-only.
+    if side_name and side_observe_only():
         side_board = by_name.get(side_name) or None
         if side_board is None and side_info:
             side_board = dict(side_info)
@@ -271,7 +493,7 @@ def _pick_link_fallback_board(
                 continue
             return board, float(BOARD_LINK_SCORE_FALLBACK_SIM), "score"
     # Last resort: raw side board even when sim is thin (still observe_only).
-    if side_name:
+    if side_name and side_observe_only():
         side_board = by_name.get(side_name)
         if _link_board_ok(
             side_board, main_name=main_name, side_name=side_name, allow_side_name=True

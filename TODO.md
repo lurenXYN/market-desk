@@ -107,6 +107,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **环境闸 v1.10.33 影子骨架**：`env_gate` score/档×ETF|股；道氏/均线/MACD·RSI/ATR/缺口；冻结+pack；`env_gate_live` 默认关
 - [x] **环境闸补齐 v1.10.34**：亮灯率×env×kind 影子；live keys 默认 minute；假杀/真杀 ETF|股分桶；ADX/BOLL/量能；缺口细分+精简K线软标签
 - [x] **证伪工具 v1.10.35**：as-of 买闸重放（gate_replay）+ 成交口径 comparable_roundtrip + env_bucket 离线重算脚本
+- [x] **多主线可买 v1.10.36**：支线×0.6 可亮灯（不推送）；无 ETF 概念不当 sticky；成分重合≥0.3 禁并列；池子 `all` 仅影子
 
 ### 环境闸 / 技术特征 · 有效清单（2026-11-02）
 
@@ -128,8 +129,9 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] env_bucket 离线：`scripts/replay_env_bucket.py`（可 `--compare-lit`）
 
 **下一步（按收益排序，一次一处）**
-- [ ] 影子攒满后：对照 `env_lit.live_recommend` + gate_replay 假杀均值，再决定是否开 `env_gate_live`（仍先 minute）
-- [ ] 模拟账本继续攒 closed_n → 开工闸
+- [ ] 影子攒满后：对照 `env_lit.live_recommend` + gate_replay 假杀均值，再决定是否开 `env_gate_live`（仍先 minute；**不要**把 `off_high` 加进 live keys——友好市放松离日高是追尖方向）
+- [ ] 模拟账本继续攒 closed_n → 开工闸；顺带看 `sim.by_channel` 支线是拖累还是贡献（满 ≥10 日再谈 `side_buy_enabled`）
+- [ ] 主线池 `pool_shadow` 看 2～3 天换防次数后再决定是否把 `mainline_pool_mode` 切 `all`
 - [ ] 艾略特：保持观察页；可选把 Top1 方向作 env 弱分（多解，权重低）
 
 **明确不做（进主链路）**

@@ -191,8 +191,9 @@ CONCEPT_JUNK_KEYWORDS = (
     "指数",
 )
 
-HOT_BOARD_COUNT = 8
+HOT_BOARD_COUNT = 16
 ICE_BOARD_COUNT = 4
+LIFECYCLE_COL_LIMIT = 8               # boards kept per 萌芽/主升/尖峰/衰退 column
 CONSTITUENT_TOP = 20
 
 # Server酱 free tier: 5 pushes per SendKey per day, shared with news-radar
@@ -214,6 +215,16 @@ MIN_STOCK_MV_YI = 120.0
 
 # Show an observation side branch when its score stays within this gap of the mainline.
 SIDE_MAINLINE_GAP = 12.0
+# Live mainline pool: industry_first (concepts join only when industry is thin) | all.
+MAINLINE_POOL_MODE = "industry_first"
+# Concepts join industry_first when the strongest industry has fewer limit-ups.
+CONCEPT_JOIN_ZT = 3
+# Side-branch live buys (A2). False restores observation-only.
+SIDE_BUY_ENABLED = True
+SIDE_SIZE_MULT = 0.6
+# Constituent Jaccard at/above this (and both sides ≥ SIDE_MEMBER_MIN) counts as same theme.
+SIDE_MEMBER_OVERLAP = 0.3
+SIDE_MEMBER_MIN = 5
 
 # Mute buy/entry noise for this many minutes after 09:30 (0 = off).
 OPEN_MUTE_MINUTES = 5
@@ -393,7 +404,7 @@ REGIME_SHADOW_SINCE = "2026-10-15"
 # Default live=off; freeze into buy payloads from ENV_GATE_SHADOW_SINCE.
 ENV_GATE_SHADOW_SINCE = "2026-11-02"
 ENV_GATE_LIT_MIN_DAYS = 10        # shadow days before considering env_gate_live
-ENV_GATE_LIVE_KEYS = ("minute",)  # first live slice; expand after evidence
+ENV_GATE_LIVE_KEYS = ("minute",)  # first live slice; do not add off_high yet
 ENV_FRIENDLY_GATE = 0.90          # <1 loosens minute/off_high when friendly
 ENV_HOSTILE_GATE = 1.10           # >1 tightens when hostile
 ENV_ETF_SCALE = 0.85              # compress env deviation toward 1.0 for ETF
@@ -414,7 +425,7 @@ ZT_SHARE_MIN_N = 3                      # and board has ≥ this many limit-ups
 ZT_SHARE_TOP = 12                       # rows kept per kind per day
 # Lifecycle boards frozen from the last close but missing from today's hot list:
 # fetch at most this many separately per tick so their cards show live data.
-LIFECYCLE_SIDE_MAX = 8
+LIFECYCLE_SIDE_MAX = 16
 # Future sell open watch window (minutes after 09:30); used by TODO 开盘卖出缓冲窗.
 SELL_OPEN_WATCH_MINUTES = 15
 # Soft: during open watch, "must" stop that only barely lost open may wait (false break).
@@ -551,7 +562,7 @@ ETF_PULSE_LOOKBACK_MIN = 10
 ETF_PULSE_FETCH_SEC = 60                # minute refetch cadence per ETF
 
 # Narrative graph (shadow mode): cross-industry clusters of limit-up names.
-NARR_EXTRA_CONCEPTS = 20                # extra top-pct concept boards whose members are fetched
+NARR_EXTRA_CONCEPTS = 32                # extra top-pct concept boards whose members are fetched
 NARR_SNAP_MIN_BOARDS = 100              # East Money snapshot concepts needed to use the snapshot pool
 NARR_SINA_SNAP_MIN_BOARDS = 40          # Sina concept snaps usable when EM coverage is thin
 NARR_SNAP_MAX_MEMBERS = 600             # skip catch-all concepts (index / margin lists) in the snapshot pool
@@ -560,6 +571,10 @@ NARR_MIN_SHARED = 2                     # limit-ups a concept needs to join the 
 NARR_EDGE_JACCARD = 0.3                 # concept-concept edge threshold
 NARR_MIN_ZT = 4                         # cluster limit-ups to be a candidate
 NARR_MIN_INDUSTRIES = 2                 # distinct industries → cross-industry narrative
+NARR_CLUSTER_MAX = 8                    # clusters kept for the radar strip / shadow rec
+NARR_LEADERS_PER = 5                    # limit-up leaders stored per cluster
+NARR_REC_MAX = 8                        # observe cards in 图谱·影子荐
+NARR_STRIP_MAX = 6                      # radar-strip chips (hidden + mainline)
 
 # Board source stickiness: once degraded to Sina inside a half-session, stay
 # there until the next break (lunch / pre-open / after close) and only switch

@@ -256,6 +256,7 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                         "chase_price": item.get("chase_price"),
                         "buy_price": item.get("buy_price"),
                         "qty": int(item.get("qty") or 0) or None,
+                        "size_mult": item.get("size_mult"),
                         "pct": item.get("pct"),
                         "trend": item.get("trend"),
                         "trend_quality": item.get("trend_quality"),

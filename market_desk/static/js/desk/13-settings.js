@@ -10,6 +10,12 @@ async function openSettings() {
     document.getElementById("setIdle").value = s.idle_seconds ?? 60;
     document.getElementById("setSticky").value = s.sticky_margin ?? 12;
     document.getElementById("setSwitch").value = s.switch_min_seconds ?? 300;
+    const poolModeEl = document.getElementById("setPoolMode");
+    if (poolModeEl) poolModeEl.value = s.mainline_pool_mode || "industry_first";
+    const sideBuyEl = document.getElementById("setSideBuy");
+    if (sideBuyEl) sideBuyEl.checked = s.side_buy_enabled !== false;
+    const sideMultEl = document.getElementById("setSideMult");
+    if (sideMultEl) sideMultEl.value = s.side_size_mult ?? 0.6;
     document.getElementById("setToastCd").value = s.toast_cooldown ?? 180;
     document.getElementById("setToastOn").checked = !!s.toast_enabled;
     document.getElementById("setDecisionOn").checked = s.decision_alerts !== false;
@@ -171,12 +177,20 @@ document.addEventListener("click", (ev) => {
   sPanel.hidden = true;
 });
 document.getElementById("settingsSave").addEventListener("click", async () => {
+  const poolMode = document.getElementById("setPoolMode")?.value || "industry_first";
+  const prevMode = (window.__lastSettings || {}).mainline_pool_mode || "industry_first";
+  if (poolMode === "all" && prevMode !== "all") {
+    if (!confirm("主线池切到「行业+概念」会改 live sticky（不只是影子对照）。确定？")) return;
+  }
   const body = {
     refresh_seconds: Number(document.getElementById("setRefresh").value),
     auction_refresh_seconds: Number(document.getElementById("setAuctionRefresh").value),
     idle_seconds: Number(document.getElementById("setIdle").value),
     sticky_margin: Number(document.getElementById("setSticky").value),
     switch_min_seconds: Number(document.getElementById("setSwitch").value),
+    mainline_pool_mode: document.getElementById("setPoolMode")?.value || "industry_first",
+    side_buy_enabled: !!document.getElementById("setSideBuy")?.checked,
+    side_size_mult: Number(document.getElementById("setSideMult")?.value || 0.6),
     toast_cooldown: Number(document.getElementById("setToastCd").value),
     toast_enabled: !!document.getElementById("setToastOn").checked,
     decision_alerts: !!document.getElementById("setDecisionOn").checked,

@@ -182,6 +182,7 @@ ENTRIES: dict[str, dict[str, str]] = {
         "env_mult_table：friendly≈0.90、hostile≈1.10；ETF 振幅×ENV_ETF_SCALE 向 1 收缩。\n"
         "买卡冻结 payload.env_gate（分种 mult）；shadows/agent-pack 看覆盖与 lit（亮灯率×env×kind）。\n"
         "满 ≥ENV_GATE_LIT_MIN_DAYS 且 friendly 亮灯明显高于 hostile 才建议开 live；env_gate_live_keys 默认仅 minute。\n"
+        "off_high 故意不进 live keys：友好市放松离日高是追尖方向；adapt 假杀偏置仍始终可调离日高。\n"
         "假杀/真杀按 ETF|股分桶进 buy_gate_bias.v2。仍禁止「仅尺下→ready=false」；不做缠论/谐波/全套 K 线进闸。",
     },
     "软排序": {
@@ -342,7 +343,8 @@ ENTRIES: dict[str, dict[str, str]] = {
         "最高分的行业即实时主线。sticky：同名保留除非分差达标；同主题粘滞；持有期内更难被掀翻。\n"
         "作战台「主线为什么是它」可看分差与原因。\n"
         "关键词映射 ETF；无精确映射时软匹配近似行业ETF，但**默认只观察回踩、不标 etf_mapped、仍走 orphan 严过滤**；\n"
-        "仍无映射则不做载体定价买入，改盯主板回踩票。同池第二名若分差不大，另见「观察支线」。\n"
+        "仍无映射则不做载体定价买入，改盯主板回踩票。同池第二名若分差不大，另见「支线可买」。\n"
+        "无精确 ETF 的概念不能成为 sticky 主线（可当支线）。主线池 live 默认 industry_first；all 模式仅影子并行。\n"
         "卖点：sell_themes=主线+支线+分差内热点同伴；买入仍只跟 sticky。\n"
         "资金流软加分：今日主力净流入≥约0.8亿 +4，≤-1亿 −5；日&5日同榜流入再 +2.5。\n"
         "题材信誉：次日熄火记 fade、续热记 persist；净续热率对称换算 soft rep_adj（约−12～+8）并入主线分；\n"
@@ -446,12 +448,17 @@ ENTRIES: dict[str, dict[str, str]] = {
         "卡片展示白盒贡献条。对比前半样本可显示「权重从 a→b」。样本不足时不启用。",
     },
     "观察支线": {
-        "mean": "同池里紧跟主线的第二名板块，只展示回踩观察，永不 ready、不当现买主推。",
-        "algo": "pick_side_mainline：行业池（无则全热点）按主线同分排序，取非主线、非同主题、非退潮、\n"
-        "且 main−side 分差 ≤ side_mainline_gap（默认 12；设 0 关闭）的最高分者。\n"
-        "走观察回踩定价；日线标注后仍强制 ready=False、buy=False。不改主线 sticky / 主 recommend。\n"
-        "个股只保留支线板块成分股（side_require_member，默认开）；ETF 载体不受限。\n"
-        "若与主线 sim≥BOARD_LINK_SIM_MIN（或同主题）且主线需联动 → 并入「板块联动」副卡，不再单独挂支线。\n"
-        "卖点会把支线纳入卖侧主题集合，所属仓位可按其退潮/衰退软减。",
+        "mean": "同池第二名板块的旧称；现为「支线可买」（×0.6，不改顶栏）。side_buy_enabled=false 时回到只观察。",
+        "algo": "见「支线可买」。",
+    },
+    "支线可买": {
+        "mean": "同池里紧跟主线、且真·不同主题的第二名板块。默认可亮灯（仓位×0.6），不推送、不升顶栏「可买入」。",
+        "algo": "pick_side_mainline：同池第二名，非退潮；名字同主题或成分 Jaccard≥0.3（两侧均≥5 只）则跳过。\n"
+        "side_buy_enabled（默认开）时走与主线相同的回踩定价，ready 可亮；仓位再×side_size_mult（0.6）。\n"
+        "确认闸（离日高/薄确认/流出/指数弱）对支线同一套，载体用支线板+支线 ETF；降档保留「支线回踩」。\n"
+        "同码已在主线 recommend 的从支线去掉。主线+支线名义不超过 target_total_cost，超了先砍支线。\n"
+        "notify 只扫主线 recommend。side_buy_enabled=false 时强制 ready=False（回归观察支线）。\n"
+        "无精确 ETF 的概念不能当 sticky，可当支线。主线池 all 仅影子（pool_shadow），live 默认 industry_first。\n"
+        "模拟仓 buy_side 按真实 size_mult 开仓（不再把 0.6 当成满仓）。",
     },
 }
