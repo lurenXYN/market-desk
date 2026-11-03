@@ -662,6 +662,7 @@ def init_db() -> None:
         _ensure_auth_and_user_scope(conn)
         _ensure_backtest_tables(conn)
         _ensure_ma_fan_tables(conn)
+        _ensure_code_board_seen_tables(conn)
         from market_desk.db.sim_desk import ensure_sim_desk_tables
         from market_desk.db.bars_cache import ensure_bars_cache_tables
         from market_desk.exec.store import ensure_exec_tables
@@ -670,6 +671,44 @@ def init_db() -> None:
         ensure_bars_cache_tables(conn)
         ensure_exec_tables(conn)
         conn.commit()
+    try:
+        from market_desk.db.code_board_seen import backfill_code_board_seen
+
+        backfill_code_board_seen()
+    except Exception:
+        import logging
+
+        logging.getLogger("market_desk.db").exception("code_board_seen backfill failed")
+
+
+def _ensure_code_board_seen_tables(conn: sqlite3.Connection) -> None:
+    """Create the frozen code-board appearance index (signals / MA-fan / pot)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS code_board_seen (
+            trade_date TEXT NOT NULL,
+            code TEXT NOT NULL,
+            source TEXT NOT NULL,
+            board_name TEXT NOT NULL DEFAULT '',
+            board_key TEXT NOT NULL DEFAULT '',
+            board_kind TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL DEFAULT '',
+            price REAL,
+            pct REAL,
+            d3 REAL,
+            tag TEXT NOT NULL DEFAULT '',
+            ref_id INTEGER,
+            first_seen_at TEXT NOT NULL,
+            PRIMARY KEY (trade_date, code, source, board_name)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cbs_code ON code_board_seen(code, trade_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cbs_board ON code_board_seen(board_key, trade_date)"
+    )
 
 
 def _ensure_ma_fan_tables(conn: sqlite3.Connection) -> None:

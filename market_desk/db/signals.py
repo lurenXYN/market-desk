@@ -274,6 +274,9 @@ def upsert_signal(row: dict[str, Any]) -> None:
                 owner_id,
             ),
         )
+        from market_desk.db.code_board_seen import sync_signal_seen
+
+        sync_signal_seen(conn, row=row, merged_payload=merged, owner_id=owner_id)
         conn.commit()
 
 

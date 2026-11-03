@@ -1305,6 +1305,7 @@
       <div class="sig-hist-sum" id="sigHistSum"></div>
       <div class="chart-desc sig-hist-desc" id="sigHistDesc" hidden></div>
       <div class="sig-hist-table-wrap">
+        <div class="hd sig-hist-sec">复盘买卖信号</div>
         <table class="sig-hist-table">
           <thead>
             <tr>
@@ -1321,6 +1322,28 @@
             </tr>
           </thead>
           <tbody id="sigHistBody"></tbody>
+        </table>
+      </div>
+      <div class="sig-hist-table-wrap" id="sigHistScanWrap">
+        <div class="hd sig-hist-sec">发散 / 锅底出现<button type="button" class="q" data-term="区间涨跌榜">?</button>
+          <span class="meta" id="sigHistScanMeta"></span>
+        </div>
+        <table class="sig-hist-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>类型</th>
+              <th>当时价</th>
+              <th>距今</th>
+              <th>当日%</th>
+              <th>三日%</th>
+              <th>标签</th>
+              <th>板块</th>
+            </tr>
+          </thead>
+          <tbody id="sigHistScanBody">
+            <tr><td colspan="8" class="meta">加载中…</td></tr>
+          </tbody>
         </table>
       </div>
     </aside>

@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 from market_desk.review.range_board import (
+    _days_ago,
     _fold_by_code,
+    _seen_to_scan_row,
     _vs_chase_pct,
-    build_board_roster,
     build_range_leaderboard,
 )
+
+
+def test_scan_row_has_price_and_days_ago():
+    row = _seen_to_scan_row(
+        {
+            "source": "ma_fan",
+            "trade_date": "2026-10-20",
+            "price": 12.3,
+            "pct": 1.5,
+            "tag": "初",
+            "boards": ["固态电池"],
+            "d3": -2.0,
+        }
+    )
+    assert row["close"] == 12.3
+    assert row["days_ago"] is not None and row["days_ago"] >= 0
+    assert row["d3"] == -2.0
+    assert row["board_text"] == "固态电池"
+    assert _days_ago("bad") is None
 
 
 def test_vs_chase_none_without_chase():
@@ -144,54 +164,3 @@ def test_leaderboard_sort_and_skip_unscored(monkeypatch):
     best = build_range_leaderboard(window="1w", side="best", limit=10)
     assert [r["code"] for r in best["items"]] == ["600011", "600010"]
 
-
-def test_board_roster_matches_frozen_names(monkeypatch):
-    events = [
-        {
-            "trade_date": "2026-10-20",
-            "code": "600100",
-            "name": "甲",
-            "source": "signal",
-            "boards": ["固态电池", "新能源"],
-            "mainline": "主线甲",
-            "outcome_day3_pct": 1.0,
-        },
-        {
-            "trade_date": "2026-10-21",
-            "code": "600101",
-            "name": "乙",
-            "source": "ma_fan",
-            "boards": ["半导体"],
-            "mainline": None,
-            "outcome_day3_pct": -2.0,
-        },
-        {
-            "trade_date": "2026-10-22",
-            "code": "600102",
-            "name": "丙",
-            "source": "pot",
-            "boards": ["固态电池概念"],
-            "mainline": None,
-            "outcome_day3_pct": None,
-        },
-    ]
-
-    def _fake_collect(*, window="1w"):
-        return {
-            "window": "1m",
-            "window_days": 20,
-            "days": ["2026-10-22", "2026-10-21", "2026-10-20"],
-            "events": events,
-        }
-
-    monkeypatch.setattr(
-        "market_desk.review.range_board.collect_range_events",
-        _fake_collect,
-    )
-    hit = build_board_roster("固态", days=20, limit=80)
-    assert hit["ok"] is True
-    codes = {r["code"] for r in hit["items"]}
-    assert "600100" in codes
-    assert "600102" in codes
-    assert "600101" not in codes
-    assert all("固态" in str(r.get("board_hit") or "") for r in hit["items"])

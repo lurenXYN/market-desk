@@ -88,6 +88,8 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-03（v1.10.42）：agent-pack.v3 加 `adapt_live`（size_heat/exec_size/buy_gate + 回踩/tune/sticky/卖带宽现倍率），补审计盲区。
 - 2026-11-03（v1.10.43）：agent-pack.v4 加 `adapt_effect`（分档成绩/今日卡/漏买/题材），用于看拧完有没有用。
 - 2026-11-03（v1.10.44）：复盘区间涨跌榜（1w/2w/1m）+ 代码/板块检索（信号∪发散∪锅底），只读。
+- 2026-11-03（v1.10.45）：历史抽屉补发散/锅底出现表（日期·当时价·距今）。
+- 2026-11-03（v1.10.46）：`code_board_seen` 出现索引（冻结板名）+ 现况板对照；按码/按板读本地索引。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -118,6 +120,8 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **agent-pack adapt_live v1.10.42**：当日 size_heat / exec_size / buy_gate 现倍率进包（v3）
 - [x] **agent-pack adapt_effect v1.10.43**：size/闸分档成绩 + 今日卡 + 漏买三类 + 题材信誉两端（v4）
 - [x] **复盘区间涨跌 v1.10.44**：近周/月最惨·最强 + 代码/板块检索（信号∪发散∪锅底）
+- [x] **历史抽屉扫描表 v1.10.45**：发散/锅底出现日 + 当时价 + 距今
+- [x] **出现索引 v1.10.46**：`code_board_seen`（信号/发散/锅底 × 冻结板名）+ 现况板（非当时）+ 板检索归一
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

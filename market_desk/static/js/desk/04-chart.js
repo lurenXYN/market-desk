@@ -384,6 +384,63 @@ function paintSigHistDesc(row, idx) {
   });
 }
 
+function paintSigHistScans(d) {
+  const body = document.getElementById("sigHistScanBody");
+  const meta = document.getElementById("sigHistScanMeta");
+  if (!body) return;
+  const rows = d.scan_rows || [];
+  if (meta) {
+    meta.textContent =
+      `发散 ${d.ma_fan_n ?? 0} · 锅底 ${d.pot_n ?? 0}`
+      + ((d.board_set || []).length
+        ? ` · 板 ${(d.board_set || []).slice(0, 6).join(" · ")}`
+        : "");
+  }
+  const sum = document.getElementById("sigHistSum");
+  if (sum && !sum.querySelector(".sig-hist-scan-tip")) {
+    const tip = document.createElement("span");
+    tip.className = "meta sig-hist-scan-tip";
+    tip.textContent =
+      `发散 ${d.ma_fan_n ?? 0} · 锅底 ${d.pot_n ?? 0}`
+      + ((d.board_set || []).length
+        ? ` · 当时板 ${(d.board_set || []).slice(0, 8).join(" · ")}`
+        : "");
+    sum.appendChild(tip);
+    const cur = (d.current_boards || []).map((b) => b.name).filter(Boolean);
+    if (cur.length) {
+      const now = document.createElement("span");
+      now.className = "meta sig-hist-scan-tip";
+      now.title = "今日成分快照，仅供对照，不是当时挂的板";
+      now.textContent = `现况板（非当时） ${cur.slice(0, 10).join(" · ")}`;
+      sum.appendChild(now);
+    }
+  }
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8" class="meta">近窗未进发散/锅底名单</td></tr>`;
+    return;
+  }
+  const srcLab = (s) => (s === "pot" ? "锅底" : (s === "ma_fan" ? "发散" : (s || "—")));
+  const pctHtml = (v) => {
+    if (v == null || Number.isNaN(Number(v))) return "—";
+    const n = Number(v);
+    return `<span class="${n >= 0 ? "up" : "down"}">${(n > 0 ? "+" : "") + n.toFixed(2)}%</span>`;
+  };
+  body.innerHTML = rows.map((r) => {
+    const ago = r.days_ago != null ? `${r.days_ago} 天前` : "—";
+    const px = r.close != null ? Number(r.close).toFixed(2) : "—";
+    return `<tr>
+      <td>${escAttr(r.trade_date || "—")}</td>
+      <td>${escAttr(srcLab(r.source))}</td>
+      <td>${escAttr(px)}</td>
+      <td>${escAttr(ago)}</td>
+      <td>${pctHtml(r.pct)}</td>
+      <td>${pctHtml(r.d3)}</td>
+      <td>${escAttr(r.tag || r.stage || "—")}</td>
+      <td title="${escAttr(r.board_text || "")}">${escAttr(r.board_text || "—")}</td>
+    </tr>`;
+  }).join("");
+}
+
 async function openSigHist(code, name) {
   const c = String(code || "").replace(/\D/g, "").padStart(6, "0");
   if (c.length !== 6) return;
@@ -397,6 +454,10 @@ async function openSigHist(code, name) {
   document.getElementById("sigHistSum").innerHTML = "";
   document.getElementById("sigHistBody").innerHTML =
     `<tr><td colspan="10" class="meta">加载中…</td></tr>`;
+  const scanBody = document.getElementById("sigHistScanBody");
+  if (scanBody) scanBody.innerHTML = `<tr><td colspan="8" class="meta">加载中…</td></tr>`;
+  const scanMeta = document.getElementById("sigHistScanMeta");
+  if (scanMeta) scanMeta.textContent = "";
   const xq = xueqiuUrl(c);
   const a = document.getElementById("sigHistXq");
   a.href = xq || "#";
@@ -412,5 +473,17 @@ async function openSigHist(code, name) {
     document.getElementById("sigHistMeta").textContent = "历史信号拉取失败";
     document.getElementById("sigHistBody").innerHTML =
       `<tr><td colspan="10" class="meta">加载失败</td></tr>`;
+  }
+  try {
+    const r2 = await fetch("/api/review/appearances/" + c);
+    const d2 = await r2.json();
+    if (seq !== sigHistSeq) return;
+    if (!d2.ok && d2.ok !== undefined) throw new Error("bad");
+    paintSigHistScans(d2);
+  } catch (e) {
+    if (seq !== sigHistSeq) return;
+    if (scanBody) {
+      scanBody.innerHTML = `<tr><td colspan="8" class="meta">发散/锅底列表加载失败</td></tr>`;
+    }
   }
 }

@@ -70,6 +70,7 @@ function paintRevRangeAppearances(d) {
   if (!box) return;
   box.hidden = false;
   const boards = (d.board_set || []).slice(0, 12).map((b) => escAttr(b)).join(" · ") || "—";
+  const curBoards = (d.current_boards || []).slice(0, 12).map((b) => escAttr(b.name)).join(" · ");
   const fan = (d.ma_fan_days || []).slice(0, 8).map((x) =>
     `${escAttr(x.trade_date || "")}${x.d3 != null ? `(${Number(x.d3) >= 0 ? "+" : ""}${Number(x.d3).toFixed(1)}%)` : ""}`
   ).join(" · ") || "—";
@@ -80,7 +81,8 @@ function paintRevRangeAppearances(d) {
     `<div class="hd">${escAttr(d.name || "")} · ${escAttr(d.code || "")}`
     + ` <button type="button" class="rev-col-btn rev-range-hist" data-code="${escAttr(d.code || "")}" data-name="${escAttr(d.name || "")}">打开历史</button></div>`
     + `<div class="meta">信号 ${d.signal_n ?? 0} · 发散 ${d.ma_fan_n ?? 0} · 锅底 ${d.pot_n ?? 0}</div>`
-    + `<div class="meta">相关板：${boards}</div>`
+    + `<div class="meta">当时板：${boards}</div>`
+    + (curBoards ? `<div class="meta" title="今日成分快照，仅供对照">现况板（非当时）：${curBoards}</div>` : "")
     + `<div class="meta">发散日：${fan}</div>`
     + `<div class="meta">锅底日：${pot}</div>`;
 }
@@ -102,6 +104,8 @@ function paintRevRangeRoster(d) {
       <td>${escAttr(it.name || "—")}</td>
       <td>${escAttr(_revRangeSrcLabel(it.source))}</td>
       <td>${escAttr(it.board_hit || "—")}</td>
+      <td>${it.price != null ? escAttr(Number(it.price).toFixed(2)) : "—"}</td>
+      <td>${it.days_ago != null ? escAttr(it.days_ago + " 天前") : "—"}</td>
       <td>${_revRangePct(it.outcome_day3_pct)}</td>
       <td><button type="button" class="rev-col-btn rev-range-hist" data-code="${escAttr(code)}" data-name="${escAttr(it.name || "")}">历史</button></td>
     </tr>`;
@@ -109,7 +113,7 @@ function paintRevRangeRoster(d) {
   box.innerHTML =
     `<div class="hd">板块「${escAttr(d.q || "")}」· ${d.n ?? rows.length} 条</div>`
     + `<div class="table-wrap"><table class="rev-table compact"><thead><tr>`
-    + `<th>日期</th><th>代码</th><th>名称</th><th>来源</th><th>命中板</th><th>三日%</th><th></th>`
+    + `<th>日期</th><th>代码</th><th>名称</th><th>来源</th><th>命中板</th><th>当时价</th><th>距今</th><th>三日%</th><th></th>`
     + `</tr></thead><tbody>${lines}</tbody></table></div>`;
 }
 
@@ -189,27 +193,3 @@ function bindRevRangeBoard() {
 }
 
 bindRevRangeBoard();
-
-const _openSigHistRange = typeof openSigHist === "function" ? openSigHist : null;
-if (_openSigHistRange) {
-  openSigHist = async function (code, name) {
-    await _openSigHistRange(code, name);
-    try {
-      const c = String(code || "").replace(/\D/g, "").padStart(6, "0").slice(-6);
-      if (!/^\d{6}$/.test(c)) return;
-      const r = await fetch("/api/review/appearances/" + c);
-      const d = await r.json();
-      if (!d.ok && d.ok !== undefined) return;
-      const sum = document.getElementById("sigHistSum");
-      if (!sum) return;
-      const boards = (d.board_set || []).slice(0, 8).join(" · ") || "—";
-      const tip = document.createElement("span");
-      tip.className = "meta";
-      tip.textContent =
-        `发散 ${d.ma_fan_n ?? 0} · 锅底 ${d.pot_n ?? 0} · 板 ${boards}`;
-      sum.appendChild(tip);
-    } catch (e) {
-      /* ignore */
-    }
-  };
-}

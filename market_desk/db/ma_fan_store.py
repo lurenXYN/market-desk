@@ -40,6 +40,9 @@ def save_ma_fan_day(trade_date: str, payload: dict[str, Any]) -> None:
                 str(body.get("saved_at") or now),
             ),
         )
+        from market_desk.db.code_board_seen import sync_ma_fan_seen
+
+        sync_ma_fan_seen(conn, day, body)
         conn.commit()
 
 

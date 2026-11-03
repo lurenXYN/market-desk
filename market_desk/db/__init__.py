@@ -20,6 +20,12 @@ from market_desk.db.schema import (  # noqa: F401
     _migrate_watchlist_user_scope,
     _migrate_favorite_boards_user_scope,
 )
+from market_desk.db.code_board_seen import (  # noqa: F401
+    backfill_code_board_seen,
+    current_boards_for_code,
+    load_seen_by_board,
+    load_seen_by_code,
+)
 from market_desk.db.ma_fan_store import (  # noqa: F401
     save_ma_fan_day,
     load_ma_fan_day,

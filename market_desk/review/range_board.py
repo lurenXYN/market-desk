@@ -21,24 +21,16 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _boards_from_signal(row: dict[str, Any]) -> list[str]:
     """Prefer frozen board_names, then source_board / mainline."""
-    p = _payload(row)
-    raw = p.get("board_names") or row.get("boards") or []
-    out: list[str] = []
-    if isinstance(raw, list):
-        out = [str(x).strip() for x in raw if str(x).strip()]
-    sb = str(p.get("source_board") or row.get("source_board") or "").strip()
-    ml = str(row.get("mainline") or p.get("mainline") or "").strip()
-    for name in (sb, ml):
-        if name and name not in out:
-            out.append(name)
-    return out
+    from market_desk.db.code_board_seen import boards_from_signal
+
+    return boards_from_signal(row)
 
 
 def _boards_from_scan(item: dict[str, Any]) -> list[str]:
-    raw = item.get("boards") or []
-    if isinstance(raw, list):
-        return [str(x).strip() for x in raw if str(x).strip()]
-    return []
+    """Return scan side-note boards (plus the stored industry)."""
+    from market_desk.db.code_board_seen import boards_from_scan_item
+
+    return boards_from_scan_item(item)
 
 
 def _entry_price(row: dict[str, Any]) -> float | None:
@@ -312,86 +304,90 @@ def build_range_leaderboard(
     }
 
 
-def build_code_appearances(code: str, *, limit: int = 120) -> dict[str, Any]:
-    """Count signal / MA-fan / pot appearances and related frozen boards."""
-    from market_desk.db import list_ma_fan_dates, load_ma_fan_day, load_signals_for_code
-    from market_desk.review.outcome import _flatten_signal_prices
-    from market_desk.review.signals import _dragon_hide_from_review, is_buy_signal
+def _days_ago(day: str) -> int | None:
+    """Return calendar days from ``day`` to today (Asia/Shanghai)."""
+    from datetime import date
+
+    from market_desk.review.outcome import _cn_now
+
+    raw = str(day or "")[:10]
+    if len(raw) != 10:
+        return None
+    try:
+        d0 = date.fromisoformat(raw)
+    except ValueError:
+        return None
+    return max(0, (_cn_now().date() - d0).days)
+
+
+def _seen_to_scan_row(r: dict[str, Any]) -> dict[str, Any]:
+    """Map one indexed MA-fan / pot appearance into an API scan row."""
+    boards = list(r.get("boards") or [])
+    src = str(r.get("source") or "")
+    return {
+        "source": src,
+        "trade_date": r.get("trade_date"),
+        "close": num(r.get("price")),
+        "pct": num(r.get("pct")),
+        "days_ago": _days_ago(str(r.get("trade_date") or "")),
+        "d3": num(r.get("d3")),
+        "stage": r.get("tag"),
+        "tag": r.get("tag") or None,
+        "focus": ("浅跌" in str(r.get("tag") or "")) if src == "pot" else None,
+        "boards": boards,
+        "board_text": " / ".join(boards) or "—",
+    }
+
+
+def build_code_appearances(code: str, *, limit: int = 400) -> dict[str, Any]:
+    """Return indexed signal / MA-fan / pot appearances plus frozen and current boards.
+
+    Reads only the local ``code_board_seen`` index (and today's snapshot for the
+    separate ``current_boards`` hint); no live network request.
+    """
+    from market_desk.db import current_boards_for_code, load_seen_by_code
 
     c = normalize_code(code)
     if len(c) != 6:
         return {"ok": False, "code": c, "note": "代码须为 6 位"}
 
-    sig_rows = []
+    rows = load_seen_by_code(c, limit=limit)
     boards: list[str] = []
-    for raw in load_signals_for_code(c, limit=limit):
-        item = _flatten_signal_prices(raw)
-        if _dragon_hide_from_review(item):
-            continue
-        if not is_buy_signal(item.get("signal_type")) and not str(
-            item.get("signal_type") or ""
-        ).startswith("sell"):
-            continue
-        for b in _boards_from_signal(item):
-            if b not in boards:
-                boards.append(b)
-        sig_rows.append(
-            {
-                "trade_date": item.get("trade_date"),
-                "name": item.get("name"),
-                "signal_type": item.get("signal_type"),
-                "outcome_label": item.get("outcome_label"),
-                "outcome_day3_pct": item.get("outcome_day3_pct"),
-                "mainline": item.get("mainline"),
-                "boards": _boards_from_signal(item),
-            }
-        )
-
+    sig_rows: list[dict[str, Any]] = []
     ma_fan_days: list[dict[str, Any]] = []
     pot_days: list[dict[str, Any]] = []
-    scan_name = ""
-    for day in list_ma_fan_dates(limit=40):
-        body = load_ma_fan_day(day) or {}
-        for it in body.get("items") or []:
-            if normalize_code(it.get("code")) != c:
-                continue
-            if not scan_name and it.get("name"):
-                scan_name = str(it.get("name"))
-            for b in _boards_from_scan(it):
-                if b not in boards:
-                    boards.append(b)
-            fwd = it.get("fwd") if isinstance(it.get("fwd"), dict) else {}
-            ma_fan_days.append(
+    scan_rows: list[dict[str, Any]] = []
+    name = ""
+    for r in rows:
+        if not name and r.get("name"):
+            name = str(r.get("name"))
+        for b in r.get("boards") or []:
+            if b not in boards:
+                boards.append(b)
+        src = str(r.get("source") or "")
+        if src == "signal":
+            sig_rows.append(
                 {
-                    "trade_date": day,
-                    "stage": it.get("stage"),
-                    "theme_tag": it.get("theme_tag"),
-                    "boards": _boards_from_scan(it),
-                    "d3": num(fwd.get("d3")),
+                    "trade_date": r.get("trade_date"),
+                    "name": r.get("name"),
+                    "signal_type": r.get("signal_type") or r.get("tag"),
+                    "price": num(r.get("price")),
+                    "outcome_label": r.get("outcome_label"),
+                    "outcome_day3_pct": r.get("outcome_day3_pct"),
+                    "mainline": r.get("mainline"),
+                    "boards": list(r.get("boards") or []),
                 }
             )
-        for it in body.get("pot") or []:
-            if normalize_code(it.get("code")) != c:
-                continue
-            if not scan_name and it.get("name"):
-                scan_name = str(it.get("name"))
-            for b in _boards_from_scan(it):
-                if b not in boards:
-                    boards.append(b)
-            fwd = it.get("fwd") if isinstance(it.get("fwd"), dict) else {}
-            pot_days.append(
-                {
-                    "trade_date": day,
-                    "focus": bool(it.get("focus")),
-                    "boards": _boards_from_scan(it),
-                    "d3": num(fwd.get("d3")),
-                }
-            )
+            continue
+        row = _seen_to_scan_row(r)
+        scan_rows.append(row)
+        (ma_fan_days if src == "ma_fan" else pot_days).append(row)
 
-    name = next(
-        (str(r.get("name") or "") for r in sig_rows if r.get("name")),
-        "",
-    ) or scan_name
+    scan_rows.sort(
+        key=lambda x: (str(x.get("trade_date") or ""), str(x.get("source") or "")),
+        reverse=True,
+    )
+    cur = current_boards_for_code(c)
     return {
         "ok": True,
         "code": c,
@@ -400,10 +396,15 @@ def build_code_appearances(code: str, *, limit: int = 120) -> dict[str, Any]:
         "ma_fan_n": len(ma_fan_days),
         "pot_n": len(pot_days),
         "board_set": boards,
+        "current_boards": cur,
         "signals": sig_rows[:60],
         "ma_fan_days": ma_fan_days,
         "pot_days": pot_days,
-        "note": "信号次数含买卖；板名来自冻结 board_names / 扫描旁注，非今日成分回写。",
+        "scan_rows": scan_rows,
+        "note": (
+            "读本地出现索引：冻结板名（当时挂上的）+ 当时价；"
+            "现况板来自今日成分快照，仅供对照，不进榜。"
+        ),
     }
 
 
@@ -413,62 +414,53 @@ def build_board_roster(
     days: int = 20,
     limit: int = 80,
 ) -> dict[str, Any]:
-    """List codes that appeared under a board name in the recent window."""
+    """List codes that appeared under a board keyword in the recent indexed window."""
+    from market_desk.db import load_seen_by_board
+
     q = str(query or "").strip()
     if not q:
         return {"ok": False, "q": q, "items": [], "note": "请输入板块关键词"}
 
-    pack = collect_range_events(window="1m" if days >= 20 else ("2w" if days >= 10 else "1w"))
-    # If caller asks for a custom day count, trim/recollect.
-    if days not in (5, 10, 20):
-        use_days = _active_trade_dates(max(1, min(int(days), 40)))
-        events = (
-            [_signal_event(r) for r in _signal_rows_for_days(use_days)]
-            + _scan_events_for_days(use_days)
-        )
-        day_list = use_days
-    else:
-        events = pack["events"]
-        day_list = pack["days"]
-
-    q_l = q.lower()
+    lim = max(1, min(int(limit), 200))
+    rows = load_seen_by_board(q, days=days, limit=lim * 3)
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-    for ev in events:
-        boards = [str(b) for b in (ev.get("boards") or [])]
-        ml = str(ev.get("mainline") or "").strip()
-        names = boards + ([ml] if ml else [])
-        hit = next((b for b in names if q_l in b.lower() or b.lower() in q_l), None)
-        if not hit:
-            continue
-        key = (str(ev.get("trade_date")), normalize_code(ev.get("code")), str(ev.get("source")))
+    for r in rows:
+        key = (str(r.get("trade_date")), str(r.get("code")), str(r.get("source")))
         if key in seen:
             continue
         seen.add(key)
+        d3 = r.get("outcome_day3_pct")
+        if d3 is None:
+            d3 = r.get("d3")
+        boards_text = str(r.get("boards_text") or "")
         items.append(
             {
-                "trade_date": ev.get("trade_date"),
-                "code": normalize_code(ev.get("code")),
-                "name": ev.get("name"),
-                "source": ev.get("source"),
-                "board_hit": hit,
-                "boards": boards,
-                "mainline": ev.get("mainline"),
-                "outcome_day3_pct": ev.get("outcome_day3_pct"),
-                "outcome_label": ev.get("outcome_label"),
-                "stage": ev.get("stage"),
-                "tags": ev.get("tags") or [],
+                "trade_date": r.get("trade_date"),
+                "code": r.get("code"),
+                "name": r.get("name"),
+                "source": r.get("source"),
+                "board_hit": r.get("board_name"),
+                "boards": [b for b in boards_text.split(" / ") if b],
+                "price": num(r.get("price")),
+                "days_ago": _days_ago(str(r.get("trade_date") or "")),
+                "mainline": r.get("mainline"),
+                "outcome_day3_pct": num(d3),
+                "outcome_label": r.get("outcome_label"),
+                "stage": r.get("tag"),
             }
         )
-        if len(items) >= max(1, min(int(limit), 200)):
+        if len(items) >= lim:
             break
 
-    items.sort(key=lambda r: (str(r.get("trade_date") or ""), str(r.get("code") or "")), reverse=True)
+    items.sort(
+        key=lambda x: (str(x.get("trade_date") or ""), str(x.get("code") or "")),
+        reverse=True,
+    )
     return {
         "ok": True,
         "q": q,
-        "days": day_list,
         "n": len(items),
         "items": items,
-        "note": "匹配冻结板名 / 主线旁注；含信号、发散、锅底。",
+        "note": "读本地出现索引；匹配冻结板名（含后缀归一）；含信号、发散、锅底。",
     }

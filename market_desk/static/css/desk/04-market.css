@@ -643,8 +643,13 @@ th { color: var(--muted); font-weight: 600; }
 }
 .sig-hist-sum b { color: var(--text); font-variant-numeric: tabular-nums; }
 .sig-hist-table-wrap {
-  overflow: auto; max-height: calc(100vh - 220px);
+  overflow: auto; max-height: calc(48vh - 80px);
   border: 1px solid var(--line); border-radius: 8px;
+  margin-bottom: 10px;
+}
+.sig-hist-sec {
+  font-size: 12px; font-weight: 700; padding: 6px 8px 4px;
+  color: var(--text); position: sticky; top: 0; background: #0e141c; z-index: 2;
 }
 .sig-hist-table {
   width: 100%; border-collapse: collapse; font-size: 12px;

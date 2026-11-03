@@ -14,6 +14,37 @@
 
 ---
 
+## [v1.10.46] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 看一只票挂过哪些板、从板反查复盘出现过谁，原先每次现场翻三源（信号 + 夜间扫描 JSON），慢，且依赖实时拼装；用今日成分回写又会把历史标脏。
+
+### 【做了什么（What）】
+- **Added** `code_board_seen` 出现索引（冻结）：`(trade_date, code, source, board_name)`，附 `board_key`（后缀归一）、当时价、当日%、三日%、标签、`ref_id`；source=`signal`|`ma_fan`|`pot`；无板名写空占位，后来有板名即替换占位。
+- **Added** 写入钩子：`upsert_signal`（仅共享买点，不含个人卖）与 `save_ma_fan_day`（整日替换）落库同事务写索引；启动时 `init_db` 空表自动回填一次（本地库约 2.5k 行 / 0.07s）。
+- **Changed** `appearances` / `board-roster` 改读索引，不再遍历 `ma_fan_day` JSON；板检索走 `board_key` 归一（「固态电池」命中「固态电池概念」），空板名不命中；roster 补当时价、距今。
+- **Added** `current_boards`（现况板）：由 `board_members_snap` 反查，抽屉与检索框单独标「现况板（非当时）」，不进榜、不排序、不回写历史。
+- **Changed** `signal_n` 现为共享买点次数（卖点个人化，不入索引；抽屉上表仍列买卖）。区间榜仍读信号 outcome + 扫描 fwd（需最新三日%），板名 helper 与索引共用一套。
+
+### 【影响与验证（Impact & Verification）】
+- 只读观测，不改 ready/闸。pytest `test_code_board_seen`（幂等/占位替换/卖不入索引/整日替换/归一/回填一次/现况分离）+ 全量 592 通过。desk.db 仅新增表与索引。
+
+---
+
+## [v1.10.45] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 历史抽屉对仅进过发散/锅底的票只显示「暂无历史信号」+ 摘要一行次数，看不到几月几号、当时价、距今，核对困难。
+
+### 【做了什么（What）】
+- **Added** 历史抽屉第二表「发散/锅底出现」：日期、类型、当时收盘价、距今天数、当日%/三日%、标签、板名。
+- **Changed** `appearances` 返回 `scan_rows`（含 `close` / `days_ago`）；打开历史时与买卖信号表一并加载。
+
+### 【影响与验证（Impact & Verification）】
+- 只读。pytest `test_range_board`。desk.db 兼容。
+
+---
+
 ## [v1.10.44] - 2026-11-03
 
 ### 【背景与动机（为什么做 · Why）】
