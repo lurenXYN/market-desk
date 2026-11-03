@@ -810,10 +810,10 @@
         <div class="rev-today" id="revToday"></div>
         <div class="rev-exec" id="revExec"></div>
         <div class="rev-missed" id="revMissed"></div>
-        <div class="rev-range" id="revRange">
-          <div class="hd">区间涨跌<button type="button" class="q" data-term="区间涨跌榜">?</button>
+        <details class="rev-range" id="revRange">
+          <summary class="hd">区间涨跌<button type="button" class="q" data-term="区间涨跌榜">?</button>
             <span class="meta" id="revRangeMeta"></span>
-          </div>
+          </summary>
           <div class="rev-range-bar">
             <div class="rev-range-toggles" id="revRangeWin">
               <button type="button" class="rev-col-btn on" data-win="1w">1周</button>
@@ -850,11 +850,11 @@
               </tbody>
             </table>
           </div>
-        </div>
+        </details>
         <div class="rev-jump">
           <a class="rev-col-btn" href="#revSignals">↓ 跳到信号表</a>
           <a class="rev-col-btn" href="#revAudit">↓ 审计区</a>
-          <span class="meta">摘要 → 区间涨跌 → 主表 → 审计默认折叠</span>
+          <span class="meta">摘要 → 区间涨跌（默认收起）→ 主表 → 审计默认折叠</span>
         </div>
         <div class="rev-toolbar" id="revSignals">
           <div class="pos-form" id="revFilters" style="grid-template-columns: 90px 90px 110px 120px 120px auto auto auto auto auto auto; margin:0; flex:1;">

@@ -271,15 +271,23 @@ tr.rev-flash { outline: 1px solid #fbbf24; outline-offset: -1px; background: rgb
 .live-vs { font-size: 11px; margin-left: 2px; }
 .rev-range {
   margin: 10px 0;
-  padding: 8px 10px 10px;
+  padding: 0 10px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #0e141c;
 }
-.rev-range .hd {
+.rev-range > summary.hd {
   font-weight: 700;
-  margin-bottom: 6px;
+  margin: 0 -10px 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
 }
+.rev-range > summary.hd::-webkit-details-marker { display: none; }
+.rev-range > summary.hd::before { content: "▸ "; color: var(--muted); }
+.rev-range[open] > summary.hd::before { content: "▾ "; }
+.rev-range:not([open]) { padding-bottom: 0; }
+.rev-range:not([open]) > summary.hd { margin-bottom: 0; }
 .rev-range-bar {
   display: flex;
   flex-wrap: wrap;

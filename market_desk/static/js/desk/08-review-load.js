@@ -38,7 +38,10 @@ async function loadReview(force, date, opts) {
       }
     }
     paintReview(d);
-    if (typeof loadRevRangeBoard === "function") loadRevRangeBoard();
+    const rangeEl = document.getElementById("revRange");
+    if (typeof loadRevRangeBoard === "function" && rangeEl && rangeEl.open) {
+      loadRevRangeBoard();
+    }
     const tSeq = ++reviewTrendSeq;
     loadReviewTrends(day, tSeq, d.trends_fp || "");
     loadReviewZtYtd(day, seq);

@@ -200,12 +200,25 @@ function bindRevRangeBoard() {
   }
   const root = document.getElementById("revRange");
   if (root) {
+    const sum = root.querySelector(":scope > summary");
+    if (sum) {
+      sum.addEventListener("click", (ev) => {
+        if (ev.target.closest("button.q")) ev.preventDefault();
+      });
+    }
     root.addEventListener("click", (ev) => {
       const hist = ev.target.closest(".rev-range-hist, .rev-range-code");
       if (!hist) return;
       const code = hist.getAttribute("data-code");
       const name = hist.getAttribute("data-name") || "";
       if (code && typeof openSigHist === "function") openSigHist(code, name);
+    });
+    // Default collapsed: load only when first opened (or reopen with empty body).
+    root.addEventListener("toggle", () => {
+      if (!root.open || typeof loadRevRangeBoard !== "function") return;
+      const body = document.getElementById("revRangeBody");
+      const hasRows = !!(body && body.querySelector("tr .rev-range-code, tr .rev-range-hist"));
+      if (!hasRows) loadRevRangeBoard();
     });
   }
 }

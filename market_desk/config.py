@@ -417,6 +417,16 @@ DEEP_V_DD_PCT = 1.5                     # CSI1000 max drawdown from open (%)
 DEEP_V_RECOVER_FRAC = 0.5               # close rebound / drawdown ≥ this
 DEEP_V_CHASE_HHMM = "14:00"             # first ready at/after → chase group A
 DEEP_V_FETCH_SEC = 180                  # refresh CSI1000 minutes cadence
+# No-pullback run-up (NP) observation (read-only; pre-registered 2026-11-03).
+# NP = shared buy whose daily low and close both stayed above the plan price.
+# Out-of-sample evidence only counts from SINCE; earlier days are discovery.
+NP_SHADOW_SINCE = "2026-11-04"
+NP_GATE_MIN_N = 30            # NP cards in the out-of-sample window
+NP_GATE_MIN_DAYS = 10         # trading days with both NP and TP cards
+NP_GATE_MIN_DIFF = 0.5        # NP − TP three-day excess (%), same-day paired
+NP_GATE_MIN_T = 2.0           # |safe_t| over daily paired differences
+NP_BUCKET_MIN_N = 8           # subgroup shown as "thin" below this
+
 # Limit-up board-share lift table (display only; never recommends codes).
 ZT_SHARE_SHADOW_SINCE = "2026-10-31"
 ZT_SHARE_LOOKBACK = 20                  # trading days for mean / σ

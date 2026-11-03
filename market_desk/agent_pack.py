@@ -13,7 +13,7 @@ from typing import Any
 from market_desk.calendar import now_cn
 
 
-AGENT_PACK_SCHEMA = "agent_pack.v4"
+AGENT_PACK_SCHEMA = "agent_pack.v5"
 
 _GATE_LIVE_KEYS = ("minute", "off_high", "thin")
 
@@ -482,6 +482,13 @@ def build_agent_pack_sync() -> dict[str, Any]:
     except Exception as exc:
         adapt_effect = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
 
+    try:
+        from market_desk.np_review import build_np_review
+
+        np_review = build_np_review(buy_rows)
+    except Exception as exc:
+        np_review = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
+
     proposals = []
     seen: set[str] = set()
     for it in review.get("items") or []:
@@ -579,6 +586,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
         },
         "adapt_live": adapt_live,
         "adapt_effect": adapt_effect,
+        "np_review": np_review,
         "proposals": proposals,
         "dual_wins": dual,
         "review_check": review,

@@ -560,6 +560,13 @@ def apply_outcomes(
     """
     n = 0
     today = _cn_now().strftime("%Y-%m-%d")
+    try:
+        # Freeze signal-day low/close once (NP observation); never blocks scoring.
+        from market_desk.np_review import freeze_np_for_rows
+
+        freeze_np_for_rows(rows, closes_map, today=today)
+    except Exception:
+        pass
     for row in rows:
         if str(row.get("trade_date") or "") >= today:
             continue

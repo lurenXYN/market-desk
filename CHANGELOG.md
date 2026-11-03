@@ -14,6 +14,48 @@
 
 ---
 
+## [v1.10.51] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- `fetch_daily_bars` 在腾讯/东财已拿到 ≥20 根时提前返回，跳过写库，导致 `market_bar_daily` 实测为空；NP 补冻、纪律、闸门重放、基准日线都吃亏。
+
+### 【做了什么（What）】
+- **Fixed** 所有成功拉到的日线都经 `_cache_daily_bars` → `upsert_daily_bars`，含早退路径。
+
+### 【影响与验证（Impact & Verification）】
+- 幂等覆盖，口径不变。`tests/test_bars_cache_fetch.py` 覆盖腾讯早退写库。desk.db 无迁移。
+
+---
+
+## [v1.10.50] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 「没回踩就上去」的票反复出现，不知是计划价偏低、出卡偏晚还是题材太强；`auto_tune` 只数 `never_touched` 就松回踩，没有证据说明追这类票是否真的更好。且日线缓存 `market_bar_daily` 实测为空，无法事后重放当日最低/收盘。
+
+### 【做了什么（What）】
+- **Added** `market_desk/np_review.py`：NP（日线最低与收盘都高于计划价）vs TP（同日触到计划价）观察包；进场口径 E1=出卡时 last、E2=当日收盘（不用计划价），扣同窗中证1000；按日配对 NP−TP、`safe_t`、前后两半同号；七维描述分桶（gap/时段/板块阶段/尺上下/深V/来源/日线趋势，含 `np_rate`）。
+- **Added** 收盘后冻结 `payload.np`（`day_low/day_close/day_high/plan/np`）：`apply_outcomes` 入口 + `_score_review_backlog` 补冻，`set_signal_payload_once` 只写一次。
+- **Added** `agent_pack.v5` 新块 `np_review`（`oos` 自 `NP_SHADOW_SINCE=2026-11-04` 判定；`discovery` 仅找共性）。预登记门槛：NP 张数≥30、配对日≥10、NP−TP 三日超额≥+0.5%、|t|≥2、两半同号。
+- **Not changed** 计划价/回踩带/ready 硬闸/`auto_tune` 均不动。
+
+### 【影响与验证（Impact & Verification）】
+- 只读观察；desk.db 无迁移（仅 payload 新键）。`tests/test_np_review.py` 5 项；全量 598 passed。
+
+---
+
+## [v1.10.49] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 区间涨跌默认展开占复盘首屏，多数时候先看主表。
+
+### 【做了什么（What）】
+- **Changed** 区间涨跌改为 `<details>` 默认收起；首次展开再拉榜。
+
+### 【影响与验证（Impact & Verification）】
+- 只读 UI。desk.db 无新迁移。
+
+---
+
 ## [v1.10.48] - 2026-11-03
 
 ### 【背景与动机（为什么做 · Why）】

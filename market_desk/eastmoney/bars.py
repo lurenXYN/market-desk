@@ -69,6 +69,22 @@ async def _fetch_daily_bars_eastmoney(
     return []
 
 
+def _cache_daily_bars(code: str, bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Persist fetched bars into ``market_bar_daily`` (best effort) and return them.
+
+    Early-return paths used to skip this write once a source already had ≥20 bars,
+    leaving the local cache empty for offline NP / discipline / gate replay.
+    """
+    if bars:
+        try:
+            from market_desk.db.bars_cache import upsert_daily_bars
+
+            upsert_daily_bars(code, bars, source="fetch_daily_bars")
+        except Exception:
+            pass
+    return bars
+
+
 async def fetch_daily_bars(
     client: httpx.AsyncClient,
     code: str,
@@ -86,6 +102,7 @@ async def fetch_daily_bars(
 
     Order: East Money (fast fail) → Tencent qfq → Sina. EM history hosts often
     disconnect on some networks; Tencent/Sina keep daily trend usable.
+    Every successful fetch is upserted into ``market_bar_daily``.
     """
     c = normalize_code(code)
     if not c:
@@ -102,14 +119,14 @@ async def fetch_daily_bars(
         except Exception:
             bars = []
         if len(bars) >= 20:
-            return bars
+            return _cache_daily_bars(c, bars)
     em = await _fetch_daily_bars_eastmoney(
         client, c, limit=limit, adjust=adjust, beg=beg, end=end
     )
     if len(em) > len(bars):
         bars = em
     if len(bars) >= 20:
-        return bars
+        return _cache_daily_bars(c, bars)
     if not prefer_tx:
         try:
             from market_desk.tencent import fetch_daily_bars as tx_daily
@@ -120,21 +137,14 @@ async def fetch_daily_bars(
         except Exception:
             pass
     if len(bars) >= 20:
-        return bars
+        return _cache_daily_bars(c, bars)
     try:
         sina = await _fetch_daily_bars_sina(client, c, limit=limit)
         if len(sina) > len(bars):
             bars = sina
     except Exception:
         pass
-    if bars:
-        try:
-            from market_desk.db.bars_cache import upsert_daily_bars
-
-            upsert_daily_bars(c, bars, source="fetch_daily_bars")
-        except Exception:
-            pass
-    return bars
+    return _cache_daily_bars(c, bars)
 
 
 def _parse_eastmoney_klines(rows: list[Any]) -> list[dict[str, Any]]:
