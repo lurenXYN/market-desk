@@ -27,8 +27,9 @@ def _buy(code: str, hhmm: str, price: float = 10.0, **extra):
 
 def test_above_plan_marks_chase_and_caution():
     rows = enrich_signals_with_live_marks(
-        [_buy("600001", "09:40")],
+        [_buy("600001", "09:40", trade_date=TRADE_DAY)],
         {"600001": {"price": 10.2, "low": 9.9}},
+        today=TRADE_DAY,
     )
     r = rows[0]
     assert "above_plan" in r["price_flags"]
@@ -41,11 +42,15 @@ def test_above_plan_marks_chase_and_caution():
 
 def test_above_plan_skipped_below_threshold_and_on_chase_hit():
     small = enrich_signals_with_live_marks(
-        [_buy("600001", "09:40")], {"600001": {"price": 10.05, "low": 9.9}}
+        [_buy("600001", "09:40", trade_date=TRADE_DAY)],
+        {"600001": {"price": 10.05, "low": 9.9}},
+        today=TRADE_DAY,
     )[0]
     assert "above_plan" not in small["price_flags"]
     capped = enrich_signals_with_live_marks(
-        [_buy("600001", "09:40")], {"600001": {"price": 10.6, "low": 9.9}}
+        [_buy("600001", "09:40", trade_date=TRADE_DAY)],
+        {"600001": {"price": 10.6, "low": 9.9}},
+        today=TRADE_DAY,
     )[0]
     assert "chase_hit" in capped["price_flags"]
     assert "above_plan" not in capped["price_flags"]
@@ -54,8 +59,10 @@ def test_above_plan_skipped_below_threshold_and_on_chase_hit():
 
 
 def test_sell_rows_never_marked_above_plan():
-    sell = _buy("600001", "09:40", signal_type="sell")
-    r = enrich_signals_with_live_marks([sell], {"600001": {"price": 10.3, "low": 9.9}})[0]
+    sell = _buy("600001", "09:40", signal_type="sell", trade_date=TRADE_DAY)
+    r = enrich_signals_with_live_marks(
+        [sell], {"600001": {"price": 10.3, "low": 9.9}}, today=TRADE_DAY
+    )[0]
     assert "above_plan" not in r["price_flags"]
 
 

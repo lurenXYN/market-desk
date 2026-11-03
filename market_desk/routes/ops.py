@@ -404,11 +404,15 @@ def build_ops_check() -> dict:
         )
     try:
         from market_desk.db.bars_cache import bars_cache_stats
+        from market_desk.np_review import signal_bar_np_coverage
 
         st = bars_cache_stats()
+        cov = signal_bar_np_coverage()
         rows = int(st.get("rows") or 0)
         codes = int(st.get("codes") or 0)
-        lvl = "ok" if rows > 0 and codes > 0 else "warn"
+        bar_rate = cov.get("bar_rate")
+        np_rate = cov.get("np_rate")
+        lvl = "ok" if cov.get("ok") else ("warn" if rows > 0 else "warn")
         checks.append(
             {
                 "id": "bars_cache",
@@ -416,9 +420,13 @@ def build_ops_check() -> dict:
                 "level": lvl,
                 "detail": (
                     f"{codes} 码 · {rows} 行 · "
-                    f"{st.get('min_date') or '—'}→{st.get('max_date') or '—'}"
+                    f"{st.get('min_date') or '—'}→{st.get('max_date') or '—'}；"
+                    f"买卡有K {cov.get('with_bar')}/{cov.get('buys')} "
+                    f"({None if bar_rate is None else f'{bar_rate:.0%}'}) · "
+                    f"已冻NP {cov.get('with_np')}/{cov.get('buys')} "
+                    f"({None if np_rate is None else f'{np_rate:.0%}'})"
                 ),
-                "stats": st,
+                "stats": {**st, "coverage": cov},
             }
         )
     except Exception as exc:

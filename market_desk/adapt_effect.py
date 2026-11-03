@@ -312,18 +312,38 @@ def build_adapt_effect_panel(
     buy_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the effect-audit block for agent-pack."""
-    scorecard = build_size_gate_scorecard(buy_rows)
+    learn_rows = buy_rows
+    basis = "classic"
+    try:
+        from market_desk.adapt.bundle import (
+            _remap_rows_for_adapt_standard,
+            closes_map_from_bar_cache,
+        )
+
+        codes = [str(r.get("code") or "") for r in (buy_rows or [])]
+        packed = closes_map_from_bar_cache(codes)
+        remapped, n_hit = _remap_rows_for_adapt_standard(
+            buy_rows, "same_day_plan", closes_map=packed or None
+        )
+        if n_hit > 0:
+            learn_rows = remapped
+            basis = "same_day_plan"
+    except Exception:
+        pass
+    scorecard = build_size_gate_scorecard(learn_rows)
+    scorecard["basis"] = basis
     today = build_today_buy_cards()
     miss = build_miss_trend(buy_rows)
     themes = build_theme_rep_snapshot()
     return {
         "ok": True,
+        "basis": basis,
         "scorecard": scorecard,
         "today_cards": today,
         "miss_trend": miss,
         "theme_rep": themes,
         "note": (
-            "看效果用：size/闸分档 abs·xs + 今日卡对照 adapt_live + 漏买三类 + 题材信誉两端。"
-            "仍非因子反事实。"
+            "看效果用：size/闸分档 abs·xs（默认 same_day_plan 可触达口径）+ 今日卡对照 "
+            "adapt_live + 漏买三类 + 题材信誉两端。仍非因子反事实。"
         ),
     }

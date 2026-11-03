@@ -309,18 +309,19 @@ ENTRIES: dict[str, dict[str, str]] = {
         "命中集合 BUY_HIT_LABELS={次日红,三日红}；虚红/冲高回落不进命中率。",
     },
     "复盘评测标准": {
-        "mean": "三套口径可切换：现行（成交价缺省用建议价·隔日）；当日建议价（须当天碰到 plan·隔日）；实盘成交（只用你填的成交价·隔日，无成交则标无成交）。调参反哺默认只用落库 classic。",
+        "mean": "三套口径可切换：现行 classic（成交价缺省用建议价·隔日）；当日建议价 same_day_plan（须当天碰到 plan·隔日）；实盘成交 filled。落库仍写 classic；调参学习默认重算 same_day_plan。",
         "algo": "settings.outcome_standard / GET /api/review?oc=classic|same_day_plan|filled。\n"
         "classic 写入 signals；另两套 overlay。卖出 MAE 忽略次日 high（开盘毛刺）。\n"
         "plan_price 与 wait 分列落库，same_day_plan/回测 plan 模式不再与 wait 塌缩。\n"
         "开盘卖出缓冲见「开盘卖出缓冲」词条（must/watch）。",
     },
     "调参口径": {
-        "mean": "仓位热度、执行分、卖点 MFE 等 soft 调参默认读库里 classic 结果标签。"
-        "打开「调参跟随评测」后：界面实盘成交→已交易样本；界面当日plan·隔日→用预取日线按 same_day_plan 重算标签再反哺。",
-        "algo": "build_adapt_bundle。adapt_follow_outcome+filled → 仅 traded+有标签行；\n"
-        "same_day_plan → engine 预取 set_adapt_bars → _remap_rows_for_adapt_standard 调 score_signal_with_closes；\n"
-        "无 OHLC 包或重算 0 笔时回退 classic 并在 basis_note 说明。",
+        "mean": "仓位热度、执行分等 soft 调参默认按 same_day_plan（日低触到计划价才计）；NP 未触达不进样本。打开「调参跟随」且界面选实盘成交时改用已交易样本。",
+        "algo": "build_adapt_bundle 默认 same_day_plan：engine 预取 set_adapt_bars / 日线缓存 → "
+        "_remap_rows_for_adapt_standard；当日未触达不进热度。\n"
+        "adapt_follow_outcome+filled → 仅 traded+有标签行；\n"
+        "无 OHLC 包或重算 0 笔时回退 classic 并在 basis_note 说明。"
+        "dual_wins.touch 与 classic 并排，改规则优先对照 touch。",
     },
     "回测保真": {
         "mean": "回测撮合精度：日线用高低点判触达（偏乐观）；分时模式按信号日拉 1 分钟 K，识别「先冲不追上限再回踩」的假触达（历史日亦可）。",

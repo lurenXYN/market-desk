@@ -129,11 +129,12 @@ class ReviewMixin:
                     packed = await fetch_daily_klines_many(client, codes, limit=40)
                     apply_outcomes(pending, packed)
                 try:
-                    from market_desk.np_review import backfill_np_freeze
+                    from market_desk.np_review import backfill_np_freeze, backfill_signal_daily_bars
 
+                    await backfill_signal_daily_bars(client, limit_codes=80)
                     await backfill_np_freeze(client, limit=300)
                 except Exception:
-                    log.exception("np freeze backfill failed")
+                    log.exception("np/bars freeze backfill failed")
                 # Re-score labeled rows once when the OHLC fake-red formula bumps.
                 ver = int(OUTCOME_FORMULA_VERSION)
                 try:

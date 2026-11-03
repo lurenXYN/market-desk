@@ -49,6 +49,45 @@ def get_adapt_bars() -> dict[str, Any]:
     return dict(_ADAPT_BARS)
 
 
+def closes_map_from_bar_cache(
+    codes: list[str] | None,
+    *,
+    limit: int = 60,
+) -> dict[str, Any]:
+    """Build ``{code: (dates, closes, ohlc)}`` from ``market_bar_daily`` (offline)."""
+    from market_desk.db.bars_cache import load_daily_bars
+    from market_desk.filters import normalize_code
+    from market_desk.numbers import num
+
+    out: dict[str, Any] = {}
+    for raw in codes or []:
+        code = normalize_code(raw)
+        if not code or code in out:
+            continue
+        try:
+            bars = load_daily_bars(code, limit=int(limit))
+        except Exception:
+            bars = []
+        dates: list[str] = []
+        closes: list[float] = []
+        opens: list[float | None] = []
+        highs: list[float | None] = []
+        lows: list[float | None] = []
+        for b in bars:
+            c = num(b.get("close"))
+            d = str(b.get("trade_date") or b.get("date") or "")[:10]
+            if c is None or len(d) != 10:
+                continue
+            dates.append(d)
+            closes.append(float(c))
+            opens.append(num(b.get("open")))
+            highs.append(num(b.get("high")))
+            lows.append(num(b.get("low")))
+        if len(dates) >= 4:
+            out[code] = (dates, closes, {"open": opens, "high": highs, "low": lows})
+    return out
+
+
 def _remap_rows_for_adapt_standard(
     rows: list[dict[str, Any]] | None,
     standard: str,
@@ -60,6 +99,8 @@ def _remap_rows_for_adapt_standard(
     ``filled``: keep traded + labeled rows (实盘成交样本).
     ``same_day_plan``: re-score buys with ``score_signal_with_closes`` when
     OHLC pack is available (from ``closes_map`` or ``set_adapt_bars``).
+    Buys that cannot be rescored have classic outcome fields cleared so inflated
+    plan-entry day3% does not leak into heat / exec.
     """
     from market_desk.filters import normalize_code
     from market_desk.review import is_buy_signal, score_signal_with_closes
@@ -77,6 +118,10 @@ def _remap_rows_for_adapt_standard(
         return src, 0
     packed = closes_map if closes_map is not None else get_adapt_bars()
     if not packed:
+        # Fall back to cache when engine prefetch is empty.
+        codes = [str(r.get("code") or "") for r in src]
+        packed = closes_map_from_bar_cache(codes)
+    if not packed:
         return src, 0
     remapped: list[dict[str, Any]] = []
     n_hit = 0
@@ -88,6 +133,10 @@ def _remap_rows_for_adapt_standard(
         code = normalize_code(row.get("code"))
         triple = packed.get(code) if code else None
         if not triple or len(triple) < 2:
+            # Drop classic outcome so untouched / unscored cards do not inflate.
+            row["outcome_label"] = None
+            row["outcome_day1_pct"] = None
+            row["outcome_day3_pct"] = None
             remapped.append(row)
             continue
         dates = list(triple[0] or [])
@@ -105,6 +154,10 @@ def _remap_rows_for_adapt_standard(
         if scored and scored.get("outcome_label"):
             row.update(scored)
             n_hit += 1
+        else:
+            row["outcome_label"] = None
+            row["outcome_day1_pct"] = None
+            row["outcome_day3_pct"] = None
         remapped.append(row)
     return remapped, n_hit
 
@@ -119,10 +172,10 @@ def build_adapt_bundle(
 ) -> dict[str, Any]:
     """Assemble day-scoped adaptive soft controls for the battle desk.
 
-    Outcome-based soft knobs default to **persisted classic** labels on
-    ``signals``. When ``adapt_follow_outcome`` is on:
-      - ``filled`` → traded+labeled rows
-      - ``same_day_plan`` → re-score with OHLC pack from ``set_adapt_bars``
+    Learning basis defaults to ``same_day_plan`` (only cards whose day low
+    touched the plan price). Optional ``adapt_follow_outcome`` + UI
+    ``filled`` switches to traded fills. Classic plan-entry labels are not
+    used for heat / exec when a remap pack is available.
     """
     from market_desk.settings import setting
 
@@ -135,27 +188,22 @@ def build_adapt_bundle(
             rows = load_signals(limit=240)
     except Exception:
         rows = []
+    # P1: learning defaults to executable same_day_plan; filled only when opted in.
+    learn_std = "filled" if (follow and ui_std == "filled") else "same_day_plan"
     basis = "classic"
     basis_note = "调参反哺固定用落库 classic 标签"
-    if follow and ui_std in ("same_day_plan", "filled"):
-        remapped, n_hit = _remap_rows_for_adapt_standard(rows, ui_std)
-        if n_hit > 0:
-            rows = remapped
-            basis = ui_std
-            if ui_std == "same_day_plan":
-                basis_note = (
-                    f"调参跟随当日plan·隔日（已用日线重算 {n_hit} 笔）"
-                )
-            else:
-                basis_note = (
-                    f"调参跟随实盘成交（已用已交易样本 {n_hit} 笔）"
-                )
+    remapped, n_hit = _remap_rows_for_adapt_standard(rows, learn_std)
+    if n_hit > 0:
+        rows = remapped
+        basis = learn_std
+        if learn_std == "same_day_plan":
+            basis_note = f"调参用当日plan·隔日（可触达才计；已重算 {n_hit} 笔）"
         else:
-            basis_note = (
-                f"跟随开关已开且界面为 {ui_std}，但暂无可用重算样本，仍用 classic"
-            )
-    elif follow and ui_std != "classic":
-        basis_note = f"跟随开关已开；界面 {ui_std} 暂无重映路径，仍用 classic"
+            basis_note = f"调参跟随实盘成交（已用已交易样本 {n_hit} 笔）"
+    else:
+        basis_note = (
+            f"学习口径 {learn_std} 暂无日线重算样本，仍用 classic（覆盖率上来后自动切）"
+        )
     heat = build_size_heat(rows)
     sweet = build_pullback_sweet(rows)
     sell_mfe = build_sell_mfe_bias(rows, use_cache=False)
@@ -167,12 +215,13 @@ def build_adapt_bundle(
     _ADAPT_CACHE["context_gate"] = context_gate
     missed_by: dict[str, int] = {}
     missed_n = 0
+    allow_miss_loosen = False
     desk_hits: list[dict[str, Any]] = []
     try:
+        from market_desk.np_review import build_np_missed, np_miss_loosen_allowed
         from market_desk.review import (
             build_desk_source_hit_rates,
             build_kind_hit_rates,
-            build_missed_buys,
             cached_buy_gate_bias,
         )
 
@@ -180,30 +229,12 @@ def build_adapt_bundle(
         kinds = build_kind_hit_rates(rows)
         desk_hits = build_desk_source_hit_rates(rows)
         day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
-        # Prefer dash date; signals may also use YYYYMMDD.
-        day_alt = day.replace("-", "")
-        missed = build_missed_buys(rows, trade_date=day)
-        if not missed and len(day_alt) == 8:
-            missed = build_missed_buys(rows, trade_date=day_alt)
-        # Also scan recent days in rows for same-context historical misses.
-        # Use all missed on loaded window matching any trade_date for bucket counts.
-        all_missed: list[dict[str, Any]] = []
-        seen_days: set[str] = set()
-        for r in rows or []:
-            d = str(r.get("trade_date") or "")[:10]
-            if not d or d in seen_days:
-                continue
-            seen_days.add(d)
-            all_missed.extend(build_missed_buys(rows, trade_date=d))
-            if len(d) == 10:
-                all_missed.extend(build_missed_buys(rows, trade_date=d.replace("-", "")))
-        # Dedupe by id
-        by_id: dict[Any, dict[str, Any]] = {}
-        for m in all_missed:
-            by_id[m.get("id") or id(m)] = m
-        all_missed = list(by_id.values())
+        # NP freeze is the only miss truth for adapt (live price_flags never persist).
+        all_missed = build_np_missed(rows)
+        missed = [m for m in all_missed if str(m.get("trade_date") or "")[:10] == day]
         missed_by = count_missed_by_context(all_missed)
         missed_n = len(missed)
+        allow_miss_loosen = bool(np_miss_loosen_allowed(rows).get("ok"))
     except Exception:
         gate = {}
         kinds = []
@@ -215,8 +246,10 @@ def build_adapt_bundle(
         missed_n=missed_n,
         current_context=current_ctx,
         missed_by_context=missed_by,
+        allow_miss_loosen=allow_miss_loosen,
     )
     _ADAPT_CACHE["missed_by_context"] = dict(missed_by)
+    _ADAPT_CACHE["allow_miss_loosen"] = allow_miss_loosen
     store_tune_cache(tune, current_ctx)
     heat_m = float(heat.get("size_mult") or 1.0)
     # Soft blend of phase×kind into a dedicated factor (not pre-multiplied into heat).

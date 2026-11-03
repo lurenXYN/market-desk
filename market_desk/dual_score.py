@@ -100,25 +100,15 @@ def load_bench_closes(*, limit: int = 240, allow_http: bool = True) -> list[tupl
     return _fetch_bench_closes_http(sym, want)
 
 
-def oos_buy_dual_wins(
+def _dual_win_block(
     rows: list[dict[str, Any]],
-    closes: list[tuple[str, float]] | None = None,
+    closes: list[tuple[str, float]],
     *,
-    since: str | None = None,
+    since: str,
+    label_all: str,
+    label_lit: str,
 ) -> dict[str, Any]:
-    """Dual wins for scored out-of-sample buy cards (all + lit subset).
-
-    Dedupes per (day, code); only full 3-session horizons count.
-    """
-    start = str(since or EDGE_SHADOW_SINCE)[:10]
-    closes = list(closes) if closes is not None else load_bench_closes()
-    if len(closes) < 4:
-        return {
-            "ok": False,
-            "bench": REVIEW_BENCH_LABEL,
-            "note": f"无{REVIEW_BENCH_LABEL}日线缓存，双胜率暂不可算",
-        }
-
+    """Internal: one dual-win block (classic or executable remap)."""
     attached = attach_bench_excess(rows, closes)
     seen: set[tuple[str, str]] = set()
     all_abs: list[float] = []
@@ -132,6 +122,9 @@ def oos_buy_dual_wins(
             continue
         if int(r.get("skipped") or 0):
             continue
+        lab = str(r.get("outcome_label") or "").strip()
+        if lab in {"当日未触达", "未触达", "无成交", "无日线", "样本不足", "待隔日"}:
+            continue
         d3 = num(r.get("outcome_day3_pct"))
         xs = num(r.get("excess_d3_pct"))
         if d3 is None or xs is None:
@@ -139,7 +132,7 @@ def oos_buy_dual_wins(
         if int(r.get("bench_sessions") or 0) < OUTCOME_HORIZON_SESSIONS:
             continue
         day = str(r.get("trade_date") or "")[:10]
-        if not day or day < start:
+        if not day or day < since:
             continue
         key = (day, normalize_code(r.get("code")))
         if key in seen:
@@ -156,14 +149,83 @@ def oos_buy_dual_wins(
 
     return {
         "ok": bool(all_abs),
+        "days": len(days),
+        "n": len(all_abs),
+        "all": dual_from_pairs(all_abs, all_xs, label=label_all),
+        "lit": dual_from_pairs(lit_abs, lit_xs, label=label_lit),
+    }
+
+
+def oos_buy_dual_wins(
+    rows: list[dict[str, Any]],
+    closes: list[tuple[str, float]] | None = None,
+    *,
+    since: str | None = None,
+) -> dict[str, Any]:
+    """Dual wins for scored out-of-sample buy cards (all + lit subset).
+
+    Dedupes per (day, code); only full 3-session horizons count.
+    Also reports ``touch`` = same_day_plan executable remap (day low touched
+    plan) side-by-side with persisted classic, when bar cache allows.
+    """
+    start = str(since or EDGE_SHADOW_SINCE)[:10]
+    closes = list(closes) if closes is not None else load_bench_closes()
+    if len(closes) < 4:
+        return {
+            "ok": False,
+            "bench": REVIEW_BENCH_LABEL,
+            "note": f"无{REVIEW_BENCH_LABEL}日线缓存，双胜率暂不可算",
+        }
+
+    classic = _dual_win_block(
+        rows,
+        closes,
+        since=start,
+        label_all="样本外买卡·classic",
+        label_lit="亮过可买·classic",
+    )
+
+    touch: dict[str, Any] = {"ok": False, "note": "无日线缓存，可成交口径暂不可算"}
+    try:
+        from market_desk.adapt.bundle import (
+            _remap_rows_for_adapt_standard,
+            closes_map_from_bar_cache,
+        )
+
+        codes = [str(r.get("code") or "") for r in rows]
+        packed = closes_map_from_bar_cache(codes)
+        if packed:
+            remapped, n_hit = _remap_rows_for_adapt_standard(
+                rows, "same_day_plan", closes_map=packed
+            )
+            if n_hit > 0:
+                touch = _dual_win_block(
+                    remapped,
+                    closes,
+                    since=start,
+                    label_all="样本外买卡·可触达",
+                    label_lit="亮过可买·可触达",
+                )
+                touch["remapped_n"] = n_hit
+                touch["note"] = "same_day_plan：日低触到计划价才计；复盘判据以本列为保守对照"
+            else:
+                touch = {"ok": False, "note": "日线在但无可重算样本"}
+    except Exception as exc:
+        touch = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+
+    return {
+        "ok": bool(classic.get("ok")),
         "bench": REVIEW_BENCH_LABEL,
         "since": start,
-        "days": len(days),
-        "all": dual_from_pairs(all_abs, all_xs, label="样本外买卡"),
-        "lit": dual_from_pairs(lit_abs, lit_xs, label="亮过可买"),
+        "days": classic.get("days"),
+        "all": classic.get("all"),
+        "lit": classic.get("lit"),
+        "classic": classic,
+        "touch": touch,
         "note": (
             "恶劣市看 xs_win（跑赢大盘）；绝对盈亏看 abs_win。"
-            "改规则用相对；开不开工用绝对（模拟闸）。"
+            "classic=落库计划价进场；touch=可触达计划价（same_day_plan）。"
+            "改规则看相对，优先对照 touch；开不开工用绝对（模拟闸）。"
         ),
     }
 

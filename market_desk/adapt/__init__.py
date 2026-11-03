@@ -54,6 +54,7 @@ from market_desk.adapt.bundle import (  # noqa: F401
     _ADAPT_BARS,
     set_adapt_bars,
     get_adapt_bars,
+    closes_map_from_bar_cache,
     _remap_rows_for_adapt_standard,
     build_adapt_bundle,
     record_trade_feedback,

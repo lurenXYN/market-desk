@@ -170,8 +170,23 @@ def count_missed_by_context(missed: list[dict[str, Any]] | None) -> dict[str, in
     return out
 
 
+# Labels that are not executable learning samples under same_day_plan / filled.
+_ADAPT_SKIP_LABELS = {
+    "当日未触达",
+    "未触达",
+    "无成交",
+    "无日线",
+    "样本不足",
+    "待隔日",
+}
+
+
 def _buy_scored(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Return scored buy rows respecting hit_rate_mode (newest last)."""
+    """Return scored buy rows respecting hit_rate_mode (newest last).
+
+    Skips non-executable labels (e.g. 当日未触达) so NP / untouched cards do
+    not count as losses in heat / exec after same_day_plan remapping.
+    """
     from market_desk.review import is_buy_signal
 
     mode = str(setting("hit_rate_mode", "traded") or "traded").strip().lower()
@@ -183,7 +198,8 @@ def _buy_scored(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             continue
         if mode == "traded" and not int(row.get("traded") or 0):
             continue
-        if not row.get("outcome_label"):
+        lab = str(row.get("outcome_label") or "").strip()
+        if not lab or lab in _ADAPT_SKIP_LABELS:
             continue
         out.append(row)
     # Prefer chronological order by signal_at / id.

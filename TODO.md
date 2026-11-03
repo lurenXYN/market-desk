@@ -95,6 +95,9 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-03（v1.10.49）：区间涨跌默认收起，展开再拉榜。
 - 2026-11-03（v1.10.50）：NP（没回踩就上去）只读观察包 `np_review`（agent-pack v5）；**预登记**：样本外自 2026-11-04；NP 张数≥30、配对日≥10、NP−TP 三日超额（E1 出卡 last 进场，扣中证1000）≥+0.5%、|t|≥2、两半同号才议软改；未过线维持计划价；一次最多改一处，不碰 ready 硬闸；`discovery` 段只找共性不得据此改参。
 - 2026-11-03（v1.10.51）：日线拉数早退路径也写入 `market_bar_daily`，修空缓存。
+- 2026-11-03（v1.10.52）：P0 假闭环接线——漏买改读冻结 NP；松回踩要过 NP soft_candidate；历史日不用今日报价标未回踩；日线/NP 覆盖率进 ops。
+- 2026-11-03（v1.10.53）：P1 学习口径默认 `same_day_plan`；`dual_wins.touch` 并排；当日未触达不进热度。
+- 2026-11-03（已定规格 · 待做）：P2 模拟闸拆绝对档（真钱）+ 相对档（只放行券商只读）。不做「未操作」自动标记。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -132,6 +135,9 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **区间涨跌默认收起 v1.10.49**
 - [x] **NP 未回踩上行观察 v1.10.50**：`payload.np` 收盘冻结 + `np_review`（agent-pack v5）；2026-11-04 起样本外；节后按预登记门槛判，未过线不动参数
 - [x] **日线缓存早退写库 v1.10.51**：`fetch_daily_bars` ≥20 早退也 upsert
+- [x] **P0 漏买/历史标/覆盖率 v1.10.52**：NP 真相源 + 松参门控 + 历史 enrich + bars/np 覆盖率
+- [x] **P1 学习口径 same_day_plan v1.10.53**：adapt 默认可触达；dual_wins.touch 并排；未触达不进热度
+- [ ] **P2 模拟闸相对档**：绝对权益仍管真钱；相对中证1000 超额>0 只放行券商只读
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

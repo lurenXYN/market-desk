@@ -483,9 +483,10 @@ def build_agent_pack_sync() -> dict[str, Any]:
         adapt_effect = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
 
     try:
-        from market_desk.np_review import build_np_review
+        from market_desk.np_review import build_np_review, signal_bar_np_coverage
 
         np_review = build_np_review(buy_rows)
+        np_review["bar_coverage"] = signal_bar_np_coverage(buy_rows)
     except Exception as exc:
         np_review = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
 
@@ -560,6 +561,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "dual_wins": {
                 "all": (dual.get("all") or {}) if dual.get("ok") else dual,
                 "lit": (dual.get("lit") or {}) if dual.get("ok") else None,
+                "touch": dual.get("touch") if isinstance(dual.get("touch"), dict) else None,
             },
             "proposals_ready": ready_n,
             "proposals_hold": hold_n,

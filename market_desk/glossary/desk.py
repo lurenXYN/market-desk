@@ -35,8 +35,10 @@ ENTRIES: dict[str, dict[str, str]] = {
         "近20笔且 n≥8：执行分&lt;50→仓位×0.70；&lt;70→×0.85；追高占比≥40%→再压到≤×0.75。不禁买。",
     },
     "漏买清单": {
-        "mean": "今天该买却没买、价格已经跑掉的名单（跳过或未点已交易，且未回踩上行）。调参仍只用这一类。",
-        "algo": "同日买入信号：skipped 或未 traded，且 price_flags 含 miss_pullback / 标记含「未回踩」。miss_kind=never_touched。",
+        "mean": "没买到、且收盘确认日线没回踩到计划价就上去的卡（NP）。没买=无成交价，不拆跳过/未操作。",
+        "algo": "adapt 用 build_np_missed：共享买、无 fill、payload.np.np=true。\n"
+        "盘中复盘 UI 仍可用 price_flags.miss_pullback（仅当日）；历史日只认冻结 np。\n"
+        "松回踩仅当 np_review.oos=soft_candidate；否则记「NP未过线·漏买不松回踩」。",
     },
     "漏买归因": {
         "mean": "把未交易漏买拆成三类一眼看清：未触达就走 / 触达未买 / 闸门卡死。展示向，不直接改 adapt。",

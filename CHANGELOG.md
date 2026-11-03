@@ -14,6 +14,41 @@
 
 ---
 
+## [v1.10.53] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- classic 三日% 用计划价进场，NP 卡吃不到却仍进热度/执行分，学习样本偏乐观。
+- 规格已定：学习固定 `same_day_plan`（日低触到计划价才计）；NP 走独立观察包。
+
+### 【做了什么（What）】
+- **Changed** `build_adapt_bundle` 默认学习口径 `same_day_plan`（日线预取常开 + 缓存回退）；仅 `adapt_follow_outcome`+界面 filled 才改用实盘成交。
+- **Changed** `_buy_scored` 排除「当日未触达」等不可成交标签，避免 NP 当连亏。
+- **Added** `dual_wins.touch` 与 `classic` 并排；`adapt_effect.scorecard.basis` 标明口径。
+- **Not changed** 落库仍写 classic；ready 硬闸 / 计划价不动。
+
+### 【影响与验证（Impact & Verification）】
+- 无日线时仍回退 classic 并在 basis_note 说明。`tests/test_p1_same_day_learn.py`。desk.db 无迁移。
+
+---
+
+## [v1.10.52] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 漏买→松回踩假闭环：`build_missed_buys` 依赖复盘页临时 `price_flags`，`build_adapt_bundle` 读原始信号时恒为空，文档却写着在学。
+- 翻看历史日时用**今天的报价**标「未回踩·已上行」，日期越早越假。
+- 日线缓存刚修好写路径，但历史覆盖与 `payload.np` 冻结率不可见。
+
+### 【做了什么（What）】
+- **Changed** adapt 漏买改读 `build_np_missed`（冻结 `payload.np` + 无成交价）；`miss_mult` 仅当 NP oos=`soft_candidate` 才放宽，否则记「NP未过线·漏买不松回踩」。
+- **Changed** `enrich_signals_with_live_marks`：历史日 miss/above 只用冻结 np；止损/不追 live 标仅同日。
+- **Added** `signal_bar_np_coverage` + 复盘 backlog 顺带 `backfill_signal_daily_bars`；ops/agent-pack 展示买卡有K / 已冻 NP 占比。
+- **Not changed** 计划价、ready 硬闸、classic 三日% 默认（P1 再用 same_day_plan）；不做「未操作」自动标记。
+
+### 【影响与验证（Impact & Verification）】
+- 当前 NP 未过线 → 行为与「死回路」相同（不松），但接线真实可测。`tests/test_p0_np_miss.py`。desk.db 无迁移。
+
+---
+
 ## [v1.10.51] - 2026-11-03
 
 ### 【背景与动机（为什么做 · Why）】

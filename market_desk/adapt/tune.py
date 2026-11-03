@@ -94,12 +94,14 @@ def build_auto_tune_deltas(
     missed_n: int = 0,
     current_context: dict[str, Any] | None = None,
     missed_by_context: dict[str, int] | None = None,
+    allow_miss_loosen: bool = False,
 ) -> dict[str, Any]:
     """Clamped soft deltas for pullback sensitivity (shared ±ADAPT_TUNE_CLAMP).
 
     Channels (gate / miss / kind) are computed separately then multiplied. When
     gate wants loosen and kind wants tighten, conflict damping sets both to 1.0.
-    Missed-buy nudges only apply for a fully tagged current context bucket.
+    Missed-buy nudges only apply for a fully tagged current context bucket, and
+    only when ``allow_miss_loosen`` is True (NP oos soft_candidate).
     """
     clamp = float(ADAPT_TUNE_CLAMP)
     notes: list[str] = []
@@ -123,16 +125,19 @@ def build_auto_tune_deltas(
     bucket_n = 0
     if ctx.get("tagged") and ctx.get("key"):
         bucket_n = int((missed_by_context or {}).get(str(ctx["key"])) or 0)
-        if bucket_n >= int(ADAPT_MISSED_MIN_N):
+    if bucket_n >= int(ADAPT_MISSED_MIN_N) or int(missed_n or 0) >= int(ADAPT_MISSED_MIN_N):
+        if not allow_miss_loosen:
+            notes.append("NP未过线·漏买不松回踩")
+        elif ctx.get("tagged") and ctx.get("key") and bucket_n >= int(ADAPT_MISSED_MIN_N):
             miss_mult = 1.0 - clamp * 0.5
             notes.append(
                 f"{ctx.get('label') or ctx['key']}漏买{bucket_n}"
                 f"→略放宽（夹紧±{int(clamp * 100)}%）"
             )
-    elif int(missed_n or 0) >= int(ADAPT_MISSED_MIN_N):
-        notes.append(
-            f"漏买{int(missed_n)}笔未分情景·不调参（需时段×波动标签）"
-        )
+        elif int(missed_n or 0) >= int(ADAPT_MISSED_MIN_N):
+            notes.append(
+                f"漏买{int(missed_n)}笔未分情景·不调参（需时段×波动标签）"
+            )
 
     kind_mult = 1.0
     for row in kind_hits or []:
@@ -168,6 +173,7 @@ def build_auto_tune_deltas(
         "context": ctx or None,
         "missed_bucket_n": bucket_n,
         "missed_by_context": dict(missed_by_context or {}),
+        "allow_miss_loosen": bool(allow_miss_loosen),
         "note": "；".join(notes) if notes else "暂无自动调参",
     }
 
@@ -204,6 +210,7 @@ def resolve_auto_tune(
     kind_hits: list[dict[str, Any]] | None = None,
     missed_n: int = 0,
     missed_by_context: dict[str, int] | None = None,
+    allow_miss_loosen: bool | None = None,
 ) -> dict[str, Any]:
     """Return situational auto-tune, preferring matching cache then rebuilding."""
     cached = get_cached_tune(current_context)
@@ -230,12 +237,16 @@ def resolve_auto_tune(
     missed_map = missed_by_context
     if missed_map is None and isinstance(_ADAPT_CACHE.get("missed_by_context"), dict):
         missed_map = dict(_ADAPT_CACHE["missed_by_context"])
+    allow = allow_miss_loosen
+    if allow is None:
+        allow = bool(_ADAPT_CACHE.get("allow_miss_loosen"))
     tune = build_auto_tune_deltas(
         gate_bias=gb or {},
         kind_hits=kinds or [],
         missed_n=missed_n,
         current_context=current_context,
         missed_by_context=missed_map,
+        allow_miss_loosen=bool(allow),
     )
     store_tune_cache(tune, current_context)
     return tune

@@ -405,6 +405,178 @@ def np_verdict(oos: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_np_missed(
+    rows: list[dict[str, Any]] | None,
+    *,
+    trade_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """List unfilled shared buys frozen as NP (day low & close above plan).
+
+    ``没买就是没买``: any card without a fill counts, regardless of skipped /
+    traded flags. Live ``price_flags`` are ignored — adapt learning must not
+    depend on review-page enrich that never persists.
+
+    Args:
+        rows: Signal rows with ``payload`` dicts.
+        trade_date: Optional YYYY-MM-DD filter; ``None`` keeps the full window.
+    """
+    from market_desk.adapt.context import context_from_row
+    from market_desk.review.signals import is_buy_signal
+
+    day = str(trade_date or "")[:10]
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not is_buy_signal(row.get("signal_type")):
+            continue
+        if int(row.get("owner_user_id") or 0) != 0:
+            continue
+        d = str(row.get("trade_date") or "")[:10]
+        if day and d != day:
+            continue
+        fill = num(row.get("fill_price"))
+        if fill is not None and fill > 0:
+            continue
+        frozen = _payload(row).get(NP_KEY)
+        if not isinstance(frozen, dict) or not frozen.get("np"):
+            continue
+        ctx = context_from_row(row)
+        out.append(
+            {
+                "id": row.get("id"),
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "price": row.get("price"),
+                "trade_date": d,
+                "signaled_at": row.get("signaled_at"),
+                "mainline": row.get("mainline"),
+                "context": ctx,
+                "context_label": ctx.get("label"),
+                "miss_kind": "never_touched",
+                "miss_kind_label": "未回踩·已上行(NP)",
+                "np": frozen,
+            }
+        )
+    return out
+
+
+def np_miss_loosen_allowed(buy_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Return whether the miss→pullback channel may loosen (NP oos soft_candidate).
+
+    Uses offline bench closes only so the live adapt path never blocks on HTTP.
+    """
+    try:
+        closes: list[tuple[str, float]] = []
+        try:
+            from market_desk.dual_score import load_bench_closes
+
+            closes = load_bench_closes(limit=240, allow_http=False)
+        except Exception:
+            closes = []
+        pack = build_np_review(buy_rows, bench_closes=closes)
+        verdict = str(pack.get("verdict") or "")
+        ok = verdict == "soft_candidate"
+        return {
+            "ok": ok,
+            "verdict": verdict,
+            "note": pack.get("verdict_note") or "",
+        }
+    except Exception as exc:
+        return {"ok": False, "verdict": "error", "note": f"{type(exc).__name__}: {exc}"[:120]}
+
+
+def signal_bar_np_coverage(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Report how many shared buys have a same-day bar and a frozen ``payload.np``.
+
+    Args:
+        rows: Signal rows; loads recent buys when omitted.
+    """
+    from market_desk.db.bars_cache import load_daily_bars
+    from market_desk.review.signals import is_buy_signal
+
+    if rows is None:
+        try:
+            from market_desk.db import load_signals
+
+            rows = [
+                r
+                for r in load_signals(limit=2000)
+                if is_buy_signal(r.get("signal_type")) and int(r.get("owner_user_id") or 0) == 0
+            ]
+        except Exception:
+            rows = []
+    buys = [
+        r
+        for r in (rows or [])
+        if is_buy_signal(r.get("signal_type")) and int(r.get("owner_user_id") or 0) == 0
+    ]
+    n = len(buys)
+    with_bar = 0
+    with_np = 0
+    # Cache one load per code to avoid N identical queries.
+    bar_days: dict[str, set[str]] = {}
+    for r in buys:
+        code = normalize_code(r.get("code"))
+        day = str(r.get("trade_date") or "")[:10]
+        if code and day:
+            if code not in bar_days:
+                try:
+                    bars = load_daily_bars(code, limit=120)
+                    bar_days[code] = {str(b.get("trade_date") or b.get("date") or "")[:10] for b in bars}
+                except Exception:
+                    bar_days[code] = set()
+            if day in bar_days[code]:
+                with_bar += 1
+        frozen = _payload(r).get(NP_KEY)
+        if isinstance(frozen, dict) and frozen.get("np") is not None:
+            with_np += 1
+    bar_rate = round(with_bar / n, 3) if n else None
+    np_rate = round(with_np / n, 3) if n else None
+    ok = bool(n) and (bar_rate or 0) >= 0.8 and (np_rate or 0) >= 0.8
+    return {
+        "ok": ok,
+        "buys": n,
+        "with_bar": with_bar,
+        "with_np": with_np,
+        "bar_rate": bar_rate,
+        "np_rate": np_rate,
+        "note": "共享买卡中有当日K线 / 已冻 payload.np 的占比；<80% 时 NP 与离线重放偏软",
+    }
+
+
+async def backfill_signal_daily_bars(
+    client: Any,
+    *,
+    limit_codes: int = 80,
+    lookback: int = 60,
+) -> dict[str, Any]:
+    """Fetch daily bars for recent shared-buy codes so ``market_bar_daily`` fills in.
+
+    Best effort; relies on ``fetch_daily_bars`` upserting on every successful path.
+    """
+    from market_desk.db import load_signals
+    from market_desk.eastmoney.bars import fetch_daily_klines_many
+    from market_desk.review.signals import is_buy_signal
+
+    codes: list[str] = []
+    seen: set[str] = set()
+    for r in load_signals(limit=4000):
+        if not is_buy_signal(r.get("signal_type")):
+            continue
+        if int(r.get("owner_user_id") or 0) != 0:
+            continue
+        c = normalize_code(r.get("code"))
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        codes.append(c)
+        if len(codes) >= int(limit_codes):
+            break
+    if not codes:
+        return {"ok": True, "codes": 0, "fetched": 0}
+    packed = await fetch_daily_klines_many(client, codes, limit=int(lookback))
+    return {"ok": True, "codes": len(codes), "fetched": len(packed)}
+
+
 def build_np_review(
     buy_rows: list[dict[str, Any]] | None,
     *,

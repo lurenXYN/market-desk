@@ -67,8 +67,18 @@ from market_desk.review.alerts import (
 def enrich_signals_with_live_marks(
     rows: list[dict[str, Any]],
     quotes: dict[str, dict[str, Any]],
+    *,
+    today: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Flag signals whose live price hit stop or chase levels."""
+    """Flag signals whose live price hit stop or chase levels.
+
+    Same-day rows use the live quote for miss/above marks. Past trade dates use
+    frozen ``payload.np`` only — today's quote must not rewrite historical
+    「未回踩·已上行」.
+    """
+    from market_desk.review.outcome import _cn_now
+
+    today_s = str(today or _cn_now().strftime("%Y-%m-%d"))[:10]
     out: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
@@ -81,19 +91,27 @@ def enrich_signals_with_live_marks(
         chase = num(payload.get("chase_price"))
         wait = num(payload.get("wait_price"))
         sig_px = num(item.get("price"))
+        trade_day = str(item.get("trade_date") or "")[:10]
+        if not trade_day:
+            stamp = str(item.get("signaled_at") or "")
+            trade_day = stamp[:10] if len(stamp) >= 10 else ""
+        # Missing date → treat as live (legacy rows / unit fixtures).
+        same_day = (not trade_day) or trade_day >= today_s
+        frozen_np = payload.get("np") if isinstance(payload.get("np"), dict) else None
         item["chase_price"] = chase
         item["wait_price"] = wait
         item["stop_price"] = stop
         flags: list[str] = []
         labels: list[str] = []
-        if last is not None and stop is not None and last <= stop:
+        if same_day and last is not None and stop is not None and last <= stop:
             flags.append("stop_hit")
             labels.append("触及止损")
-        if last is not None and chase is not None and last >= chase:
+        if same_day and last is not None and chase is not None and last >= chase:
             flags.append("chase_hit")
             labels.append("触及不追")
         if (
-            last is not None
+            same_day
+            and last is not None
             and wait is not None
             and stop is not None
             and stop < last < wait
@@ -102,21 +120,30 @@ def enrich_signals_with_live_marks(
         ):
             flags.append("near_wait")
             labels.append("回踩区间")
-        # Ideal entry never touched today, yet price already ran higher.
-        miss_pullback = (
-            is_buy_signal(item.get("signal_type"))
-            and last is not None
-            and sig_px is not None
-            and day_low is not None
-            and day_low > sig_px
-            and last > sig_px
-            and "stop_hit" not in flags
-        )
+        # Ideal entry never touched, yet price already ran higher.
+        if same_day:
+            miss_pullback = (
+                is_buy_signal(item.get("signal_type"))
+                and last is not None
+                and sig_px is not None
+                and day_low is not None
+                and day_low > sig_px
+                and last > sig_px
+                and "stop_hit" not in flags
+            )
+        else:
+            # Historical: only frozen day-bar NP counts (never today's quote low).
+            miss_pullback = bool(
+                is_buy_signal(item.get("signal_type"))
+                and frozen_np
+                and frozen_np.get("np") is True
+            )
         if miss_pullback:
             flags.append("miss_pullback")
             labels.append("未回踩·已上行")
         elif (
-            last is not None
+            same_day
+            and last is not None
             and wait is not None
             and chase is not None
             and wait <= last < chase
@@ -125,7 +152,15 @@ def enrich_signals_with_live_marks(
         ):
             flags.append("in_band")
             labels.append("建议价附近")
-        above_pct = _above_plan_pct(item.get("signal_type"), last, sig_px, flags)
+        if same_day:
+            above_pct = _above_plan_pct(item.get("signal_type"), last, sig_px, flags)
+        else:
+            # Historical above-plan vs frozen day close, not today's last.
+            above_pct = None
+            if is_buy_signal(item.get("signal_type")) and frozen_np:
+                day_close = num(frozen_np.get("day_close"))
+                plan = num(frozen_np.get("plan")) or sig_px
+                above_pct = _above_plan_pct(item.get("signal_type"), day_close, plan, flags)
         if above_pct is not None:
             flags.append("above_plan")
             # In-band yet above plan reads contradictory; the above-plan label wins.
@@ -138,7 +173,7 @@ def enrich_signals_with_live_marks(
         # Keep a live last for booking defaults; do not overwrite plan suggest (price).
         if last is not None:
             item["last"] = last
-        item.update(live_price_slope(code, last))
+        item.update(live_price_slope(code, last) if same_day else {})
         if item.get("plan_qty") is None:
             pq = num(payload.get("qty"))
             if pq is not None and float(pq) > 0:
@@ -155,7 +190,7 @@ def enrich_signals_with_live_marks(
         item["price_mark"] = " / ".join(labels) if labels else ""
         # Buying caution for same-day signals: short line for the table, full text as tip.
         caution, tip = "", ""
-        if is_buy_signal(item.get("signal_type")):
+        if same_day and is_buy_signal(item.get("signal_type")):
             if "stop_hit" in flags:
                 caution, tip = "到止损带，今日不买", "现价已到止损带，当日不宜再按原计划买"
             elif "chase_hit" in flags:
