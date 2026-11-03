@@ -149,6 +149,55 @@ async def review_code_history(
     return await engine.build_review_code_history(c, user_id=uid, limit=limit)
 
 
+@router.get("/api/review/range-board")
+def review_range_board(
+    window: str = Query(default="1w", description="1w | 2w | 1m"),
+    side: str = Query(default="worst", description="worst | best"),
+    limit: int = Query(default=30, ge=5, le=100),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return week/month winners or losers across signals + MA-fan + pot."""
+    del user
+    from market_desk.review import build_range_leaderboard
+
+    win = str(window or "1w").strip().lower()
+    if win not in ("1w", "2w", "1m"):
+        raise HTTPException(400, "window must be 1w, 2w, or 1m")
+    sd = str(side or "worst").strip().lower()
+    if sd not in ("worst", "best"):
+        raise HTTPException(400, "side must be worst or best")
+    return build_range_leaderboard(window=win, side=sd, limit=limit)
+
+
+@router.get("/api/review/appearances/{code}")
+def review_code_appearances(
+    code: str,
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Return how often a code appeared in signals / MA-fan / pot plus boards."""
+    del user
+    from market_desk.review import build_code_appearances
+
+    c = normalize_code(code)
+    if len(c) != 6 or not c.isdigit():
+        raise HTTPException(400, "code must be a 6-digit ticker")
+    return build_code_appearances(c)
+
+
+@router.get("/api/review/board-roster")
+def review_board_roster(
+    q: str = Query(..., min_length=1, max_length=40),
+    days: int = Query(default=20, ge=5, le=40),
+    limit: int = Query(default=80, ge=10, le=200),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """List codes that appeared under a board keyword in the recent window."""
+    del user
+    from market_desk.review import build_board_roster
+
+    return build_board_roster(q, days=days, limit=limit)
+
+
 @router.post("/api/review/{sid}")
 def annotate_signal(
     sid: int,

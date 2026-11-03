@@ -87,6 +87,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-02（v1.10.41）：清单瘦身落地——分时闸补 kind；执行分/热度加仓 n≥8（连亏 3/5 不动）；删 rel_strength 空算倍率。P1/P2 暂缓。
 - 2026-11-03（v1.10.42）：agent-pack.v3 加 `adapt_live`（size_heat/exec_size/buy_gate + 回踩/tune/sticky/卖带宽现倍率），补审计盲区。
 - 2026-11-03（v1.10.43）：agent-pack.v4 加 `adapt_effect`（分档成绩/今日卡/漏买/题材），用于看拧完有没有用。
+- 2026-11-03（v1.10.44）：复盘区间涨跌榜（1w/2w/1m）+ 代码/板块检索（信号∪发散∪锅底），只读。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -116,6 +117,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **自适应瘦身 v1.10.41**：分时闸补 kind；执行分/热度加仓 n≥8；连亏 3/5 不动；删 rel_strength 空算
 - [x] **agent-pack adapt_live v1.10.42**：当日 size_heat / exec_size / buy_gate 现倍率进包（v3）
 - [x] **agent-pack adapt_effect v1.10.43**：size/闸分档成绩 + 今日卡 + 漏买三类 + 题材信誉两端（v4）
+- [x] **复盘区间涨跌 v1.10.44**：近周/月最惨·最强 + 代码/板块检索（信号∪发散∪锅底）
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

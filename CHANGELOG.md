@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.44] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 复盘只有单日表，难一眼看近周最惨/最强；发散与锅底与买点分家，按代码/板名回溯要翻多页。
+
+### 【做了什么（What）】
+- **Added** 复盘「区间涨跌」：`GET /api/review/range-board`（1w/2w/1m × 最惨|最强，三日%排序 + 相对不追%）；宇宙=买信号∪发散∪锅底，同码折叠。
+- **Added** `GET /api/review/appearances/{code}`、`GET /api/review/board-roster?q=`；历史抽屉旁注发散/锅底次数与板集合。
+- **Added** 复盘页区块 + 代码/板块搜索；词条「区间涨跌榜」。
+
+### 【影响与验证（Impact & Verification）】
+- 只读，不改 ready/闸，不建股票主表。pytest `test_range_board`。desk.db 兼容。
+
+---
+
 ## [v1.10.43] - 2026-11-03
 
 ### 【背景与动机（为什么做 · Why）】

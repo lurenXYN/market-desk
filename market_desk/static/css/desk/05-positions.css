@@ -269,6 +269,55 @@ tr.rev-flash { outline: 1px solid #fbbf24; outline-offset: -1px; background: rgb
 .live-arrow.down { color: var(--down); }
 .live-arrow.flat { color: var(--muted); }
 .live-vs { font-size: 11px; margin-left: 2px; }
+.rev-range {
+  margin: 10px 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0e141c;
+}
+.rev-range .hd {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.rev-range-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.rev-range-toggles {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rev-range-toggles .rev-col-btn.on {
+  border-color: #3b82f6;
+  color: #93c5fd;
+  background: #132033;
+}
+.rev-range-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rev-range-search input {
+  width: 160px;
+  max-width: 42vw;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: #0a1018;
+  color: var(--text);
+}
+.rev-range-search-out {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
 .rev-jump {
   display: flex;
   flex-wrap: wrap;

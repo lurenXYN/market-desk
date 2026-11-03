@@ -38,6 +38,7 @@ async function loadReview(force, date, opts) {
       }
     }
     paintReview(d);
+    if (typeof loadRevRangeBoard === "function") loadRevRangeBoard();
     const tSeq = ++reviewTrendSeq;
     loadReviewTrends(day, tSeq, d.trends_fp || "");
     loadReviewZtYtd(day, seq);
