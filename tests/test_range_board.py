@@ -6,6 +6,7 @@ from market_desk.review.range_board import (
     _days_ago,
     _fold_by_code,
     _seen_to_scan_row,
+    _vs_chase_now_pct,
     _vs_chase_pct,
     build_range_leaderboard,
 )
@@ -33,6 +34,7 @@ def test_scan_row_has_price_and_days_ago():
 def test_vs_chase_none_without_chase():
     assert _vs_chase_pct(chase=None, entry=10.0, day3_pct=-5.0, last=9.5) is None
     assert _vs_chase_pct(chase=0.0, entry=10.0, day3_pct=-5.0, last=9.5) is None
+    assert _vs_chase_now_pct(chase=None, live_last=73.87) is None
 
 
 def test_vs_chase_from_day3_close():
@@ -44,6 +46,13 @@ def test_vs_chase_from_day3_close():
 def test_vs_chase_falls_back_to_last():
     out = _vs_chase_pct(chase=10.0, entry=None, day3_pct=None, last=9.0)
     assert out == -10.0
+
+
+def test_vs_chase_now_matches_review_deviation():
+    # live 73.87 / chase 103 → same as review chase_dev_pct ≈ -28.28
+    assert _vs_chase_now_pct(chase=103.0, live_last=73.87) == round(
+        (73.87 / 103.0 - 1.0) * 100.0, 2
+    )
 
 
 def test_fold_keeps_worst_day3_and_sources():

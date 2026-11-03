@@ -53,7 +53,7 @@ def _vs_chase_pct(
     day3_pct: float | None,
     last: float | None,
 ) -> float | None:
-    """Return % of reference price vs chase (day3 close preferred, else last)."""
+    """Return % of day3 close (or fallback last) vs chase — outcome column."""
     if chase is None or chase <= 0:
         return None
     ref: float | None = None
@@ -64,6 +64,15 @@ def _vs_chase_pct(
     if ref is None or ref <= 0:
         return None
     return round((ref / float(chase) - 1.0) * 100.0, 2)
+
+
+def _vs_chase_now_pct(*, chase: float | None, live_last: float | None) -> float | None:
+    """Return % of live last vs chase — same口径 as review「偏离」under 不追价."""
+    if chase is None or chase <= 0:
+        return None
+    if live_last is None or live_last <= 0:
+        return None
+    return round((float(live_last) / float(chase) - 1.0) * 100.0, 2)
 
 
 def _active_trade_dates(limit: int) -> list[str]:
@@ -279,6 +288,8 @@ def build_range_leaderboard(
                 "board_text": " / ".join(r.get("boards") or []) or "—",
                 "chase_price": r.get("chase_price"),
                 "vs_chase_pct": r.get("vs_chase_pct"),
+                "vs_chase_now_pct": None,
+                "live_last": None,
                 "outcome_day3_pct": r.get("outcome_day3_pct"),
                 "outcome_label": r.get("outcome_label"),
                 "sources": list(r.get("sources") or []),
@@ -298,10 +309,40 @@ def build_range_leaderboard(
         "unscored_n": unscored_n,
         "items": items,
         "note": (
-            "按三日%排序；相对不追%=三日收（或 last）相对冻结不追价。"
-            "发散/锅底无不通价则相对不追为空；无三日%不进榜。"
+            "按三日%排序；相对不追·三日=三日收相对冻结不追价；"
+            "相对不追·现价=现价相对不追价（同复盘表偏离）。"
+            "发散/锅底无不通价则两列皆空；无三日%不进榜。"
         ),
     }
+
+
+async def attach_live_vs_chase(pack: dict[str, Any]) -> dict[str, Any]:
+    """Fill ``vs_chase_now_pct`` / ``live_last`` from a short quote round-trip."""
+    import httpx
+
+    from market_desk.tencent import fetch_quotes
+
+    items = list(pack.get("items") or [])
+    codes = [
+        str(it.get("code") or "")
+        for it in items
+        if num(it.get("chase_price")) is not None and str(it.get("code") or "")
+    ]
+    if not codes:
+        return pack
+    quotes: dict[str, Any] = {}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0)) as client:
+            quotes = await fetch_quotes(client, codes)
+    except Exception:
+        quotes = {}
+    for it in items:
+        chase = num(it.get("chase_price"))
+        q = quotes.get(str(it.get("code") or "")) or {}
+        live = num(q.get("price") if q.get("price") is not None else q.get("last"))
+        it["live_last"] = live
+        it["vs_chase_now_pct"] = _vs_chase_now_pct(chase=chase, live_last=live)
+    return pack
 
 
 def _days_ago(day: str) -> int | None:

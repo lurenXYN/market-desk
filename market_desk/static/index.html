@@ -829,6 +829,7 @@
             </label>
             <button type="button" class="rev-col-btn" id="revRangeSearchBtn">查</button>
           </div>
+          <div class="rev-range-search-out" id="revRangeSearchOut" hidden></div>
           <div class="table-wrap">
             <table class="rev-table compact" id="revRangeTable">
               <thead>
@@ -839,16 +840,16 @@
                   <th>板块</th>
                   <th>来源</th>
                   <th>三日%</th>
-                  <th>相对不追%</th>
+                  <th title="三日收相对冻结不追价">相对不追·三日</th>
+                  <th title="现价相对冻结不追价，同复盘表不追价下「偏离」">相对不追·现价</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody id="revRangeBody">
-                <tr><td colspan="8" class="meta">加载中…</td></tr>
+                <tr><td colspan="9" class="meta">加载中…</td></tr>
               </tbody>
             </table>
           </div>
-          <div class="rev-range-search-out" id="revRangeSearchOut" hidden></div>
         </div>
         <div class="rev-jump">
           <a class="rev-col-btn" href="#revSignals">↓ 跳到信号表</a>

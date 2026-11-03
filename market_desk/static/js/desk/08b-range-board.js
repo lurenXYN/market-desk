@@ -21,7 +21,7 @@ async function loadRevRangeBoard() {
   revRangeBusy = true;
   const body = document.getElementById("revRangeBody");
   const meta = document.getElementById("revRangeMeta");
-  if (body) body.innerHTML = `<tr><td colspan="8" class="meta">加载中…</td></tr>`;
+  if (body) body.innerHTML = `<tr><td colspan="9" class="meta">加载中…</td></tr>`;
   try {
     const q = new URLSearchParams({
       window: revRangeWin,
@@ -39,13 +39,16 @@ async function loadRevRangeBoard() {
     const rows = d.items || [];
     if (!body) return;
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="8" class="meta">该窗口暂无已评分样本</td></tr>`;
+      body.innerHTML = `<tr><td colspan="9" class="meta">该窗口暂无已评分样本</td></tr>`;
       return;
     }
     body.innerHTML = rows.map((it) => {
       const code = String(it.code || "");
       const name = String(it.name || "");
       const boards = escAttr(it.board_text || "—");
+      const nowTip = it.live_last != null && it.chase_price != null
+        ? `现价 ${it.live_last} / 不追 ${it.chase_price}`
+        : "无现价或不追价";
       return `<tr>
         <td>${escAttr(it.trade_date || "—")}</td>
         <td><button type="button" class="rev-col-btn rev-range-code" data-code="${escAttr(code)}" data-name="${escAttr(name)}" style="padding:0 4px">${escAttr(code)}</button></td>
@@ -53,12 +56,13 @@ async function loadRevRangeBoard() {
         <td title="${boards}">${boards}</td>
         <td>${escAttr(_revRangeSrcLabel(it.sources))}${it.appear_n > 1 ? ` ·${it.appear_n}` : ""}</td>
         <td>${_revRangePct(it.outcome_day3_pct)}</td>
-        <td>${_revRangePct(it.vs_chase_pct)}</td>
+        <td title="三日收相对不追">${_revRangePct(it.vs_chase_pct)}</td>
+        <td title="${escAttr(nowTip)}">${_revRangePct(it.vs_chase_now_pct)}</td>
         <td><button type="button" class="rev-col-btn rev-range-hist" data-code="${escAttr(code)}" data-name="${escAttr(name)}">历史</button></td>
       </tr>`;
     }).join("");
   } catch (e) {
-    if (body) body.innerHTML = `<tr><td colspan="8" class="meta">区间榜加载失败</td></tr>`;
+    if (body) body.innerHTML = `<tr><td colspan="9" class="meta">区间榜加载失败</td></tr>`;
     if (meta) meta.textContent = "";
   } finally {
     revRangeBusy = false;
@@ -117,6 +121,17 @@ function paintRevRangeRoster(d) {
     + `</tr></thead><tbody>${lines}</tbody></table></div>`;
 }
 
+function _revealRevRangeSearch() {
+  const box = document.getElementById("revRangeSearchOut");
+  if (!box) return;
+  box.hidden = false;
+  try {
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    /* ignore */
+  }
+}
+
 async function runRevRangeSearch() {
   const input = document.getElementById("revRangeQ");
   const raw = String((input && input.value) || "").trim();
@@ -130,12 +145,14 @@ async function runRevRangeSearch() {
     box.hidden = false;
     box.innerHTML = `<div class="meta">检索中…</div>`;
   }
+  _revealRevRangeSearch();
   try {
     if (/^\d{6}$/.test(code) && raw.replace(/\s/g, "").length <= 8) {
       const r = await fetch("/api/review/appearances/" + code);
       const d = await r.json();
       if (!d.ok && d.ok !== undefined) throw new Error("bad");
       paintRevRangeAppearances(d);
+      _revealRevRangeSearch();
       return;
     }
     const q = new URLSearchParams({ q: raw, days: "20", limit: "80" });
@@ -143,6 +160,7 @@ async function runRevRangeSearch() {
     const d = await r.json();
     if (!d.ok && d.ok !== undefined) throw new Error("bad");
     paintRevRangeRoster(d);
+    _revealRevRangeSearch();
   } catch (e) {
     if (box) box.innerHTML = `<div class="meta">检索失败</div>`;
   }

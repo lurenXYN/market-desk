@@ -150,7 +150,7 @@ async def review_code_history(
 
 
 @router.get("/api/review/range-board")
-def review_range_board(
+async def review_range_board(
     window: str = Query(default="1w", description="1w | 2w | 1m"),
     side: str = Query(default="worst", description="worst | best"),
     limit: int = Query(default=30, ge=5, le=100),
@@ -158,7 +158,10 @@ def review_range_board(
 ) -> dict:
     """Return week/month winners or losers across signals + MA-fan + pot."""
     del user
-    from market_desk.review import build_range_leaderboard
+    from market_desk.review.range_board import (
+        attach_live_vs_chase,
+        build_range_leaderboard,
+    )
 
     win = str(window or "1w").strip().lower()
     if win not in ("1w", "2w", "1m"):
@@ -166,7 +169,8 @@ def review_range_board(
     sd = str(side or "worst").strip().lower()
     if sd not in ("worst", "best"):
         raise HTTPException(400, "side must be worst or best")
-    return build_range_leaderboard(window=win, side=sd, limit=limit)
+    pack = build_range_leaderboard(window=win, side=sd, limit=limit)
+    return await attach_live_vs_chase(pack)
 
 
 @router.get("/api/review/appearances/{code}")
