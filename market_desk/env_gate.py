@@ -4,6 +4,7 @@ Builds a day-level ``env_score`` / ``env_bucket`` from the CSI1000 regime ruler,
 desk volatility, and a small set of *effective* technical features (Dow-like
 structure, Granville-style MA touches, MACD/RSI/ATR expansion, open gap).
 Maps to ETF vs stock gate multipliers for ``minute`` / ``off_high`` / ``thin``.
+``rel_strength`` is not a live multiplier (fail flags stay in review buckets).
 
 Does **not** turn regime alone into ready=false. Live application is off until
 ``env_gate_live`` is enabled after shadow evidence.
@@ -20,7 +21,7 @@ from typing import Any, Iterable
 
 from market_desk.numbers import num
 
-GATE_KEYS = ("minute", "off_high", "thin", "rel_strength")
+GATE_KEYS = ("minute", "off_high", "thin")
 BUCKETS = ("hostile", "neutral", "friendly")
 
 
@@ -509,10 +510,9 @@ def env_mult_table(bucket: str, kind: str) -> dict[str, float]:
     mult = 1.0 + (raw - 1.0) * scale
     mult = max(0.75, min(1.25, mult))
     out = {key: round(mult, 3) for key in GATE_KEYS}
-    # Thin / rel_strength only meaningful for stocks.
+    # Thin confirm is stock-only; ETF keeps 1.0.
     if k == "etf":
         out["thin"] = 1.0
-        out["rel_strength"] = 1.0
     return out
 
 

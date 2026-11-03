@@ -5,12 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 
-def _minute_gate_mult() -> float:
-    """Return buy-gate multiplier for minute thresholds (loosen <1, tighten >1)."""
+def _minute_gate_mult(*, kind: str = "stock") -> float:
+    """Return buy-gate multiplier for minute thresholds (loosen <1, tighten >1).
+
+    ``kind`` selects ETF vs stock false-kill learning so ETF cards do not
+    inherit the stock slice.
+    """
     try:
         from market_desk.adapt import resolve_gate_mult
 
-        return float(resolve_gate_mult("minute", 1.0))
+        return float(resolve_gate_mult("minute", 1.0, kind=kind or "stock"))
     except Exception:
         try:
             from market_desk.review import cached_buy_gate_bias
@@ -25,7 +29,11 @@ def _minute_gate_mult() -> float:
             return 1.0
 
 
-def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str, Any]:
+def evaluate_minute_structure(
+    minutes: list[dict[str, Any]] | None,
+    *,
+    kind: str = "stock",
+) -> dict[str, Any]:
     """Judge whether the minute chart supports a ready buy.
 
     Prefer fewer false chase buys:
@@ -35,6 +43,7 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
     - When volume is available: recent bars should cool vs the prior window.
 
     Review false-kills loosen tip/shallow thresholds; true-kills tighten them.
+    ``kind`` (etf|stock) picks the matching buy-gate bias slice.
     """
     rows = list(minutes or [])
     prices: list[float] = []
@@ -97,7 +106,7 @@ def evaluate_minute_structure(minutes: list[dict[str, Any]] | None) -> dict[str,
         MINUTE_VOL_PULLBACK,
     )
 
-    gate_mult = _minute_gate_mult()
+    gate_mult = _minute_gate_mult(kind=kind or "stock")
     pullback = (hi - last) / hi * 100.0 if hi > 0 else 0.0
     span = (hi - lo) / hi * 100.0 if hi > 0 else 0.0
     tip_thr = (MINUTE_TIP_THR_NARROW if span < 1.0 else MINUTE_TIP_THR_WIDE) * gate_mult
@@ -217,7 +226,8 @@ def apply_minute_confirmations(
         code = str(item.get("code") or "").zfill(6)
         if not code or code not in minutes_by_code:
             continue
-        verdict = evaluate_minute_structure(minutes_by_code.get(code))
+        kind = str(item.get("kind") or "stock")
+        verdict = evaluate_minute_structure(minutes_by_code.get(code), kind=kind)
         item["minute"] = verdict
         # Always surface pending / fail labels for progress UX.
         if verdict.get("ok") is None:

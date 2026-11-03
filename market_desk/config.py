@@ -914,7 +914,8 @@ THEME_MANUAL_ADJ_MAX = 8.0
 
 # Adaptive soft feedback (size heat / segment sell / MAE sweet / stock rep).
 ADAPT_HEAT_RECENT_N = 20
-ADAPT_HEAT_MIN_N = 5
+ADAPT_HEAT_MIN_N = 5             # consec-loss shrink can fire
+ADAPT_HEAT_BOOST_MIN_N = 8       # win-rate size-up needs more sample
 ADAPT_CONSEC_LOSS_SOFT = 3
 ADAPT_CONSEC_LOSS_HARD = 5
 ADAPT_LOSS_MULT_SOFT = 0.5
@@ -937,7 +938,7 @@ ADAPT_PULLBACK_CLAMP = 0.20
 ADAPT_STOCK_REP_ADJ_MIN = -10.0
 ADAPT_STOCK_REP_ADJ_MAX = 6.0
 ADAPT_STOCK_WATCH_STREAK = 2
-ADAPT_EXEC_MIN_N = 3             # traded fills before exec soft-size fires
+ADAPT_EXEC_MIN_N = 8             # traded fills before exec soft-size fires
 ADAPT_EXEC_SCORE_SOFT = 70.0     # below → mild shrink
 ADAPT_EXEC_SCORE_HARD = 50.0     # below → stronger shrink
 ADAPT_EXEC_CHASE_RATIO = 0.40    # chase share ≥ → shrink

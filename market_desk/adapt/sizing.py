@@ -10,6 +10,7 @@ from market_desk.config import (
     ADAPT_EXEC_MIN_N,
     ADAPT_EXEC_SCORE_HARD,
     ADAPT_EXEC_SCORE_SOFT,
+    ADAPT_HEAT_BOOST_MIN_N,
     ADAPT_HEAT_MIN_N,
     ADAPT_HEAT_RECENT_N,
     ADAPT_LOSS_MULT_HARD,
@@ -147,11 +148,12 @@ def build_size_heat(
         mult = float(ADAPT_LOSS_MULT_SOFT)
         bits.append(f"连亏{consec}→×{mult}")
     elif (
-        win_rate >= float(ADAPT_WIN_RATE_MIN)
+        len(recent) >= int(ADAPT_HEAT_BOOST_MIN_N)
+        and win_rate >= float(ADAPT_WIN_RATE_MIN)
         and pf >= float(ADAPT_WIN_PF_MIN)
         and consec == 0
     ):
-        # Mild heat boost only when not coming off a loss.
+        # Mild heat boost only when not coming off a loss and sample is thick.
         heat = 1.0 + min(0.35, (win_rate - 50.0) / 100.0 + (pf - 1.0) * 0.08)
         mult = min(float(ADAPT_WIN_MULT_CAP), heat)
         bits.append(f"PF{pf:.2f}→×{mult:.2f}")

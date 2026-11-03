@@ -14,6 +14,50 @@
 
 ---
 
+## [v1.10.43] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 有了 `adapt_live` 现倍率仍看不见「拧完有没有用」：缺 size/闸分档成绩、今日卡对照、漏买三类、题材信誉两端。
+
+### 【做了什么（What）】
+- **Added** `adapt_effect`（`agent_pack.v4`）：`scorecard`（近窗已评分买按 size_mult≤0.75/≈1/≥1.15 与有无闸失败分档 abs/xs）、`today_cards`（≤15 张 ready/半仓）、`miss_trend`（近 5 日三类漏买）、`theme_rep`（最差/最好各 5）。
+
+### 【影响与验证（Impact & Verification）】
+- 只读观测，非反事实。pytest `test_adapt_effect` + `test_agent_pack`。desk.db 兼容。
+
+---
+
+## [v1.10.42] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- Agent pack 只装影子账（env/regime/进场），看不到当日真正拧仓位/闸的现倍率，对账只能猜。
+
+### 【做了什么（What）】
+- **Added** `adapt_live`（当时 `agent_pack.v3`）：当日 `size_heat` / `exec_size` / `size_compose` / `buy_gate`（分种切片 + `live_resolved`）；优先读引擎暖 `verdict.adapt`，否则从信号重建。
+- **Added** 同块再塞 `pullback_sweet` / `auto_tune` / `sticky_margin` / `sell_mfe` / `segment_sell`（及暖路径下的 `phase_kind` / `desk_source_bias`）。
+- **Added** `summary.adapt_size_mult` / `adapt_heat_mult` / `adapt_exec_mult`；附带 `env_gate_live` / `adapt_follow_outcome` 开关态。
+
+### 【影响与验证（Impact & Verification）】
+- 只读审计，不改 ready/闸/设置。pytest `test_agent_pack`。desk.db 兼容。
+
+---
+
+## [v1.10.41] - 2026-11-02
+
+### 【背景与动机（为什么做 · Why）】
+- ETF 假杀学习接不到分时闸（`_minute_gate_mult` 不传 kind）；执行分 3 笔、热度 5 笔就能拧仓；`rel_strength` 算了倍率却无人调用。模拟闸只差约 7 元，不宜再叠新 size 因子。
+
+### 【做了什么（What）】
+- **Fixed** `evaluate_minute_structure` / `_minute_gate_mult` 按卡片 `kind` 调 `resolve_gate_mult`，ETF 用 ETF 假杀切片。
+- **Changed** `ADAPT_EXEC_MIN_N` 3→8；热度加仓另设 `ADAPT_HEAT_BOOST_MIN_N=8`；连亏 3/5 止血仍在 n≥5 开火。
+- **Removed** env/bias/情景闸的 `rel_strength` 空算倍率（复盘「相对强弱」桶仍用于弱于 ETF 归因）。
+- **Fixed** `test_edge_shadow` 不再要求 `book_open` 恰好等于三字段（现含 `items`）。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready / sticky / 环境闸 live keys。pytest `test_adapt_size` + `test_fake_pullback_probe` + `test_env_gate` + `test_edge_shadow`。desk.db 兼容。
+
+---
+
 ## [v1.10.40] - 2026-11-02
 
 ### 【背景与动机（为什么做 · Why）】

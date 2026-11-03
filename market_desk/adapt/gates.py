@@ -90,7 +90,6 @@ def build_context_gate_bias(
         "分时": "minute",
         "离日高": "off_high",
         "薄确认/共振": "thin",
-        "相对强弱": "rel_strength",
     }
     clamp = float(ADAPT_TUNE_CLAMP)
     gates: dict[str, dict[str, Any]] = {}

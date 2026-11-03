@@ -361,7 +361,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     live_keys = [
         x.strip()
         for x in live_keys_raw.replace(";", ",").split(",")
-        if x.strip() in ("minute", "off_high", "thin", "rel_strength")
+        if x.strip() in ("minute", "off_high", "thin")
     ]
     out["env_gate_live_keys"] = ",".join(live_keys or list(cfg.ENV_GATE_LIVE_KEYS))
     rs = str(out.get("ready_style") or cfg.READY_STYLE_DEFAULT).strip().lower()

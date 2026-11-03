@@ -65,7 +65,10 @@ def test_record_session_attaches_day_book(monkeypatch, tmp_path):
     }
     assert record_session_signals(snap) == 2
     rows = {r["code"]: r["payload"] for r in desk_db.load_signals_for_date("2026-10-08")}
-    assert rows["600002"]["book_open"] == {"n": 1, "avg_pct": -3.0, "worst_pct": -3.0}
+    book_open = rows["600002"]["book_open"]
+    assert book_open["n"] == 1
+    assert book_open["avg_pct"] == -3.0
+    assert book_open["worst_pct"] == -3.0
     assert "book_open" not in rows["600001"]
 
 

@@ -13,7 +13,292 @@ from typing import Any
 from market_desk.calendar import now_cn
 
 
-AGENT_PACK_SCHEMA = "agent_pack.v2"
+AGENT_PACK_SCHEMA = "agent_pack.v4"
+
+_GATE_LIVE_KEYS = ("minute", "off_high", "thin")
+
+
+def _slim_size_block(block: dict[str, Any] | None, *, kind: str) -> dict[str, Any]:
+    """Keep the knobs Agent needs to audit live size soft-controls."""
+    b = block if isinstance(block, dict) else {}
+    out: dict[str, Any] = {
+        "ok": bool(b.get("ok")),
+        "n": b.get("n"),
+        "size_mult": b.get("size_mult", 1.0),
+        "note": b.get("note") or "",
+        "source": kind,
+    }
+    for key in (
+        "win_rate",
+        "consec_loss",
+        "profit_factor",
+        "hit_n",
+        "score",
+        "chase_n",
+        "chase_ratio",
+    ):
+        if b.get(key) is not None:
+            out[key] = b.get(key)
+    return out
+
+
+def _slim_buy_gate_slice(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Compress one buy_gate_bias kind slice to mult / gates / note."""
+    r = row if isinstance(row, dict) else {}
+    gates_raw = r.get("gates") if isinstance(r.get("gates"), dict) else {}
+    gates = {
+        str(k): {
+            "mult": (g or {}).get("mult"),
+            "mode": (g or {}).get("mode"),
+            "false_kill_n": (g or {}).get("false_kill_n"),
+            "true_kill_n": (g or {}).get("true_kill_n"),
+        }
+        for k, g in gates_raw.items()
+        if isinstance(g, dict)
+    }
+    return {
+        "ok": bool(r.get("ok")),
+        "loosen": bool(r.get("loosen")),
+        "tighten": bool(r.get("tighten")),
+        "mult": r.get("mult", 1.0),
+        "gates": gates,
+        "note": r.get("note") or "",
+    }
+
+
+def _live_gate_resolved() -> dict[str, dict[str, float]]:
+    """Resolve stacked live gate mults for stock and ETF (minute/off_high/thin)."""
+    from market_desk.adapt import resolve_gate_mult
+
+    out: dict[str, dict[str, float]] = {}
+    for kind in ("stock", "etf"):
+        out[kind] = {
+            key: round(float(resolve_gate_mult(key, 1.0, kind=kind)), 4)
+            for key in _GATE_LIVE_KEYS
+        }
+    return out
+
+
+def _slim_knob(block: dict[str, Any] | None, *, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    """Copy selected knob fields; return None when block is empty."""
+    if not isinstance(block, dict):
+        return None
+    out: dict[str, Any] = {"ok": bool(block.get("ok"))}
+    for key in keys:
+        if block.get(key) is not None:
+            out[key] = block.get(key)
+    if block.get("note") is not None:
+        out["note"] = block.get("note") or ""
+    return out
+
+
+def _segment_key_from_warm_or_clock(warm: dict[str, Any] | None) -> str:
+    """Pick segment for sell-band rebuild: warm context, else clock bucket."""
+    if isinstance(warm, dict):
+        ctx = warm.get("context") if isinstance(warm.get("context"), dict) else {}
+        seg = str(ctx.get("segment") or "").strip()
+        if seg:
+            return seg
+        seg_sell = warm.get("segment_sell") if isinstance(warm.get("segment_sell"), dict) else {}
+        seg = str(seg_sell.get("segment") or "").strip()
+        if seg:
+            return seg
+    try:
+        from market_desk.adapt import segment_bucket_from_clock
+        from market_desk.calendar import now_cn
+
+        return str(segment_bucket_from_clock(now_cn()) or "morning")
+    except Exception:
+        return "morning"
+
+
+def build_adapt_live_snapshot(
+    buy_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Snapshot today's soft size / gate / band knobs for Agent audit.
+
+    Prefers the warm ``verdict.adapt`` on the engine snapshot when present so the
+    pack matches what the desk is already applying; otherwise rebuilds from
+    signals. Never flips settings — read-only.
+    """
+    from market_desk.settings import setting
+
+    warm: dict[str, Any] | None = None
+    warm_src = "none"
+    try:
+        from market_desk.engine import engine
+
+        adapt = ((engine.snapshot or {}).get("verdict") or {}).get("adapt")
+        if isinstance(adapt, dict) and adapt.get("ok"):
+            warm = adapt
+            warm_src = "engine.snapshot"
+    except Exception:
+        warm = None
+
+    rows = buy_rows
+    try:
+        if rows is None:
+            from market_desk.db import load_signals
+
+            rows = load_signals(limit=240)
+    except Exception:
+        rows = []
+
+    sweet_raw: dict[str, Any] | None = None
+    tune_raw: dict[str, Any] | None = None
+    sell_mfe_raw: dict[str, Any] | None = None
+    seg_sell_raw: dict[str, Any] | None = None
+    phase_kind_raw: dict[str, Any] | None = None
+    desk_src_raw: dict[str, Any] | None = None
+
+    if warm is not None:
+        heat = _slim_size_block(warm.get("size_heat"), kind="warm")
+        exec_size = _slim_size_block(warm.get("exec_size"), kind="warm")
+        size_compose = warm.get("size_compose") if isinstance(warm.get("size_compose"), dict) else {}
+        size_mult = warm.get("size_mult", size_compose.get("size_mult", 1.0))
+        size_factors = warm.get("size_factors") or size_compose.get("factors") or []
+        outcome_basis = warm.get("outcome_basis") or "classic"
+        outcome_basis_note = warm.get("outcome_basis_note") or ""
+        context_gate = warm.get("context_gate") if isinstance(warm.get("context_gate"), dict) else {}
+        sweet_raw = warm.get("pullback_sweet") if isinstance(warm.get("pullback_sweet"), dict) else None
+        tune_raw = warm.get("auto_tune") if isinstance(warm.get("auto_tune"), dict) else None
+        sell_mfe_raw = warm.get("sell_mfe") if isinstance(warm.get("sell_mfe"), dict) else None
+        seg_sell_raw = warm.get("segment_sell") if isinstance(warm.get("segment_sell"), dict) else None
+        phase_kind_raw = warm.get("phase_kind") if isinstance(warm.get("phase_kind"), dict) else None
+        desk_src_raw = (
+            warm.get("desk_source_bias") if isinstance(warm.get("desk_source_bias"), dict) else None
+        )
+    else:
+        from market_desk.adapt import (
+            build_exec_size_bias,
+            build_pullback_sweet,
+            build_sell_mfe_bias,
+            build_size_heat,
+            compose_size_mult,
+            resolve_auto_tune,
+            segment_sell_mult,
+        )
+
+        heat_raw = build_size_heat(rows, use_cache=False)
+        exec_raw = build_exec_size_bias(rows, use_cache=False)
+        heat = _slim_size_block(heat_raw, kind="rebuilt")
+        exec_size = _slim_size_block(exec_raw, kind="rebuilt")
+        composed = compose_size_mult(
+            [
+                {"key": "heat", "label": "仓位热度", "mult": float(heat.get("size_mult") or 1.0)},
+                {"key": "exec", "label": "执行分", "mult": float(exec_size.get("size_mult") or 1.0)},
+            ]
+        )
+        size_compose = composed
+        size_mult = composed.get("size_mult", 1.0)
+        size_factors = composed.get("factors") or []
+        outcome_basis = "classic"
+        outcome_basis_note = "pack 重建（引擎无暖 adapt）· 固定 classic"
+        context_gate = {}
+        warm_src = "rebuilt"
+        sweet_raw = build_pullback_sweet(rows, use_cache=False)
+        tune_raw = resolve_auto_tune()
+        sell_mfe_raw = build_sell_mfe_bias(rows, use_cache=False)
+        seg_sell_raw = segment_sell_mult(
+            _segment_key_from_warm_or_clock(None), rows, use_cache=False
+        )
+
+    try:
+        from market_desk.adapt import build_sticky_margin_bias
+
+        sticky_raw = build_sticky_margin_bias(use_cache=True)
+    except Exception as exc:
+        sticky_raw = {"ok": False, "mult": 1.0, "note": f"{type(exc).__name__}: {exc}"[:120]}
+
+    try:
+        from market_desk.review import cached_buy_gate_bias
+
+        gate_bundle = cached_buy_gate_bias() or {}
+    except Exception as exc:
+        gate_bundle = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+
+    buy_gate = {
+        "ok": bool(gate_bundle.get("ok")),
+        "schema": gate_bundle.get("schema") or "buy_gate_bias.v2",
+        "note": gate_bundle.get("note") or "",
+        "all": _slim_buy_gate_slice(gate_bundle.get("all") or gate_bundle),
+        "etf": _slim_buy_gate_slice(gate_bundle.get("etf")),
+        "stock": _slim_buy_gate_slice(gate_bundle.get("stock")),
+        "live_resolved": _live_gate_resolved(),
+    }
+
+    ctx_slim: dict[str, Any] | None = None
+    if isinstance(context_gate, dict) and context_gate.get("ok"):
+        ctx_slim = {
+            "ok": True,
+            "mult": context_gate.get("mult"),
+            "gates": context_gate.get("gates") or {},
+            "note": context_gate.get("note") or "",
+            "matched_n": context_gate.get("matched_n"),
+        }
+
+    phase_slim: dict[str, Any] | None = None
+    if isinstance(phase_kind_raw, dict):
+        phase_slim = {}
+        for k in ("stock", "etf"):
+            row = phase_kind_raw.get(k) if isinstance(phase_kind_raw.get(k), dict) else None
+            if row:
+                phase_slim[k] = _slim_size_block(row, kind=warm_src)
+
+    return {
+        "ok": True,
+        "warm_source": warm_src,
+        "adapt_follow_outcome": bool(setting("adapt_follow_outcome", False)),
+        "env_gate_live": bool(setting("env_gate_live", False)),
+        "outcome_basis": outcome_basis,
+        "outcome_basis_note": outcome_basis_note,
+        "size_heat": heat,
+        "exec_size": exec_size,
+        "size_mult": size_mult,
+        "size_compose": {
+            "size_mult": size_compose.get("size_mult") if isinstance(size_compose, dict) else size_mult,
+            "raw_product": size_compose.get("raw_product") if isinstance(size_compose, dict) else None,
+            "clamped": size_compose.get("clamped") if isinstance(size_compose, dict) else None,
+            "factors": size_factors,
+            "note": (size_compose.get("note") if isinstance(size_compose, dict) else "") or "",
+        },
+        "phase_kind": phase_slim,
+        "desk_source_bias": _slim_knob(
+            desk_src_raw, keys=("link_mult", "trial_mult")
+        ),
+        "buy_gate": buy_gate,
+        "context_gate": ctx_slim,
+        "pullback_sweet": _slim_knob(
+            sweet_raw, keys=("n", "sweet_max", "band_max", "mae_p50", "mae_p80")
+        ),
+        "auto_tune": _slim_knob(
+            tune_raw,
+            keys=(
+                "pb_min_mult",
+                "gate_mult",
+                "miss_mult",
+                "kind_mult",
+                "conflict",
+                "clamp",
+                "missed_bucket_n",
+            ),
+        ),
+        "sticky_margin": _slim_knob(
+            sticky_raw, keys=("mult", "margin", "base_margin", "stats")
+        ),
+        "sell_mfe": _slim_knob(
+            sell_mfe_raw, keys=("n", "mult", "p50", "widen", "tighten")
+        ),
+        "segment_sell": _slim_knob(
+            seg_sell_raw,
+            keys=("segment", "mult", "prior", "widen", "tighten", "source"),
+        ),
+        "note": (
+            "size_heat/exec_size 为当日软仓位；buy_gate.live_resolved 已叠假杀×情景×"
+            "（可选）env；env_gate_live 默认关时 env 项为 1.0。"
+            "另含回踩甜区/auto_tune/sticky/卖带宽现倍率。"
+        ),
+    }
 
 
 def _item_proposal(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -184,6 +469,19 @@ def build_agent_pack_sync() -> dict[str, Any]:
     except Exception as exc:
         quota = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
 
+    try:
+        # Prefer engine warm adapt; builders reload ≤240 signals when rebuilt.
+        adapt_live = build_adapt_live_snapshot(None)
+    except Exception as exc:
+        adapt_live = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
+
+    try:
+        from market_desk.adapt_effect import build_adapt_effect_panel
+
+        adapt_effect = build_adapt_effect_panel(buy_rows)
+    except Exception as exc:
+        adapt_effect = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:160]}
+
     proposals = []
     seen: set[str] = set()
     for it in review.get("items") or []:
@@ -260,13 +558,27 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "proposals_hold": hold_n,
             "proposals_soft_candidate": soft_n,
             "proposals_watch": watch_n,
+            "adapt_size_mult": (adapt_live.get("size_mult") if isinstance(adapt_live, dict) else None),
+            "adapt_heat_mult": (
+                ((adapt_live.get("size_heat") or {}).get("size_mult"))
+                if isinstance(adapt_live, dict)
+                else None
+            ),
+            "adapt_exec_mult": (
+                ((adapt_live.get("exec_size") or {}).get("size_mult"))
+                if isinstance(adapt_live, dict)
+                else None
+            ),
             "note": (
                 "sample=ready 只表示天数/张数够看；verdict=hold 默认不改；"
                 "soft_candidate 仅形似过门槛，仍须对照 TODO 全条件。一次最多改一处。"
                 "abs_win=绝对胜率，xs_win=跑赢大盘胜率。"
                 "env_gate 默认影子；env_gate_live 才软乘阈值（默认仅 minute）。"
+                "adapt_live=当日现倍率；adapt_effect=分档成绩/今日卡/漏买/题材（看效果用，不自动改闸）。"
             ),
         },
+        "adapt_live": adapt_live,
+        "adapt_effect": adapt_effect,
         "proposals": proposals,
         "dual_wins": dual,
         "review_check": review,

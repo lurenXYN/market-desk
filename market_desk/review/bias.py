@@ -403,7 +403,6 @@ def build_buy_gate_bias_for_kind(
         "分时": "minute",
         "离日高": "off_high",
         "薄确认/共振": "thin",
-        "相对强弱": "rel_strength",
     }
     for row in kills or []:
         gate = str(row.get("gate") or "")

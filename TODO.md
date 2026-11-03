@@ -83,6 +83,10 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-10-31（v1.10.29）：复盘双胜率（绝对 / 跑赢大盘）+ proposals 降级为 hold/soft_candidate + 模拟相对大盘线。
 - 2026-10-31（v1.10.30）：尺下存活压力旁注（abs_win vs xs_win）；仍不叠 soft_rank。
 - 2026-11-02：VPS `agent-pack` cf=true 自治复盘——soft_candidate=0；双胜率/相对大盘印证恶劣市有边；**不改规则**；修 edge_shadow 指数 HTTP 回退以便 survival 可算。
+- 2026-11-02：登记「自学习闭环清单」——先修回路再软用已有信号，最后才填洞；ready/硬禁门槛不降。
+- 2026-11-02（v1.10.41）：清单瘦身落地——分时闸补 kind；执行分/热度加仓 n≥8（连亏 3/5 不动）；删 rel_strength 空算倍率。P1/P2 暂缓。
+- 2026-11-03（v1.10.42）：agent-pack.v3 加 `adapt_live`（size_heat/exec_size/buy_gate + 回踩/tune/sticky/卖带宽现倍率），补审计盲区。
+- 2026-11-03（v1.10.43）：agent-pack.v4 加 `adapt_effect`（分档成绩/今日卡/漏买/题材），用于看拧完有没有用。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -109,6 +113,40 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **证伪工具 v1.10.35**：as-of 买闸重放（gate_replay）+ 成交口径 comparable_roundtrip + env_bucket 离线重算脚本
 - [x] **多主线可买 v1.10.36**：支线×0.6 可亮灯（不推送）；无 ETF 概念不当 sticky；成分重合≥0.3 禁并列；池子 `all` 仅影子
 - [x] **看好板块接线 v1.10.40**：按登录用户装饰/取消；未进热门可取消；共享生命周期用全员并集
+- [x] **自适应瘦身 v1.10.41**：分时闸补 kind；执行分/热度加仓 n≥8；连亏 3/5 不动；删 rel_strength 空算
+- [x] **agent-pack adapt_live v1.10.42**：当日 size_heat / exec_size / buy_gate 现倍率进包（v3）
+- [x] **agent-pack adapt_effect v1.10.43**：size/闸分档成绩 + 今日卡 + 漏买三类 + 题材信誉两端（v4）
+
+### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
+
+> **结论**：机器够、闭环不够。先修接线/门槛，两周不加新规则。仓位已连乘多层，模拟闸只差约 7 元，这时叠新 size 因子会搅样本。  
+> **落地**：一次最多一处；只许 `size` / `rank` / `gate_mult`；`ready` / 硬禁仍走原门槛。  
+> **边界**：运行时 adapt 管人的行为（连亏、追高）；Agent pack 管市场结构。不另建证据账本框架。
+
+**本次小改（v1.10.41）**
+- [x] 分时确认把 `kind=etf|stock` 传进 `resolve_gate_mult`，ETF 假杀分桶接到分时闸
+- [x] 执行分缩仓开火 n≥8；热度**加仓** n≥8；连亏 3/5 止血不动（n≥5 即可）
+- [x] `rel_strength` 从 env/bias 空算路径删掉（复盘桶名仍用于「弱于主线ETF」归因，不接 live 倍率）
+- [x] `test_edge_shadow` `book_open` 断言跟上 `items`
+
+**等样本（不加新规则）**
+- [ ] `env_gate_live`：影子满 ≥10 日且 `env_lit.live_recommend` 为真才开；仍只开 `minute`；**不要**把 `off_high` 加进 live keys
+- [ ] 模拟账本继续攒 `closed_n` → 开工闸；满 ≥10 日再看 `sim.by_channel` 是否关 `side_buy_enabled`
+- [ ] `pool_shadow` 换防次数攒 2～3 天，再决定是否切 `mainline_pool_mode=all`
+
+**暂缓**
+- P1：生命周期减仓、资金流再降权（流出已在确认项里）、`gate_blocked` 反哺
+- P2：ETF 折溢价、日历事件、回踩量能（分时已有缩量确认，缺的是成交量字段）
+- 新证据账本框架（`agent_pack.proposals` 已够）
+
+**以后可看（先影子，不绑仓位）**
+- [ ] 板涨、ETF/成分不跟 → 复盘「假主线」软标（先看约 10 日）
+
+**明确不做**
+- 北向当日净流入、缠论/谐波、艾略特进闸、全套 K 线、分析师预期、宏观高频
+- 新闻雷达改买闸；锅底 / R20 / 业绩预告漂移再进主链路（已否决）
+- 第三套学习器（黑盒 ML）并行拧闸
+- 看好板块喂主线 sticky；龙虎榜名称标签进闸
 
 ### 环境闸 / 技术特征 · 有效清单（2026-11-02）
 
@@ -130,10 +168,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] env_bucket 离线：`scripts/replay_env_bucket.py`（可 `--compare-lit`）
 
 **下一步（按收益排序，一次一处）**
-- [ ] 影子攒满后：对照 `env_lit.live_recommend` + gate_replay 假杀均值，再决定是否开 `env_gate_live`（仍先 minute；**不要**把 `off_high` 加进 live keys——友好市放松离日高是追尖方向）
-- [ ] 模拟账本继续攒 closed_n → 开工闸；顺带看 `sim.by_channel` 支线是拖累还是贡献（满 ≥10 日再谈 `side_buy_enabled`）
-- [ ] 主线池 `pool_shadow` 看 2～3 天换防次数后再决定是否把 `mainline_pool_mode` 切 `all`
-- [ ] 艾略特：保持观察页；可选把 Top1 方向作 env 弱分（多解，权重低）
+- 并入上方「自学习闭环清单」P0/P1，不再单开一条。艾略特保持观察页（可选 Top1 作 env 弱分，多解、权重低、不进闸）。
 
 **明确不做（进主链路）**
 - [ ] 缠论一二三买卖、谐波蝴蝶/螃蟹等、全套葛兰威尔绰号、全套 K 线辞典 → 不进 ready/闸门

@@ -97,8 +97,8 @@ def test_live_keys_minute_only(monkeypatch):
         "ok": True,
         "bucket": "hostile",
         "mult": {
-            "stock": {"minute": 1.1, "off_high": 1.1, "thin": 1.1, "rel_strength": 1.1},
-            "etf": {"minute": 1.05, "off_high": 1.05, "thin": 1.0, "rel_strength": 1.0},
+            "stock": {"minute": 1.1, "off_high": 1.1, "thin": 1.1},
+            "etf": {"minute": 1.05, "off_high": 1.05, "thin": 1.0},
         },
     }
     assert eg.env_gate_mult_for_key("minute", kind="stock") == 1.1
@@ -110,6 +110,7 @@ def test_off_high_stays_out_of_default_live_keys():
 
     assert "minute" in ENV_GATE_LIVE_KEYS
     assert "off_high" not in ENV_GATE_LIVE_KEYS
+    assert "rel_strength" not in eg.GATE_KEYS
 
 
 def test_features_tags_present():

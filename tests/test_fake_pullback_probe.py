@@ -29,6 +29,34 @@ class FakePullbackProbeTests(unittest.TestCase):
             v.get("at_tip") or "分时贴近" in str(v.get("label") or "")
         )
 
+    def test_minute_gate_mult_passes_item_kind(self) -> None:
+        seen: list[str] = []
+
+        def _capture(gate_key, default=1.0, *, kind="stock"):
+            del gate_key, default
+            seen.append(kind)
+            return 1.0
+
+        import market_desk.minute_confirm as mc
+
+        orig = mc._minute_gate_mult
+        mc._minute_gate_mult = lambda *, kind="stock": _capture("minute", kind=kind)
+        try:
+            rec = {
+                "items": [
+                    {"code": "510300", "kind": "etf", "ready": True, "qty": 400},
+                    {"code": "600000", "kind": "stock", "ready": True, "qty": 400},
+                ]
+            }
+            apply_minute_confirmations(
+                rec,
+                {"510300": _tip_minutes(), "600000": _tip_minutes()},
+            )
+            self.assertIn("etf", seen)
+            self.assertIn("stock", seen)
+        finally:
+            mc._minute_gate_mult = orig
+
     def test_minute_demote_sets_fake_pullback_tip(self) -> None:
         rec = {
             "buy": True,
