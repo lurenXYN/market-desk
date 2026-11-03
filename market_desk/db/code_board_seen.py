@@ -271,13 +271,30 @@ _SEEN_SELECT = """
     SELECT t.trade_date, t.code, t.source, t.board_name, t.board_kind, t.name,
            t.price, t.pct, t.d3, t.tag, t.ref_id,
            s.signal_type AS signal_type, s.outcome_label AS outcome_label,
-           s.outcome_day3_pct AS outcome_day3_pct, s.mainline AS mainline,
-           (SELECT GROUP_CONCAT(b2.board_name, ' / ') FROM code_board_seen b2
-             WHERE b2.trade_date = t.trade_date AND b2.code = t.code
-               AND b2.source = t.source AND b2.board_name != '') AS boards_text
+           s.outcome_day3_pct AS outcome_day3_pct, s.mainline AS mainline
     FROM code_board_seen t
     LEFT JOIN signals s ON s.id = t.ref_id
 """
+
+
+def _fold_seen_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    """Collapse board rows that share ``(trade_date, code, source)``."""
+    folded: dict[tuple[str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str]] = []
+    for r in rows:
+        item = dict(r)
+        key = (str(item["trade_date"]), str(item["code"]), str(item["source"]))
+        cur = folded.get(key)
+        if cur is None:
+            item["boards"] = [item["board_name"]] if item["board_name"] else []
+            item["boards_text"] = item["board_name"] or ""
+            folded[key] = item
+            order.append(key)
+            continue
+        if item["board_name"] and item["board_name"] not in cur["boards"]:
+            cur["boards"].append(item["board_name"])
+            cur["boards_text"] = " / ".join(cur["boards"])
+    return [folded[k] for k in order]
 
 
 def load_seen_by_code(code: str, *, limit: int = 400) -> list[dict[str, Any]]:
@@ -296,17 +313,7 @@ def load_seen_by_code(code: str, *, limit: int = 400) -> list[dict[str, Any]]:
             """,
             (c, max(1, min(int(limit), 1000))),
         ).fetchall()
-    folded: dict[tuple[str, str], dict[str, Any]] = {}
-    for r in rows:
-        item = dict(r)
-        key = (str(item["trade_date"]), str(item["source"]))
-        cur = folded.get(key)
-        if cur is None:
-            item["boards"] = [item["board_name"]] if item["board_name"] else []
-            folded[key] = item
-        elif item["board_name"] and item["board_name"] not in cur["boards"]:
-            cur["boards"].append(item["board_name"])
-    return list(folded.values())
+    return _fold_seen_rows(rows)
 
 
 def load_seen_by_board(
@@ -339,7 +346,56 @@ def load_seen_by_board(
             """,
             (since, key, key, max(1, min(int(limit), 400))),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return _fold_seen_rows(rows)
+
+
+# Inverted constituent cache: code -> [{name, kind, at}]. Rebuilt when the
+# snap table fingerprint (row count + max at) changes; avoids LIKE full scans.
+_CURRENT_BOARD_CACHE: dict[str, list[dict[str, str]]] = {}
+_CURRENT_BOARD_FP: tuple[int, str] | None = None
+
+
+def _refresh_current_board_cache(conn: sqlite3.Connection) -> None:
+    """Rebuild the code → boards inverted index from ``board_members_snap``."""
+    global _CURRENT_BOARD_CACHE, _CURRENT_BOARD_FP
+    fp_row = conn.execute(
+        "SELECT COUNT(*), COALESCE(MAX(at), '') FROM board_members_snap"
+    ).fetchone()
+    fp = (int(fp_row[0] or 0), str(fp_row[1] or ""))
+    if _CURRENT_BOARD_FP == fp and _CURRENT_BOARD_CACHE is not None:
+        return
+    by_code: dict[str, list[dict[str, str]]] = {}
+    seen_pair: dict[str, set[str]] = {}
+    rows = conn.execute(
+        """
+        SELECT source, name, kind, at, codes FROM board_members_snap
+        WHERE COALESCE(name, '') != ''
+        ORDER BY CASE source WHEN 'em' THEN 0 ELSE 1 END, n
+        """
+    ).fetchall()
+    for r in rows:
+        name = str(r["name"] or "")
+        kind = str(r["kind"] or "")
+        at = str(r["at"] or "")
+        key = board_key(name)
+        if not name or not key:
+            continue
+        try:
+            codes = json.loads(r["codes"] or "[]")
+        except (TypeError, ValueError):
+            codes = []
+        item = {"name": name, "kind": kind, "at": at}
+        for raw in codes:
+            c = str(raw or "").strip()
+            if len(c) != 6:
+                continue
+            used = seen_pair.setdefault(c, set())
+            if key in used:
+                continue
+            used.add(key)
+            by_code.setdefault(c, []).append(item)
+    _CURRENT_BOARD_CACHE = by_code
+    _CURRENT_BOARD_FP = fp
 
 
 def current_boards_for_code(code: str) -> list[dict[str, str]]:
@@ -347,25 +403,9 @@ def current_boards_for_code(code: str) -> list[dict[str, str]]:
     c = str(code or "").strip()
     if len(c) != 6:
         return []
-    out: list[dict[str, str]] = []
-    seen: set[str] = set()
     try:
         with _connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT source, name, kind, at FROM board_members_snap
-                WHERE codes LIKE ? AND COALESCE(name, '') != ''
-                ORDER BY CASE source WHEN 'em' THEN 0 ELSE 1 END, n
-                """,
-                (f'%"{c}"%',),
-            ).fetchall()
+            _refresh_current_board_cache(conn)
     except sqlite3.Error:
         return []
-    for r in rows:
-        name = str(r["name"] or "")
-        k = board_key(name)
-        if not name or k in seen:
-            continue
-        seen.add(k)
-        out.append({"name": name, "kind": str(r["kind"] or ""), "at": str(r["at"] or "")})
-    return out
+    return list(_CURRENT_BOARD_CACHE.get(c) or [])

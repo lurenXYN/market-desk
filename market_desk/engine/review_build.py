@@ -828,15 +828,23 @@ class ReviewMixin:
         user_id: int | None = None,
         limit: int = 120,
     ) -> dict[str, Any]:
-        """Return signal history plus current trend / holder snapshot for one code."""
+        """Return signal history plus current trend / holder snapshot for one code.
+
+        Drawer must open from local signals first. Trend / holders are a short
+        best-effort enrich (≤3.5s); day-cache hits skip the network round-trip.
+        """
         c = normalize_code(code)
         today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         holders: dict[str, dict[str, Any]] = {}
         trend: dict[str, Any] | None = None
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as client:
+        cached = self._cached_trends_for([c])
+        if c in cached:
+            trend = cached[c]
+
+        async def _enrich() -> None:
+            nonlocal holders, trend
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3.5)) as client:
                 closes_task = self._resolve_daily_closes(client, [c], today)
-                # ETF / funds skip shareholder stats.
                 want_holder = bool(c) and not c.startswith(("1", "5"))
                 if want_holder:
                     holders_task = fetch_holder_stats_many(client, [c])
@@ -845,10 +853,16 @@ class ReviewMixin:
                     )
                 else:
                     closes_by_code, ok_by_code = await closes_task
+                    holders = {}
                 series = list(closes_by_code.get(c) or [])
                 trend = classify_daily_trend(
                     series, fetch_ok=bool(ok_by_code.get(c, bool(series)))
                 )
+
+        try:
+            await asyncio.wait_for(_enrich(), timeout=3.5)
+        except asyncio.TimeoutError:
+            log.info("review code history enrich timed out for %s", c)
         except Exception:
             log.exception("review code history enrich failed for %s", c)
         return build_code_signal_history(

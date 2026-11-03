@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.47] - 2026-11-03
+
+### 【背景与动机（为什么做 · Why）】
+- 历史抽屉卡在「加载中」：先等日线/股东外网（超时可达 25s）才画买卖表，再串行拉 appearances；现况板还对成分 JSON 做全表 LIKE。
+
+### 【做了什么（What）】
+- **Changed** `build_review_code_history`：日缓存命中可跳过拉 K；外网 enrich 总超时 ≤3.5s，超时仍返回本地信号行。
+- **Changed** 抽屉前端 history + appearances **并行**请求，下表不再等上表。
+- **Changed** `current_boards_for_code` 改为成分倒排内存缓存（按 snap 指纹重建）；去掉逐行 `GROUP_CONCAT` 子查询。
+
+### 【影响与验证（Impact & Verification）】
+- 只读加速。pytest `test_code_board_seen` + `test_range_board`。desk.db 无新迁移。
+
+---
+
 ## [v1.10.46] - 2026-11-03
 
 ### 【背景与动机（为什么做 · Why）】

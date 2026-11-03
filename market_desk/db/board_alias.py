@@ -42,6 +42,13 @@ def save_board_members_snap(
             ),
         )
         conn.commit()
+    try:
+        # Invalidate the inverted current-board cache (rebuilt lazily on next read).
+        import market_desk.db.code_board_seen as cbs
+
+        cbs._CURRENT_BOARD_FP = None
+    except Exception:
+        pass
 
 
 def load_board_members_snap(source: str, *, with_codes: bool = True) -> dict[str, dict[str, Any]]:

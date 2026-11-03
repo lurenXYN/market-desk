@@ -462,28 +462,33 @@ async function openSigHist(code, name) {
   const a = document.getElementById("sigHistXq");
   a.href = xq || "#";
   a.textContent = xq ? `雪球看盘 · ${xq.split("/").pop()}` : "雪球看盘";
-  try {
-    const r = await fetch("/api/review/history/" + c);
-    const d = await r.json();
-    if (seq !== sigHistSeq) return;
-    if (!d.ok && d.ok !== undefined) throw new Error("bad");
-    paintSigHist(d);
-  } catch (e) {
-    if (seq !== sigHistSeq) return;
-    document.getElementById("sigHistMeta").textContent = "历史信号拉取失败";
-    document.getElementById("sigHistBody").innerHTML =
-      `<tr><td colspan="10" class="meta">加载失败</td></tr>`;
-  }
-  try {
-    const r2 = await fetch("/api/review/appearances/" + c);
-    const d2 = await r2.json();
-    if (seq !== sigHistSeq) return;
-    if (!d2.ok && d2.ok !== undefined) throw new Error("bad");
-    paintSigHistScans(d2);
-  } catch (e) {
-    if (seq !== sigHistSeq) return;
-    if (scanBody) {
-      scanBody.innerHTML = `<tr><td colspan="8" class="meta">发散/锅底列表加载失败</td></tr>`;
-    }
-  }
+  // Fire both reads together — appearances is local-index fast and must not wait
+  // behind the history enrich (trend / holders network).
+  const histP = fetch("/api/review/history/" + c)
+    .then((r) => r.json())
+    .then((d) => {
+      if (seq !== sigHistSeq) return;
+      if (!d.ok && d.ok !== undefined) throw new Error("bad");
+      paintSigHist(d);
+    })
+    .catch(() => {
+      if (seq !== sigHistSeq) return;
+      document.getElementById("sigHistMeta").textContent = "历史信号拉取失败";
+      document.getElementById("sigHistBody").innerHTML =
+        `<tr><td colspan="10" class="meta">加载失败</td></tr>`;
+    });
+  const scanP = fetch("/api/review/appearances/" + c)
+    .then((r) => r.json())
+    .then((d) => {
+      if (seq !== sigHistSeq) return;
+      if (!d.ok && d.ok !== undefined) throw new Error("bad");
+      paintSigHistScans(d);
+    })
+    .catch(() => {
+      if (seq !== sigHistSeq) return;
+      if (scanBody) {
+        scanBody.innerHTML = `<tr><td colspan="8" class="meta">发散/锅底列表加载失败</td></tr>`;
+      }
+    });
+  await Promise.all([histP, scanP]);
 }
