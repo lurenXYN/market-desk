@@ -14,6 +14,20 @@
 
 ---
 
+## [v1.10.55] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 发散/锅底页「板块」列经常空白：行业补全只扫发散 `items`，发散已齐时直接 return，锅底永远补不上；作战台板块池也只挂在发散行上。
+
+### 【做了什么（What）】
+- **Fixed** `backfill_day_meta` 同时补 `items` + `pot`。
+- **Fixed** `attach_review_flags_to_ma_fan` 给锅底也挂 desk boards；同行缺行业时两边互拷。
+
+### 【影响与验证（Impact & Verification）】
+- 打开发散/锅底页会触发补全并落库。`tests/test_ma_fan_rescan.py` 覆盖锅底-only 补全。
+
+---
+
 ## [v1.10.54] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】

@@ -166,7 +166,8 @@ async def backfill_day_meta(
 ) -> bool:
     """Fill missing industry / holder meta on a stored day payload in place.
 
-    Throttled per ``day`` so repeated page loads do not hammer the source.
+    Covers both MA-fan ``items`` and pot-bottom ``pot`` rows. Throttled per
+    ``day`` so repeated page loads do not hammer the source.
 
     Returns:
         True when at least one row gained a non-empty industry.
@@ -174,21 +175,32 @@ async def backfill_day_meta(
     import time
 
     items = list(body.get("items") or [])
-    if not any(_needs_meta(h) for h in items):
+    pot = list(body.get("pot") or [])
+    need_items = any(_needs_meta(h) for h in items)
+    need_pot = any(_needs_meta(h) for h in pot)
+    if not need_items and not need_pot:
         return False
     now = time.monotonic()
     if now - _BACKFILL_AT.get(day, -1e9) < MA_FAN_BACKFILL_RETRY_S:
         return False
     _BACKFILL_AT[day] = now
-    before = sum(1 for h in items if not _needs_meta(h))
+    before = sum(1 for h in items + pot if not _needs_meta(h))
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s), trust_env=False) as client:
-            await asyncio.wait_for(enrich_hits_meta(client, items), timeout=timeout_s * 2)
+            coros = []
+            if need_items:
+                coros.append(enrich_hits_meta(client, items))
+            if need_pot:
+                coros.append(enrich_hits_meta(client, pot))
+            await asyncio.wait_for(asyncio.gather(*coros), timeout=timeout_s * 2)
     except Exception as exc:
         log.warning("ma_fan meta backfill failed day=%s: %r", day, exc)
         return False
-    after = sum(1 for h in items if not _needs_meta(h))
-    body["items"] = items
+    if need_items:
+        body["items"] = items
+    if need_pot:
+        body["pot"] = pot
+    after = sum(1 for h in items + pot if not _needs_meta(h))
     if after > before:
         log.info("ma_fan meta backfill day=%s filled=%s", day, after - before)
     return after > before

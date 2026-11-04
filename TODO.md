@@ -98,6 +98,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-03（v1.10.52）：P0 假闭环接线——漏买改读冻结 NP；松回踩要过 NP soft_candidate；历史日不用今日报价标未回踩；日线/NP 覆盖率进 ops。
 - 2026-11-03（v1.10.53）：P1 学习口径默认 `same_day_plan`；`dual_wins.touch` 并排；当日未触达不进热度。
 - 2026-11-04（v1.10.54）：P2 模拟闸双档——`gate_readonly_ok`（相对超额→券商只读）+ `gate_ok`（绝对转正→真钱下单）。
+- 2026-11-04（v1.10.55）：发散/锅底板块列——补全与 desk boards 覆盖 pot。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 

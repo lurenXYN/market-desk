@@ -234,22 +234,51 @@ def attach_review_flags_to_ma_fan(
     *,
     snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Refresh ``in_review`` and theme/amount soft tags on stored hits."""
+    """Refresh ``in_review`` and theme/amount soft tags on stored hits.
+
+    Annotates both MA-fan ``items`` and pot-bottom ``pot`` so the 板块 column
+    can show desk pool boards on either tab.
+    """
     body = dict(payload or {})
     day = str(trade_date or body.get("trade_date") or "")[:10]
     signal_codes = _buy_signal_codes_for_day(day) if day else set()
-    seeded: list[dict[str, Any]] = []
-    for raw in body.get("items") or []:
-        item = dict(raw or {})
-        code = normalize_code(item.get("code")) or ""
-        item["in_review"] = bool(code and code in signal_codes)
-        seeded.append(item)
+
+    def _seed(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for raw in rows or []:
+            item = dict(raw or {})
+            code = normalize_code(item.get("code")) or ""
+            item["in_review"] = bool(code and code in signal_codes)
+            out.append(item)
+        return out
+
+    seeded_items = _seed(body.get("items"))
+    seeded_pot = _seed(body.get("pot"))
+    # Copy industry from the sibling list when one side already has it.
+    by_code_ind: dict[str, str] = {}
+    for row in list(seeded_items) + list(seeded_pot):
+        code = normalize_code(row.get("code")) or ""
+        ind = str(row.get("industry") or "").strip()
+        if code and ind and code not in by_code_ind:
+            by_code_ind[code] = ind
+    for row in list(seeded_items) + list(seeded_pot):
+        code = normalize_code(row.get("code")) or ""
+        if code and not str(row.get("industry") or "").strip() and code in by_code_ind:
+            row["industry"] = by_code_ind[code]
+
     items = annotate_hits_with_desk_context(
-        seeded,
+        seeded_items,
+        trade_date=day,
+        snapshot=snapshot,
+    )
+    pot = annotate_hits_with_desk_context(
+        seeded_pot,
         trade_date=day,
         snapshot=snapshot,
     )
     body["items"] = items
+    body["pot"] = pot
     body["review_overlap_n"] = sum(1 for x in items if x.get("in_review"))
     body["theme_overlap_n"] = sum(1 for x in items if x.get("theme_tag"))
+    body["pot_review_overlap_n"] = sum(1 for x in pot if x.get("in_review"))
     return body

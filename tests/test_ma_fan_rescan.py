@@ -231,6 +231,43 @@ def test_backfill_day_meta_is_throttled_per_day(monkeypatch) -> None:
     assert "industry" not in body2["items"][0]
 
 
+def test_backfill_day_meta_fills_pot_when_fan_already_complete(monkeypatch) -> None:
+    """Pot rows used to be skipped when MA-fan items needed no meta."""
+    async def meta(client, codes):
+        return {c: {"industry": "软件开发"} for c in codes}
+
+    async def no_holders(client, codes):
+        return {}
+
+    monkeypatch.setattr(mf_src, "fetch_stock_meta_many", meta)
+    monkeypatch.setattr(mf_src, "fetch_holder_stats_many", no_holders)
+    mf_src._BACKFILL_AT.clear()
+    body = {
+        "items": [{"code": "600000", "industry": "银行Ⅱ"}],
+        "pot": [{"code": "688088", "industry": ""}],
+    }
+    assert asyncio.run(mf.backfill_day_meta("2026-10-23", body)) is True
+    assert body["pot"][0]["industry"] == "软件开发"
+
+
+def test_attach_review_flags_annotates_pot_boards() -> None:
+    from market_desk.ma_fan.context import attach_review_flags_to_ma_fan
+
+    snap = {
+        "hot_boards": [
+            {"name": "人工智能", "members": [{"code": "688088", "name": "X"}]}
+        ]
+    }
+    body = {
+        "trade_date": "2026-10-23",
+        "items": [{"code": "600000", "industry": "银行Ⅱ", "score": 1}],
+        "pot": [{"code": "688088", "industry": "", "score": 1}],
+    }
+    out = attach_review_flags_to_ma_fan(body, "2026-10-23", snapshot=snap)
+    assert "人工智能" in (out["pot"][0].get("boards") or [])
+
+
+
 def test_listing_board_label() -> None:
     from market_desk.filters import listing_board_label
 
