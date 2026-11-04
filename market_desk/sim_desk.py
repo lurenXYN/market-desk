@@ -1420,6 +1420,8 @@ def sync_exits_from_snapshot(
     *,
     book_quotes: dict[str, dict[str, Any]] | None = None,
     trends_by_code: dict[str, dict[str, Any]] | None = None,
+    minutes_for=None,
+    minutes_by_code: dict[str, list] | None = None,
 ) -> dict[str, Any]:
     """Mark open lots and apply system sell advice. Return sync stats."""
     trade_date = str(snapshot.get("trade_date") or "")
@@ -1471,12 +1473,13 @@ def sync_exits_from_snapshot(
     if positions and session_ok:
         try:
             from market_desk.verdict.sell_advice import build_sell_advice
-            from market_desk.sell_open_buffer import apply_sell_open_buffer
+            from market_desk.sell_finalize import finalize_sell_advice
 
             clock = _parse_snap_now(signaled_at)
+            verdict = dict(snapshot.get("verdict") or {})
             advice = build_sell_advice(
                 positions,
-                snapshot.get("verdict") or {},
+                verdict,
                 snapshot.get("phase") or "",
                 trade_date=trade_date,
                 trends_by_code=trends_by_code or {},
@@ -1484,24 +1487,22 @@ def sync_exits_from_snapshot(
                 metrics=snapshot.get("metrics"),
                 now=clock,
             )
-            # Soft sells wait for open buffer (same as personal desk); hard stops pass.
-            try:
-                from market_desk.config import SELL_OPEN_WATCH_MINUTES
-                from market_desk.settings import setting
-
-                watch_m = int(setting("sell_open_watch_minutes", SELL_OPEN_WATCH_MINUTES))
-            except Exception:
-                watch_m = 15
-            advice = apply_sell_open_buffer(
+            # Same post-gates as personal desk (open buffer / minute / reconcile / hold).
+            advice, _ = finalize_sell_advice(
                 advice,
+                minutes_for=minutes_for,
+                minutes_by_code=minutes_by_code,
                 now=clock,
-                watch_minutes=watch_m,
-                minutes_by_code={},
+                verdict=verdict,
+                positions=positions,
+                reconcile=True,
+                hold_before_match=True,
+                ui_top_n=None,
             )
             by_code: dict[str, dict[str, Any]] = {
                 normalize_code(p.get("code")) or "": p for p in positions
             }
-            items = list(advice.get("all_items") or advice.get("items") or [])
+            items = list(advice.get("alert_items") or advice.get("all_items") or advice.get("items") or [])
             for it in items:
                 code = normalize_code(it.get("code"))
                 pos = by_code.get(code or "")
@@ -1547,13 +1548,16 @@ def sync_from_engine(
     snapshot: dict[str, Any],
     *,
     book_quotes: dict[str, dict[str, Any]] | None = None,
+    minutes_for=None,
 ) -> dict[str, Any]:
     """Engine-refresh entry: open lit cards + try exits. Never raises."""
     try:
         ensure_sim_book_epoch()
         get_sim_account(SIM_INITIAL_CASH)
         backfill_missing_buy_fills()
-        return sync_exits_from_snapshot(snapshot, book_quotes=book_quotes)
+        return sync_exits_from_snapshot(
+            snapshot, book_quotes=book_quotes, minutes_for=minutes_for
+        )
     except Exception as exc:
         log.exception("sim_desk sync failed")
         return {"ok": False, "reason": str(exc)[:160], "opened": 0, "filled": 0}

@@ -478,4 +478,12 @@ async def attach_cv(
         if cv:
             it["cv"] = cv
             n += 1
+        else:
+            # Explicit degrade so review/pick don't treat missing cv as "unknown quiet".
+            it["cv"] = {
+                "ok": False,
+                "degraded": True,
+                "note": "日线不足或拉取失败",
+            }
+            it["cv_degraded"] = True
     return n

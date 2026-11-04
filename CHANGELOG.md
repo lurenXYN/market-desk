@@ -14,6 +14,37 @@
 
 ---
 
+## [v1.10.63] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 扩展扫：看好台另算卖点与主台闸不一致；顶栏看不见环境闸影子桶；CV 拉失败时静默空缺。
+
+### 【做了什么（What）】
+- **Fixed** 看好台卖卡复用个人层 `sell_advice.alert_items`（同源过闸）。
+- **Added** slice/`env_gate` + 顶栏 `envGatePill` 影子小标；词条「环境闸」补充说明。
+- **Added** `cv_degraded` / 复盘「CV降级」角标（日线不足或拉取失败）。
+
+### 【影响与验证（Impact & Verification）】
+- `test_favorite_sell_reuses_main_advice`。desk.db 无迁移。
+
+---
+
+## [v1.10.62] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 扩展扫：日记 advice 读共享快照且支线键路径错；卖推送只看 UI 顶 4 条；sim 卖闸缺分时/对冲；分钟闸裸 `except: pass`。
+
+### 【做了什么（What）】
+- **Added** `sell_finalize.finalize_sell_advice`：open-buffer / 分时 / reconcile / hold-before-match；`alert_items` 全量池；个人层与 sim 共用。
+- **Fixed** 日记 `_advice_snapshot_for_code` 走 `snapshot_for_user`；买侧 `recommend/side/link`；卖侧 `alert_items`。
+- **Fixed** Server酱/音效卖推送读 `alert_items`（不被顶 4 截断）。
+- **Fixed** 卖闸异常 `log.exception` + 软卖降 ready，硬止损保留。
+
+### 【影响与验证（Impact & Verification）】
+- `test_sell_finalize_v11062`。desk.db 无迁移。
+
+---
+
 ## [v1.10.61] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】

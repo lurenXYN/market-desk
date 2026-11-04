@@ -47,10 +47,17 @@ class TrimIn(BaseModel):
 
 
 def _advice_snapshot_for_code(
-    code: str, *, source: str | None = None
+    code: str, *, user_id: int | None = None, source: str | None = None
 ) -> dict[str, Any]:
     """Capture live desk advice for one ticker into an exec-diary payload."""
-    snap = engine.snapshot or {}
+    snap: dict[str, Any] = {}
+    if user_id is not None:
+        try:
+            snap = engine.snapshot_for_user(int(user_id)) or {}
+        except Exception:
+            snap = engine.snapshot or {}
+    else:
+        snap = engine.snapshot or {}
     code_n = normalize_code(code)
     verdict = snap.get("verdict") or {}
     ml = (verdict.get("mainline") or {}) if isinstance(verdict, dict) else {}
@@ -63,23 +70,21 @@ def _advice_snapshot_for_code(
     }
     if source:
         out["source"] = str(source)
-    rec = verdict.get("recommend") or {}
-    primary = rec.get("primary") if isinstance(rec, dict) else None
     buy_hit: dict[str, Any] | None = None
-    if isinstance(primary, dict) and normalize_code(primary.get("code")) == code_n:
-        buy_hit = primary
-    if buy_hit is None:
-        for bucket in (
-            rec.get("items") or [],
-            (snap.get("side_recommend") or {}).get("items") or [],
-            (snap.get("link_recommend") or {}).get("items") or [],
-        ):
-            for it in bucket:
-                if isinstance(it, dict) and normalize_code(it.get("code")) == code_n:
-                    buy_hit = it
-                    break
-            if buy_hit is not None:
+    for key in ("recommend", "side_recommend", "link_recommend"):
+        rec = verdict.get(key) if isinstance(verdict, dict) else None
+        if not isinstance(rec, dict):
+            continue
+        primary = rec.get("primary")
+        if isinstance(primary, dict) and normalize_code(primary.get("code")) == code_n:
+            buy_hit = primary
+            break
+        for it in rec.get("items") or []:
+            if isinstance(it, dict) and normalize_code(it.get("code")) == code_n:
+                buy_hit = it
                 break
+        if buy_hit is not None:
+            break
     if buy_hit is not None:
         out["buy"] = {
             "buy_price": buy_hit.get("buy_price") or buy_hit.get("last"),
@@ -92,7 +97,9 @@ def _advice_snapshot_for_code(
             "role_label": buy_hit.get("role_label"),
             "reason": (str(buy_hit.get("reason") or ""))[:160],
         }
-    for it in ((snap.get("sell_advice") or {}).get("items") or []):
+    sa = snap.get("sell_advice") or {}
+    sell_pool = sa.get("alert_items") or sa.get("items") or []
+    for it in sell_pool:
         if not isinstance(it, dict):
             continue
         if normalize_code(it.get("code")) != code_n:
@@ -132,7 +139,9 @@ def _log_exec_diary(
             name=name or "",
             qty=qty,
             price=price,
-            advice=_advice_snapshot_for_code(code, source=source),
+            advice=_advice_snapshot_for_code(
+                code, user_id=int(user_id), source=source
+            ),
             note=note or "",
             trade_date=trade_date,
         )

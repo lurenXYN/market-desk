@@ -22,7 +22,6 @@ from market_desk.verdict import (
     finalize_recommend_buy_ux,
     merge_favorite_desk_buys,
     position_summary,
-    reconcile_buy_sell_conflict,
     _attach_risk_sizing,
 )
 
@@ -143,50 +142,9 @@ def attach_personal_layer(
             similar=out.get("similar_days"),
             metrics=out.get("metrics"),
         )
-        # Soft take / half: minute fade gate + open-buffer minute refine.
-        try:
-            from market_desk.minute_confirm import apply_sell_minute_gates
-            from market_desk.sell_open_buffer import apply_sell_open_buffer
 
-            advice = out["sell_advice"] or {}
-            pool = list(advice.get("all_items") or advice.get("items") or [])
-            need_codes = []
-            for it in pool:
-                code = str(it.get("code") or "").zfill(6)
-                if not code or len(code) != 6:
-                    continue
-                if it.get("minute_gate") or it.get("open_buffer_track") or it.get("ready"):
-                    need_codes.append(code)
-            need_codes = sorted(set(need_codes))
-            minutes: dict[str, list] = {}
-            if need_codes and callable(minutes_for):
-                try:
-                    minutes = dict(minutes_for(need_codes) or {})
-                except Exception:
-                    minutes = {}
-            if minutes:
-                try:
-                    from market_desk.config import SELL_OPEN_WATCH_MINUTES
-                    from market_desk.settings import setting
-
-                    watch_m = int(setting("sell_open_watch_minutes", SELL_OPEN_WATCH_MINUTES))
-                except Exception:
-                    watch_m = 15
-                advice = apply_sell_open_buffer(
-                    advice, watch_minutes=watch_m, minutes_by_code=minutes
-                )
-            out["sell_advice"] = apply_sell_minute_gates(advice, minutes)
-        except Exception:
-            pass
-
-        advice = out.get("sell_advice") or {}
-        all_items = list(advice.get("all_items") or advice.get("items") or [])
-        advice["items"] = all_items[:4]
-        if all_items:
-            advice["all_items"] = all_items
-        out["sell_advice"] = advice
-
-        # Re-size recommend cards with this user's equity / open book.
+        # Re-size recommend cards with this user's equity / open book (before
+        # sell reconcile so soft-sell vs ready-buy uses sized buy ready flags).
         bridge = (verdict.get("auction_open_bridge") or {}) if isinstance(verdict, dict) else {}
         seg_v = (verdict.get("segment") or {}) if isinstance(verdict, dict) else {}
         block_arm = (
@@ -210,28 +168,21 @@ def attach_personal_layer(
             )
         verdict = apply_size_cap_gate(verdict, positions)
 
-        # Soft sell vs ready buy / held-code buy: prefer hold, never dual-signal.
-        try:
-            verdict, advice = reconcile_buy_sell_conflict(
-                verdict, out.get("sell_advice"), positions
-            )
-            out["sell_advice"] = advice
-        except Exception:
-            pass
+        from market_desk.sell_finalize import finalize_sell_advice
 
-        try:
-            from market_desk.sell_open_buffer import hold_sells_before_match
-
-            out["sell_advice"] = hold_sells_before_match(out.get("sell_advice"))
-        except Exception:
-            pass
-
-        advice = out.get("sell_advice") or {}
-        all_items = list(advice.get("all_items") or advice.get("items") or [])
-        advice["items"] = all_items[:4]
-        if all_items:
-            advice["all_items"] = all_items
+        advice, reconciled = finalize_sell_advice(
+            out.get("sell_advice"),
+            minutes_for=minutes_for,
+            verdict=verdict,
+            positions=positions,
+            reconcile=True,
+            hold_before_match=True,
+            ui_top_n=4,
+        )
+        if reconciled is not None:
+            verdict = reconciled
         out["sell_advice"] = advice
+        all_items = list(advice.get("alert_items") or advice.get("all_items") or advice.get("items") or [])
         try:
             from market_desk.review import record_sell_advice_signals
 
@@ -305,6 +256,7 @@ def attach_personal_layer(
             trade_date=trade_dash,
             metrics=out.get("metrics"),
             hot_boards=out.get("hot_boards"),
+            main_sell_advice=out.get("sell_advice"),
         )
         template = favorite_desk_template
         if template is None:

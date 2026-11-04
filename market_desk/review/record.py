@@ -451,7 +451,9 @@ def record_sell_advice_signals(snapshot: dict[str, Any]) -> int:
     if owner <= 0:
         return 0
     sell = snapshot.get("sell_advice") or {}
-    items = list(sell.get("all_items") or sell.get("items") or [])
+    items = list(
+        sell.get("all_items") or sell.get("alert_items") or sell.get("items") or []
+    )
     ready = [x for x in items if x.get("ready")]
     if not ready:
         return 0

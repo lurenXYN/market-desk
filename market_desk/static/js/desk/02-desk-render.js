@@ -105,6 +105,23 @@ function renderDeskHead(d, v) {
       regimePill.className = "meta";
     }
   }
+  const envPill = document.getElementById("envGatePill");
+  if (envPill) {
+    const eg = d.env_gate || {};
+    const bucket = String(eg.bucket || "");
+    const labMap = { friendly: "友好", neutral: "中性", hostile: "敌意" };
+    if (eg.ok && labMap[bucket]) {
+      const live = eg.live ? "·live" : "·影子";
+      envPill.innerHTML = `环境${labMap[bucket]}${live}`
+        + ` <button type="button" class="q" data-term="环境闸">?</button>`;
+      envPill.title = eg.note || "环境闸影子桶 · 默认不关亮灯";
+      envPill.className = "meta env-" + bucket;
+    } else {
+      envPill.textContent = "";
+      envPill.title = "";
+      envPill.className = "meta";
+    }
+  }
   const gateEl = document.getElementById("gateHint");
   const gate = d.desk_gate_summary || {};
   if (gateEl) {

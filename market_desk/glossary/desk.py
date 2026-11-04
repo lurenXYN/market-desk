@@ -180,10 +180,11 @@ ENTRIES: dict[str, dict[str, str]] = {
         "门槛见 TODO；约 10/28 后才允许软排序叠 regime，永不硬切 ready。另见「环境闸」。",
     },
     "环境闸": {
-        "mean": "把大盘好坏变成买闸软倍率：坏环境更严、好环境略松，并区分 ETF/个股。默认只记账，不关亮灯。",
+        "mean": "把大盘好坏变成买闸软倍率：坏环境更严、好环境略松，并区分 ETF/个股。默认只记账，不关亮灯。顶栏「环境·影子」小标只旁注。",
         "algo": "build_env_gate：尺上下 + 波动档 + 道氏/均线/MACD·RSI/ATR/ADX/BOLL/量能 + 缺口细分与精简K线软标签 → score → hostile|neutral|friendly。\n"
         "env_mult_table：friendly≈0.90、hostile≈1.10；ETF 振幅×ENV_ETF_SCALE 向 1 收缩。\n"
         "买卡冻结 payload.env_gate（分种 mult）；shadows/agent-pack 看覆盖与 lit（亮灯率×env×kind）。\n"
+        "作战台顶栏 envGatePill 显示 bucket（影子/live）；slice 始终带 env_gate；market_gates 仍不上主台。\n"
         "满 ≥ENV_GATE_LIT_MIN_DAYS 且 friendly 亮灯明显高于 hostile 才建议开 live；env_gate_live_keys 默认仅 minute。\n"
         "off_high 故意不进 live keys：友好市放松离日高是追尖方向；adapt 假杀偏置仍始终可调离日高。\n"
         "假杀/真杀按 ETF|股分桶进 buy_gate_bias.v2。仍禁止「仅尺下→ready=false」；不做缠论/谐波/全套 K 线进闸。",

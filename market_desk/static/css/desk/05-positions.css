@@ -242,6 +242,9 @@ tr.rev-flash { outline: 1px solid #fbbf24; outline-offset: -1px; background: rgb
 #regimePill.regime-above { color: var(--ferm); }
 #regimePill.regime-below { color: var(--warn); }
 #regimePill.regime-unknown { color: var(--muted); }
+#envGatePill.env-friendly { color: var(--ferm); }
+#envGatePill.env-neutral { color: var(--muted); }
+#envGatePill.env-hostile { color: var(--warn); }
 .rev-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .rev-actions .rev-up {
   background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;

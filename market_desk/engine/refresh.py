@@ -926,7 +926,9 @@ class RefreshMixin:
                     from market_desk.sim_desk import sync_from_engine
 
                     payload["sim_desk"] = sync_from_engine(
-                        payload, book_quotes=self._book_quotes
+                        payload,
+                        book_quotes=self._book_quotes,
+                        minutes_for=self._minutes_for_codes,
                     )
                 except Exception:
                     log.exception("sim_desk sync failed")

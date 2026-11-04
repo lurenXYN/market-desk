@@ -351,6 +351,8 @@ class DeskEngine(
             "temperature": snap.get("temperature"),
             "verdict": snap.get("verdict"),
             "market_regime": snap.get("market_regime"),
+            # Shadow env bucket only (top-bar pill); never drives ready by itself.
+            "env_gate": snap.get("env_gate"),
             "desk_gate_summary": snap.get("desk_gate_summary"),
             "health": snap.get("health"),
             "enrich_pending": snap.get("enrich_pending"),

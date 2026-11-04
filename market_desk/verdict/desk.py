@@ -441,6 +441,57 @@ def merge_favorite_desk_buys(
     return user_desk
 
 
+def _main_sell_by_code(main_sell_advice: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Index main-desk sell cards by code (prefer alert_items full pool)."""
+    sa = main_sell_advice or {}
+    pool = sa.get("alert_items") or sa.get("items") or []
+    out: dict[str, dict[str, Any]] = {}
+    for it in pool:
+        if not isinstance(it, dict):
+            continue
+        code = normalize_code(it.get("code"))
+        if code and code not in out:
+            out[code] = it
+    return out
+
+
+def _sell_plan_from_main_items(
+    items: list[dict[str, Any]],
+    *,
+    board_name: str,
+) -> dict[str, Any]:
+    """Build a favorite-board sell box from already-finalized main desk cards."""
+    ready = [it for it in items if it.get("ready")]
+    if ready:
+        top = ready[0]
+        return {
+            "sell": True,
+            "title": f"看好 · {board_name} · 卖点",
+            "text": str(top.get("role_label") or top.get("reason") or "相关持仓有卖点"),
+            "size_note": "与上方卖卡同源（个人层已过闸）",
+            "items": items,
+            "from_main": True,
+        }
+    if items:
+        top = items[0]
+        return {
+            "sell": False,
+            "title": f"看好 · {board_name} · 观望",
+            "text": str(top.get("role_label") or top.get("reason") or "相关持仓暂无卖点"),
+            "size_note": "与上方卖卡同源（个人层已过闸）",
+            "items": items,
+            "from_main": True,
+        }
+    return {
+        "sell": False,
+        "title": "相关持仓观望",
+        "text": f"看好 {board_name} 有持仓，暂无卖点",
+        "size_note": "按浮盈/回撤与板块强弱再评估",
+        "items": [],
+        "from_main": True,
+    }
+
+
 def build_favorite_desk_plans(
     *,
     favorite_boards: list[dict[str, Any]] | None,
@@ -455,12 +506,14 @@ def build_favorite_desk_plans(
     trade_date: str | None = None,
     metrics: dict[str, Any] | None = None,
     hot_boards: list[dict[str, Any]] | None = None,
+    main_sell_advice: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build buy/sell plans for personally favored boards on the battle desk.
 
     Plans stay secondary to the live mainline: default to pullback watch pricing,
     but near-entry cards can light ready inside this box only when gates pass.
-    Soft ETF maps never arm ready.
+    Soft ETF maps never arm ready. Sell cards reuse the main personal
+    ``sell_advice`` when provided so gates stay consistent.
     """
     boards = list(favorite_boards or [])[:4]
     if not boards:
@@ -472,6 +525,7 @@ def build_favorite_desk_plans(
     positions = list(positions or [])
     metrics = metrics or {}
     hot = list(hot_boards or [])
+    main_by_code = _main_sell_by_code(main_sell_advice)
     out_boards: list[dict[str, Any]] = []
     for board in boards:
         name = str(board.get("name") or "").strip()
@@ -534,16 +588,7 @@ def build_favorite_desk_plans(
             if int(p.get("qty") or 0) > 0
             and _position_tied_to_board(p, board, vehicle, buy)
         ]
-        sell = build_sell_advice(tied, fake_verdict, phase, trade_date=trade_date)
-        if tied and not sell.get("items"):
-            sell = {
-                "sell": False,
-                "title": "相关持仓观望",
-                "text": f"看好 {name} 有持仓，暂无卖点",
-                "size_note": "按浮盈/回撤与板块强弱再评估",
-                "items": [],
-            }
-        elif not tied:
+        if not tied:
             sell = {
                 "sell": False,
                 "empty": True,
@@ -552,6 +597,24 @@ def build_favorite_desk_plans(
                 "size_note": "",
                 "items": [],
             }
+        elif main_by_code:
+            tied_items = []
+            for p in tied:
+                c = normalize_code(p.get("code"))
+                if c and c in main_by_code:
+                    tied_items.append(dict(main_by_code[c]))
+            sell = _sell_plan_from_main_items(tied_items, board_name=name)
+        else:
+            # Fallback when personal sell_advice is not yet attached.
+            sell = build_sell_advice(tied, fake_verdict, phase, trade_date=trade_date)
+            if tied and not sell.get("items"):
+                sell = {
+                    "sell": False,
+                    "title": "相关持仓观望",
+                    "text": f"看好 {name} 有持仓，暂无卖点",
+                    "size_note": "按浮盈/回撤与板块强弱再评估",
+                    "items": [],
+                }
 
         out_boards.append(
             {

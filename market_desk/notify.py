@@ -880,7 +880,9 @@ def build_alert_feed(snap: dict[str, Any] | None, *, now: datetime) -> dict[str,
     ]
     stops: list[dict[str, Any]] = []
     if is_sell_push_window(now, trading_day=bool(snap.get("trading_day", True))):
-        for item in (snap.get("sell_advice") or {}).get("items") or []:
+        sa = snap.get("sell_advice") or {}
+        sell_pool = sa.get("alert_items") or sa.get("items") or []
+        for item in sell_pool:
             if not item.get("ready") or str(item.get("urgency") or "") != "stop":
                 continue
             stops.append(
@@ -915,7 +917,8 @@ def push_user_sell_alerts(
     day = str(trade_date or "")[:10]
     if not key or uid <= 0 or not day:
         return 0
-    alerts = build_sell_ready_alerts((snap.get("sell_advice") or {}).get("items"))
+    sa = snap.get("sell_advice") or {}
+    alerts = build_sell_ready_alerts(sa.get("alert_items") or sa.get("items"))
     if not alerts:
         return 0
     store = f"sc_sell_once:{day}:{uid}"

@@ -418,7 +418,10 @@ function revCellHtml(col, r, ctx) {
     const histBtn = code
       ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
       : "";
-    const cvChips = (r.cv_tags || []).map((t) =>
+    const cvDeg = (r.cv_degraded || (r.cv && r.cv.degraded))
+      ? ` <span class="rev-chip cv-warn" title="筹码/量能日线不足或拉取失败">CV降级</span>`
+      : "";
+    const cvChips = cvDeg + (r.cv_tags || []).map((t) =>
       ` <span class="rev-chip cv-${t.tone === "good" ? "good" : "warn"}" title="${escAttr(t.title || "")}">${escAttr(t.label || "")}</span>`
     ).join("");
     const st = String(r.signal_type || "");
