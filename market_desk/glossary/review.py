@@ -316,9 +316,9 @@ ENTRIES: dict[str, dict[str, str]] = {
         "开盘卖出缓冲见「开盘卖出缓冲」词条（must/watch）。",
     },
     "调参口径": {
-        "mean": "仓位热度、执行分等 soft 调参默认按 same_day_plan（日低触到计划价才计）；NP 未触达不进样本。打开「调参跟随」且界面选实盘成交时改用已交易样本。",
+        "mean": "仓位热度、执行分等 soft 调参默认按 same_day_plan（日低触到计划价才计）；NP 未触达不进样本。打开「调参跟随」且界面选实盘成交时改用已交易样本。无日线时清空不可核验的 classic 三日%，不回退乐观样本。",
         "algo": "build_adapt_bundle 默认 same_day_plan：engine 预取 set_adapt_bars / 日线缓存 → "
-        "_remap_rows_for_adapt_standard；当日未触达不进热度。\n"
+                "_remap_rows_for_adapt_standard；无 bars 也 strip classic 标签；当日未触达不进热度。\n"
         "adapt_follow_outcome+filled → 仅 traded+有标签行；\n"
         "无 OHLC 包或重算 0 笔时回退 classic 并在 basis_note 说明。"
         "dual_wins.touch 与 classic 并排，改规则优先对照 touch。",

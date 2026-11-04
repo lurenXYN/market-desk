@@ -119,16 +119,13 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["market_gates"] = old_payload["market_gates"]
         if old_payload.get("board_stage"):
             merged["board_stage"] = old_payload["board_stage"]
-        # Soft market ruler: freeze at first insert (do not refresh / backfill later).
+        # Soft market ruler: freeze first *non-empty* capture; allow fill-once
+        # when the first insert missed the field (do not pop a later backfill).
         if isinstance(old_payload.get("market_regime"), dict):
             merged["market_regime"] = old_payload["market_regime"]
-        elif existing:
-            merged.pop("market_regime", None)
-        # Env-gate shadow: freeze first insert (bucket × kind mults).
+        # Env-gate shadow: same fill-once semantics as market_regime.
         if isinstance(old_payload.get("env_gate"), dict):
             merged["env_gate"] = old_payload["env_gate"]
-        elif existing:
-            merged.pop("env_gate", None)
         # Gate-replay inputs: keep first high / cross counts / thin_confirm.
         for _gk in ("high", "cross_n", "cross_theme_n", "thin_confirm"):
             if old_payload.get(_gk) is not None:
@@ -768,10 +765,15 @@ def mark_signal_outcome(signal_id: int, outcome: dict[str, Any]) -> bool:
         return cur.rowcount > 0
 
 
-def set_signal_payload_once(values: dict[int, tuple[str, Any]]) -> int:
+def set_signal_payload_once(
+    values: dict[int, tuple[str, Any]],
+    *,
+    replace_if: Any | None = None,
+) -> int:
     """Write ``payload[key] = value`` per signal id only where the key is still absent.
 
-    Returns how many signals were updated.
+    ``replace_if(key, old, new)`` may allow an upgrade when the stored value is a
+    stub (e.g. incomplete ``pick0``). Returns how many signals were updated.
     """
     if not values:
         return 0
@@ -785,8 +787,12 @@ def set_signal_payload_once(values: dict[int, tuple[str, Any]]) -> int:
                 payload = json.loads(row["payload"] or "{}")
             except json.JSONDecodeError:
                 payload = {}
-            if not isinstance(payload, dict) or payload.get(key) is not None:
+            if not isinstance(payload, dict):
                 continue
+            existing = payload.get(key)
+            if existing is not None:
+                if replace_if is None or not replace_if(key, existing, value):
+                    continue
             payload[key] = value
             conn.execute(
                 "UPDATE signals SET payload = ? WHERE id = ?",

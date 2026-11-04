@@ -121,8 +121,6 @@ def _remap_rows_for_adapt_standard(
         # Fall back to cache when engine prefetch is empty.
         codes = [str(r.get("code") or "") for r in src]
         packed = closes_map_from_bar_cache(codes)
-    if not packed:
-        return src, 0
     remapped: list[dict[str, Any]] = []
     n_hit = 0
     for raw in src:
@@ -131,9 +129,9 @@ def _remap_rows_for_adapt_standard(
             remapped.append(row)
             continue
         code = normalize_code(row.get("code"))
-        triple = packed.get(code) if code else None
+        triple = packed.get(code) if code and packed else None
         if not triple or len(triple) < 2:
-            # Drop classic outcome so untouched / unscored cards do not inflate.
+            # No bars → strip classic outcomes (do not silently learn on plan-entry %).
             row["outcome_label"] = None
             row["outcome_day1_pct"] = None
             row["outcome_day3_pct"] = None
@@ -190,20 +188,26 @@ def build_adapt_bundle(
         rows = []
     # P1: learning defaults to executable same_day_plan; filled only when opted in.
     learn_std = "filled" if (follow and ui_std == "filled") else "same_day_plan"
-    basis = "classic"
-    basis_note = "调参反哺固定用落库 classic 标签"
     remapped, n_hit = _remap_rows_for_adapt_standard(rows, learn_std)
-    if n_hit > 0:
+    if learn_std == "same_day_plan":
+        # Always take remapped rows: missing bars clear classic outcomes instead
+        # of silently learning on optimistic plan-entry day3%.
         rows = remapped
-        basis = learn_std
-        if learn_std == "same_day_plan":
+        basis = "same_day_plan"
+        if n_hit > 0:
             basis_note = f"调参用当日plan·隔日（可触达才计；已重算 {n_hit} 笔）"
         else:
-            basis_note = f"调参跟随实盘成交（已用已交易样本 {n_hit} 笔）"
+            basis_note = (
+                "学习口径 same_day_plan：暂无日线重算，已清空不可核验的 classic 三日%"
+                "（不回退乐观样本；覆盖率上来后自动计）"
+            )
+    elif n_hit > 0:
+        rows = remapped
+        basis = "filled"
+        basis_note = f"调参跟随实盘成交（已用已交易样本 {n_hit} 笔）"
     else:
-        basis_note = (
-            f"学习口径 {learn_std} 暂无日线重算样本，仍用 classic（覆盖率上来后自动切）"
-        )
+        basis = "classic"
+        basis_note = "调参跟随实盘成交暂无已交易样本，仍用 classic"
     heat = build_size_heat(rows)
     sweet = build_pullback_sweet(rows)
     sell_mfe = build_sell_mfe_bias(rows, use_cache=False)

@@ -677,7 +677,14 @@ class ReviewMixin:
         """
         from market_desk.config import REVIEW_SCORE_CACHE_SEC
         from market_desk.db import day_lit_book, load_signals, load_signals_for_date, set_signal_payload_once
-        from market_desk.pick_score import build_history_stats, pick_check, pick_top, score_pick
+        from market_desk.pick_score import (
+            build_history_stats,
+            pick0_is_stub,
+            pick0_may_upgrade,
+            pick_check,
+            pick_top,
+            score_pick,
+        )
         from market_desk.review import _flatten_signal_prices, is_buy_signal
 
         now = datetime.now(CN_TZ)
@@ -751,7 +758,16 @@ class ReviewMixin:
                     "at": at,
                 }
                 first = _stored(r)
-                if first:
+                candidate = {
+                    k: item[k]
+                    for k in ("score", "grade", "factors", "check", "position", "live_last", "at")
+                }
+                raw_p0 = (
+                    (r.get("payload") or {}).get("pick0")
+                    if isinstance(r.get("payload"), dict)
+                    else None
+                )
+                if first and not pick0_is_stub(first):
                     first_chk = first.get("check") or pick_check(first.get("factors"), first.get("position"))
                     item["first"] = {
                         "score": first.get("score"),
@@ -759,15 +775,21 @@ class ReviewMixin:
                         "at": first.get("at"),
                         "check_label": first_chk.get("label"),
                     }
+                    # One-shot fill when the first freeze had no quote yet.
+                    if pick0_may_upgrade(raw_p0, candidate):
+                        fresh[int(r["id"])] = ("pick0", candidate)
                 else:
-                    fresh[int(r["id"])] = (
-                        "pick0",
-                        {k: item[k] for k in ("score", "grade", "factors", "check", "position", "live_last", "at")},
-                    )
+                    # Missing or stub → write / upgrade; do not show stub as "first".
+                    fresh[int(r["id"])] = ("pick0", candidate)
                 items[str(r["id"])] = item
             if fresh:
                 try:
-                    set_signal_payload_once(fresh)
+                    set_signal_payload_once(
+                        fresh,
+                        replace_if=lambda key, old, new: (
+                            key == "pick0" and pick0_may_upgrade(old, new)
+                        ),
+                    )
                 except Exception:
                     log.exception("store first pick scores failed")
             marks = {str(r.get("code")): r.get("live_last") for r in rows if r.get("live_last") is not None}

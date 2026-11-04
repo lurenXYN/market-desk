@@ -169,7 +169,11 @@ def _buy_signal_codes_for_day(trade_date: str) -> set[str]:
 
 
 def ma_fan_code_set(trade_date: str | None = None) -> set[str]:
-    """Return codes from the persisted scan for ``trade_date`` (or latest)."""
+    """Return codes from the persisted scan for ``trade_date`` (or latest).
+
+    Includes both MA-fan ``items`` and pot-bottom ``pot`` so review soft tags
+    cover either tab.
+    """
     from market_desk.db import load_ma_fan_day, list_ma_fan_dates
 
     day = str(trade_date or "")[:10]
@@ -180,10 +184,11 @@ def ma_fan_code_set(trade_date: str | None = None) -> set[str]:
         return set()
     payload = load_ma_fan_day(day) or {}
     out: set[str] = set()
-    for item in payload.get("items") or []:
-        code = normalize_code((item or {}).get("code"))
-        if code:
-            out.add(code)
+    for key in ("items", "pot"):
+        for item in payload.get(key) or []:
+            code = normalize_code((item or {}).get("code"))
+            if code:
+                out.add(code)
     return out
 
 
@@ -204,10 +209,12 @@ def enrich_signals_with_ma_fan(
             dates = list_ma_fan_dates(limit=1)
             day = dates[0] if dates else ""
         body = load_ma_fan_day(day) or {}
-        for item in body.get("items") or []:
-            c = normalize_code((item or {}).get("code"))
-            if c:
-                payload_by_code[c] = item
+        # Pot first, then items win on conflict (fan note preferred over pot).
+        for key in ("pot", "items"):
+            for item in body.get(key) or []:
+                c = normalize_code((item or {}).get("code"))
+                if c:
+                    payload_by_code[c] = item
     except Exception:
         payload_by_code = {}
     out: list[dict[str, Any]] = []

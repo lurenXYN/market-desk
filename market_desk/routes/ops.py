@@ -336,11 +336,17 @@ def build_ops_check() -> dict:
         gate = start_gate_snapshot()
         cum = gate.get("cum_pnl_pct")
         cum_s = f"{cum:+.2f}%" if cum is not None else "—"
+        # ok when absolute green OR relative-only (券商只读); warn only when both red.
+        sim_level = (
+            "ok"
+            if (gate.get("gate_ok") or gate.get("gate_readonly_ok"))
+            else "warn"
+        )
         checks.append(
             {
                 "id": "sim_desk",
                 "title": "模拟操盘开工闸",
-                "level": "ok" if gate.get("gate_ok") else "warn",
+                "level": sim_level,
                 "detail": (
                     f"{gate.get('gate_label')} · 平仓{gate.get('closed_n', 0)} · "
                     f"持仓{gate.get('open_n', 0)} · 累计{cum_s}"
@@ -503,7 +509,7 @@ def ops_shadows(
 
 @router.get("/api/ops/exec-desk")
 def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
-    """vnpy-style execution facade snapshot (paper now; live after gate_ok)."""
+    """vnpy-style execution facade (paper now; attach after gate_readonly_ok; trade after gate_ok)."""
     del user
     from market_desk.exec import get_exec_engine
 

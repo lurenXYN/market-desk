@@ -46,16 +46,18 @@ function paintSimDesk(data) {
   }
   const gateEl = document.getElementById("simGate");
   if (gateEl) {
-    const ok = !!gate.gate_ok;
+    const tradeOk = !!gate.gate_ok;
+    const readonlyOk = !!gate.gate_readonly_ok;
+    const anyOk = tradeOk || readonlyOk;
     const toGreen = gate.to_green_cny;
     gateEl.innerHTML =
       `<div><b>开工闸</b> · ${gate.gate_label || "—"}`
       + ` · 平仓${gate.closed_n || 0} · 持仓${gate.open_n || 0}`
-      + (toGreen != null && !ok ? ` · 距转正约 ${_simNum(toGreen)} 元` : "")
+      + (toGreen != null && !tradeOk ? ` · 距绝对转正约 ${_simNum(toGreen)} 元` : "")
       + `</div>`
       + `<div class="meta">${gate.rule || ""}</div>`;
-    gateEl.classList.toggle("ok", ok);
-    gateEl.classList.toggle("warn", !ok);
+    gateEl.classList.toggle("ok", anyOk);
+    gateEl.classList.toggle("warn", !anyOk);
   }
   const attrEl = document.getElementById("simAttr");
   if (attrEl) {

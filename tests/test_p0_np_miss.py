@@ -107,7 +107,9 @@ def test_historical_enrich_uses_frozen_np_not_today_quote():
     out = enrich_signals_with_live_marks(rows, quotes, today="2026-11-03")
     assert "miss_pullback" in out[0]["price_flags"]
     assert out[0]["above_plan_pct"] is not None
+    assert out[0]["live_last"] == 10.8  # frozen close, not today's 20
     assert "miss_pullback" not in out[1]["price_flags"]
+    assert out[1].get("live_last") is None
     # Historical must not use today's stop/chase live hits.
     assert "stop_hit" not in out[0]["price_flags"]
     assert "chase_hit" not in out[0]["price_flags"]

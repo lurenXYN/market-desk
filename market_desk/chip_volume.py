@@ -41,7 +41,11 @@ _INDEX_CACHE: dict[str, dict[str, float]] = {}
 async def fetch_bars_with_turnover(
     client: httpx.AsyncClient, code: str, limit: int = CV_CHIP_WINDOW + 10
 ) -> list[dict[str, Any]]:
-    """Fetch forward-adjusted daily bars with turnover (%) from Tencent newfqkline."""
+    """Fetch forward-adjusted daily bars with turnover (%) from Tencent newfqkline.
+
+    Successful pulls also upsert ``market_bar_daily`` so NP / discipline / ops
+    coverage share the same on-disk cache (not just process memory).
+    """
     sym = tencent_symbol(code)
     url = (
         "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
@@ -78,6 +82,13 @@ async def fetch_bars_with_turnover(
             }
         )
         prev = float(close)
+    if out:
+        try:
+            from market_desk.db.bars_cache import upsert_daily_bars
+
+            upsert_daily_bars(code, out, source="chip_volume")
+        except Exception as exc:
+            log.debug("cv bars cache %s failed: %r", code, exc)
     return out
 
 

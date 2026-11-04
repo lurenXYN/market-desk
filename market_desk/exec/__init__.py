@@ -1,7 +1,9 @@
 """Execution layer inspired by vnpy (gateway / order / risk / reconcile).
 
-Paper gateway wraps ``sim_desk``. Live broker attach is hard-blocked until
-``portfolio_stats().gate_ok``. Do not deploy full VeighNa on the small VPS.
+Paper gateway wraps ``sim_desk``. Dual start gates:
+``gate_readonly_ok`` (relative excess) unlocks broker attach / 只读;
+``gate_ok`` (absolute equity > 0) unlocks live Send. Do not deploy full
+VeighNa on the small VPS.
 """
 
 from market_desk.exec.circuit import CircuitBreaker, is_open_intent

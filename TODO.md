@@ -99,6 +99,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-03（v1.10.53）：P1 学习口径默认 `same_day_plan`；`dual_wins.touch` 并排；当日未触达不进热度。
 - 2026-11-04（v1.10.54）：P2 模拟闸双档——`gate_readonly_ok`（相对超额→券商只读）+ `gate_ok`（绝对转正→真钱下单）。
 - 2026-11-04（v1.10.55）：发散/锅底板块列——补全与 desk boards 覆盖 pot。
+- 2026-11-04（v1.10.56）：假闭环扫尾——近周漏买/历史 live_last、只读闸 UI、pot 发散标、regime 空首补、CV 写库、adapt 不退 classic、pick0 可升级。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -139,6 +140,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **P0 漏买/历史标/覆盖率 v1.10.52**：NP 真相源 + 松参门控 + 历史 enrich + bars/np 覆盖率
 - [x] **P1 学习口径 same_day_plan v1.10.53**：adapt 默认可触达；dual_wins.touch 并排；未触达不进热度
 - [x] **P2 模拟闸相对档 v1.10.54**：`gate_readonly_ok` 放行只读；`gate_ok` 管真钱下单
+- [x] **假闭环扫尾 v1.10.56**：近周漏买接 NP；历史 live_last；只读闸 UI；pot 发散标；regime 空首补；CV 写库；adapt 不退 classic；pick0 可升级
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

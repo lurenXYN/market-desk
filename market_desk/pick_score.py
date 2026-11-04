@@ -31,6 +31,32 @@ from market_desk.config import (
 from market_desk.numbers import num
 from market_desk.stats_tools import safe_t, spearman
 
+def pick0_is_stub(p0: Any) -> bool:
+    """Return True when a stored ``pick0`` is incomplete and may be upgraded.
+
+    First capture can land before enrich finishes (no score / empty factors).
+    Those stubs must not permanently freeze a half-baked score. A missing
+    ``live_last`` alone is still a valid first freeze (quotes may stay down).
+    """
+    if not isinstance(p0, dict):
+        return True
+    if p0.get("score") is None:
+        return True
+    factors = p0.get("factors")
+    if not isinstance(factors, list) or not factors:
+        return True
+    return False
+
+
+def pick0_may_upgrade(old: Any, new: Any) -> bool:
+    """Allow replacing a stub, or filling ``live_last`` once when quotes arrive."""
+    if pick0_is_stub(old):
+        return True
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    return old.get("live_last") is None and new.get("live_last") is not None
+
+
 SOURCE_LABELS: dict[str, str] = {
     "buy": "主线回踩",
     "buy_side": "支线回踩",

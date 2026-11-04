@@ -131,7 +131,12 @@ def attach_low_n_flags(items: list[dict[str, Any]] | None, *, n_key: str = "scor
 
 
 def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[dict[str, Any]]:
-    """List same-day buys that were skipped or never traded while price already ran."""
+    """List same-day buys that were skipped or never traded while price already ran.
+
+    Accepts ephemeral ``price_flags`` **or** frozen ``payload.np.np`` so raw DB
+    rows (no review enrich) still show. Adapt learning must keep using
+    ``build_np_missed`` — this helper is display / review-payload only.
+    """
     from market_desk.adapt import context_from_row
 
     out: list[dict[str, Any]] = []
@@ -144,6 +149,11 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
         traded = int(row.get("traded") or 0)
         flags = row.get("price_flags") or []
         miss = "miss_pullback" in flags or "未回踩" in str(row.get("price_mark") or "")
+        if not miss:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            frozen = payload.get("np") if isinstance(payload.get("np"), dict) else None
+            if frozen and frozen.get("np") is True:
+                miss = True
         if not ((skipped and miss) or (not traded and not skipped and miss)):
             continue
         ctx = context_from_row(row)

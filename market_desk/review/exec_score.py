@@ -343,9 +343,12 @@ MISS_KIND_LABELS = {
 def classify_miss_kind(row: dict[str, Any]) -> str | None:
     """Classify why a same-day buy was missed (display / review only).
 
-    - never_touched: plan never hit, price already higher (classic miss_pullback)
-    - touched_not_bought: in band / near wait but not traded
-    - gate_blocked: hard confirm fails while price ran above plan
+    - never_touched: plan never hit, price already higher (classic miss_pullback
+      or frozen ``payload.np.np`` — works on raw DB rows without ``price_flags``)
+    - touched_not_bought: in band / near wait but not traded (live flags, or
+      frozen NP with day low ≤ plan)
+    - gate_blocked: hard confirm fails while price ran above plan (same-day
+      ``live_last``, or historical frozen day close — never today's quote alone)
     """
     from market_desk.numbers import num
 
@@ -356,14 +359,34 @@ def classify_miss_kind(row: dict[str, Any]) -> str | None:
         return None
     if "miss_pullback" in flags or "未回踩" in mark:
         return "never_touched"
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    frozen = payload.get("np") if isinstance(payload.get("np"), dict) else None
+    if frozen and frozen.get("np") is True:
+        return "never_touched"
     if "in_band" in flags or "near_wait" in flags or "建议价附近" in mark or "回踩区间" in mark:
         return "touched_not_bought"
-    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
     fails = list(payload.get("confirm_fail") or row.get("confirm_fail") or [])
     blocked = bool(payload.get("block_ready") or row.get("block_ready"))
     ready = int(row.get("ready") or 0)
-    last = num(row.get("live_last") if row.get("live_last") is not None else row.get("last"))
-    plan = num(row.get("price") or row.get("plan_price") or row.get("buy_price"))
+    # Prefer enrich live_last; else frozen day close. Do not use row.last when a
+    # freeze exists — upsert may have overwritten last with today's quote.
+    last = num(row.get("live_last"))
+    if last is None and frozen:
+        last = num(frozen.get("day_close"))
+    if last is None and not frozen:
+        last = num(row.get("last"))
+    plan = num(
+        row.get("price")
+        or row.get("plan_price")
+        or row.get("buy_price")
+        or (frozen.get("plan") if frozen else None)
+    )
     if (fails or blocked) and not ready and last is not None and plan is not None and last > plan:
         return "gate_blocked"
+    # Historical touch without ephemeral price_flags.
+    if frozen and frozen.get("np") is False:
+        day_low = num(frozen.get("day_low"))
+        plan_f = num(frozen.get("plan")) if frozen.get("plan") is not None else plan
+        if day_low is not None and plan_f is not None and day_low <= plan_f:
+            return "touched_not_bought"
     return None

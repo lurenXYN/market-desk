@@ -14,6 +14,26 @@
 
 ---
 
+## [v1.10.56] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 假闭环扫尾：近周漏买喂裸信号恒空、历史 `live_last` 污染闸门卡死、只读闸 UI 仍红、锅底不进复盘发散标、regime/env 空首插被冻死、CV 日线不进库、adapt 无 K 静默退 classic、`pick0` 半成品永冻。
+
+### 【做了什么（What）】
+- **Fixed** `classify_miss_kind` / `build_missed_buys` 读冻结 `payload.np`；`week_exec` 先轻量 enrich。
+- **Fixed** 历史 enrich 的 `live_last`/`dev_pct` 只用冻结收盘，不用今日报价。
+- **Fixed** ops 模拟闸灯 + 模拟台样式认 `gate_readonly_ok`；exec/ops 文档双闸。
+- **Fixed** `ma_fan_code_set` / enrich 含 `pot`。
+- **Fixed** `market_regime` / `env_gate` 允许空首插后补一次；其后仍冻结。
+- **Fixed** CV `fetch_bars_with_turnover` upsert `market_bar_daily`。
+- **Fixed** adapt `same_day_plan` 无日线时清空 classic 三日%，不回退乐观样本。
+- **Fixed** `pick0` 残缺 / 无报价可升级一次（`pick0_may_upgrade`）。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_hidden_wiring_v11056.py`；既有 p0/p1/regime 回归。desk.db 无迁移。
+
+---
+
 ## [v1.10.55] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】

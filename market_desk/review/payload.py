@@ -168,21 +168,29 @@ def enrich_signals_with_live_marks(
                 labels.remove("建议价附近")
             labels.append(f"高于计划价 +{above_pct:.1f}%")
         item["above_plan_pct"] = above_pct
-        item["live_last"] = last
-        item["live_pct"] = num(q.get("pct"))
-        # Keep a live last for booking defaults; do not overwrite plan suggest (price).
-        if last is not None:
-            item["last"] = last
-        item.update(live_price_slope(code, last) if same_day else {})
+        # Same-day: live quote. Historical: frozen day close only — never today's
+        # last (would poison gate_blocked / dev_pct when flipping past dates).
+        if same_day:
+            item["live_last"] = last
+            item["live_pct"] = num(q.get("pct"))
+            if last is not None:
+                item["last"] = last
+            item.update(live_price_slope(code, last))
+            ref_px = last
+        else:
+            day_close = num(frozen_np.get("day_close")) if frozen_np else None
+            item["live_last"] = day_close
+            item["live_pct"] = None
+            ref_px = day_close
         if item.get("plan_qty") is None:
             pq = num(payload.get("qty"))
             if pq is not None and float(pq) > 0:
                 item["plan_qty"] = int(pq)
-        if last is not None and sig_px is not None and sig_px > 0:
-            item["dev_pct"] = round((float(last) / float(sig_px) - 1.0) * 100.0, 2)
+        if ref_px is not None and sig_px is not None and sig_px > 0:
+            item["dev_pct"] = round((float(ref_px) / float(sig_px) - 1.0) * 100.0, 2)
         else:
             item["dev_pct"] = None
-        if last is not None and chase is not None and chase > 0:
+        if same_day and last is not None and chase is not None and chase > 0:
             item["chase_dev_pct"] = round((float(last) / float(chase) - 1.0) * 100.0, 2)
         else:
             item["chase_dev_pct"] = None
@@ -560,8 +568,13 @@ def build_review_payload(
         }
     try:
         week_dates = [d for d in dates if d and d <= calendar_today][:5]
+        # Mark week rows from frozen NP (empty quotes) so miss buckets are not
+        # stuck at 0 when global_rows never went through live enrich.
+        week_rows = enrich_signals_with_live_marks(
+            global_rows, {}, today=calendar_today
+        )
         summary["week_exec"] = build_week_exec_board(
-            global_rows,
+            week_rows,
             dates=week_dates,
             days=5,
         )
