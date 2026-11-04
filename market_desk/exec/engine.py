@@ -23,8 +23,8 @@ class ExecEngine:
       0.5  layer   — gateway + risk + OrderBook
       0.6  high    — limits + reconcile skeleton
       0.7  circuit — day-loss / reject-streak + order persist + sell triggers
-      1    read    — live query_* only, after gate_ok
-      2    click   — send_order with human confirm, after 1
+      1    read    — live query_* only, after gate_readonly_ok (or gate_ok)
+      2    click   — send_order with human confirm, after gate_ok
       3    auto    — ready/sell → send_order, after 2 + user OK
     """
 
@@ -58,22 +58,26 @@ class ExecEngine:
 
     @property
     def active(self) -> BaseGateway:
-        """Paper until a live gateway is attached and gate is green."""
-        if self._live is not None and require_start_gate(live=True).ok:
+        """Paper until a live gateway is attached and the read gate is green."""
+        if self._live is not None and require_start_gate(live=True, trade=False).ok:
             return self._live
         return self.paper
 
     def attach_live(self, gateway: BaseGateway) -> dict[str, Any]:
-        """Register a live broker gateway; refused while start-gate is red."""
-        verdict = require_start_gate(live=True)
+        """Register a live broker gateway for stage-1 reads (relative or absolute green)."""
+        verdict = require_start_gate(live=True, trade=False)
         if not verdict.ok:
             return {
                 "ok": False,
                 "reason": verdict.reason,
-                "hint": "sim portfolio must be green (gate_ok) before live gateway",
+                "hint": "sim gate_readonly_ok (相对超额) or gate_ok (绝对) before live attach",
             }
         self._live = gateway
-        return {"ok": True, "gateway": gateway.gateway_name}
+        return {
+            "ok": True,
+            "gateway": gateway.gateway_name,
+            "gate": verdict.reason,
+        }
 
     def detach_live(self) -> None:
         """Drop the live gateway (paper remains)."""
@@ -87,7 +91,8 @@ class ExecEngine:
     def send_order(self, req: OrderRequest, *, live: bool = False) -> OrderData:
         """Send via paper (default) or live; always upsert into OrderBook."""
         if live:
-            verdict = require_start_gate(live=True)
+            # Live sends always need absolute gate_ok (真钱).
+            verdict = require_start_gate(live=True, trade=True)
             if not verdict.ok:
                 order = OrderData(
                     code=req.code,
@@ -172,6 +177,7 @@ class ExecEngine:
             "ok": True,
             "stage": "0.7_circuit_persist_triggers",
             "gate_ok": bool(stats.get("gate_ok")),
+            "gate_readonly_ok": bool(stats.get("gate_readonly_ok")),
             "gate": gate,
             "paper": self.paper.snapshot(),
             "orders": self.orders.to_dict(),
@@ -218,15 +224,22 @@ class ExecEngine:
                     "attached": True,
                     "gateway": self._live.gateway_name,
                     "connected": self._live.connected,
-                    "allowed": require_start_gate(live=True).ok,
+                    "read_allowed": require_start_gate(live=True, trade=False).ok,
+                    "trade_allowed": require_start_gate(live=True, trade=True).ok,
+                    "allowed": require_start_gate(live=True, trade=False).ok,
                 }
                 if self._live is not None
-                else {"attached": False, "allowed": require_start_gate(live=True).ok}
+                else {
+                    "attached": False,
+                    "read_allowed": require_start_gate(live=True, trade=False).ok,
+                    "trade_allowed": require_start_gate(live=True, trade=True).ok,
+                    "allowed": require_start_gate(live=True, trade=False).ok,
+                }
             ),
             "rule": (
                 "参考 vnpy：决策在 desk，执行走 gateway；"
                 "OrderBook 持久化 + 日损/连拒熔断 + 卖点条件触发语义；"
-                "live 须 gate_ok；不部署 VeighNa"
+                "live 只读须 gate_readonly_ok；live 下单须 gate_ok；不部署 VeighNa"
             ),
         }
 

@@ -379,14 +379,22 @@ def build_review_check_sync() -> dict[str, Any]:
                     "closed_n": sim_gate.get("closed_n"),
                     "open_n": sim_gate.get("open_n"),
                     "gate_ok": sim_gate.get("gate_ok"),
+                    "gate_readonly_ok": sim_gate.get("gate_readonly_ok"),
                     "gate_label": sim_gate.get("gate_label"),
                     "to_green_cny": sim_gate.get("to_green_cny"),
                     "vs_bench": sim_gate.get("vs_bench"),
                     "recent": sim_gate.get("recent"),
                 },
                 ui_verdict=sim_gate.get("gate_label"),
-                hint="权益相对初始>0 且已有平仓才写券商对接；vs_bench=相对中证1000（不改 gate_ok）",
-                level="ok" if sim_gate.get("gate_ok") else "warn",
+                hint=(
+                    "相对大盘超额>0 → 券商只读；权益相对初始>0 → 真钱下单；"
+                    "二者都要已有平仓"
+                ),
+                level=(
+                    "ok"
+                    if sim_gate.get("gate_ok") or sim_gate.get("gate_readonly_ok")
+                    else "warn"
+                ),
             )
         )
     except Exception as exc:

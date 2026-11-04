@@ -267,5 +267,6 @@ def soft_candidate_hint(item: dict[str, Any]) -> bool:
         ic_t = num(m.get("ic_t"))
         return bool(ic is not None and ic > 0 and ic_t is not None and abs(ic_t) >= 2)
     if iid == "sim_desk_gate":
-        return bool(m.get("gate_ok"))
+        # Absolute green (真钱) or relative excess (券商只读) both count as candidates.
+        return bool(m.get("gate_ok") or m.get("gate_readonly_ok"))
     return False

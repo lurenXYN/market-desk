@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.54] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 模拟账本相对中证1000已能超额，却因绝对权益差几元永远过不了 `gate_ok`，连券商只读都推进不了。
+
+### 【做了什么（What）】
+- **Added** 双闸：`gate_ok`=绝对权益>0（真钱 / live 下单）；`gate_readonly_ok`=相对超额>0 或绝对转正（券商只读 / attach_live）。
+- **Changed** `require_start_gate(..., trade=)`：只读与下单分档；agent-pack / review_check 文案同步。
+- **Not changed** 绝对闸门槛数值；不自动挂真券商。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_p2_sim_gates.py`：相对绿绝对红 → 可 attach、不可 live 下单。全量 609 passed。
+
+---
+
 ## [v1.10.53] - 2026-11-03
 
 ### 【背景与动机（为什么做 · Why）】

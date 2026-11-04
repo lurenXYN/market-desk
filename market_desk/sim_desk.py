@@ -372,14 +372,40 @@ def account_snapshot() -> dict[str, Any]:
 
 
 def portfolio_stats(fills: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Aggregate account equity into the start-gate summary."""
+    """Aggregate account equity into the start-gate summary.
+
+    Two gates (P2):
+      - ``gate_ok`` — absolute equity > initial and ≥1 closed lot (真钱 / stage 2–3).
+      - ``gate_readonly_ok`` — absolute green **or** paper excess vs CSI1000 > 0
+        with ≥1 closed lot (券商只读 / stage 1 only).
+    """
     del fills  # equity-based gate; fills still drive closed_n via count
     open_lots = load_open_sim_lots()
     closed_n = count_sim_sell_fills()
     acct = account_snapshot()
     ret = acct.get("return_pct")
     gate_ok = bool(closed_n >= 1 and ret is not None and ret > 0)
+    excess = None
+    try:
+        vs = sim_vs_bench(cum_pnl_pct=ret)
+        if vs.get("ok"):
+            excess = vs.get("excess_cum_pct")
+    except Exception:
+        vs = {"ok": False}
+        excess = None
+    gate_readonly_ok = bool(
+        gate_ok
+        or (closed_n >= 1 and excess is not None and float(excess) > 0)
+    )
     realized = sum_sim_realized_pnl_cny()
+    if gate_ok:
+        gate_label = "可开干（权益相对初始>0）"
+    elif gate_readonly_ok:
+        gate_label = "可券商只读（相对大盘超额>0）"
+    elif closed_n < 1:
+        gate_label = "未过线·尚无平仓"
+    else:
+        gate_label = "未过线·绝对未转正且相对未超额"
     return {
         "closed_n": closed_n,
         "open_n": len(open_lots),
@@ -390,15 +416,10 @@ def portfolio_stats(fills: list[dict[str, Any]] | None = None) -> dict[str, Any]
         "cum_pnl_pct": ret,
         "realized_pnl_cny": round(realized, 2),
         "gate_ok": gate_ok,
-        "gate_label": (
-            "可开干（权益相对初始>0）"
-            if gate_ok
-            else (
-                "未过线·尚无平仓"
-                if closed_n < 1
-                else "未过线·权益未转正"
-            )
-        ),
+        "gate_readonly_ok": gate_readonly_ok,
+        "excess_cum_pct": excess,
+        "gate_label": gate_label,
+        "vs_bench": vs if isinstance(vs, dict) else {"ok": False},
     }
 
 
@@ -486,9 +507,10 @@ def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
 
 
 def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) -> dict[str, Any]:
-    """Paper-book return vs CSI1000 over the same epoch window (display only).
+    """Paper-book return vs CSI1000 over the same epoch window.
 
-    Does not change ``gate_ok`` (absolute equity still owns the start gate).
+    Feeds ``gate_readonly_ok`` (excess > 0). Absolute ``gate_ok`` still owns
+    live send_order / stage 2–3.
     """
     from market_desk.config import REVIEW_BENCH_LABEL
     from market_desk.db.sim_desk import get_sim_account_epoch
@@ -496,7 +518,7 @@ def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) 
     from market_desk.numbers import num
 
     start = str(epoch or get_sim_account_epoch() or SIM_BOOK_SINCE or "")[:10]
-    closes = load_bench_closes(limit=240)
+    closes = load_bench_closes(limit=240, allow_http=False)
     if not start or len(closes) < 2:
         return {
             "ok": False,
@@ -520,7 +542,7 @@ def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) 
     bench_pct = round((float(end_px) / float(start_px) - 1.0) * 100.0, 3)
     book = num(cum_pnl_pct)
     if book is None:
-        book = num(portfolio_stats().get("cum_pnl_pct"))
+        book = num(account_snapshot().get("return_pct"))
     excess = round(float(book) - bench_pct, 3) if book is not None else None
     return {
         "ok": True,
@@ -533,7 +555,8 @@ def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) 
         "excess_cum_pct": excess,
         "note": (
             "相对大盘 = 账本权益累计% − 中证1000同窗%；"
-            "gate_ok 仍只看绝对权益>0，本字段仅解释「没绿是策略还是市场」。"
+            "超额>0 → gate_readonly_ok（券商只读）；"
+            "gate_ok 仍只看绝对权益>0（真钱下单）。"
         ),
     }
 
@@ -547,10 +570,12 @@ def start_gate_snapshot() -> dict[str, Any]:
     to_green_cny = None
     if initial > 0 and equity <= initial:
         to_green_cny = round(initial - equity + 0.01, 2)
-    try:
-        vs_bench = sim_vs_bench(cum_pnl_pct=stats.get("cum_pnl_pct"))
-    except Exception as exc:
-        vs_bench = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+    vs_bench = stats.get("vs_bench") if isinstance(stats.get("vs_bench"), dict) else {}
+    if not vs_bench:
+        try:
+            vs_bench = sim_vs_bench(cum_pnl_pct=stats.get("cum_pnl_pct"))
+        except Exception as exc:
+            vs_bench = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
     return {
         **stats,
         "account": acct,
@@ -560,8 +585,9 @@ def start_gate_snapshot() -> dict[str, Any]:
         "by_channel": sim_channel_split(load_sim_fills(limit=300)),
         "rule": (
             "初始2万纸面资金；亮过可买且可成交→扣款+手续费开仓；"
-            "卖点且可卖出→回款+手续费平仓；权益相对初始>0 且已有平仓才允许券商阶段1–3；"
-            "vs_bench 为相对中证1000（不改 gate_ok）"
+            "卖点且可卖出→回款+手续费平仓；"
+            "相对大盘超额>0 → 券商只读(stage1)；"
+            "权益相对初始>0 → 真钱下单(stage2–3)。"
         ),
     }
 

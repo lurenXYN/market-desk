@@ -325,9 +325,10 @@ def _item_proposal(item: dict[str, Any]) -> dict[str, Any] | None:
         for k in ("abs_win", "xs_win", "reclaim_abs_win", "wins_note")
         if metrics.get(k) is not None
     }
-    # Start gate owns its own readiness (equity > 0), not the 10d/30n floor.
+    # Start gate: absolute → 真钱；relative excess → 券商只读 only.
     if iid == "sim_desk_gate":
         gate_ok = bool(metrics.get("gate_ok"))
+        readonly = bool(metrics.get("gate_readonly_ok"))
         vs = metrics.get("vs_bench")
         if gate_ok:
             return {
@@ -335,7 +336,17 @@ def _item_proposal(item: dict[str, Any]) -> dict[str, Any] | None:
                 "title": title,
                 "sample": "ready",
                 "verdict": "soft_candidate",
-                "reason": "gate_ok=true · 可按排期推进券商只读（首次真钱仍须一句确认）",
+                "reason": "gate_ok=true · 绝对转正，可议真钱阶段（首次仍须一句确认）",
+                "metrics": metrics,
+                "wins": wins or None,
+            }
+        if readonly:
+            return {
+                "id": iid,
+                "title": title,
+                "sample": "ready",
+                "verdict": "soft_candidate",
+                "reason": "gate_readonly_ok · 相对大盘超额>0，可推进券商只读（不下单）",
                 "metrics": metrics,
                 "wins": wins or None,
             }
@@ -506,6 +517,13 @@ def build_agent_pack_sync() -> dict[str, Any]:
     # Sim gate fallback when review-check omitted the row.
     if "sim_desk_gate" not in seen:
         vs = gate.get("vs_bench") if isinstance(gate.get("vs_bench"), dict) else {}
+        metrics = {
+            "cum_pnl_pct": gate.get("cum_pnl_pct"),
+            "closed_n": gate.get("closed_n"),
+            "gate_ok": gate.get("gate_ok"),
+            "gate_readonly_ok": gate.get("gate_readonly_ok"),
+            "vs_bench": vs,
+        }
         if gate.get("gate_ok"):
             proposals.append(
                 {
@@ -513,12 +531,19 @@ def build_agent_pack_sync() -> dict[str, Any]:
                     "title": "模拟开工闸",
                     "sample": "ready",
                     "verdict": "soft_candidate",
-                    "reason": "gate_ok=true · 可按排期推进券商只读（首次真钱仍须一句确认）",
-                    "metrics": {
-                        "cum_pnl_pct": gate.get("cum_pnl_pct"),
-                        "closed_n": gate.get("closed_n"),
-                        "vs_bench": vs,
-                    },
+                    "reason": "gate_ok=true · 绝对转正，可议真钱阶段（首次仍须一句确认）",
+                    "metrics": metrics,
+                }
+            )
+        elif gate.get("gate_readonly_ok"):
+            proposals.append(
+                {
+                    "id": "sim_desk_gate",
+                    "title": "模拟开工闸",
+                    "sample": "ready",
+                    "verdict": "soft_candidate",
+                    "reason": "gate_readonly_ok · 相对大盘超额>0，可推进券商只读（不下单）",
+                    "metrics": metrics,
                 }
             )
         else:
@@ -529,7 +554,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
                     "sample": "thin",
                     "verdict": "watch",
                     "reason": f"未过线 · {gate.get('gate_label') or 'gate_ok=false'}",
-                    "metrics": {"vs_bench": vs} if vs else None,
+                    "metrics": metrics,
                 }
             )
 
@@ -556,6 +581,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
         "summary": {
             "ops_overall": ops.get("overall"),
             "sim_gate_ok": bool(gate.get("gate_ok")),
+            "sim_gate_readonly_ok": bool(gate.get("gate_readonly_ok")),
             "sim_cum_pnl_pct": gate.get("cum_pnl_pct"),
             "sim_vs_bench": vs_bench,
             "dual_wins": {

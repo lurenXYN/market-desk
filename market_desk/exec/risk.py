@@ -42,10 +42,12 @@ class RiskVerdict:
         }
 
 
-def require_start_gate(*, live: bool) -> RiskVerdict:
-    """Block live broker paths until the paper sim start-gate is green.
+def require_start_gate(*, live: bool, trade: bool = True) -> RiskVerdict:
+    """Block live broker paths until the matching paper sim gate is green.
 
-    Paper gateway always passes. Live (stage 1–3) requires portfolio_stats.gate_ok.
+    Paper gateway always passes.
+    - ``trade=False`` (stage 1 只读): ``gate_readonly_ok`` (相对超额或绝对转正).
+    - ``trade=True`` (stage 2–3 下单): ``gate_ok`` (绝对权益>0) only.
     """
     if not live:
         return RiskVerdict(ok=True, reason="paper")
@@ -59,13 +61,24 @@ def require_start_gate(*, live: bool) -> RiskVerdict:
             reason=f"gate_unavailable:{exc}"[:120],
             status=Status.REJECTED,
         )
-    if not stats.get("gate_ok"):
+    if trade:
+        if not stats.get("gate_ok"):
+            return RiskVerdict(
+                ok=False,
+                reason="start_gate_blocked",
+                status=Status.REJECTED,
+            )
+        return RiskVerdict(ok=True, reason="gate_ok")
+    if not (stats.get("gate_readonly_ok") or stats.get("gate_ok")):
         return RiskVerdict(
             ok=False,
             reason="start_gate_blocked",
             status=Status.REJECTED,
         )
-    return RiskVerdict(ok=True, reason="gate_ok")
+    return RiskVerdict(
+        ok=True,
+        reason="gate_readonly_ok" if stats.get("gate_readonly_ok") else "gate_ok",
+    )
 
 
 def check_order_basics(req: OrderRequest) -> RiskVerdict:

@@ -97,7 +97,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-03（v1.10.51）：日线拉数早退路径也写入 `market_bar_daily`，修空缓存。
 - 2026-11-03（v1.10.52）：P0 假闭环接线——漏买改读冻结 NP；松回踩要过 NP soft_candidate；历史日不用今日报价标未回踩；日线/NP 覆盖率进 ops。
 - 2026-11-03（v1.10.53）：P1 学习口径默认 `same_day_plan`；`dual_wins.touch` 并排；当日未触达不进热度。
-- 2026-11-03（已定规格 · 待做）：P2 模拟闸拆绝对档（真钱）+ 相对档（只放行券商只读）。不做「未操作」自动标记。
+- 2026-11-04（v1.10.54）：P2 模拟闸双档——`gate_readonly_ok`（相对超额→券商只读）+ `gate_ok`（绝对转正→真钱下单）。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -137,7 +137,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **日线缓存早退写库 v1.10.51**：`fetch_daily_bars` ≥20 早退也 upsert
 - [x] **P0 漏买/历史标/覆盖率 v1.10.52**：NP 真相源 + 松参门控 + 历史 enrich + bars/np 覆盖率
 - [x] **P1 学习口径 same_day_plan v1.10.53**：adapt 默认可触达；dual_wins.touch 并排；未触达不进热度
-- [ ] **P2 模拟闸相对档**：绝对权益仍管真钱；相对中证1000 超额>0 只放行券商只读
+- [x] **P2 模拟闸相对档 v1.10.54**：`gate_readonly_ok` 放行只读；`gate_ok` 管真钱下单
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

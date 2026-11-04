@@ -243,7 +243,7 @@ def test_sim_vs_bench_display_only(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "market_desk.dual_score.load_bench_closes",
-        lambda limit=240: [
+        lambda limit=240, allow_http=True: [
             ("2026-10-28", 100.0),
             ("2026-10-29", 99.0),
             ("2026-10-30", 98.0),
