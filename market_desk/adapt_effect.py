@@ -93,12 +93,15 @@ def build_size_gate_scorecard(
     from market_desk.review.bench import attach_bench_excess
     from market_desk.review.signals import is_buy_signal
 
+    from market_desk.adapt.context import _ADAPT_SKIP_LABELS
+
     rows = [
         r
         for r in (buy_rows or [])
         if is_buy_signal(r.get("signal_type"))
         and not int(r.get("skipped") or 0)
         and str(r.get("outcome_label") or "").strip()
+        and str(r.get("outcome_label") or "").strip() not in _ADAPT_SKIP_LABELS
     ]
     # Newest-first signals → take head then chronological for stability.
     rows = list(rows[: max(20, int(recent_n))])
@@ -179,7 +182,11 @@ def build_size_gate_scorecard(
 
 
 def build_today_buy_cards(*, limit: int = 15) -> dict[str, Any]:
-    """Slim today's recommend cards from the warm engine snapshot."""
+    """Slim today's recommend cards from the warm engine snapshot.
+
+    Merges main / side / link / trial / independent / dragon desks so the
+    effect panel matches the full buy universe (not only mainline items).
+    """
     try:
         from market_desk.engine import engine
 
@@ -188,33 +195,48 @@ def build_today_buy_cards(*, limit: int = 15) -> dict[str, Any]:
         return {"ok": False, "n": 0, "items": [], "note": f"{type(exc).__name__}: {exc}"[:120]}
 
     verdict = snap.get("verdict") if isinstance(snap.get("verdict"), dict) else {}
-    rec = verdict.get("recommend") if isinstance(verdict.get("recommend"), dict) else {}
-    items_raw = list(rec.get("items") or [])
+    desk_keys = (
+        ("recommend", "main"),
+        ("side_recommend", "side"),
+        ("link_recommend", "link"),
+        ("watch_trial_recommend", "watch_trial"),
+        ("independent_recommend", "independent_pop"),
+        ("dragon_recommend", "dragon"),
+    )
     main = verdict.get("mainline") if isinstance(verdict.get("mainline"), dict) else {}
     action = str(verdict.get("action") or "")
     out_items: list[dict[str, Any]] = []
-    for it in items_raw:
-        if not isinstance(it, dict):
-            continue
-        ready = bool(it.get("ready"))
-        probe = bool(it.get("probe_ok") or it.get("ready_relaxed"))
-        if not (ready or probe or it.get("near_entry")):
-            continue
-        fails = [str(x) for x in (it.get("confirm_fail") or []) if str(x).strip()]
-        out_items.append(
-            {
-                "code": str(it.get("code") or "").zfill(6),
-                "name": it.get("name"),
-                "kind": it.get("kind") or "stock",
-                "ready": ready,
-                "probe_ok": probe,
-                "size_mult": it.get("size_mult"),
-                "qty": it.get("qty"),
-                "desk_source": it.get("desk_source") or it.get("source"),
-                "confirm_fail": fails[:4],
-                "plan_price": it.get("plan_price") or it.get("price"),
-            }
-        )
+    seen: set[str] = set()
+    for key, default_src in desk_keys:
+        box = verdict.get(key) if isinstance(verdict.get(key), dict) else {}
+        for it in box.get("items") or []:
+            if not isinstance(it, dict):
+                continue
+            ready = bool(it.get("ready"))
+            probe = bool(it.get("probe_ok") or it.get("ready_relaxed"))
+            if not (ready or probe or it.get("near_entry")):
+                continue
+            code = str(it.get("code") or "").zfill(6)
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            fails = [str(x) for x in (it.get("confirm_fail") or []) if str(x).strip()]
+            out_items.append(
+                {
+                    "code": code,
+                    "name": it.get("name"),
+                    "kind": it.get("kind") or "stock",
+                    "ready": ready,
+                    "probe_ok": probe,
+                    "size_mult": it.get("size_mult"),
+                    "qty": it.get("qty"),
+                    "desk_source": it.get("desk_source") or it.get("source") or default_src,
+                    "confirm_fail": fails[:4],
+                    "plan_price": it.get("plan_price") or it.get("price"),
+                }
+            )
+            if len(out_items) >= int(limit):
+                break
         if len(out_items) >= int(limit):
             break
     return {
@@ -223,7 +245,7 @@ def build_today_buy_cards(*, limit: int = 15) -> dict[str, Any]:
         "action": action,
         "mainline": main.get("name") or verdict.get("mainline_name"),
         "items": out_items,
-        "note": "仅 ready/半仓/近价卡，≤15；对照 adapt_live.size_mult",
+        "note": "全桌 ready/半仓/近价卡，≤15；对照 adapt_live.size_mult",
     }
 
 
@@ -311,39 +333,62 @@ def build_theme_rep_snapshot(*, each: int = 5) -> dict[str, Any]:
 def build_adapt_effect_panel(
     buy_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Assemble the effect-audit block for agent-pack."""
-    learn_rows = buy_rows
-    basis = "classic"
+    """Assemble the effect-audit block for agent-pack.
+
+    Learning rows always follow ``same_day_plan`` remap (aligned with
+    ``build_adapt_bundle``): missing bars strip classic day3% instead of
+    silently scoring optimistic plan-entry labels.
+    """
+    learn_rows = list(buy_rows or [])
+    basis = "same_day_plan"
+    basis_note = ""
+    n_hit = 0
     try:
         from market_desk.adapt.bundle import (
             _remap_rows_for_adapt_standard,
             closes_map_from_bar_cache,
         )
 
-        codes = [str(r.get("code") or "") for r in (buy_rows or [])]
+        codes = [str(r.get("code") or "") for r in learn_rows]
         packed = closes_map_from_bar_cache(codes)
         remapped, n_hit = _remap_rows_for_adapt_standard(
-            buy_rows, "same_day_plan", closes_map=packed or None
+            learn_rows, "same_day_plan", closes_map=packed or None
         )
+        learn_rows = remapped
         if n_hit > 0:
-            learn_rows = remapped
-            basis = "same_day_plan"
-    except Exception:
-        pass
+            basis_note = f"可触达口径·已重算 {n_hit} 笔"
+        else:
+            basis_note = "暂无日线重算，已清空不可核验的 classic 三日%（不回退乐观样本）"
+    except Exception as exc:
+        basis_note = f"remap 失败·已尽量清空: {type(exc).__name__}"[:120]
+        # Still strip classic outcomes so effect cannot learn on plan-entry %.
+        stripped: list[dict[str, Any]] = []
+        from market_desk.review.signals import is_buy_signal
+
+        for raw in learn_rows:
+            row = dict(raw)
+            if is_buy_signal(row.get("signal_type")):
+                row["outcome_label"] = None
+                row["outcome_day1_pct"] = None
+                row["outcome_day3_pct"] = None
+            stripped.append(row)
+        learn_rows = stripped
     scorecard = build_size_gate_scorecard(learn_rows)
     scorecard["basis"] = basis
+    scorecard["basis_note"] = basis_note
     today = build_today_buy_cards()
     miss = build_miss_trend(buy_rows)
     themes = build_theme_rep_snapshot()
     return {
         "ok": True,
         "basis": basis,
+        "basis_note": basis_note,
         "scorecard": scorecard,
         "today_cards": today,
         "miss_trend": miss,
         "theme_rep": themes,
         "note": (
-            "看效果用：size/闸分档 abs·xs（默认 same_day_plan 可触达口径）+ 今日卡对照 "
-            "adapt_live + 漏买三类 + 题材信誉两端。仍非因子反事实。"
+            "看效果用：size/闸分档 abs·xs（same_day_plan 可触达口径；无日线清空 classic）"
+            " + 今日卡对照 adapt_live + 漏买三类 + 题材信誉两端。仍非因子反事实。"
         ),
     }

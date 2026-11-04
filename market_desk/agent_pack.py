@@ -178,9 +178,36 @@ def build_adapt_live_snapshot(
             resolve_auto_tune,
             segment_sell_mult,
         )
+        from market_desk.adapt.bundle import (
+            _remap_rows_for_adapt_standard,
+            closes_map_from_bar_cache,
+        )
 
-        heat_raw = build_size_heat(rows, use_cache=False)
-        exec_raw = build_exec_size_bias(rows, use_cache=False)
+        # Align cold rebuild with warm adapt: same_day_plan remap (strip classic
+        # when bars missing) so Actions dump / offline pack matches live learning.
+        learn_rows = list(rows or [])
+        remapped, n_hit = _remap_rows_for_adapt_standard(
+            learn_rows,
+            "same_day_plan",
+            closes_map=closes_map_from_bar_cache(
+                [str(r.get("code") or "") for r in learn_rows]
+            )
+            or None,
+        )
+        learn_rows = remapped
+        outcome_basis = "same_day_plan"
+        if n_hit > 0:
+            outcome_basis_note = (
+                f"pack 重建（引擎无暖 adapt）· same_day_plan 已重算 {n_hit} 笔"
+            )
+        else:
+            outcome_basis_note = (
+                "pack 重建（引擎无暖 adapt）· same_day_plan 暂无日线，"
+                "已清空不可核验的 classic 三日%"
+            )
+
+        heat_raw = build_size_heat(learn_rows, use_cache=False)
+        exec_raw = build_exec_size_bias(learn_rows, use_cache=False)
         heat = _slim_size_block(heat_raw, kind="rebuilt")
         exec_size = _slim_size_block(exec_raw, kind="rebuilt")
         composed = compose_size_mult(
@@ -192,15 +219,13 @@ def build_adapt_live_snapshot(
         size_compose = composed
         size_mult = composed.get("size_mult", 1.0)
         size_factors = composed.get("factors") or []
-        outcome_basis = "classic"
-        outcome_basis_note = "pack 重建（引擎无暖 adapt）· 固定 classic"
         context_gate = {}
         warm_src = "rebuilt"
-        sweet_raw = build_pullback_sweet(rows, use_cache=False)
+        sweet_raw = build_pullback_sweet(learn_rows, use_cache=False)
         tune_raw = resolve_auto_tune()
-        sell_mfe_raw = build_sell_mfe_bias(rows, use_cache=False)
+        sell_mfe_raw = build_sell_mfe_bias(learn_rows, use_cache=False)
         seg_sell_raw = segment_sell_mult(
-            _segment_key_from_warm_or_clock(None), rows, use_cache=False
+            _segment_key_from_warm_or_clock(None), learn_rows, use_cache=False
         )
 
     try:

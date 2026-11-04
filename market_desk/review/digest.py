@@ -101,7 +101,7 @@ def build_week_exec_board(
         day_win = 0
         day_fol = 0
         for r in day_rows:
-            if str(r.get("signal_type") or "") != "buy":
+            if not is_buy_signal(r.get("signal_type")):
                 continue
             payload = r.get("payload") if isinstance(r.get("payload"), dict) else {}
             half = bool(

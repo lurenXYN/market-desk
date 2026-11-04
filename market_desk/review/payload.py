@@ -632,7 +632,7 @@ def build_review_payload(
         from market_desk.review_check import build_todo_strip
 
         summary["todo_strip"] = build_todo_strip(
-            [r for r in wide_rows if str(r.get("signal_type") or "") == "buy"]
+            [r for r in wide_rows if is_buy_signal(r.get("signal_type"))]
         )
     except Exception:
         summary["todo_strip"] = {"ok": False, "rows": [], "note": "清单进度暂不可用"}

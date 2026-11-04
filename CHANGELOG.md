@@ -14,6 +14,37 @@
 
 ---
 
+## [v1.10.58] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- agent-pack 冷重建固定 classic，与盘中 warm 口径分裂；今日卡 / todo_strip 只看主线；scorecard 把「当日未触达」占进 recent_n；文档双闸与调参口径滞后。
+
+### 【做了什么（What）】
+- **Fixed** pack 冷重建走 `same_day_plan` remap（无 K 清空 classic）。
+- **Fixed** `build_today_buy_cards` 合并 side/link/trial/indep/dragon。
+- **Fixed** 复盘 `todo_strip` 用 `is_buy_signal`。
+- **Fixed** scorecard 剔 `_ADAPT_SKIP_LABELS`。
+- **Docs** TODO 决策表双闸；glossary「调参口径」algo 去掉「回退 classic」。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_wiring_v11057_58.py`。desk.db 无迁移。
+
+---
+
+## [v1.10.57] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- `adapt_effect` 无日线仍吃 classic，与 bundle strip 不一致；漏买/近周半仓窗只认主线 `buy`，支线等学习看得见、复盘看不见（NP 冻结本身已覆盖全买类）。
+
+### 【做了什么（What）】
+- **Fixed** `build_adapt_effect_panel` 一律采用 remap；`basis` 固定 `same_day_plan`，无 K 清空 classic。
+- **Fixed** `build_missed_buys` / `build_miss_attribution` / week 半仓窗改 `is_buy_signal`。
+
+### 【影响与验证（Impact & Verification）】
+- 复盘漏买/近周计数会纳入支线等（更真实，数字可能跳变）。`tests/test_wiring_v11057_58.py`。
+
+---
+
 ## [v1.10.56] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】

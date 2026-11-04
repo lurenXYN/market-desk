@@ -25,7 +25,7 @@ Agents: **at the start of each session involving this app, read this file before
 > | 样本不足 / 不过门槛 | Agent | 写「维持记账」，**不改** ready/排序/闸门 |
 > | 过门槛 → **软改**（提示 / 排序 / 系数 / 文案） | Agent | **直接改并发布**；一次仍最多一处；改前在规则区记一行 |
 > | 软改后再跑 ≥2 周仍过 → **硬闸**（压 ready / 硬禁） | Agent | **直接改并发布**；须在 CHANGELOG 写清依据；regime 仍永不因尺直接关 ready |
-> | **开工闸 / 写真券商 / 真钱下单** | Agent | `gate_ok` 为真则按排期推进代码；**首次接通真券商 Send 前**仍用一句话确认（不可逆资金） |
+> | **开工闸 / 写真券商 / 真钱下单** | Agent | 双闸：`gate_readonly_ok`（相对超额）→ 券商只读；`gate_ok`（绝对权益>0）→ 真钱下单。只读可先推进；**首次接通真券商 Send 前**仍用一句话确认（不可逆资金） |
 > | 改预登记门槛本身 | 须先改本表再看数 | 禁止看完数再改门槛 |
 >
 > 用户不必逐项审批；若事后不同意某次软/硬改，再说回滚即可。
@@ -100,6 +100,8 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-04（v1.10.54）：P2 模拟闸双档——`gate_readonly_ok`（相对超额→券商只读）+ `gate_ok`（绝对转正→真钱下单）。
 - 2026-11-04（v1.10.55）：发散/锅底板块列——补全与 desk boards 覆盖 pot。
 - 2026-11-04（v1.10.56）：假闭环扫尾——近周漏买/历史 live_last、只读闸 UI、pot 发散标、regime 空首补、CV 写库、adapt 不退 classic、pick0 可升级。
+- 2026-11-04（v1.10.57）：adapt_effect 对齐 bundle strip；漏买/近周半仓窗改 `is_buy_signal`（复盘数字会纳入支线等）。
+- 2026-11-04（v1.10.58）：pack 冷重建 same_day_plan；今日卡全桌；todo_strip/scorecard skip；双闸/调参文档。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -141,6 +143,8 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **P1 学习口径 same_day_plan v1.10.53**：adapt 默认可触达；dual_wins.touch 并排；未触达不进热度
 - [x] **P2 模拟闸相对档 v1.10.54**：`gate_readonly_ok` 放行只读；`gate_ok` 管真钱下单
 - [x] **假闭环扫尾 v1.10.56**：近周漏买接 NP；历史 live_last；只读闸 UI；pot 发散标；regime 空首补；CV 写库；adapt 不退 classic；pick0 可升级
+- [x] **口径对齐 v1.10.57**：adapt_effect strip；漏买/近周 `is_buy_signal`
+- [x] **宇宙/文档 v1.10.58**：pack 冷重建；今日卡全桌；todo_strip；scorecard skip；双闸文档
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

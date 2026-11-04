@@ -122,7 +122,10 @@ def test_adapt_effect_panel(tmp_path, monkeypatch):
         [_buy(code="600001", day="2026-10-20", d3=1.5, size_mult=0.7)]
     )
     assert panel["ok"] is True
-    assert panel["scorecard"]["ok"] is True
+    assert panel["basis"] == "same_day_plan"
+    # No daily bars → classic day3% stripped; scorecard empty by design (v1.10.57).
+    assert panel["scorecard"]["ok"] is False
+    assert panel["scorecard"].get("basis") == "same_day_plan"
     assert "today_cards" in panel
     assert "miss_trend" in panel
     assert "theme_rep" in panel

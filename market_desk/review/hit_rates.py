@@ -143,7 +143,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
     for row in rows:
         if str(row.get("trade_date") or "") != trade_date:
             continue
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         skipped = int(row.get("skipped") or 0)
         traded = int(row.get("traded") or 0)
@@ -170,6 +170,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
                 "price_mark": row.get("price_mark"),
                 "mainline": row.get("mainline"),
                 "signaled_at": row.get("signaled_at"),
+                "signal_type": row.get("signal_type"),
                 "context": ctx,
                 "context_label": ctx.get("label"),
                 "miss_kind": "never_touched",
@@ -186,7 +187,8 @@ def build_miss_attribution(
 ) -> dict[str, Any]:
     """Bucket untraded same-day buys by miss reason for review display.
 
-    Keeps adapt's ``missed_buys`` (never_touched only) unchanged; this board is
+    Includes all desk buy types (``is_buy_signal``), not only mainline ``buy``.
+    Keeps adapt's ``build_np_missed`` as the learning truth source; this board is
     broader and display-only.
     """
     from market_desk.adapt import context_from_row
@@ -199,7 +201,7 @@ def build_miss_attribution(
     for row in rows:
         if str(row.get("trade_date") or "") != trade_date:
             continue
-        if str(row.get("signal_type") or "") != "buy":
+        if not is_buy_signal(row.get("signal_type")):
             continue
         if int(row.get("traded") or 0):
             continue
@@ -219,6 +221,7 @@ def build_miss_attribution(
                 "price_mark": row.get("price_mark"),
                 "mainline": row.get("mainline"),
                 "signaled_at": row.get("signaled_at"),
+                "signal_type": row.get("signal_type"),
                 "context_label": ctx.get("label"),
                 "miss_kind": kind,
                 "miss_kind_label": MISS_KIND_LABELS.get(kind, kind),
