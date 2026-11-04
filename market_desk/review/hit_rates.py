@@ -147,12 +147,17 @@ _MISS_KIND_RANK = {
 
 
 def _miss_item_rank(item: dict[str, Any]) -> tuple[int, int, str, int]:
-    """Sort key for keeping one miss row per code (lower wins)."""
+    """Sort key for keeping one miss row per code (lower wins).
+
+    Prefer clearer miss taxonomy first (never_touched > touched > gate), then
+    mainline channel — so a side-desk never_touched is not buried under a
+    mainline gate_blocked.
+    """
     st = str(item.get("signal_type") or "")
     kind = str(item.get("miss_kind") or "")
     return (
-        int(_MISS_BUY_TYPE_RANK.get(st, 9)),
         int(_MISS_KIND_RANK.get(kind, 9)),
+        int(_MISS_BUY_TYPE_RANK.get(st, 9)),
         str(item.get("signaled_at") or ""),
         int(item.get("id") or 0),
     )
@@ -161,8 +166,8 @@ def _miss_item_rank(item: dict[str, Any]) -> tuple[int, int, str, int]:
 def _fold_miss_items_by_code(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Collapse same-code multi-desk buy cards into one display row.
 
-    Review table already folds channels; miss boards were still listing every
-    ``buy`` / ``buy_side`` / ``buy_link`` row and looked like duplicates.
+    Review table folds by traded→ready→channel; this miss board folds by
+    kind→channel (untraded only). Learning still uses ``build_np_missed``.
     """
     best: dict[str, dict[str, Any]] = {}
     for raw in items:
@@ -175,20 +180,32 @@ def _fold_miss_items_by_code(items: list[dict[str, Any]]) -> list[dict[str, Any]
         if cur is None:
             item["channels_n"] = 1
             item["channel_types"] = [str(item.get("signal_type") or "")]
+            item["also_kinds"] = []
             best[code] = item
             continue
         st = str(item.get("signal_type") or "")
         types = list(cur.get("channel_types") or [])
         if st and st not in types:
             types.append(st)
-        cur["channel_types"] = types
-        cur["channels_n"] = len(types)
+        also = list(cur.get("also_kinds") or [])
+        other_kind = str(item.get("miss_kind") or "")
+        cur_kind = str(cur.get("miss_kind") or "")
+        if other_kind and other_kind != cur_kind and other_kind not in also:
+            also.append(other_kind)
         if _miss_item_rank(item) < _miss_item_rank(cur):
-            keep_types = types
-            keep_n = cur["channels_n"]
+            # Winner flips: keep previous kind as also_kinds.
+            prev_kind = cur_kind
+            keep_also = [k for k in also if k != other_kind]
+            if prev_kind and prev_kind != other_kind and prev_kind not in keep_also:
+                keep_also.append(prev_kind)
             best[code] = item
-            best[code]["channel_types"] = keep_types
-            best[code]["channels_n"] = keep_n
+            best[code]["channel_types"] = types
+            best[code]["channels_n"] = len(types)
+            best[code]["also_kinds"] = keep_also
+        else:
+            cur["channel_types"] = types
+            cur["channels_n"] = len(types)
+            cur["also_kinds"] = also
     return list(best.values())
 
 

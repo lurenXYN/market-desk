@@ -77,18 +77,13 @@ def np_from_bar(
             is_one_word_limit_up,
         )
 
-        if is_one_word_limit_up(open_, high, lo, cl, prev_close):
-            one_word = "limit_up"
-        elif is_one_word_limit_down(open_, high, lo, cl, prev_close):
-            one_word = "limit_down"
-        elif (
-            high is not None
-            and abs(float(high) - lo) <= 1e-6
-            and touched
-            and prev_close is None
-        ):
-            # Flat sealed bar without prev_close — treat as untouchable board.
-            one_word = "sealed"
+        # Require prev_close: without it, do not invent a sealed board (would
+        # mis-tag normal flat/touch days as NP and dilute the TP sample).
+        if prev_close is not None:
+            if is_one_word_limit_up(open_, high, lo, cl, prev_close):
+                one_word = "limit_up"
+            elif is_one_word_limit_down(open_, high, lo, cl, prev_close):
+                one_word = "limit_down"
     except Exception:
         one_word = None
     if one_word and touched:

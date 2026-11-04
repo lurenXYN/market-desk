@@ -153,7 +153,7 @@ def test_miss_attr_folds_same_code_multi_desk():
     assert attr["total"] == 2
     assert attr["counts"]["touched_not_bought"] == 2
     by_code = {m["code"]: m for m in attr["items"]}
-    assert by_code["002048"]["id"] == 2  # mainline buy wins over side
+    assert by_code["002048"]["id"] == 2  # same kind → mainline wins
     assert by_code["002048"]["channels_n"] == 2
     missed = build_missed_buys(
         [
@@ -173,6 +173,42 @@ def test_miss_attr_folds_same_code_multi_desk():
     assert len(missed) == 1
     assert missed[0]["code"] == "002048"
     assert missed[0]["channels_n"] == 2
+
+
+def test_miss_attr_prefers_clearer_kind_over_mainline():
+    """Side never_touched must beat mainline gate_blocked when folding."""
+    rows = [
+        {
+            "id": 1,
+            "code": "600001",
+            "trade_date": "2026-11-04",
+            "signal_type": "buy",
+            "traded": 0,
+            "ready": 0,
+            "price": 10.0,
+            "live_last": 11.0,
+            "price_flags": [],
+            "payload": {"confirm_fail": ["minute"], "np": {"np": False, "day_low": 10.5, "day_close": 11.0, "plan": 10.0}},
+        },
+        {
+            "id": 2,
+            "code": "600001",
+            "trade_date": "2026-11-04",
+            "signal_type": "buy_side",
+            "traded": 0,
+            "price": 10.0,
+            "live_last": 11.5,
+            "price_flags": ["miss_pullback"],
+            "price_mark": "未回踩",
+            "payload": {"np": {"np": True, "day_low": 10.2, "day_close": 11.5, "plan": 10.0}},
+        },
+    ]
+    attr = build_miss_attribution(rows, trade_date="2026-11-04")
+    assert attr["total"] == 1
+    item = attr["items"][0]
+    assert item["miss_kind"] == "never_touched"
+    assert item["id"] == 2
+    assert "gate_blocked" in (item.get("also_kinds") or [])
 
 
 def test_week_exec_half_window_counts_side_buy():

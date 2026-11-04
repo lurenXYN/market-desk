@@ -123,6 +123,13 @@ function paintReview(payload) {
           : "")
         + `${tickerHtml(m.name, m.code, "", { signal_at: m.signaled_at || "" })}`
         + (m.channels_n > 1 ? ` <span class="meta">多通道 ${m.channels_n}</span>` : "")
+        + ((m.also_kinds || []).length
+          ? ` <span class="meta">兼有 ${(m.also_kinds || []).map((k) => ({
+              never_touched: "未触达",
+              touched_not_bought: "触达未买",
+              gate_blocked: "闸门",
+            }[k] || k)).join("/")}</span>`
+          : "")
         + ` 建议 ${m.price ?? "—"} · ${
           m.live_last != null
             ? `现 ${m.live_last}`

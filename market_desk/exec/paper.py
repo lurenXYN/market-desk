@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-from datetime import datetime
 from typing import Any
 
 from market_desk.config import TRADE_FEE_CNY
@@ -39,11 +38,15 @@ _oid = itertools.count(1)
 
 
 def _stamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    from market_desk.calendar import now_cn
+
+    return now_cn().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _day() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    from market_desk.calendar import today_cn
+
+    return today_cn().isoformat()
 
 
 class PaperGateway(BaseGateway):
@@ -255,6 +258,8 @@ class PaperGateway(BaseGateway):
             order.message = "lot_insert_failed"
             return order
         set_sim_cash(cash_after, initial_cash=float(snap["initial_cash"]))
+        from market_desk.sim_desk import format_buy_fill_note
+
         apply_sim_buy_fill(
             lot_id=int(lot_id),
             trade_date=day,
@@ -264,7 +269,12 @@ class PaperGateway(BaseGateway):
             fee=FEE,
             cash_after=cash_after,
             weight=1.0,
-            note=req.reference or "paper_buy",
+            note=format_buy_fill_note(
+                signal_type="buy",
+                reason=str(req.reference or "paper_buy"),
+                size_tag="manual",
+                fill_px=px,
+            ),
         )
         order.traded = qty
         order.status = Status.ALLTRADED
@@ -336,8 +346,8 @@ class PaperGateway(BaseGateway):
             pnl_pct=pnl,
             pnl_cny=pnl_cny,
             exit_mode=mode,
-            role_label="paper_sell",
-            note=req.reference or "paper_sell",
+            role_label="手工纸面卖出",
+            note=str(req.reference or "手工纸面卖出"),
         )
         if not ok:
             order.status = Status.REJECTED

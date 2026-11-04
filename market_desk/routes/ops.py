@@ -579,6 +579,18 @@ def ops_bars_cache(
     return out
 
 
+@router.post("/api/ops/bench-refresh")
+def ops_bench_refresh(
+    force: bool = Query(default=False),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """HTTP-warm the IDX CSI1000 cache used by gate_readonly (offline path)."""
+    del user
+    from market_desk.dual_score import ensure_bench_cache
+
+    return {"ok": True, **ensure_bench_cache(force=bool(force))}
+
+
 @router.get("/api/ops/sim-desk")
 def ops_sim_desk(
     backfill: bool = Query(default=False),

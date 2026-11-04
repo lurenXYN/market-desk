@@ -123,6 +123,53 @@ def load_bench_closes(*, limit: int = 240, allow_http: bool = True) -> list[tupl
     return fetched
 
 
+def bench_cache_fresh(*, limit: int = 240, max_age_days: int = 7) -> dict[str, Any]:
+    """Return freshness of the IDX bench cache (no HTTP)."""
+    closes = load_bench_closes(limit=limit, allow_http=False)
+    out: dict[str, Any] = {
+        "ok": len(closes) >= 4,
+        "n": len(closes),
+        "code": bench_cache_code(),
+        "from": closes[0][0] if closes else None,
+        "to": closes[-1][0] if closes else None,
+        "stale": False,
+    }
+    if not closes:
+        out["note"] = "指数 IDX 缓存为空；相对闸拒闸直至灌库"
+        return out
+    try:
+        from datetime import date, timedelta
+
+        from market_desk.calendar import today_cn
+
+        end_d = date.fromisoformat(str(closes[-1][0])[:10])
+        if end_d < today_cn() - timedelta(days=int(max_age_days)):
+            out["ok"] = False
+            out["stale"] = True
+            out["note"] = f"指数缓存过旧（至 {closes[-1][0]}）"
+    except Exception:
+        pass
+    return out
+
+
+def ensure_bench_cache(*, limit: int = 240, force: bool = False) -> dict[str, Any]:
+    """Warm IDX bench bars via HTTP when empty/stale (startup / ops; not gate path).
+
+    Gate path keeps ``allow_http=False`` so ``portfolio_stats`` stays offline.
+    """
+    status = bench_cache_fresh(limit=limit)
+    if status.get("ok") and not force:
+        status["refreshed"] = False
+        return status
+    closes = load_bench_closes(limit=limit, allow_http=True)
+    after = bench_cache_fresh(limit=limit)
+    after["refreshed"] = True
+    after["fetched_n"] = len(closes)
+    if not after.get("ok"):
+        after["note"] = after.get("note") or "HTTP 灌库后仍不足；检查网络或 REVIEW_BENCH_SYMBOL"
+    return after
+
+
 def _dual_win_block(
     rows: list[dict[str, Any]],
     closes: list[tuple[str, float]],

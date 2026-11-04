@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
+
 from market_desk.config import ADAPT_VOL_AMOUNT_PCTILE, ADAPT_VOL_HS300_ABS
 from market_desk.settings import setting
 
@@ -35,8 +35,10 @@ VOL_BUCKET_LABELS = {
 
 
 def _cache_day() -> str:
-    """Return today's cache key."""
-    return datetime.now().strftime("%Y-%m-%d")
+    """Return today's cache key (Asia/Shanghai)."""
+    from market_desk.calendar import today_cn
+
+    return today_cn().isoformat()
 
 
 def _num(v: Any) -> float | None:

@@ -151,6 +151,20 @@ def upsert_daily_bars(
                 # Different family with an existing close → null-fill only.
                 if old_fam != new_fam and old_close is not None:
                     same_family = False
+                    try:
+                        import logging
+
+                        logging.getLogger(__name__).warning(
+                            "bars cross-family skip overwrite %s %s old=%s(%s) new=%s(%s)",
+                            c,
+                            day,
+                            old_src,
+                            old_fam,
+                            source,
+                            new_fam,
+                        )
+                    except Exception:
+                        pass
             if same_family:
                 sql = """
                 INSERT INTO market_bar_daily(

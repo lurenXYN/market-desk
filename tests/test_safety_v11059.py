@@ -265,3 +265,17 @@ def test_np_from_bar_one_word_limit_not_tp():
     # Normal touch still TP.
     ok = np_from_bar(10.0, 9.8, 10.2, 10.5, open_=10.1, prev_close=10.0)
     assert ok is not None and ok["np"] is False and not ok.get("one_word")
+
+    # Flat bar without prev_close must NOT invent sealed → keep TP.
+    flat = np_from_bar(10.0, 9.5, 9.5, 9.5, open_=9.5, prev_close=None)
+    assert flat is not None and flat["np"] is False and not flat.get("one_word")
+
+
+def test_sim_vs_bench_empty_idx_note():
+    from market_desk.sim_desk import sim_vs_bench
+
+    out = sim_vs_bench(cum_pnl_pct=1.0, epoch="2026-01-01")
+    # Without IDX rows (and allow_http=False), refuse with actionable note.
+    if not out.get("ok"):
+        note = out.get("note") or ""
+        assert "IDX" in note or "指数" in note

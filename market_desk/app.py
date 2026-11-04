@@ -53,6 +53,20 @@ async def lifespan(_app: FastAPI):
             engine.snapshot["history"] = load_daily(14)
     except Exception:
         log.exception("daily patch apply failed (post-start)")
+    # Warm IDX bench cache off the gate path (HTTP ok here; sim_vs_bench stays offline).
+    try:
+        from market_desk.dual_score import ensure_bench_cache
+
+        bench = await asyncio.to_thread(ensure_bench_cache)
+        log.info(
+            "bench cache warm: ok=%s n=%s to=%s refreshed=%s",
+            bench.get("ok"),
+            bench.get("n"),
+            bench.get("to"),
+            bench.get("refreshed"),
+        )
+    except Exception:
+        log.exception("bench cache warm failed")
     yield
     await engine.stop()
 

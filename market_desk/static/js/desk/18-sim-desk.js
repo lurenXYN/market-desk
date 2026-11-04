@@ -131,7 +131,11 @@ function paintSimDesk(data) {
           <td>${_simNum(t.fee)}</td>
           <td class="${cls}">${side === "sell" ? _simNum(pnl) : "—"}</td>
           <td>${cashShow}</td>
-          <td class="meta">${t.note || t.role_label || ""}</td>
+          <td class="meta">${
+            side === "sell"
+              ? (t.role_label || t.note || "")
+              : (t.note || t.role_label || "")
+          }</td>
         </tr>`;
       }).join("");
     }

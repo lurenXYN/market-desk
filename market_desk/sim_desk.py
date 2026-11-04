@@ -184,6 +184,7 @@ BUY_FILL_REASON_ZH: dict[str, str] = {
     "probe_touch": "试探通道触价",
     "backfill_buy_log": "补记开仓",
     "paper_buy": "手工纸面买入",
+    "paper_sell": "手工纸面卖出",
     "no_touch": "未触价",
 }
 _BUY_SIZE_TAG_ZH: dict[str, str] = {
@@ -629,12 +630,22 @@ def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) 
     from market_desk.numbers import num
 
     start = str(epoch or get_sim_account_epoch() or SIM_BOOK_SINCE or "")[:10]
+    # Gate path stays offline — never sync-HTTP here (see ensure_bench_cache).
     closes = load_bench_closes(limit=240, allow_http=False)
-    if not start or len(closes) < 2:
+    if not start:
         return {
             "ok": False,
             "bench": REVIEW_BENCH_LABEL,
-            "note": "无账本起点或指数日线缓存（IDX key；非个股 000852）",
+            "note": "无账本起点（epoch / SIM_BOOK_SINCE）",
+        }
+    if len(closes) < 2:
+        return {
+            "ok": False,
+            "bench": REVIEW_BENCH_LABEL,
+            "note": (
+                "指数 IDX 缓存为空或不足，拒绝相对闸；"
+                "等待启动灌库 / EOD，或 POST /api/ops/bench-refresh"
+            ),
         }
     # Anchor: last index close on/before epoch; end: latest cached close.
     start_px = None
@@ -1171,7 +1182,7 @@ def replay_exits_from_sell_signals(*, limit: int = 3000) -> int:
             pnl_cny=pnl_cny,
             exit_mode=mode,
             role_label=str(item.get("role_label") or "回放卖出"),
-            note="replay_sell_signal",
+            note=str(item.get("role_label") or "回放卖出"),
         )
         if ok:
             set_sim_cash(cash_after, initial_cash=float(acct["initial_cash"]))

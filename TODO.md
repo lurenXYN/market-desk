@@ -104,6 +104,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-04（v1.10.58）：pack 冷重建 same_day_plan；今日卡全桌；todo_strip/scorecard skip；双闸/调参文档。
 - 2026-11-04（v1.10.59）：安全扫尾 #1–#12——pick0/日线/IDX/epoch/live/半冻；bars 口径家族；day_close；ever_ready；一字板 NP；now_cn。
 - 2026-11-04（v1.10.60）：漏买归因同码多通道折叠；买入日志备注展开（通道/触价/仓位）。
+- 2026-11-04（v1.10.61）：IDX 启动/ops 灌库；漏买先 kind；一字板无昨收；paper/回放备注；now_cn。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -149,6 +150,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **宇宙/文档 v1.10.58**：pack 冷重建；今日卡全桌；todo_strip；scorecard skip；双闸文档
 - [x] **安全扫尾 v1.10.59**：pick0 补价不改分；日线最新 N；IDX 基准；epoch 顺序；live check_order；半冻/COALESCE；day_close
 - [x] **漏买同码折叠 + 买入备注 v1.10.60**：miss 按码收拢；买入日志展开通道/触价/仓位
+- [x] **第四轮扫尾 v1.10.61**：IDX 灌库；漏买 kind 优先；一字板；paper/回放备注；now_cn
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

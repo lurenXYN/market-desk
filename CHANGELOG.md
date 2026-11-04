@@ -14,6 +14,23 @@
 
 ---
 
+## [v1.10.61] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 第四轮扫尾：IDX 空时相对闸静默拒；漏买折叠主线压过更清晰 miss；一字板无昨收误标 NP；纸面/回放备注短码；paper/adapt 时区残留。
+
+### 【做了什么（What）】
+- **Added** `ensure_bench_cache`：启动灌 IDX；`POST /api/ops/bench-refresh`；闸门路径仍离线，拒闸 note 写明补库方式。
+- **Fixed** 漏买折叠先 kind 再通道；`also_kinds` 角标。
+- **Fixed** `np_from_bar` 无 `prev_close` 不再 sealed 兜底。
+- **Fixed** Paper 买入走 `format_buy_fill_note`；回放卖 note=role_label；前端卖侧优先 role_label。
+- **Fixed** `exec/paper`、`adapt/context` 改 `now_cn`/`today_cn`；跨复权占坑打 warning。
+
+### 【影响与验证（Impact & Verification）】
+- `test_miss_attr_prefers_clearer_kind_over_mainline`、`test_np_from_bar` 无昨收、既有 safety。desk.db 无迁移。
+
+---
+
 ## [v1.10.60] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】
