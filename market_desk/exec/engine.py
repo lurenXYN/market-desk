@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from market_desk.exec.circuit import CircuitBreaker
+from market_desk.exec.circuit import CircuitBreaker, is_open_intent
 from market_desk.exec.condition import sell_advice_to_triggers
 from market_desk.exec.gateway import BaseGateway
 from market_desk.exec.orders import OrderBook
 from market_desk.exec.paper import PaperGateway
 from market_desk.exec.reconcile import reconcile_positions, self_check_gateway
-from market_desk.exec.risk import require_start_gate
+from market_desk.exec.risk import check_order, require_start_gate
 from market_desk.exec.types import OrderData, OrderRequest, Status
 from market_desk.sim_desk import portfolio_stats, start_gate_snapshot
 
@@ -91,8 +91,30 @@ class ExecEngine:
     def send_order(self, req: OrderRequest, *, live: bool = False) -> OrderData:
         """Send via paper (default) or live; always upsert into OrderBook."""
         if live:
-            # Live sends always need absolute gate_ok (真钱).
-            verdict = require_start_gate(live=True, trade=True)
+            # Live: absolute gate + full risk (lot/price/circuit/session/limits).
+            acct = None
+            positions = None
+            try:
+                if self._live is not None:
+                    acct = self._live.query_account()
+                    positions = self._live.query_positions()
+            except Exception:
+                acct = None
+                positions = None
+            if acct is None:
+                try:
+                    acct = self.paper.query_account()
+                    positions = self.paper.query_positions()
+                except Exception:
+                    pass
+            verdict = check_order(
+                req,
+                live=True,
+                account=acct,
+                positions=positions,
+                circuit=self.circuit,
+            )
+            open_intent = is_open_intent(req)
             if not verdict.ok:
                 order = OrderData(
                     code=req.code,
@@ -107,6 +129,12 @@ class ExecEngine:
                     name=req.name,
                     reference=req.reference,
                 )
+                try:
+                    if open_intent:
+                        self.circuit.note_reject(verdict.reason)
+                        self.circuit.persist()
+                except Exception:
+                    pass
                 return self.orders.upsert(order) if order.orderid else order
             if self._live is None:
                 order = OrderData(
@@ -124,6 +152,15 @@ class ExecEngine:
                 )
                 return order
             filled = self._live.send_order(req)
+            try:
+                if filled.status == Status.REJECTED and open_intent:
+                    self.circuit.note_reject(filled.message or "live_reject")
+                    self.circuit.persist()
+                elif filled.status == Status.ALLTRADED:
+                    self.circuit.note_fill()
+                    self.circuit.persist()
+            except Exception:
+                pass
             return self.orders.upsert(filled)
         filled = self.paper.send_order(req)
         return self.orders.upsert(filled)

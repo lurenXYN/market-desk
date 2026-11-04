@@ -128,7 +128,7 @@ def score_signal_with_closes(
                 "outcome_mae_pct": None,
                 "outcome_label": "无成交",
                 "outcome_standard": std,
-                "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
             }
     else:
         price = fill if fill is not None and fill > 0 else plan
@@ -234,13 +234,23 @@ def score_signal_with_closes(
             "outcome_standard": std,
             "outcome_exit_basis": exit_basis,
             "outcome_exit_price": round(float(price), 4),
-            "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     # --- buys ---
     if std == "same_day_plan":
         # Human ops under T+1: must touch plan that day, then score next session(s).
-        if day0_low is None or day0_low > price:
+        if day0_low is None:
+            return {
+                "outcome_day1_pct": None,
+                "outcome_day3_pct": None,
+                "outcome_mfe_pct": None,
+                "outcome_mae_pct": None,
+                "outcome_label": "无日线",
+                "outcome_standard": std,
+                "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        if day0_low > price:
             return {
                 "outcome_day1_pct": None,
                 "outcome_day3_pct": None,
@@ -248,7 +258,7 @@ def score_signal_with_closes(
                 "outcome_mae_pct": None,
                 "outcome_label": "当日未触达",
                 "outcome_standard": std,
-                "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
             }
         if not after_dates:
             return {
@@ -258,7 +268,7 @@ def score_signal_with_closes(
                 "outcome_mae_pct": None,
                 "outcome_label": "待隔日",
                 "outcome_standard": std,
-                "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
     if not after_dates:
@@ -329,7 +339,7 @@ def score_signal_with_closes(
         "outcome_mae_pct": mae,
         "outcome_label": label,
         "outcome_standard": std,
-        "outcome_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "outcome_checked_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 

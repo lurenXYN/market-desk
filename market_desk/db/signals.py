@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from market_desk.calendar import now_cn, today_cn
 from market_desk.db.core import _connect
 
 
@@ -112,13 +113,20 @@ def upsert_signal(row: dict[str, Any]) -> None:
             pass
         if old_payload.get("source_board") and not incoming.get("source_board"):
             merged["source_board"] = old_payload.get("source_board")
-        # Chip / volume context is signal-time evidence: first capture wins.
+        # Chip / volume context is signal-time evidence: first *non-empty* wins.
         if isinstance(old_payload.get("cv"), dict):
             merged["cv"] = old_payload["cv"]
-        if isinstance(old_payload.get("market_gates"), list):
+        # Empty list is a miss, not a freeze — allow later fill.
+        if isinstance(old_payload.get("market_gates"), list) and old_payload.get("market_gates"):
             merged["market_gates"] = old_payload["market_gates"]
-        if old_payload.get("board_stage"):
+        # Sentinel "none" is a miss; allow a later real stage to fill once.
+        old_stage = str(old_payload.get("board_stage") or "").strip()
+        if old_stage and old_stage.lower() not in ("none", "null", "-"):
             merged["board_stage"] = old_payload["board_stage"]
+        elif not str(incoming.get("board_stage") or "").strip() or str(
+            incoming.get("board_stage") or ""
+        ).strip().lower() in ("none", "null", "-"):
+            merged.pop("board_stage", None)
         # Soft market ruler: freeze first *non-empty* capture; allow fill-once
         # when the first insert missed the field (do not pop a later backfill).
         if isinstance(old_payload.get("market_regime"), dict):
@@ -143,14 +151,19 @@ def upsert_signal(row: dict[str, Any]) -> None:
         elif existing:
             merged.pop("deep_v_chase", None)
         # Live price when the signal first fired (``last`` itself is overwritten on refresh).
-        if not existing:
-            merged["first_last"] = row.get("last")
-        elif "first_last" in old_payload:
+        # Missing first_last may fill once when a later upsert finally has last.
+        if old_payload.get("first_last") is not None:
             merged["first_last"] = old_payload["first_last"]
+        elif row.get("last") is not None:
+            merged["first_last"] = row.get("last")
+        else:
+            merged.pop("first_last", None)
 
-        # Shadow breaker input: today's lit book, frozen at first sight and at first light.
+        # Shadow breaker input: today's lit book, frozen at first *non-empty* sight.
         day_book = merged.pop("day_book", None)
-        if not existing and isinstance(day_book, dict):
+        if isinstance(old_payload.get("book_open"), dict):
+            merged["book_open"] = old_payload["book_open"]
+        elif isinstance(day_book, dict):
             merged["book_open"] = day_book
 
         # Gate evolution: keep first_ready / fail history across same-day upserts.
@@ -160,10 +173,6 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["ever_ready"] = True
             if not old_payload.get("first_ready_at"):
                 merged["first_ready_at"] = signaled or old_payload.get("first_ready_at")
-                if row.get("last") is not None:
-                    merged["first_ready_px"] = row.get("last")
-                if isinstance(day_book, dict):
-                    merged["book_ready"] = day_book
                 # Deep-V chase: stamp when the card first lights at/after 14:00.
                 try:
                     from market_desk.config import DEEP_V_CHASE_HHMM
@@ -176,11 +185,24 @@ def upsert_signal(row: dict[str, Any]) -> None:
                     pass
             else:
                 merged["first_ready_at"] = old_payload.get("first_ready_at")
+            # Fill first_ready_px / book_ready once when values finally arrive.
+            if old_payload.get("first_ready_px") is not None:
+                merged["first_ready_px"] = old_payload["first_ready_px"]
+            elif row.get("last") is not None:
+                merged["first_ready_px"] = row.get("last")
+            if isinstance(old_payload.get("book_ready"), dict):
+                merged["book_ready"] = old_payload["book_ready"]
+            elif isinstance(day_book, dict):
+                merged["book_ready"] = day_book
         else:
             if old_payload.get("ever_ready"):
                 merged["ever_ready"] = True
             if old_payload.get("first_ready_at"):
                 merged["first_ready_at"] = old_payload.get("first_ready_at")
+            if old_payload.get("first_ready_px") is not None:
+                merged["first_ready_px"] = old_payload["first_ready_px"]
+            if isinstance(old_payload.get("book_ready"), dict):
+                merged["book_ready"] = old_payload["book_ready"]
         _merge_shadow_reclaim(merged, old_payload, incoming, last=row.get("last"), at=signaled)
         new_fails = [
             str(x).strip()
@@ -587,7 +609,7 @@ def sync_sell_fill_from_trim(
     """
     day = str(trade_date or "").strip()[:10]
     if not day:
-        day = datetime.now().strftime("%Y-%m-%d")
+        day = today_cn().isoformat()
     c = str(code or "").strip().zfill(6)
     qty = int(fill_qty or 0)
     if len(c) != 6 or not c.isdigit() or qty <= 0:
@@ -644,7 +666,7 @@ def list_signal_trade_dates(limit: int = 40) -> list[str]:
     Skip sentinel / far-future placeholders (e.g. 2099-01-01 test rows) so the
     review day chips stay usable.
     """
-    calendar_today = datetime.now().strftime("%Y-%m-%d")
+    calendar_today = today_cn().isoformat()
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -871,7 +893,7 @@ def upsert_signal_user_meta(
     """Insert or patch one user's traded / fill annotation for a signal."""
     uid = int(user_id)
     sid = int(signal_id)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_cn().strftime("%Y-%m-%d %H:%M:%S")
     with _connect() as conn:
         exists = conn.execute(
             "SELECT id FROM signals WHERE id = ?", (sid,)
@@ -998,7 +1020,7 @@ def apply_signal_user_meta(
 
 def save_review_digest(trade_date: str, payload: dict[str, Any]) -> None:
     """Upsert one trade-date review digest for historical charts."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_cn().strftime("%Y-%m-%d %H:%M:%S")
     with _connect() as conn:
         conn.execute(
             """

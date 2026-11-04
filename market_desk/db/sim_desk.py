@@ -266,6 +266,15 @@ def _row_to_fill(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         item["qty"] = int(item.get("qty") or 0)
     except (TypeError, ValueError):
         item["qty"] = 0
+    raw_payload = item.get("lot_payload")
+    if isinstance(raw_payload, str) and raw_payload.strip():
+        try:
+            parsed = json.loads(raw_payload)
+            item["lot_payload"] = parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["lot_payload"] = {}
+    elif not isinstance(raw_payload, dict):
+        item["lot_payload"] = {}
     return item
 
 
@@ -559,7 +568,8 @@ def load_sim_fills(*, limit: int = 200, side: str | None = None) -> list[dict[st
                 """
                 SELECT f.*, l.code AS code, l.name AS name, l.open_px AS open_px,
                        l.open_weight AS open_weight, l.size_tag AS size_tag,
-                       l.open_date AS open_date, l.signal_type AS signal_type
+                       l.open_date AS open_date, l.signal_type AS signal_type,
+                       l.payload AS lot_payload
                 FROM sim_fill f
                 JOIN sim_lot l ON l.id = f.lot_id
                 WHERE f.side = ?
@@ -573,7 +583,8 @@ def load_sim_fills(*, limit: int = 200, side: str | None = None) -> list[dict[st
                 """
                 SELECT f.*, l.code AS code, l.name AS name, l.open_px AS open_px,
                        l.open_weight AS open_weight, l.size_tag AS size_tag,
-                       l.open_date AS open_date, l.signal_type AS signal_type
+                       l.open_date AS open_date, l.signal_type AS signal_type,
+                       l.payload AS lot_payload
                 FROM sim_fill f
                 JOIN sim_lot l ON l.id = f.lot_id
                 ORDER BY COALESCE(f.filled_at, f.trade_date) DESC, f.id DESC

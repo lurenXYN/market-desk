@@ -41,6 +41,9 @@ def np_from_bar(
     low: float | None,
     close: float | None,
     high: float | None = None,
+    *,
+    open_: float | None = None,
+    prev_close: float | None = None,
 ) -> dict[str, Any] | None:
     """Classify one signal day against its plan price.
 
@@ -49,20 +52,58 @@ def np_from_bar(
         low: Signal-day low.
         close: Signal-day close.
         high: Signal-day high (stored for later range analysis).
+        open_: Signal-day open (optional; used with ``prev_close`` for 一字板).
+        prev_close: Prior session close (optional; 一字涨/跌停 detection).
 
     Returns:
-        ``{"np": bool, "day_low", "day_close", "day_high", "plan"}`` or None when
-        plan / low / close is missing.
+        ``{"np": bool, "day_low", "day_close", "day_high", "plan", ...}`` or None
+        when plan / low / close is missing.
+
+    One-word limit boards that "touch" plan are still tagged ``np=True``: a sealed
+    一字涨停 cannot be bought, and a sealed 一字跌停 is not a normal pullback fill
+    for NP vs TP sample contrast (would dilute the TP bucket).
     """
     if plan is None or low is None or close is None or plan <= 0:
         return None
-    return {
-        "np": bool(float(low) > float(plan) and float(close) > float(plan)),
-        "day_low": round(float(low), 4),
-        "day_close": round(float(close), 4),
+    lo = float(low)
+    cl = float(close)
+    pl = float(plan)
+    touched = lo <= pl
+    np_flag = bool(lo > pl and cl > pl)
+    one_word: str | None = None
+    try:
+        from market_desk.counterfactual.sim import (
+            is_one_word_limit_down,
+            is_one_word_limit_up,
+        )
+
+        if is_one_word_limit_up(open_, high, lo, cl, prev_close):
+            one_word = "limit_up"
+        elif is_one_word_limit_down(open_, high, lo, cl, prev_close):
+            one_word = "limit_down"
+        elif (
+            high is not None
+            and abs(float(high) - lo) <= 1e-6
+            and touched
+            and prev_close is None
+        ):
+            # Flat sealed bar without prev_close — treat as untouchable board.
+            one_word = "sealed"
+    except Exception:
+        one_word = None
+    if one_word and touched:
+        # Do not count sealed-board "touches" as TP.
+        np_flag = True
+    out: dict[str, Any] = {
+        "np": np_flag,
+        "day_low": round(lo, 4),
+        "day_close": round(cl, 4),
         "day_high": None if high is None else round(float(high), 4),
-        "plan": round(float(plan), 4),
+        "plan": round(pl, 4),
     }
+    if one_word:
+        out["one_word"] = one_word
+    return out
 
 
 def _is_shared_buy(row: dict[str, Any]) -> bool:
@@ -104,10 +145,20 @@ def freeze_np_values(
         i = dates.index(day)
         lows = list(ohlc.get("low") or [])
         highs = list(ohlc.get("high") or [])
+        opens = list(ohlc.get("open") or [])
         low = lows[i] if i < len(lows) else None
         high = highs[i] if i < len(highs) else None
+        open_ = opens[i] if i < len(opens) else None
         close = closes[i] if i < len(closes) else None
-        frozen = np_from_bar(plan_price_of(row), num(low), num(close), num(high))
+        prev_close = closes[i - 1] if i > 0 else None
+        frozen = np_from_bar(
+            plan_price_of(row),
+            num(low),
+            num(close),
+            num(high),
+            open_=num(open_),
+            prev_close=num(prev_close),
+        )
         if frozen is not None:
             out[int(row["id"])] = (NP_KEY, frozen)
     return out

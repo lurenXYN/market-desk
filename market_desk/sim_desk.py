@@ -175,6 +175,103 @@ def buy_fill_evidence(row: dict[str, Any]) -> tuple[bool, str]:
     return False, "no_touch"
 
 
+# Machine fill-reason codes → Chinese for the trade-log 备注 column.
+BUY_FILL_REASON_ZH: dict[str, str] = {
+    "cf_touch": "反事实到价可成交",
+    "touched_plan": "触达计划价",
+    "first_ready_px": "亮灯价可挂",
+    "last_le_plan": "现价已≤计划",
+    "probe_touch": "试探通道触价",
+    "backfill_buy_log": "补记开仓",
+    "paper_buy": "手工纸面买入",
+    "no_touch": "未触价",
+}
+_BUY_SIZE_TAG_ZH: dict[str, str] = {
+    "full": "满仓档",
+    "half": "半仓",
+    "probe": "试探仓",
+    "side": "支线仓",
+    "manual": "手工仓",
+}
+_BARE_BUY_NOTES = frozenset(BUY_FILL_REASON_ZH) | {
+    "ok",
+    "open",
+    "paper_buy",
+    "backfill_buy_log",
+}
+
+
+def format_buy_fill_note(
+    *,
+    signal_type: str | None = None,
+    reason: str | None = None,
+    size_tag: str | None = None,
+    plan_px: float | None = None,
+    fill_px: float | None = None,
+    mainline: str | None = None,
+) -> str:
+    """Build a human-readable buy note for the sim trade log.
+
+    Mirrors sell notes that already carry role text: channel · why-fill · plan/fill
+    · size · mainline. Bare machine codes alone (``cf_touch``) are expanded.
+    """
+    from market_desk.pick_score import SOURCE_LABELS
+
+    raw = str(reason or "").strip()
+    # Already a composed Chinese note — keep as-is.
+    if raw and (" · " in raw or "·" in raw) and raw not in _BARE_BUY_NOTES:
+        return raw[:160]
+    parts: list[str] = []
+    src = SOURCE_LABELS.get(str(signal_type or ""), "")
+    if src:
+        parts.append(src)
+    reason_zh = BUY_FILL_REASON_ZH.get(raw, "")
+    if reason_zh:
+        parts.append(reason_zh)
+    elif raw and raw not in _BARE_BUY_NOTES:
+        parts.append(raw[:40])
+    plan = _f(plan_px)
+    fill = _f(fill_px)
+    if plan and plan > 0:
+        parts.append(f"计划{plan:g}")
+    if fill and fill > 0 and (plan is None or abs(fill - plan) / max(plan, 1e-9) > 0.001):
+        parts.append(f"成交{fill:g}")
+    tag = str(size_tag or "").strip()
+    tag_zh = _BUY_SIZE_TAG_ZH.get(tag, "")
+    if tag_zh:
+        parts.append(tag_zh)
+    elif tag and tag not in _BUY_SIZE_TAG_ZH:
+        parts.append(tag)
+    ml = str(mainline or "").strip()
+    if ml:
+        parts.append(f"主线{ml}" if not ml.startswith("主线") else ml)
+    return " · ".join(parts)[:160] if parts else (raw or "买入")
+
+
+def enrich_buy_trade_note(fill: dict[str, Any]) -> dict[str, Any]:
+    """Expand bare buy-fill machine codes for API / UI display (read path)."""
+    if str(fill.get("side") or "") != "buy":
+        return fill
+    note = str(fill.get("note") or "").strip()
+    if note and note not in _BARE_BUY_NOTES and (" · " in note or "·" in note):
+        return fill
+    payload = fill.get("lot_payload") if isinstance(fill.get("lot_payload"), dict) else {}
+    reason = note if note in _BARE_BUY_NOTES else (
+        str(payload.get("fill_reason") or note or "open")
+    )
+    out = dict(fill)
+    out["note"] = format_buy_fill_note(
+        signal_type=str(fill.get("signal_type") or ""),
+        reason=reason,
+        size_tag=str(fill.get("size_tag") or ""),
+        plan_px=_f(payload.get("plan_price")) or _f(fill.get("open_px")),
+        fill_px=_f(fill.get("px")),
+        mainline=payload.get("mainline") or fill.get("mainline"),
+    )
+    out["note_code"] = reason if reason in BUY_FILL_REASON_ZH else None
+    return out
+
+
 def assess_buy_fill(
     row: dict[str, Any],
     *,
@@ -380,9 +477,10 @@ def portfolio_stats(fills: list[dict[str, Any]] | None = None) -> dict[str, Any]
         with ≥1 closed lot (券商只读 / stage 1 only).
     """
     del fills  # equity-based gate; fills still drive closed_n via count
+    # Snapshot first: ensure_sim_book_epoch may wipe; closed_n must be post-wipe.
+    acct = account_snapshot()
     open_lots = load_open_sim_lots()
     closed_n = count_sim_sell_fills()
-    acct = account_snapshot()
     ret = acct.get("return_pct")
     gate_ok = bool(closed_n >= 1 and ret is not None and ret > 0)
     excess = None
@@ -467,9 +565,14 @@ def recent_closed(limit: int = 8) -> list[dict[str, Any]]:
 
 
 def recent_trades(limit: int = 80) -> list[dict[str, Any]]:
-    """Full trade log (buys + sells) newest first."""
+    """Full trade log (buys + sells) newest first.
+
+    Buy rows with bare machine notes (``cf_touch`` …) are expanded to a readable
+    通道 · 触价原因 · 计划/成交 · 仓位 · 主线 string for the UI 备注 column.
+    """
     backfill_missing_buy_fills()
-    return load_sim_fills(limit=max(1, min(int(limit), 300)))
+    fills = load_sim_fills(limit=max(1, min(int(limit), 300)))
+    return [enrich_buy_trade_note(f) for f in fills]
 
 
 def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
@@ -490,6 +593,7 @@ def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
         fee = _f(lot.get("buy_fee"))
         if fee is None:
             fee = FEE
+        lot_payload = lot.get("payload") if isinstance(lot.get("payload"), dict) else {}
         ok = apply_sim_buy_fill(
             lot_id=lid,
             trade_date=day,
@@ -499,7 +603,14 @@ def backfill_missing_buy_fills(*, limit: int = 5000) -> int:
             fee=float(fee),
             cash_after=0.0,
             weight=float(lot.get("open_weight") or 1.0),
-            note="backfill_buy_log",
+            note=format_buy_fill_note(
+                signal_type=str(lot.get("signal_type") or ""),
+                reason=str(lot_payload.get("fill_reason") or "backfill_buy_log"),
+                size_tag=str(lot.get("size_tag") or ""),
+                plan_px=_f(lot.get("open_px")),
+                fill_px=float(px),
+                mainline=lot_payload.get("mainline"),
+            ),
         )
         if ok:
             added += 1
@@ -523,7 +634,7 @@ def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) 
         return {
             "ok": False,
             "bench": REVIEW_BENCH_LABEL,
-            "note": "无账本起点或指数日线缓存",
+            "note": "无账本起点或指数日线缓存（IDX key；非个股 000852）",
         }
     # Anchor: last index close on/before epoch; end: latest cached close.
     start_px = None
@@ -534,9 +645,29 @@ def sim_vs_bench(*, cum_pnl_pct: float | None = None, epoch: str | None = None) 
         else:
             break
     if start_px is None:
-        # Epoch before first cached bar — use first bar.
-        start_day, start_px = closes[0][0], closes[0][1]
+        # Epoch before first cached bar — refuse rather than silently shift window.
+        return {
+            "ok": False,
+            "bench": REVIEW_BENCH_LABEL,
+            "note": "指数缓存起点晚于账本 epoch，拒绝相对闸",
+        }
     end_day, end_px = closes[-1][0], closes[-1][1]
+    # Freshness: last bar must be within ~7 calendar days of CN today.
+    try:
+        from market_desk.calendar import today_cn
+        from datetime import date, timedelta
+
+        today = today_cn()
+        end_d = date.fromisoformat(str(end_day)[:10])
+        if end_d < today - timedelta(days=7):
+            return {
+                "ok": False,
+                "bench": REVIEW_BENCH_LABEL,
+                "bench_to": end_day,
+                "note": f"指数缓存过旧（至 {end_day}），拒绝相对闸",
+            }
+    except Exception:
+        pass
     if not start_px or start_px <= 0:
         return {"ok": False, "bench": REVIEW_BENCH_LABEL, "note": "指数锚点无效"}
     bench_pct = round((float(end_px) / float(start_px) - 1.0) * 100.0, 3)
@@ -878,6 +1009,15 @@ def open_lots_from_signals(
         if not lot_id:
             continue
         set_sim_cash(cash_after, initial_cash=float(acct["initial_cash"]))
+        plan_px = _f(payload.get("plan_price")) or _f(row.get("price"))
+        buy_note = format_buy_fill_note(
+            signal_type=sig_type,
+            reason=str(verdict.get("reason") or ""),
+            size_tag=tag,
+            plan_px=plan_px,
+            fill_px=px,
+            mainline=row.get("mainline") or payload.get("mainline"),
+        )
         apply_sim_buy_fill(
             lot_id=lot_id,
             trade_date=day,
@@ -887,7 +1027,7 @@ def open_lots_from_signals(
             fee=FEE,
             cash_after=cash_after,
             weight=weight,
-            note=str(verdict.get("reason") or ""),
+            note=buy_note,
         )
         cash = cash_after
         equity = cash + mark_to_market()

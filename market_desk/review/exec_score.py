@@ -368,9 +368,12 @@ def classify_miss_kind(row: dict[str, Any]) -> str | None:
     fails = list(payload.get("confirm_fail") or row.get("confirm_fail") or [])
     blocked = bool(payload.get("block_ready") or row.get("block_ready"))
     ready = int(row.get("ready") or 0)
-    # Prefer enrich live_last; else frozen day close. Do not use row.last when a
-    # freeze exists — upsert may have overwritten last with today's quote.
+    ever_ready = bool(payload.get("ever_ready") or row.get("ever_ready") or ready)
+    # Prefer enrich live_last; else frozen day close / day_close field. Do not
+    # use row.last when a freeze exists — upsert may have overwritten last.
     last = num(row.get("live_last"))
+    if last is None:
+        last = num(row.get("day_close"))
     if last is None and frozen:
         last = num(frozen.get("day_close"))
     if last is None and not frozen:
@@ -381,7 +384,9 @@ def classify_miss_kind(row: dict[str, Any]) -> str | None:
         or row.get("buy_price")
         or (frozen.get("plan") if frozen else None)
     )
-    if (fails or blocked) and not ready and last is not None and plan is not None and last > plan:
+    # Only "never lit" cards count as gate-blocked; ever_ready then extinguished
+    # is a missed buy after a window, not a hard gate miss.
+    if (fails or blocked) and not ever_ready and last is not None and plan is not None and last > plan:
         return "gate_blocked"
     # Historical touch without ephemeral price_flags.
     if frozen and frozen.get("np") is False:

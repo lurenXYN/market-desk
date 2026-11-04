@@ -41,7 +41,73 @@ def ensure_bars_cache_tables(conn: sqlite3.Connection) -> None:
 
 
 def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        from market_desk.calendar import now_cn
+
+        return now_cn().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _bar_cache_code(code: str) -> str:
+    """Normalize stock codes; keep ``IDX######`` bench keys as-is."""
+    raw = str(code or "").strip()
+    if raw.upper().startswith("IDX") and len(raw) >= 9:
+        return raw.upper()
+    return normalize_code(code) or raw.zfill(6)
+
+
+def adj_family(source: str | None) -> str:
+    """Map a write ``source`` to an adjustment family for overwrite policy.
+
+    ``qfq`` = forward-adjusted (Tencent qfq / East Money fqt=1 / bench).
+    ``raw`` = unadjusted (Sina / explicit none). Unknown sources stay isolated
+    so they only fill nulls and never overwrite a known family.
+    """
+    s = str(source or "").strip().lower()
+    if s in {
+        "chip_volume",
+        "fetch_daily_bars",
+        "bench_eod",
+        "bench_http",
+        "tencent",
+        "tencent_qfq",
+        "eastmoney",
+        "em_qfq",
+        "qfq",
+        "fetch",
+    }:
+        return "qfq"
+    if s in {"sina", "sina_raw", "raw", "none", "fqt0"}:
+        return "raw"
+    if s.startswith("bench"):
+        return "qfq"
+    return f"other:{s or 'unknown'}"
+
+
+def _skip_incomplete_bar(day: str) -> bool:
+    """Return True for future days, or today before the A-share close stamp.
+
+    Mid-session last≠close bars must not poison NP / adapt remaps; after 15:05
+    CN the day bar is treated as closed enough to cache.
+    """
+    try:
+        from market_desk.calendar import now_cn, today_cn
+
+        today = today_cn().isoformat()
+    except Exception:
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        if day > today:
+            return True
+        if day < today:
+            return False
+        return now.strftime("%H:%M") < "15:05"
+    if day > today:
+        return True
+    if day < today:
+        return False
+    return now_cn().strftime("%H:%M") < "15:05"
 
 
 def upsert_daily_bars(
@@ -49,12 +115,20 @@ def upsert_daily_bars(
     bars: list[dict[str, Any]],
     *,
     source: str = "fetch",
+    skip_today: bool = True,
 ) -> int:
-    """Upsert bar rows for one code. Return number of rows written."""
-    c = normalize_code(code) or str(code or "").zfill(6)
+    """Upsert bar rows for one code. Return number of rows written.
+
+    Null OHLC / pct / volume never wipe an existing non-null cell (COALESCE).
+    Cross-family sources (qfq vs raw) only fill nulls — they never replace an
+    already-populated OHLC close from another adjustment family.
+    By default skips incomplete today (pre-15:05 CN) and future trade dates.
+    """
+    c = _bar_cache_code(code)
     if not c or not bars:
         return 0
     stamp = _now()
+    new_fam = adj_family(source)
     n = 0
     with _connect() as conn:
         ensure_bars_cache_tables(conn)
@@ -62,21 +136,53 @@ def upsert_daily_bars(
             day = str(bar.get("date") or bar.get("trade_date") or "")[:10]
             if len(day) != 10:
                 continue
-            conn.execute(
-                """
+            if skip_today and _skip_incomplete_bar(day):
+                continue
+            vol = bar.get("volume") if bar.get("volume") is not None else bar.get("vol")
+            existing = conn.execute(
+                "SELECT source, close FROM market_bar_daily WHERE code=? AND trade_date=?",
+                (c, day),
+            ).fetchone()
+            same_family = True
+            if existing is not None:
+                old_src = existing["source"] if isinstance(existing, sqlite3.Row) else existing[0]
+                old_close = existing["close"] if isinstance(existing, sqlite3.Row) else existing[1]
+                old_fam = adj_family(old_src)
+                # Different family with an existing close → null-fill only.
+                if old_fam != new_fam and old_close is not None:
+                    same_family = False
+            if same_family:
+                sql = """
                 INSERT INTO market_bar_daily(
                     code, trade_date, open, high, low, close, volume, pct, source, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(code, trade_date) DO UPDATE SET
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    volume = excluded.volume,
-                    pct = excluded.pct,
-                    source = excluded.source,
+                    open = COALESCE(excluded.open, market_bar_daily.open),
+                    high = COALESCE(excluded.high, market_bar_daily.high),
+                    low = COALESCE(excluded.low, market_bar_daily.low),
+                    close = COALESCE(excluded.close, market_bar_daily.close),
+                    volume = COALESCE(excluded.volume, market_bar_daily.volume),
+                    pct = COALESCE(excluded.pct, market_bar_daily.pct),
+                    source = COALESCE(excluded.source, market_bar_daily.source),
                     updated_at = excluded.updated_at
-                """,
+                """
+            else:
+                # Cross-family: keep existing OHLC; only fill holes + keep old source.
+                sql = """
+                INSERT INTO market_bar_daily(
+                    code, trade_date, open, high, low, close, volume, pct, source, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code, trade_date) DO UPDATE SET
+                    open = COALESCE(market_bar_daily.open, excluded.open),
+                    high = COALESCE(market_bar_daily.high, excluded.high),
+                    low = COALESCE(market_bar_daily.low, excluded.low),
+                    close = COALESCE(market_bar_daily.close, excluded.close),
+                    volume = COALESCE(market_bar_daily.volume, excluded.volume),
+                    pct = COALESCE(market_bar_daily.pct, excluded.pct),
+                    updated_at = excluded.updated_at
+                """
+            conn.execute(
+                sql,
                 (
                     c,
                     day,
@@ -84,7 +190,7 @@ def upsert_daily_bars(
                     bar.get("high"),
                     bar.get("low"),
                     bar.get("close"),
-                    bar.get("volume") if bar.get("volume") is not None else bar.get("vol"),
+                    vol,
                     bar.get("pct"),
                     source,
                     stamp,
@@ -102,8 +208,8 @@ def load_daily_bars(
     end: str | None = None,
     limit: int = 120,
 ) -> list[dict[str, Any]]:
-    """Load cached bars oldest→newest."""
-    c = normalize_code(code) or str(code or "").zfill(6)
+    """Load cached bars oldest→newest (most recent ``limit`` rows when capped)."""
+    c = _bar_cache_code(code)
     lim = max(1, min(int(limit or 120), 2000))
     with _connect() as conn:
         ensure_bars_cache_tables(conn)
@@ -115,9 +221,13 @@ def load_daily_bars(
         if end:
             clauses.append("trade_date <= ?")
             args.append(str(end)[:10])
+        where = " AND ".join(clauses)
+        # Newest N first, then re-order ASC for callers that walk chronologically.
         sql = (
-            f"SELECT * FROM market_bar_daily WHERE {' AND '.join(clauses)} "
-            f"ORDER BY trade_date ASC LIMIT ?"
+            f"SELECT * FROM ("
+            f"  SELECT * FROM market_bar_daily WHERE {where} "
+            f"  ORDER BY trade_date DESC LIMIT ?"
+            f") ORDER BY trade_date ASC"
         )
         args.append(lim)
         rows = conn.execute(sql, args).fetchall()

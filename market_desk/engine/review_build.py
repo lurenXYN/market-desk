@@ -681,6 +681,7 @@ class ReviewMixin:
             build_history_stats,
             pick0_is_stub,
             pick0_may_upgrade,
+            pick0_patch_live_last,
             pick_check,
             pick_top,
             score_pick,
@@ -775,9 +776,10 @@ class ReviewMixin:
                         "at": first.get("at"),
                         "check_label": first_chk.get("label"),
                     }
-                    # One-shot fill when the first freeze had no quote yet.
-                    if pick0_may_upgrade(raw_p0, candidate):
-                        fresh[int(r["id"])] = ("pick0", candidate)
+                    # Only patch live_last onto the frozen first score — never replace score/at.
+                    patched = pick0_patch_live_last(raw_p0, candidate.get("live_last"))
+                    if patched is not None and pick0_may_upgrade(raw_p0, patched):
+                        fresh[int(r["id"])] = ("pick0", patched)
                 else:
                     # Missing or stub → write / upgrade; do not show stub as "first".
                     fresh[int(r["id"])] = ("pick0", candidate)

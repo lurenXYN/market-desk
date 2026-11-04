@@ -91,7 +91,12 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
             return 0
     except ValueError:
         return 0
-    signaled_at = snapshot.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if snapshot.get("updated_at"):
+        signaled_at = snapshot.get("updated_at")
+    else:
+        from market_desk.calendar import now_cn
+
+        signaled_at = now_cn().strftime("%Y-%m-%d %H:%M:%S")
     if is_pre_match_stamp(signaled_at):
         return 0
     phase = snapshot.get("phase") or ""

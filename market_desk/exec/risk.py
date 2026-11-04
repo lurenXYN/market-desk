@@ -106,7 +106,11 @@ def check_session(*, now: datetime | None = None, guard: bool | None = None) -> 
     try:
         from market_desk.sim_desk import is_continuous_session_stamp
 
-        stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+        if now is None:
+            from market_desk.calendar import now_cn
+
+            now = now_cn()
+        stamp = now.strftime("%Y-%m-%d %H:%M:%S")
         if is_continuous_session_stamp(stamp):
             return RiskVerdict(ok=True, reason="in_session")
     except Exception:

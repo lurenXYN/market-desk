@@ -113,7 +113,8 @@ def test_historical_live_last_is_frozen_close_not_today_quote():
     ]
     quotes = {"600001": {"price": 20.0, "low": 19.0, "pct": 5.0}}
     out = enrich_signals_with_live_marks(rows, quotes, today="2026-11-03")
-    assert out[0]["live_last"] == 10.8
+    assert out[0].get("live_last") is None
+    assert out[0]["day_close"] == 10.8
     assert out[0].get("live_pct") is None
     # gate_blocked must not see today's 20
     out[0]["payload"] = {
@@ -281,12 +282,44 @@ def test_pick0_stub_and_live_last_upgrade(tmp_path, monkeypatch):
     p0 = desk_db.load_signals_for_date("2026-11-04")[0]["payload"]["pick0"]
     assert p0["score"] == 72
     assert p0["live_last"] == 10.5
-    # Complete freeze must not overwrite.
+    # Complete freeze must not overwrite score even if live_last patch claimed.
     n3 = set_signal_payload_once(
         {sid: ("pick0", {**full, "score": 99})},
         replace_if=lambda k, old, new: k == "pick0" and pick0_may_upgrade(old, new),
     )
     assert n3 == 0
+    # live_last-only patch keeps frozen score/at.
+    from market_desk.pick_score import pick0_patch_live_last
+
+    # Clear live_last to simulate first freeze without quote.
+    set_signal_payload_once(
+        {sid: ("pick0", {**full, "live_last": None})},
+        replace_if=lambda *_: True,
+    )
+    # Force-write without live_last
+    with desk_db._connect() as conn:
+        import json
+
+        row = conn.execute("SELECT payload FROM signals WHERE id=?", (sid,)).fetchone()
+        payload = json.loads(row["payload"])
+        payload["pick0"] = {
+            "score": 72,
+            "grade": "B",
+            "factors": [{"key": "x", "pts": 1}],
+            "at": "10:05",
+        }
+        conn.execute(
+            "UPDATE signals SET payload=? WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False), sid),
+        )
+        conn.commit()
+    raw = desk_db.load_signals_for_date("2026-11-04")[0]["payload"]["pick0"]
+    patched = pick0_patch_live_last(raw, 11.2)
+    assert patched is not None and patched["score"] == 72 and patched["live_last"] == 11.2
+    assert pick0_may_upgrade(raw, patched)
+    # Different score must NOT upgrade.
+    bad = {**patched, "score": 99}
+    assert not pick0_may_upgrade(raw, bad)
 
 
 def test_cv_fetch_upserts_market_bar_daily(tmp_path, monkeypatch):

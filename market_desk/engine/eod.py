@@ -525,6 +525,20 @@ class EodMixin:
         elif not self._bench_bars:
             self._bench_bars = list(bars or [])
             self._bench_bars_day = day
+        # Persist under IDX###### so gate_readonly / dual_wins offline path
+        # never collides with A-share ticker 000852.
+        if bars:
+            try:
+                from market_desk.db.bars_cache import upsert_daily_bars
+                from market_desk.dual_score import bench_cache_code
+
+                upsert_daily_bars(
+                    bench_cache_code(REVIEW_BENCH_SYMBOL),
+                    list(bars),
+                    source="bench_eod",
+                )
+            except Exception:
+                pass
 
     def _build_market_regime(self, trade_date: str | None = None) -> dict[str, Any]:
         """Classify CSI1000 vs MA60 for desk hint and signal freeze."""

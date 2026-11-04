@@ -289,6 +289,7 @@ function revTradeDefaultPx(r) {
   // Prefer actual fill / live last. Never silently use plan suggest (r.price).
   if (r.fill_price != null && r.fill_price !== "") return r.fill_price;
   if (r.live_last != null && r.live_last !== "") return r.live_last;
+  if (r.day_close != null && r.day_close !== "") return r.day_close;
   if (r.last != null && r.last !== "") return r.last;
   return "";
 }

@@ -173,13 +173,17 @@ def enrich_signals_with_live_marks(
         if same_day:
             item["live_last"] = last
             item["live_pct"] = num(q.get("pct"))
+            item["day_close"] = None
             if last is not None:
                 item["last"] = last
             item.update(live_price_slope(code, last))
             ref_px = last
         else:
+            # Historical: expose frozen day close separately; do not pretend it is
+            # a live quote (frontend should label 收盘, not 现价).
             day_close = num(frozen_np.get("day_close")) if frozen_np else None
-            item["live_last"] = day_close
+            item["day_close"] = day_close
+            item["live_last"] = None
             item["live_pct"] = None
             ref_px = day_close
         if item.get("plan_qty") is None:
@@ -452,7 +456,9 @@ def build_review_payload(
     that account. Shared digest history is saved without personal fills so users
     do not pollute each other.
     """
-    calendar_today = datetime.now().strftime("%Y-%m-%d")
+    from market_desk.calendar import today_cn
+
+    calendar_today = today_cn().isoformat()
     day = str(trade_date or calendar_today).strip()[:10] or calendar_today
     live_ml = str(live_mainline or "").strip() or None
     day_ml = resolve_day_mainline(day)

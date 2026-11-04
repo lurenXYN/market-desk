@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
+
+from market_desk.calendar import today_cn
 from market_desk.config import (
     ADAPT_SIZE_MULT_MAX,
     ADAPT_SIZE_MULT_MIN,
@@ -232,7 +233,7 @@ def build_adapt_bundle(
         gate = cached_buy_gate_bias()
         kinds = build_kind_hit_rates(rows)
         desk_hits = build_desk_source_hit_rates(rows)
-        day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+        day = str(trade_date or today_cn().isoformat())[:10]
         # NP freeze is the only miss truth for adapt (live price_flags never persist).
         all_missed = build_np_missed(rows)
         missed = [m for m in all_missed if str(m.get("trade_date") or "")[:10] == day]
@@ -333,7 +334,7 @@ def record_trade_feedback(
     c = normalize_code(code)
     if len(c) != 6:
         return {"ok": False, "error": "bad code"}
-    day = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+    day = str(trade_date or today_cn().isoformat())[:10]
     pct = float(pnl_pct) if pnl_pct is not None else None
     win = bool(pct is not None and pct > 0.15)
     loss = bool(pct is not None and pct < -0.15)

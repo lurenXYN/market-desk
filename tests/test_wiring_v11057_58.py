@@ -101,6 +101,80 @@ def test_miss_boards_include_buy_side():
     assert attr["counts"]["touched_not_bought"] == 1
 
 
+def test_miss_attr_folds_same_code_multi_desk():
+    rows = [
+        {
+            "id": 1,
+            "code": "002048",
+            "name": "宁波华翔",
+            "trade_date": "2026-11-04",
+            "signal_type": "buy_side",
+            "traded": 0,
+            "skipped": 0,
+            "price": 17.23,
+            "live_last": 17.76,
+            "dev_pct": 3.08,
+            "price_mark": "高于计划价 +3.1%",
+            "price_flags": ["in_band"],
+            "payload": {},
+            "signaled_at": "2026-11-04 10:05:00",
+        },
+        {
+            "id": 2,
+            "code": "002048",
+            "name": "宁波华翔",
+            "trade_date": "2026-11-04",
+            "signal_type": "buy",
+            "traded": 0,
+            "skipped": 0,
+            "price": 17.23,
+            "live_last": 17.76,
+            "dev_pct": 3.08,
+            "price_mark": "高于计划价 +3.1%",
+            "price_flags": ["in_band"],
+            "payload": {},
+            "signaled_at": "2026-11-04 09:40:00",
+        },
+        {
+            "id": 3,
+            "code": "600699",
+            "name": "均胜电子",
+            "trade_date": "2026-11-04",
+            "signal_type": "buy_link",
+            "traded": 0,
+            "skipped": 0,
+            "price": 10.0,
+            "live_last": 10.5,
+            "price_flags": ["near_wait"],
+            "payload": {},
+        },
+    ]
+    attr = build_miss_attribution(rows, trade_date="2026-11-04")
+    assert attr["total"] == 2
+    assert attr["counts"]["touched_not_bought"] == 2
+    by_code = {m["code"]: m for m in attr["items"]}
+    assert by_code["002048"]["id"] == 2  # mainline buy wins over side
+    assert by_code["002048"]["channels_n"] == 2
+    missed = build_missed_buys(
+        [
+            {
+                **rows[0],
+                "price_flags": ["miss_pullback"],
+                "price_mark": "未回踩",
+            },
+            {
+                **rows[1],
+                "price_flags": ["miss_pullback"],
+                "price_mark": "未回踩",
+            },
+        ],
+        trade_date="2026-11-04",
+    )
+    assert len(missed) == 1
+    assert missed[0]["code"] == "002048"
+    assert missed[0]["channels_n"] == 2
+
+
 def test_week_exec_half_window_counts_side_buy():
     rows = [
         {

@@ -102,6 +102,8 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-04（v1.10.56）：假闭环扫尾——近周漏买/历史 live_last、只读闸 UI、pot 发散标、regime 空首补、CV 写库、adapt 不退 classic、pick0 可升级。
 - 2026-11-04（v1.10.57）：adapt_effect 对齐 bundle strip；漏买/近周半仓窗改 `is_buy_signal`（复盘数字会纳入支线等）。
 - 2026-11-04（v1.10.58）：pack 冷重建 same_day_plan；今日卡全桌；todo_strip/scorecard skip；双闸/调参文档。
+- 2026-11-04（v1.10.59）：安全扫尾 #1–#12——pick0/日线/IDX/epoch/live/半冻；bars 口径家族；day_close；ever_ready；一字板 NP；now_cn。
+- 2026-11-04（v1.10.60）：漏买归因同码多通道折叠；买入日志备注展开（通道/触价/仓位）。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -145,6 +147,8 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **假闭环扫尾 v1.10.56**：近周漏买接 NP；历史 live_last；只读闸 UI；pot 发散标；regime 空首补；CV 写库；adapt 不退 classic；pick0 可升级
 - [x] **口径对齐 v1.10.57**：adapt_effect strip；漏买/近周 `is_buy_signal`
 - [x] **宇宙/文档 v1.10.58**：pack 冷重建；今日卡全桌；todo_strip；scorecard skip；双闸文档
+- [x] **安全扫尾 v1.10.59**：pick0 补价不改分；日线最新 N；IDX 基准；epoch 顺序；live check_order；半冻/COALESCE；day_close
+- [x] **漏买同码折叠 + 买入备注 v1.10.60**：miss 按码收拢；买入日志展开通道/触价/仓位
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

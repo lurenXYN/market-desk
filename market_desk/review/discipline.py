@@ -348,8 +348,11 @@ def record_discipline_history(user_id: int, card: dict[str, Any], *, final: bool
 
 
 def is_final_day(day: str, now: datetime | None = None) -> bool:
-    """Return True for past trade days, or today after 15:00 local time."""
-    now = now or datetime.now()
+    """Return True for past trade days, or today after 15:00 Asia/Shanghai."""
+    if now is None:
+        from market_desk.calendar import now_cn
+
+        now = now_cn()
     today = now.strftime("%Y-%m-%d")
     d = str(day or "")[:10]
     return bool(d) and (d < today or (d == today and now.hour >= 15))

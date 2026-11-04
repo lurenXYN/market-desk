@@ -76,6 +76,7 @@ def test_remap_same_day_plan_untouched_vs_touched(tmp_path, monkeypatch):
             {"date": "2026-11-04", "open": 10.9, "high": 11.2, "low": 10.5, "close": 11.0, "volume": 1},
             {"date": "2026-11-05", "open": 11.0, "high": 11.3, "low": 10.8, "close": 11.1, "volume": 1},
         ],
+        skip_today=False,
     )
     upsert_daily_bars(
         "600002",
@@ -85,6 +86,7 @@ def test_remap_same_day_plan_untouched_vs_touched(tmp_path, monkeypatch):
             {"date": "2026-11-04", "open": 10.6, "high": 11.0, "low": 10.3, "close": 10.8, "volume": 1},
             {"date": "2026-11-05", "open": 10.8, "high": 11.2, "low": 10.5, "close": 11.0, "volume": 1},
         ],
+        skip_today=False,
     )
     packed = closes_map_from_bar_cache(["600001", "600002"])
     assert set(packed) == {"600001", "600002"}

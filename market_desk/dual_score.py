@@ -75,19 +75,32 @@ def _fetch_bench_closes_http(sym: str, limit: int) -> list[tuple[str, float]]:
     return out
 
 
+def bench_cache_code(sym: str | None = None) -> str:
+    """Return the ``market_bar_daily`` key for the review benchmark index.
+
+    Uses ``IDX######`` so CSI1000 never collides with the A-share ticker 000852
+    (石化机械) which shares the same six digits.
+    """
+    raw = str(sym or REVIEW_BENCH_SYMBOL or "sh000852").lower()
+    digits = raw.replace("sh", "").replace("sz", "").replace("idx", "")
+    six = normalize_code(digits) or str(digits).zfill(6)
+    return f"IDX{six}"
+
+
 def load_bench_closes(*, limit: int = 240, allow_http: bool = True) -> list[tuple[str, float]]:
     """Load CSI1000 closes from the daily bar cache, optionally via HTTP.
 
     Args:
         limit: Max bars to read / fetch.
         allow_http: When the cache is thin, hit QQ day-line (disable in unit tests
-            that do not pass explicit closes).
+            that do not pass explicit closes). Successful HTTP pulls also upsert
+            into ``market_bar_daily`` under :func:`bench_cache_code`.
     """
-    from market_desk.db import load_daily_bars
+    from market_desk.db import load_daily_bars, upsert_daily_bars
 
     want = max(40, min(int(limit), 2000))
     sym = str(REVIEW_BENCH_SYMBOL or "sh000852").lower()
-    code = normalize_code(sym.replace("sh", "").replace("sz", ""))
+    code = bench_cache_code(sym)
     bars = load_daily_bars(code, limit=want)
     out: list[tuple[str, float]] = []
     for b in bars:
@@ -97,7 +110,17 @@ def load_bench_closes(*, limit: int = 240, allow_http: bool = True) -> list[tupl
             out.append((d, float(c)))
     if len(out) >= 4 or not allow_http:
         return out
-    return _fetch_bench_closes_http(sym, want)
+    fetched = _fetch_bench_closes_http(sym, want)
+    if fetched:
+        try:
+            upsert_daily_bars(
+                code,
+                [{"date": d, "close": c, "open": c, "high": c, "low": c} for d, c in fetched],
+                source="bench_http",
+            )
+        except Exception:
+            pass
+    return fetched
 
 
 def _dual_win_block(

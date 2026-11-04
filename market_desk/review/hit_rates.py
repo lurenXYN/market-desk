@@ -130,12 +130,75 @@ def attach_low_n_flags(items: list[dict[str, Any]] | None, *, n_key: str = "scor
     return out
 
 
+_MISS_BUY_TYPE_RANK = {
+    "buy": 0,
+    "buy_dragon": 1,
+    "buy_side": 2,
+    "buy_link": 3,
+    "buy_indep": 4,
+    "buy_trial": 5,
+}
+# Prefer clearer miss taxonomy when collapsing same-code multi-desk rows.
+_MISS_KIND_RANK = {
+    "never_touched": 0,
+    "touched_not_bought": 1,
+    "gate_blocked": 2,
+}
+
+
+def _miss_item_rank(item: dict[str, Any]) -> tuple[int, int, str, int]:
+    """Sort key for keeping one miss row per code (lower wins)."""
+    st = str(item.get("signal_type") or "")
+    kind = str(item.get("miss_kind") or "")
+    return (
+        int(_MISS_BUY_TYPE_RANK.get(st, 9)),
+        int(_MISS_KIND_RANK.get(kind, 9)),
+        str(item.get("signaled_at") or ""),
+        int(item.get("id") or 0),
+    )
+
+
+def _fold_miss_items_by_code(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse same-code multi-desk buy cards into one display row.
+
+    Review table already folds channels; miss boards were still listing every
+    ``buy`` / ``buy_side`` / ``buy_link`` row and looked like duplicates.
+    """
+    best: dict[str, dict[str, Any]] = {}
+    for raw in items:
+        code = normalize_code(raw.get("code"))
+        if not code:
+            continue
+        item = dict(raw)
+        item["code"] = code
+        cur = best.get(code)
+        if cur is None:
+            item["channels_n"] = 1
+            item["channel_types"] = [str(item.get("signal_type") or "")]
+            best[code] = item
+            continue
+        st = str(item.get("signal_type") or "")
+        types = list(cur.get("channel_types") or [])
+        if st and st not in types:
+            types.append(st)
+        cur["channel_types"] = types
+        cur["channels_n"] = len(types)
+        if _miss_item_rank(item) < _miss_item_rank(cur):
+            keep_types = types
+            keep_n = cur["channels_n"]
+            best[code] = item
+            best[code]["channel_types"] = keep_types
+            best[code]["channels_n"] = keep_n
+    return list(best.values())
+
+
 def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[dict[str, Any]]:
     """List same-day buys that were skipped or never traded while price already ran.
 
     Accepts ephemeral ``price_flags`` **or** frozen ``payload.np.np`` so raw DB
     rows (no review enrich) still show. Adapt learning must keep using
     ``build_np_missed`` — this helper is display / review-payload only.
+    One row per code (multi-desk channels folded).
     """
     from market_desk.adapt import context_from_row
 
@@ -164,6 +227,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
                 "name": row.get("name"),
                 "price": row.get("price"),
                 "live_last": row.get("live_last"),
+                "day_close": row.get("day_close"),
                 "dev_pct": row.get("dev_pct"),
                 "skipped": skipped,
                 "traded": traded,
@@ -177,7 +241,7 @@ def build_missed_buys(rows: list[dict[str, Any]], *, trade_date: str) -> list[di
                 "miss_kind_label": MISS_KIND_LABELS["never_touched"],
             }
         )
-    return out
+    return _fold_miss_items_by_code(out)
 
 
 def build_miss_attribution(
@@ -189,15 +253,12 @@ def build_miss_attribution(
 
     Includes all desk buy types (``is_buy_signal``), not only mainline ``buy``.
     Keeps adapt's ``build_np_missed`` as the learning truth source; this board is
-    broader and display-only.
+    broader and display-only. Same code across desks collapses to one item
+    (prefer mainline / clearer miss kind) so the list is not a duplicate wall.
     """
     from market_desk.adapt import context_from_row
 
-    buckets: dict[str, list[dict[str, Any]]] = {
-        "never_touched": [],
-        "touched_not_bought": [],
-        "gate_blocked": [],
-    }
+    raw_items: list[dict[str, Any]] = []
     for row in rows:
         if str(row.get("trade_date") or "") != trade_date:
             continue
@@ -206,16 +267,17 @@ def build_miss_attribution(
         if int(row.get("traded") or 0):
             continue
         kind = classify_miss_kind(row)
-        if not kind or kind not in buckets:
+        if not kind:
             continue
         ctx = context_from_row(row)
-        buckets[kind].append(
+        raw_items.append(
             {
                 "id": row.get("id"),
                 "code": row.get("code"),
                 "name": row.get("name"),
                 "price": row.get("price"),
                 "live_last": row.get("live_last"),
+                "day_close": row.get("day_close"),
                 "dev_pct": row.get("dev_pct"),
                 "skipped": int(row.get("skipped") or 0),
                 "price_mark": row.get("price_mark"),
@@ -227,6 +289,16 @@ def build_miss_attribution(
                 "miss_kind_label": MISS_KIND_LABELS.get(kind, kind),
             }
         )
+    folded = _fold_miss_items_by_code(raw_items)
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "never_touched": [],
+        "touched_not_bought": [],
+        "gate_blocked": [],
+    }
+    for item in folded:
+        kind = str(item.get("miss_kind") or "")
+        if kind in buckets:
+            buckets[kind].append(item)
     counts = {k: len(v) for k, v in buckets.items()}
     items: list[dict[str, Any]] = []
     for key in ("never_touched", "touched_not_bought", "gate_blocked"):

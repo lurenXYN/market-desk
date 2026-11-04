@@ -14,6 +14,45 @@
 
 ---
 
+## [v1.10.60] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 漏买归因把同日同码的主线/支线/联动等通道各列一行，列表像翻倍的重复墙，比复盘表（已有同码收拢）更吵。
+- 模拟交易日志买入备注只写 `cf_touch` 机器码，卖出侧已有可读角色句，买入侧看不出通道/触价/仓位原因。
+
+### 【做了什么（What）】
+- **Fixed** `build_miss_attribution` / `build_missed_buys` 按码折叠；优先主线、更清晰 miss 类；角标「多通道 n」。
+- **Fixed** 漏买行历史无现价时展示 `day_close`（收盘）。
+- **Fixed** 买入成交备注：`format_buy_fill_note` 写「通道 · 触价原因 · 计划/成交 · 仓位 · 主线」；读路径把旧 `cf_touch` 等短码展开。
+
+### 【影响与验证（Impact & Verification）】
+- `test_miss_attr_folds_same_code_multi_desk`、`test_buy_fill_note`。计数按唯一码。desk.db 无迁移。
+
+---
+
+## [v1.10.59] - 2026-11-04
+
+### 【背景与动机（为什么做 · Why）】
+- 第三轮假接线：pick0 补现价会整条覆盖首次分数；日线缓存 `ASC LIMIT` 取最旧 N 根导致 remap 静默变空；相对闸读 `000852` 个股码与指数撞车且不写库；epoch 切换误放行窗口；live 下单绕过 `check_order`；半冻字段/整行覆盖/历史「现价」误导。
+
+### 【做了什么（What）】
+- **Fixed** `pick0_patch_live_last`：只补 `live_last`，保留 score/at。
+- **Fixed** `load_daily_bars` 取最新 N 根再 ASC；`upsert` COALESCE 空值 + 默认跳过未收盘当日/未来。
+- **Fixed** 指数缓存 key=`IDX000852`；EOD/HTTP 写入；`sim_vs_bench` 拒过旧/无锚点。
+- **Fixed** `portfolio_stats` 先 `account_snapshot` 再读 `closed_n`。
+- **Fixed** live `send_order` 走完整 `check_order` + 熔断计数。
+- **Fixed** `first_last` / `first_ready_px` / `book_*` / `board_stage` / `market_gates` 空首可后补。
+- **Fixed** 历史 enrich 用 `day_close`（复盘/选股卡标「收盘」）；`pick_score` 历史无 `live_last` 不算仓位态。
+- **Fixed** `gate_blocked` 认 `ever_ready`；无 bar 标「无日线」。
+- **Fixed** bars 跨复权家族（qfq vs raw）只补洞、不覆盖已有 OHLC。
+- **Fixed** `np_from_bar` 一字涨/跌停触价仍记 NP（不进 TP 样本），带 `one_word`。
+- **Fixed** 关键路径 `outcome`/`adapt`/`signals`/`bars_cache`/`risk`/`discipline`/`record` 改 `now_cn`/`today_cn`。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_safety_v11059.py`（含口径/一字板）+ 既有 wiring/p0 回归。desk.db 无迁移（IDX 新码）。
+
+---
+
 ## [v1.10.58] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】

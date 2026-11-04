@@ -252,7 +252,9 @@ function paintPickResult(d) {
   }
   const cards = (d.items || []).map((it, i) => {
     const pct = it.live_pct == null ? "" : ` ${(it.live_pct > 0 ? "+" : "") + Number(it.live_pct).toFixed(2)}%`;
-    const px = it.live_last == null ? "" : `现价 ${it.live_last}${pct}`;
+    const px = it.live_last != null
+      ? `现价 ${it.live_last}${pct}`
+      : (it.day_close != null ? `收盘 ${it.day_close}` : "");
     const plan = it.price == null ? "" : ` · 计划 ${it.price}`;
     const rows = pickFactorsHtml(it.factors);
     const chk = it.check || {};

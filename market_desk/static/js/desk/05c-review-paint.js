@@ -122,7 +122,12 @@ function paintReview(payload) {
           ? `<span class="miss-kind ${missKindCls(m.miss_kind)}">${m.miss_kind_label}</span>`
           : "")
         + `${tickerHtml(m.name, m.code, "", { signal_at: m.signaled_at || "" })}`
-        + ` 建议 ${m.price ?? "—"} · 现 ${m.live_last ?? "—"}`
+        + (m.channels_n > 1 ? ` <span class="meta">多通道 ${m.channels_n}</span>` : "")
+        + ` 建议 ${m.price ?? "—"} · ${
+          m.live_last != null
+            ? `现 ${m.live_last}`
+            : (m.day_close != null ? `收盘 ${m.day_close}` : "现 —")
+        }`
         + `${m.dev_pct == null ? "" : " · 偏离 " + ((m.dev_pct > 0 ? "+" : "") + Number(m.dev_pct).toFixed(2) + "%")}`
         + ` · ${m.skipped ? "已跳过" : "未点已交易"} · ${m.price_mark || "—"}</li>`
       ).join("") + `</ul>`)
@@ -466,7 +471,9 @@ function paintReview(payload) {
       : "";
     const liveHtml = r.live_last != null
       ? `<div class="meta">现价 ${r.live_last}${liveArrowHtml(r)}${r.live_pct == null ? "" : " " + ((r.live_pct > 0 ? "+" : "") + Number(r.live_pct).toFixed(2) + "%")}</div>`
-      : "";
+      : (r.day_close != null
+        ? `<div class="meta">收盘 ${r.day_close}</div>`
+        : "");
     const dev = r.dev_pct;
     const devHtml = dev == null
       ? ""

@@ -49,12 +49,35 @@ def pick0_is_stub(p0: Any) -> bool:
 
 
 def pick0_may_upgrade(old: Any, new: Any) -> bool:
-    """Allow replacing a stub, or filling ``live_last`` once when quotes arrive."""
+    """Allow replacing a stub, or a live_last-only patch that keeps the first score.
+
+    A complete pick0 with missing ``live_last`` may be upgraded only when ``new``
+    preserves ``score`` / ``at`` (or is a patch from :func:`pick0_patch_live_last`).
+    Never overwrite the frozen first score used by ``pick_self_audit``.
+    """
     if pick0_is_stub(old):
         return True
     if not isinstance(old, dict) or not isinstance(new, dict):
         return False
-    return old.get("live_last") is None and new.get("live_last") is not None
+    if old.get("live_last") is not None or new.get("live_last") is None:
+        return False
+    # Live-last patch must keep the frozen first score (and preferably ``at``).
+    if new.get("score") != old.get("score"):
+        return False
+    if new.get("at") is not None and old.get("at") is not None and new.get("at") != old.get("at"):
+        return False
+    return True
+
+
+def pick0_patch_live_last(old: Any, live_last: Any) -> dict[str, Any] | None:
+    """Return ``old`` with ``live_last`` filled, or None when no patch is needed."""
+    if not isinstance(old, dict) or pick0_is_stub(old):
+        return None
+    if old.get("live_last") is not None or live_last is None:
+        return None
+    patched = dict(old)
+    patched["live_last"] = live_last
+    return patched
 
 
 SOURCE_LABELS: dict[str, str] = {
@@ -255,6 +278,8 @@ def _position_status(row: dict[str, Any]) -> dict[str, Any] | None:
     Kept out of the score: it says whether the buy is actionable right now, not
     whether the stock is a good pick, and its points used to swamp every other factor.
     Returns ``{kind, label, tone, detail}`` or None for manual rows / missing prices.
+    Historical rows expose ``day_close`` only (no ``live_last``) — skip position so
+    a frozen close is never treated as a live quote.
     """
     flags = list(row.get("price_flags") or [])
     last = num(row.get("live_last"))
