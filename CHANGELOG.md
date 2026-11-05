@@ -14,6 +14,22 @@
 
 ---
 
+## [v1.10.76] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 漏推或换机后要对齐「今日该跟的模拟」；补发正文原先挤成一行长串，手机难扫。
+- urllib 发 ntfy 时中文 Title 触发 latin-1 编码错误，导致整条发不出。
+
+### 【做了什么（What）】
+- **Added** `POST /api/me/ntfy-replay-today` + 设置页「补发今日」：盘前准备 / 今日模拟成交 / 近价·可买一并补发。
+- **Changed** 今日模拟补发文案：字段分行（买入/仓位/成交·计划/时间/说明/主线/金额）。
+- **Fixed** ntfy `Title` 仅 ASCII；中文标题写入正文首行，避免 urllib 编码失败。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_ntfy_push_v11073.py`（含 `format_simday_trade_block`）。desk.db 无迁移。
+
+---
+
 ## [v1.10.75] - 2026-11-05
 
 ### 【背景与动机（为什么做 · Why）】

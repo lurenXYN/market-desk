@@ -167,7 +167,7 @@ def me_serverchan_save(
 
 @router.post("/api/me/ntfy-test")
 def me_ntfy_test(user: dict = Depends(current_member_required)) -> dict:
-    """Send one test ntfy using the caller's saved topic settings."""
+    """Send one connectivity ping using the caller's saved topic settings."""
     from market_desk.ntfy_push import notify_ntfy
     from market_desk.settings import get_settings_for_user
 
@@ -187,6 +187,45 @@ def me_ntfy_test(user: dict = Depends(current_member_required)) -> dict:
     if not ok:
         raise HTTPException(502, "ntfy 发送失败（检查 topic / VPS 能否访问 ntfy.sh）")
     return {"ok": True, "hint": "请看手机 ntfy 通知"}
+
+
+@router.post("/api/me/ntfy-replay-today")
+def me_ntfy_replay_today(user: dict = Depends(current_member_required)) -> dict:
+    """Catch-up: push today's prep + sim fills + live near/buy to ntfy."""
+    from market_desk.engine import engine
+    from market_desk.ntfy_push import push_ntfy_replay_today
+    from market_desk.settings import get_settings_for_user
+
+    uid = int(user["id"])
+    s = get_settings_for_user(uid)
+    topic = str(s.get("ntfy_topic") or "").strip()
+    if not topic:
+        raise HTTPException(400, "请先填写并保存 ntfy topic")
+    snap = dict(engine.snapshot or {}) if getattr(engine, "snapshot", None) else {}
+    try:
+        personal = engine.snapshot_for_user(uid)
+        if isinstance(personal, dict) and personal.get("ok"):
+            snap = personal
+    except Exception:
+        pass
+    result = push_ntfy_replay_today(
+        topic=topic,
+        token=str(s.get("ntfy_token") or "").strip() or None,
+        snap=snap,
+    )
+    if result.get("empty"):
+        return {
+            "ok": True,
+            "hint": "今日暂无准备/模拟成交/近价可补发内容",
+            **result,
+        }
+    if not result.get("sent"):
+        raise HTTPException(502, "ntfy 发送失败（检查 topic / 网络）")
+    return {
+        "ok": True,
+        "hint": f"已补发 {result.get('sent')} 条，请看手机",
+        **result,
+    }
 
 
 @router.post("/api/admin/users/{uid}/push")

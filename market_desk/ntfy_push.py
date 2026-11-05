@@ -70,20 +70,35 @@ def notify_ntfy(
     url = resolve_ntfy_endpoint(topic_or_url)
     if not url:
         return False
+    # urllib header values are latin-1 only; keep Title ASCII and put
+    # the full (possibly Chinese) title at the top of the UTF-8 body.
+    title_s = str(title or "desk")[:120]
+    try:
+        title_hdr = title_s.encode("latin-1").decode("latin-1")
+    except UnicodeEncodeError:
+        title_hdr = "market-desk"
     headers = {
-        "Title": str(title or "作战台")[:120],
+        "Title": title_hdr[:120],
         "Priority": str(priority or "default"),
         "Content-Type": "text/plain; charset=utf-8",
     }
     if tags:
-        headers["Tags"] = str(tags)[:80]
+        tag_s = str(tags)[:80]
+        try:
+            tag_s.encode("latin-1")
+            headers["Tags"] = tag_s
+        except UnicodeEncodeError:
+            pass
     click_url = (click or _click_base() or "").strip()
     if click_url:
         headers["Click"] = click_url[:500]
     tok = str(token or "").strip()
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
-    data = str(body or "").encode("utf-8")[:3500]
+    body_s = str(body or "")
+    if title_s and not body_s.startswith(title_s):
+        body_s = f"{title_s}\n\n{body_s}"
+    data = body_s.encode("utf-8")[:3500]
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:
@@ -563,3 +578,253 @@ def push_ntfy_prep(snap: dict[str, Any] | None, *, day: str) -> int:
             ok_n += 1
     save_setting(flag, {"ok_n": ok_n})
     return ok_n
+
+
+def _fmt_px(v: Any) -> str:
+    """Format a price for ntfy lines; return em-dash when missing."""
+    try:
+        f = float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return "—"
+    if f is None:
+        return "—"
+    return f"{f:.3f}".rstrip("0").rstrip(".") if abs(f) < 100 else f"{f:.2f}"
+
+
+def _plan_px_from_trade(t: dict[str, Any]) -> float | None:
+    """Prefer payload plan_price; fall back to ``计划X`` inside the note."""
+    import re
+
+    payload = t.get("lot_payload") if isinstance(t.get("lot_payload"), dict) else {}
+    for key in ("plan_price", "plan_px"):
+        try:
+            v = float(payload.get(key)) if payload.get(key) is not None else None
+        except (TypeError, ValueError):
+            v = None
+        if v and v > 0:
+            return v
+    note = str(t.get("note") or "")
+    m = re.search(r"计划\s*([0-9]+(?:\.[0-9]+)?)", note)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def format_simday_trade_block(t: dict[str, Any], *, index: int, total: int) -> str:
+    """Format one paper fill as a labeled multi-line block for ntfy."""
+    from market_desk.pick_score import SOURCE_LABELS
+    from market_desk.sim_desk import BUY_FILL_REASON_ZH
+
+    side = str(t.get("side") or "")
+    code = str(t.get("code") or "")
+    name = str(t.get("name") or code)
+    qty = t.get("qty")
+    try:
+        qty_i = int(qty) if qty is not None else None
+    except (TypeError, ValueError):
+        qty_i = None
+    qty_s = f"{qty_i}股" if qty_i is not None else "—"
+    px_s = _fmt_px(t.get("px"))
+    at = str(t.get("filled_at") or "")
+    time_s = at[11:19] if len(at) >= 19 else (at[:19] or "—")
+    head = f"—— {index}/{total} ——"
+    lines: list[str] = [head]
+
+    if side == "buy":
+        tag = str(t.get("size_tag") or "").strip()
+        tag_zh = _SIZE_ZH.get(tag) or (tag or "买入")
+        plan = _plan_px_from_trade(t)
+        px_line = f"成交  {px_s}"
+        if plan and plan > 0:
+            px_line += f"（计划 {_fmt_px(plan)}）"
+        payload = t.get("lot_payload") if isinstance(t.get("lot_payload"), dict) else {}
+        reason_code = str(payload.get("fill_reason") or t.get("note_code") or "").strip()
+        reason_zh = BUY_FILL_REASON_ZH.get(reason_code, "")
+        channel = SOURCE_LABELS.get(str(t.get("signal_type") or ""), "")
+        # Prefer structured bits; fall back to a short cleaned note.
+        note = str(t.get("note") or "")
+        explain_parts: list[str] = []
+        if channel:
+            explain_parts.append(channel)
+        if reason_zh:
+            explain_parts.append(reason_zh)
+        elif note:
+            # Drop plan/fill/size/mainline duplicates already shown as fields.
+            keep: list[str] = []
+            for part in note.replace(" · ", "·").split("·"):
+                p = part.strip()
+                if not p:
+                    continue
+                if p.startswith("计划") or p.startswith("成交"):
+                    continue
+                if p in ("半仓", "满仓", "满仓档", "试探", "试探仓", "支线", "支线仓", "手工仓", tag_zh):
+                    continue
+                if p.startswith("主线"):
+                    continue
+                keep.append(p)
+            explain_parts.extend(keep[:2])
+        mainline = str(
+            payload.get("mainline") or t.get("mainline") or ""
+        ).strip()
+        lines.append(f"买入  {name}（{code}）")
+        lines.append(f"仓位  {tag_zh} · {qty_s}")
+        lines.append(px_line)
+        lines.append(f"时间  {time_s}")
+        if explain_parts:
+            lines.append(f"说明  {' · '.join(explain_parts)[:80]}")
+        if mainline:
+            lines.append(f"主线  {mainline}")
+        try:
+            notional = float(t.get("notional")) if t.get("notional") is not None else None
+        except (TypeError, ValueError):
+            notional = None
+        if notional and notional > 0:
+            lines.append(f"金额  约 {notional:.0f}")
+    elif side == "sell":
+        mode = str(t.get("exit_mode") or "clear")
+        mode_zh = "减半" if mode == "half" else "清仓"
+        pnl = t.get("pnl_pct")
+        try:
+            pnl_s = f"{float(pnl):+.2f}%" if pnl is not None else "—"
+        except (TypeError, ValueError):
+            pnl_s = "—"
+        role = str(t.get("role_label") or "").strip()
+        note = str(t.get("note") or "").strip()
+        lines.append(f"卖出·{mode_zh}  {name}（{code}）")
+        lines.append(f"数量  {qty_s}")
+        lines.append(f"成交  {px_s} · 盈亏 {pnl_s}")
+        lines.append(f"时间  {time_s}")
+        detail = role or note
+        if detail:
+            lines.append(f"说明  {detail[:80]}")
+    else:
+        lines.append(f"{side or '成交'}  {name}（{code}） · {qty_s} · {px_s} · {time_s}")
+    return "\n".join(lines)
+
+
+def build_today_ntfy_messages(
+    snap: dict[str, Any] | None = None,
+    *,
+    day: str | None = None,
+) -> list[tuple[str, str, str, str]]:
+    """Build today's ntfy payloads for manual replay / catch-up.
+
+    Returns list of ``(key, title, body, priority)``. Includes prep, today's
+    paper fills (补发), and live near/buy cards from ``snap`` when present.
+    """
+    from market_desk.calendar import today_cn
+    from market_desk.sim_desk import recent_trades
+
+    day_s = str(day or today_cn())[:10]
+    snap = snap if isinstance(snap, dict) else {}
+    out: list[tuple[str, str, str, str]] = []
+
+    brief = build_ntfy_prep_brief(snap or {"trade_date": day_s})
+    if brief:
+        title, body = brief
+        out.append((f"prep:{day_s}", f"【补发】{title}", body, "default"))
+
+    day_trades = [
+        t
+        for t in recent_trades(200)
+        if str(t.get("trade_date") or "")[:10] == day_s
+        or str(t.get("filled_at") or "")[:10] == day_s
+    ]
+    if day_trades:
+        n = len(day_trades)
+        lines = [
+            f"共 {n} 笔 · 对照券商手搓 · 非自动下单",
+            "",
+        ]
+        for i, t in enumerate(day_trades, start=1):
+            lines.append(format_simday_trade_block(t, index=i, total=n))
+            lines.append("")
+        out.append(
+            (
+                f"simday:{day_s}",
+                f"【补发】今日模拟 · {n}笔 · {day_s}",
+                "\n".join(lines).rstrip(),
+                "high",
+            )
+        )
+
+    # Live cards: near / ready (same filters as intraday).
+    for code, card in _recommend_by_code(snap).items():
+        name = str(card.get("name") or code)
+        px = card.get("buy_price") or card.get("plan_price") or card.get("last")
+        try:
+            px_f = float(px) if px is not None else None
+        except (TypeError, ValueError):
+            px_f = None
+        payload = card.get("payload") if isinstance(card.get("payload"), dict) else card
+        if not isinstance(payload, dict):
+            payload = {}
+        if card.get("ready") and not card.get("ready_relaxed"):
+            line = sim_buy_plan_text(
+                code=code,
+                name=name,
+                price=px_f,
+                payload=payload,
+                ready=True,
+                signal_type="buy_side" if card.get("desk_source") == "side" else "buy",
+            )
+            out.append(
+                (
+                    f"buy:{code}",
+                    f"【补发·可买】{name} {code}",
+                    f"{name} {code} 建议买 {px_f if px_f else '—'}\n{line}",
+                    "high",
+                )
+            )
+        elif card.get("near_entry") or card.get("fly_warn"):
+            payload = dict(payload)
+            payload["early_half"] = payload.get("early_half") or {"prep": True}
+            line = sim_buy_plan_text(
+                code=code,
+                name=name,
+                price=px_f,
+                payload=payload,
+                ready=False,
+                signal_type="buy_side" if card.get("desk_source") == "side" else "buy",
+            )
+            kind = "将飞" if card.get("fly_warn") else "接近"
+            out.append(
+                (
+                    f"near:{code}",
+                    f"【补发·{kind}准备】{name} {code}",
+                    f"{name} {code} · 现价/计划 {px_f if px_f else '—'}\n"
+                    f"{line}\n⚠ 接近准备 · 非系统可买 · 最多半仓预挂或盯盘",
+                    "default",
+                )
+            )
+    return out
+
+
+def push_ntfy_replay_today(
+    *,
+    topic: str,
+    token: str | None = None,
+    snap: dict[str, Any] | None = None,
+    day: str | None = None,
+) -> dict[str, Any]:
+    """Send catch-up ntfy messages for today to one topic. Returns send stats."""
+    msgs = build_today_ntfy_messages(snap, day=day)
+    sent = 0
+    titles: list[str] = []
+    for _key, title, body, pri in msgs:
+        tags = "clipboard" if _key.startswith("prep:") else (
+            "chart_with_upwards_trend" if _key.startswith("buy:") else "bell"
+        )
+        if notify_ntfy(topic, title, body, priority=pri, tags=tags, token=token):
+            sent += 1
+            titles.append(title)
+    return {
+        "ok": sent > 0 or not msgs,
+        "built": len(msgs),
+        "sent": sent,
+        "titles": titles,
+        "empty": not msgs,
+    }

@@ -15,6 +15,7 @@ from market_desk.db.sim_desk import (
 from market_desk.ntfy_push import (
     build_ntfy_prep_brief,
     filter_ntfy_alerts,
+    format_simday_trade_block,
     is_ntfy_alert,
     resolve_ntfy_endpoint,
     sim_buy_plan_text,
@@ -91,6 +92,38 @@ def test_sim_buy_and_sell_text(tmp_path, monkeypatch):
     )
     assert "对齐模拟仓" in sell
     assert "200股" in sell
+
+
+def test_format_simday_trade_block_buy_fields():
+    body = format_simday_trade_block(
+        {
+            "side": "buy",
+            "code": "510880",
+            "name": "红利ETF",
+            "qty": 700,
+            "px": 3.348,
+            "filled_at": "2026-11-05 13:38:34",
+            "size_tag": "half",
+            "notional": 2343.6,
+            "signal_type": "buy",
+            "note": "主线回踩 · 反事实到价可成交 · 计划3.337 · 成交3.348 · 半仓 · 主线电力设备",
+            "lot_payload": {
+                "mainline": "电力设备",
+                "fill_reason": "cf_touch",
+                "plan_price": 3.337,
+            },
+        },
+        index=1,
+        total=1,
+    )
+    assert "买入  红利ETF（510880）" in body
+    assert "仓位  半仓 · 700股" in body
+    assert "成交  3.348（计划 3.337）" in body
+    assert "时间  13:38:34" in body
+    assert "主线  电力设备" in body
+    assert "金额  约 2344" in body
+    # Dense note dump should not reappear as a single blob line.
+    assert "计划3.337 · 成交3.348 · 半仓 · 主线电力设备" not in body
 
 
 def test_prep_brief_has_sections(tmp_path, monkeypatch):

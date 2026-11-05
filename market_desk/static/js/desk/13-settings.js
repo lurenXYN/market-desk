@@ -87,6 +87,28 @@ async function openSettings() {
         }
       };
     }
+    const ntfyReplay = document.getElementById("btnNtfyReplay");
+    if (ntfyReplay && !ntfyReplay.dataset.bound) {
+      ntfyReplay.dataset.bound = "1";
+      ntfyReplay.onclick = async () => {
+        const msg = document.getElementById("ntfyTestMsg");
+        if (msg) msg.textContent = "补发今日…";
+        try {
+          const resp = await fetch("/api/me/ntfy-replay-today", {
+            method: "POST",
+            credentials: "same-origin",
+          });
+          const j = await resp.json().catch(() => ({}));
+          if (msg) {
+            msg.textContent = resp.ok
+              ? (j.hint || `已发 ${j.sent || 0} 条`)
+              : (j.detail || "失败");
+          }
+        } catch (e) {
+          if (msg) msg.textContent = "请求失败";
+        }
+      };
+    }
     const nrProbe = document.getElementById("btnNrProbe");
     if (nrProbe && !nrProbe.dataset.bound) {
       nrProbe.dataset.bound = "1";
