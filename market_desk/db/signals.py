@@ -134,6 +134,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
         # Env-gate shadow: same fill-once semantics as market_regime.
         if isinstance(old_payload.get("env_gate"), dict):
             merged["env_gate"] = old_payload["env_gate"]
+        # News-radar soft shadow: freeze first non-empty capture.
+        if isinstance(old_payload.get("news_radar"), dict):
+            merged["news_radar"] = old_payload["news_radar"]
+        elif isinstance(incoming.get("news_radar"), dict):
+            merged["news_radar"] = incoming["news_radar"]
         # Gate-replay inputs: keep first high / cross counts / thin_confirm.
         for _gk in ("high", "cross_n", "cross_theme_n", "thin_confirm"):
             if old_payload.get(_gk) is not None:

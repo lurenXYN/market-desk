@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.77] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 新闻雷达是否「有用」缺客观对照：手标主观、共振次日绝对涨幅含大盘 beta；需要影子记账才能和亮灯结果对齐。
+
+### 【做了什么（What）】
+- **Added** 买卡落库冻结 `payload.news_radar`（fill-once）；`news_radar_shadow_summary` + review-check「新闻雷达影子」。
+- **Added** `NEWS_RADAR_SHADOW_SINCE=2026-11-05`；词条「新闻雷达影子」。
+- **Note** 雷达侧同期：无共振不发总报、次日超额（减全板块中位数）— 见 news-radar 仓。
+
+### 【影响与验证（Impact & Verification）】
+- 不改 ready/买卖闸。desk.db 无迁移（payload JSON）。单测 freeze + summary 空样本。
+
+---
+
 ## [v1.10.76] - 2026-11-05
 
 ### 【背景与动机（为什么做 · Why）】

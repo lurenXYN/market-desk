@@ -132,6 +132,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         from market_desk.env_gate import freeze_env_gate as _freeze_env_gate
     except Exception:
         _freeze_env_gate = None  # type: ignore[assignment]
+    try:
+        from market_desk.news_radar import freeze_news_radar as _freeze_news_radar
+    except Exception:
+        _freeze_news_radar = None  # type: ignore[assignment]
     deep_v_day_row = None
     prev_deep = False
     try:
@@ -301,6 +305,18 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                             (lambda eg: {"env_gate": eg} if eg else {})(
                                 _freeze_env_gate(snapshot, kind=str(kind))
                                 if _freeze_env_gate
+                                else None
+                            )
+                        ),
+                        **(
+                            (lambda nr: {"news_radar": nr} if nr else {})(
+                                _freeze_news_radar(
+                                    snapshot,
+                                    board_names=list(item.get("board_names") or board_names or []),
+                                    mainline=str(board_fallback or mainline or ""),
+                                    source_board=str(source_board or ""),
+                                )
+                                if _freeze_news_radar
                                 else None
                             )
                         ),

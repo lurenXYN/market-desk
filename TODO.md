@@ -120,6 +120,8 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-05（v1.10.74）：接近准备 `near:`——进计划价带半仓预挂/盯盘通知；非可买。
 - 2026-11-05（v1.10.75）：模拟交易日志默认今日 / 按日 / 全部筛选。
 - 2026-11-05（v1.10.76）：ntfy 补发今日 + 模拟成交字段分行；中文 Title 编码修复。
+- 2026-11-05：新闻雷达进入效果观察窗（手标+共振次日；不改买闸）— 见独立仓 `news-radar/TODO.md`。
+- 2026-11-05（v1.10.77）：新闻雷达影子记账 + 雷达侧无共振不发/次日超额。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -180,6 +182,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **接近准备 v1.10.74**：`near:` 进计划价带半仓通知；非可买；设置 `ntfy_near`
 - [x] **模拟日志按日 v1.10.75**：交易日志默认今日；按日下拉；全部
 - [x] **ntfy 补发 v1.10.76**：补发今日 API/按钮；模拟成交分行；Title 中文编码修复
+- [x] **新闻雷达影子 v1.10.77**：买卡冻结 news_radar；review-check 对比有/无共振三日；不改闸门
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

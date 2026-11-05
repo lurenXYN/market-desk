@@ -12,6 +12,7 @@ from typing import Any
 from market_desk.config import (
     EARLY_HALF_SHADOW_SINCE,
     EDGE_SHADOW_SINCE,
+    NEWS_RADAR_SHADOW_SINCE,
     REGIME_SHADOW_SINCE,
 )
 from market_desk.calendar import today_cn
@@ -264,6 +265,44 @@ def _crowd_item() -> dict[str, Any]:
     )
 
 
+def _news_radar_item() -> dict[str, Any]:
+    """Lit-card outcomes with vs without frozen news resonance (soft only)."""
+    from market_desk.news_radar import news_radar_shadow_summary
+
+    try:
+        s = news_radar_shadow_summary(days=30)
+    except Exception as exc:  # noqa: BLE001
+        return _item(
+            id="news_radar",
+            title="新闻雷达影子",
+            since=str(NEWS_RADAR_SHADOW_SINCE),
+            sample=_sample(0, 0, min_n=10),
+            metrics={"error": type(exc).__name__},
+            ui_verdict=None,
+            hint="汇总失败，稍后重试",
+            level="warn",
+        )
+    w = s.get("with_news_hit") if isinstance(s.get("with_news_hit"), dict) else {}
+    wo = s.get("without_news_hit") if isinstance(s.get("without_news_hit"), dict) else {}
+    n = int(w.get("scored") or 0) + int(wo.get("scored") or 0)
+    return _item(
+        id="news_radar",
+        title="新闻雷达影子",
+        since=str(s.get("since") or NEWS_RADAR_SHADOW_SINCE),
+        sample=_sample(int(s.get("days") or 0), n, min_days=7, min_n=10),
+        metrics={
+            "with_hit": w,
+            "without_hit": wo,
+            "delta_day3": s.get("delta_day3"),
+            "missing_freeze": s.get("missing_freeze"),
+            "hint": s.get("hint"),
+        },
+        ui_verdict=str(s.get("hint") or ""),
+        hint="亮灯卡：有共振 vs 无共振的三日均；差≥0.5 才谈保留/降级，不改闸门",
+        level="ok" if n >= 10 else "warn",
+    )
+
+
 def build_review_check_sync() -> dict[str, Any]:
     """Build checklist items that need no async kline fetch.
 
@@ -283,6 +322,7 @@ def build_review_check_sync() -> dict[str, Any]:
     items = _edge_items(edge) if edge.get("ok") else []
     items.append(_narrative_item())
     items.append(_crowd_item())
+    items.append(_news_radar_item())
     try:
         from market_desk.config import DEEP_V_SHADOW_SINCE
         from market_desk.deep_v import build_deep_v_shadow

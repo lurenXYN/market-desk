@@ -286,6 +286,9 @@ EDGE_BREAKER_LEVELS = (-1.0, -2.0, -3.0)
 # Early-half (fly_warn) shadow: paper half-size entry at first fly print vs wait
 # for full ready vs skip. Out-of-sample from this date (pre-registered 2026-10-13).
 EARLY_HALF_SHADOW_SINCE = "2026-10-13"
+# News-radar soft shadow: freeze payload.news_radar at buy-record time; compare
+# lit cards with vs without resonance/board_lead. Observation only (no gates).
+NEWS_RADAR_SHADOW_SINCE = "2026-11-05"
 # Live desk soft order applies reweight deltas to card order only (never lights).
 SOFT_RANK_LIVE = True
 # Counterfactual (What-If) gate net-value audit (display only). Cards whose price
