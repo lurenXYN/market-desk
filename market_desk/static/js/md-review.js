@@ -142,12 +142,17 @@
       if (role) v = v ? `${v} · ${role}` : role;
       rows.push({ k: "来源", v });
     }
-    const vs = r.vs_mainline;
+    const role = r.desk_source || r.vs_compare_role || "";
+    const useSrc = (role === "side" || role === "link") && (r.vs_source || (r.payload && r.payload.vs_source));
+    const vs = useSrc ? (r.vs_source || r.payload.vs_source) : r.vs_mainline;
+    const vsOf = useSrc
+      ? (r.vs_source_of || (r.payload && r.payload.vs_source_of) || r.vs_mainline_of)
+      : r.vs_mainline_of;
     if (vs && vs !== "—") {
       let v = vs;
-      if (r.vs_mainline_of) v += `（对照「${r.vs_mainline_of}」）`;
+      if (vsOf) v += `（对照「${vsOf}」）`;
       rows.push({
-        k: "对照主线",
+        k: useSrc ? (role === "side" ? "对照支线" : "对照联动") : "对照主线",
         v,
         cls: r.board_match === true ? "up" : (r.board_match === false ? "down" : ""),
       });

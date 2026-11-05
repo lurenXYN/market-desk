@@ -711,9 +711,9 @@ def _attach_risk_sizing(
 
     cool_n = int(setting("cool_after_losses", 3) or 3)
     try:
-        from market_desk.db import load_positions
+        from market_desk.settings import current_open_positions
 
-        open_rows = [r for r in (load_positions() or []) if int(r.get("qty") or 0) > 0]
+        open_rows = current_open_positions()
         losers = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) < 0)
     except Exception:
         losers = 0

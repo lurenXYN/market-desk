@@ -552,7 +552,19 @@ class RecommendMixin:
         """
         rec = verdict.get("recommend") or {}
         dragon = verdict.get("dragon_recommend") or {}
-        items = list(rec.get("items") or []) + list(dragon.get("items") or [])
+        side = verdict.get("side_recommend") or {}
+        # Side joins when live buys are enabled so near-entry / ready cards get
+        # the same minute structure gate as mainline (link/indep stay observe).
+        try:
+            from market_desk.verdict.branches import side_buy_enabled
+
+            include_side = bool(side_buy_enabled() and (side.get("items") or []))
+        except Exception:
+            include_side = False
+        pools = [rec, dragon] + ([side] if include_side else [])
+        items: list[dict[str, Any]] = []
+        for pool in pools:
+            items.extend(list(pool.get("items") or []))
         priority: list[str] = []
         rest: list[str] = []
         for x in items:
@@ -571,7 +583,7 @@ class RecommendMixin:
                 continue
             seen.add(code)
             codes.append(code)
-            if len(codes) >= 8:
+            if len(codes) >= 12:
                 break
         if not codes:
             return
@@ -604,6 +616,14 @@ class RecommendMixin:
         if dragon.get("items"):
             verdict["dragon_recommend"] = self._apply_micro_gates(
                 apply_minute_confirmations(dragon, minutes_by_code),
+                minutes_by_code=minutes_by_code,
+                quotes_by_code=quotes_by_code,
+                now=now,
+                trade_date=trade_date,
+            )
+        if include_side and side.get("items"):
+            verdict["side_recommend"] = self._apply_micro_gates(
+                apply_minute_confirmations(side, minutes_by_code),
                 minutes_by_code=minutes_by_code,
                 quotes_by_code=quotes_by_code,
                 now=now,

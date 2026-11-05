@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Any
 
 from market_desk.db import load_favorite_boards, load_positions, load_watchlist, touch_position_peaks
 from market_desk.filters import normalize_code
 from market_desk.settings import use_user_settings
+
+log = logging.getLogger(__name__)
 from market_desk.engine.boards import _mark_favorite_flags
 from market_desk.verdict import (
     apply_size_cap_gate,
@@ -166,6 +169,22 @@ def attach_personal_layer(
                 block_arm=block_arm,
                 allow_probe=(key == "recommend"),
             )
+        # Re-cap side notional against this user's open book (shared refresh
+        # saw empty positions so side budget never subtracted held cost).
+        try:
+            from market_desk.verdict.branches import (
+                cap_side_to_daily_budget,
+                side_buy_enabled,
+            )
+
+            if side_buy_enabled() and verdict.get("side_recommend"):
+                capped = cap_side_to_daily_budget(
+                    verdict.get("recommend"), verdict.get("side_recommend")
+                )
+                if capped is not None:
+                    verdict["side_recommend"] = capped
+        except Exception:
+            log.exception("personal side budget cap failed")
         verdict = apply_size_cap_gate(verdict, positions)
 
         from market_desk.sell_finalize import finalize_sell_advice
@@ -188,7 +207,7 @@ def attach_personal_layer(
 
             record_sell_advice_signals(out)
         except Exception:
-            pass
+            log.exception("record_sell_advice_signals failed user=%s", uid)
         advice.pop("all_items", None)
         out["sell_advice"] = advice
         positions = attach_position_sell_hints(positions, all_items)
@@ -196,6 +215,14 @@ def attach_personal_layer(
         out["position_summary"] = position_summary(positions)
         cap = float((verdict.get("playbook") or {}).get("size_cap_pct") or 100)
         out["risk_overview"] = build_risk_overview(positions, size_cap_pct=cap)
+        try:
+            from market_desk.verdict.buy import build_desk_gate_summary
+
+            out["desk_gate_summary"] = build_desk_gate_summary(
+                verdict, phase=out.get("phase") or ""
+            )
+        except Exception:
+            log.exception("rebuild desk_gate_summary failed")
         out["verdict"] = verdict
 
         wl_raw = load_watchlist(user_id=uid)

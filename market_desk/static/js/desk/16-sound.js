@@ -98,6 +98,7 @@ function soundKindForToast(key) {
   const k = String(key || "");
   if (k.startsWith("sell:stop:") || k.startsWith("band:stop:") || k.startsWith("wl:stop:")) return "stop";
   if (k === "phase:恐慌") return "stop";
+  if (k.startsWith("sell:take:") || k.startsWith("sell:trim:")) return "risk";
   if (k.startsWith("exit:") || k.startsWith("decline:") || k.startsWith("crowd:hard:")) return "risk";
   if (k.startsWith("buy:") || k.startsWith("fly:")) return "buy";
   return "";

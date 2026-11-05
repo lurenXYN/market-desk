@@ -222,11 +222,9 @@ def cap_side_to_daily_budget(
     cap = float(setting("target_total_cost", POSITION_MAX_TOTAL_COST) or POSITION_MAX_TOTAL_COST)
     open_cost = 0.0
     try:
-        from market_desk.db import load_positions
+        from market_desk.settings import current_open_positions
 
-        for row in load_positions() or []:
-            if int(row.get("qty") or 0) <= 0:
-                continue
+        for row in current_open_positions():
             try:
                 open_cost += float(row.get("cost") or 0)
             except (TypeError, ValueError):

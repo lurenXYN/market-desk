@@ -602,6 +602,9 @@ class RefreshMixin:
                         block_arm=block_arm,
                     )
                 verdict = reconfirm_recommend_ready(verdict, metrics)
+                # Shared positions stay empty on purpose: paper signals / sim opens
+                # must not inherit any one user's size_cap. Personal layer re-applies
+                # apply_size_cap_gate with that user's book in attach_personal_layer.
                 verdict = apply_size_cap_gate(verdict, positions)
                 try:
                     crowd = self._radar_crowding(
@@ -929,6 +932,7 @@ class RefreshMixin:
                         payload,
                         book_quotes=self._book_quotes,
                         minutes_for=self._minutes_for_codes,
+                        trends_for=self._cached_trends_for,
                     )
                 except Exception:
                     log.exception("sim_desk sync failed")

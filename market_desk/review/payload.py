@@ -332,6 +332,11 @@ def build_code_signal_history(
                 "minute": payload.get("minute") if isinstance(payload.get("minute"), dict) else None,
                 "vs_mainline": payload.get("vs_mainline"),
                 "vs_mainline_of": payload.get("vs_mainline_of") or item.get("mainline"),
+                # Side/link history prefers frozen origin board over sticky mainline.
+                "vs_source": payload.get("vs_source"),
+                "vs_source_of": payload.get("vs_source_of")
+                or payload.get("source_board")
+                or payload.get("vs_mainline_of"),
                 "board_match": payload.get("board_match"),
                 "payload": {
                     "reason": payload.get("reason"),
@@ -340,6 +345,10 @@ def build_code_signal_history(
                     "minute": payload.get("minute") if isinstance(payload.get("minute"), dict) else None,
                     "role_label": payload.get("role_label"),
                     "desk_source": payload.get("desk_source"),
+                    "vs_source": payload.get("vs_source"),
+                    "vs_source_of": payload.get("vs_source_of") or payload.get("source_board"),
+                    "ever_ready": payload.get("ever_ready"),
+                    "first_ready_at": payload.get("first_ready_at"),
                 },
             }
         )

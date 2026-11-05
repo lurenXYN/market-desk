@@ -485,16 +485,20 @@ function revCellHtml(col, r, ctx) {
     return `<div class="board-lines">${boards.map((b) => `<span>${b}</span>`).join("")}</div>`;
   }
   if (col === "vs_ml") {
-    const tag = r.vs_mainline || "—";
+    const role = r.vs_compare_role || r.desk_source || "";
+    const useSrc = (role === "side" || role === "link") && (r.vs_source || (r.payload && r.payload.vs_source));
+    const tag = useSrc ? (r.vs_source || r.payload.vs_source) : (r.vs_mainline || "—");
+    const ofName = useSrc
+      ? (r.vs_source_of || (r.payload && r.payload.vs_source_of) || r.vs_mainline_of)
+      : r.vs_mainline_of;
     const match = r.board_match;
     const cls = match === true ? "up" : (match === false ? "down" : "meta");
     const bits = [];
-    const role = r.vs_compare_role || r.desk_source || "";
     const roleLab = role === "side" ? "支线" : (role === "link" ? "联动" : (role === "watch_trial" ? "自选试探" : "主线"));
-    if (r.vs_mainline_of) bits.push(`对照${roleLab}「${r.vs_mainline_of}」`);
-    if (r.vs_sticky_of && r.vs_sticky_of !== r.vs_mainline_of) {
+    if (ofName) bits.push(`对照${roleLab}「${ofName}」`);
+    if (r.vs_sticky_of && r.vs_sticky_of !== ofName) {
       bits.push(`盘面主线「${r.vs_sticky_of}」${r.vs_sticky ? "·" + r.vs_sticky : ""}`);
-    } else if (!r.vs_mainline_of && r.vs_sticky_of) {
+    } else if (!ofName && r.vs_sticky_of) {
       bits.push(`相对盘面主线「${r.vs_sticky_of}」`);
     }
     const of = bits.join("；") || "相对对照主线";

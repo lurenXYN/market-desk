@@ -103,7 +103,9 @@ function resolveChartLevels() {
         add(pos.last_sell_price, "已减价", "#c084fc");
       }
     }
-    const sellIt = ((((lastData || {}).sell_advice || {}).items) || []).find(
+    const sa = (lastData || {}).sell_advice || {};
+    const sellPool = sa.alert_items || sa.items || [];
+    const sellIt = sellPool.find(
       (it) => String(it.code || "").replace(/\D/g, "").padStart(6, "0") === c
     );
     if (sellIt) {

@@ -182,17 +182,19 @@ class ExecEngine:
         }
 
     def sell_triggers(self, advice: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Map sell-advice rows into unified exec trigger intents."""
-        if advice is None:
-            try:
-                from market_desk.verdict.sell_advice import build_sell_advice
+        """Map sell-advice rows into unified exec trigger intents.
 
-                advice = build_sell_advice()
-            except Exception:
-                advice = {}
+        Callers must pass already-finalized ``sell_advice`` (prefer
+        ``alert_items``). Bare ``build_sell_advice()`` is no longer attempted —
+        that call had no positions/verdict and always yielded an empty list.
+        """
+        if not isinstance(advice, dict) or not (
+            advice.get("alert_items") or advice.get("items") or advice.get("all_items")
+        ):
+            return []
         return sell_advice_to_triggers(advice)
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, sell_advice: dict[str, Any] | None = None) -> dict[str, Any]:
         """Ops / review dump: gate + paper + orders + circuit + self-reconcile."""
         gate = start_gate_snapshot()
         stats = portfolio_stats()
@@ -200,7 +202,7 @@ class ExecEngine:
         tripped = bool(circ.get("tripped"))
         triggers = []
         try:
-            triggers = self.sell_triggers()
+            triggers = self.sell_triggers(sell_advice)
         except Exception:
             triggers = []
         by_mode: dict[str, int] = {}

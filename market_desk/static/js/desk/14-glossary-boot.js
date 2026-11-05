@@ -540,7 +540,8 @@ document.getElementById("revBody").addEventListener("click", async (ev) => {
       );
       const hold = holdPos ? Number(holdPos.qty || 0) : 0;
       const halfQ = halfSellQtyClient(hold);
-      const adviceItem = ((((lastData || {}).sell_advice || {}).items) || []).find(
+      const _sa = (lastData || {}).sell_advice || {};
+      const adviceItem = ((_sa.alert_items || _sa.items) || []).find(
         (x) => String(x.code || "").padStart(6, "0") === String(code || "").padStart(6, "0")
       );
       const exitMode = (adviceItem && adviceItem.exit_mode) || "half";

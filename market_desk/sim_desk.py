@@ -1549,14 +1549,26 @@ def sync_from_engine(
     *,
     book_quotes: dict[str, dict[str, Any]] | None = None,
     minutes_for=None,
+    trends_for=None,
 ) -> dict[str, Any]:
     """Engine-refresh entry: open lit cards + try exits. Never raises."""
     try:
         ensure_sim_book_epoch()
         get_sim_account(SIM_INITIAL_CASH)
         backfill_missing_buy_fills()
+        trends_by_code: dict[str, dict[str, Any]] = {}
+        if callable(trends_for):
+            try:
+                codes = list_open_sim_codes()
+                trends_by_code = dict(trends_for(codes) or {})
+            except Exception:
+                log.exception("sim_desk trends_for failed")
+                trends_by_code = {}
         return sync_exits_from_snapshot(
-            snapshot, book_quotes=book_quotes, minutes_for=minutes_for
+            snapshot,
+            book_quotes=book_quotes,
+            minutes_for=minutes_for,
+            trends_by_code=trends_by_code,
         )
     except Exception as exc:
         log.exception("sim_desk sync failed")

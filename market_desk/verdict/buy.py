@@ -422,8 +422,7 @@ def build_verdict(
     # Precompose size (incl. phase soft / similar / float cool) for playbook + qty.
     try:
         from market_desk.adapt import compose_size_mult
-        from market_desk.db import load_positions
-        from market_desk.settings import setting as _setting
+        from market_desk.settings import current_open_positions, setting as _setting
 
         factors = [
             dict(f)
@@ -451,7 +450,7 @@ def build_verdict(
                 }
             )
         cool_n = int(_setting("cool_after_losses", 3) or 3)
-        open_rows = [r for r in (load_positions() or []) if int(r.get("qty") or 0) > 0]
+        open_rows = current_open_positions()
         losers = sum(1 for r in open_rows if (r.get("pnl_pct") or 0) < 0)
         if cool_n > 0 and losers >= cool_n:
             factors.append({"key": "float_cool", "label": f"浮亏{losers}只", "mult": 0.75})

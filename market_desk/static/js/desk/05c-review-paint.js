@@ -376,6 +376,9 @@ function paintReview(payload) {
     const st = String(r.signal_type || "");
     if (!(st === "buy" || st.startsWith("buy_"))) return false;
     if (Number(r.ready || 0) || Number(r.traded || 0) || Number(r.skipped || 0)) return false;
+    // Ever-ready (lit then demoted) is not "pure watch" — keep visible.
+    const p = r.payload || {};
+    if (r.ever_ready || p.ever_ready || r.first_ready_at || p.first_ready_at) return false;
     if (r.outcome_label) return false;
     const flags = r.price_flags || [];
     // Keep actionable / diagnostic rows visible.

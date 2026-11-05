@@ -566,6 +566,7 @@ def build_risk_overview(
     if loss_cap_hit:
         tips.append(
             f"今日盈亏已触及单日亏损帽 {loss_cap:g}%（当前 {day_pct}%），建议停手、只减不加"
+            f"（仅提示，不挡 ready）"
         )
     if cool_hit:
         tips.append(f"浮亏标的 {losers} 只 ≥ 连亏降温阈值 {cool_n}，建议手数×0.75、先冷静再开新仓")

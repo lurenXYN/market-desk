@@ -11,6 +11,7 @@ from market_desk.db import load_setting, load_user_setting, save_setting, save_u
 _SETTINGS_KEY = "runtime"
 _CACHE: dict[str, Any] | None = None
 _USER_OVERLAY: ContextVar[dict[str, Any] | None] = ContextVar("user_settings", default=None)
+_USER_ID: ContextVar[int | None] = ContextVar("settings_user_id", default=None)
 
 # Per-user private knobs (risk / sizing / personal alerts).
 USER_PRIVATE_KEYS = frozenset(
@@ -287,18 +288,49 @@ def get_settings_for_user(user_id: int | None) -> dict[str, Any]:
 
 
 def use_user_settings(user_id: int | None):
-    """Context manager that overlays one user's private settings onto ``setting()``."""
+    """Context manager that overlays one user's private settings onto ``setting()``.
+
+    Also stamps ``current_user_id()`` so sizing helpers can load that user's book
+    without every call site threading ``user_id`` explicitly.
+    """
     from contextlib import contextmanager
 
     @contextmanager
     def _ctx():
-        token = _USER_OVERLAY.set(get_settings_for_user(user_id) if user_id is not None else None)
+        uid = int(user_id) if user_id is not None else None
+        tok_overlay = _USER_OVERLAY.set(
+            get_settings_for_user(uid) if uid is not None else None
+        )
+        tok_uid = _USER_ID.set(uid)
         try:
             yield
         finally:
-            _USER_OVERLAY.reset(token)
+            _USER_ID.reset(tok_uid)
+            _USER_OVERLAY.reset(tok_overlay)
 
     return _ctx()
+
+
+def current_user_id() -> int | None:
+    """Return the user id active under ``use_user_settings``, else None."""
+    uid = _USER_ID.get()
+    try:
+        return int(uid) if uid is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def current_open_positions() -> list[dict[str, Any]]:
+    """Load open book rows for ``current_user_id()``; empty when no user context."""
+    uid = current_user_id()
+    if uid is None:
+        return []
+    try:
+        from market_desk.db import load_positions
+
+        return [r for r in (load_positions(user_id=uid) or []) if int(r.get("qty") or 0) > 0]
+    except Exception:
+        return []
 
 
 def setting(key: str, default: Any = None) -> Any:

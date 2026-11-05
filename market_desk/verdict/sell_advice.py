@@ -260,7 +260,10 @@ def reconcile_buy_sell_conflict(
         if code:
             held.add(code)
 
-    ready_buys = _ready_buy_codes(v)
+    # Exclude held codes: sell cards only cover open book, so a same-code
+    # "ready buy" is always about to be demoted for held_block below. Counting
+    # it as a buy conflict would kill soft sells that should stay.
+    ready_buys = {c for c in _ready_buy_codes(v) if c not in held}
     theme_buyable = _desk_theme_buyable(v)
 
     soft_demoted = 0

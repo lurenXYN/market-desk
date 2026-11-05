@@ -107,6 +107,9 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-04（v1.10.61）：IDX 启动/ops 灌库；漏买先 kind；一字板无昨收；paper/回放备注；now_cn。
 - 2026-11-04（v1.10.62）：卖闸共用 finalize；日记/推送 alert_items；软卖异常降级。
 - 2026-11-04（v1.10.63）：看好台同源卖；env 顶栏小标；CV 降级角标。
+- 2026-11-05（v1.10.64）：当前用户仓 cool/side；reconcile 保留持仓软卖；顶栏闸重算。
+- 2026-11-05（v1.10.65）：exec armed；sim 趋势；支线分时闸。
+- 2026-11-05（v1.10.66）：卖箱展开；声音 take/trim；传染 CSS；ever_ready/vs_source。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -155,6 +158,9 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **第四轮扫尾 v1.10.61**：IDX 灌库；漏买 kind 优先；一字板；paper/回放备注；now_cn
 - [x] **扩展扫 v1.10.62**：finalize_sell_advice；日记/推送 alert_items；软卖异常降级
 - [x] **扩展扫 v1.10.63**：看好台同源卖；envGatePill；cv_degraded
+- [x] **接线 v1.10.64**：current_open_positions；reconcile 持仓软卖；desk_gate_summary 重算
+- [x] **接线 v1.10.65**：exec armed；sim trends；支线分时（样本自本版分段）
+- [x] **接线 v1.10.66**：卖箱 alert_items；声音/传染；ever_ready；vs_source
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

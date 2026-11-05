@@ -144,5 +144,15 @@ function renderDeskInsights(d, v) {
       el.textContent = (el.textContent ? el.textContent + " · " : "") + parts.join(" · ");
     }
   }
-  document.getElementById("sellItems").innerHTML = (sell.items || []).map(sellCard).join("");
+  const topItems = sell.items || [];
+  const allSell = sell.alert_items || topItems;
+  const extraN = Math.max(0, allSell.length - topItems.length);
+  let sellHtml = topItems.map(sellCard).join("");
+  if (extraN > 0) {
+    const rest = allSell.slice(topItems.length);
+    sellHtml += `<details class="sell-more"><summary>另有 ${extraN} 条卖点</summary>`
+      + rest.map(sellCard).join("")
+      + `</details>`;
+  }
+  document.getElementById("sellItems").innerHTML = sellHtml;
 }

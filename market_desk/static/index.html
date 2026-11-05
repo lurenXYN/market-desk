@@ -166,7 +166,7 @@
             <option value="filled">实盘成交价·隔日</option>
           </select>
         </label>
-        <label class="settings-check" title="调参反哺固定用落库 classic；开关仅标注意图">
+        <label class="settings-check" title="仅当评测标准选「实盘成交」时，调参改学 filled；classic / 当日建议价下开关无效（默认仍学 same_day_plan）">
           <input id="setAdaptFollowOc" type="checkbox" /> 调参跟随评测标准<button type="button" class="q" data-term="调参口径">?</button>
         </label>
         <label>Ready 风格 <button type="button" class="q" data-term="Ready风格">?</button>
@@ -211,7 +211,7 @@
         <label class="settings-check">
           <input id="setScClear" type="checkbox" /> 清除已存 Key
         </label>
-        <label>单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
+        <label title="仅仓位页提示，不挡 ready / 不加仓闸">单日亏损帽%<input id="setLossCap" type="number" min="-20" max="0" step="0.5" /></label>
         <label>连亏降温只数<input id="setCoolN" type="number" min="1" max="10" /></label>
         <label>目标总成本<input id="setTargetCost" type="number" min="1000" step="1000" /></label>
         <label>账户资金<input id="setEquity" type="number" min="1000" step="1000" /></label>
@@ -854,7 +854,7 @@
         </details>
         <div class="rev-jump">
           <a class="rev-col-btn" href="#revSignals">↓ 跳到信号表</a>
-          <a class="rev-col-btn" href="#revAudit">↓ 审计区</a>
+          <a class="rev-col-btn" href="#revAuditGate">↓ 审计区</a>
           <span class="meta">摘要 → 区间涨跌（默认收起）→ 主表 → 审计默认折叠</span>
         </div>
         <div class="rev-toolbar" id="revSignals">
@@ -943,7 +943,6 @@
           </table>
         </div>
 
-        <div class="rev-audit-anchor" id="revAudit"></div>
         <details class="rev-audit">
           <summary>近周归因 · 计划遵守</summary>
           <div class="week-exec" id="revWeekExec"></div>

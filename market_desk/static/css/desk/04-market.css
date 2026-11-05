@@ -375,6 +375,7 @@ th { color: var(--muted); font-weight: 600; }
 .board.st-ok { border-left-color: var(--ferm); background: linear-gradient(180deg, #102018, var(--card)); }
 .board.st-fade { border-left-color: #64748b; }
 .board.st-watch { border-left-color: var(--blue); }
+.board.st-contagion { border-left-color: var(--climax); background: linear-gradient(180deg, #2a1a10, var(--card)); }
 .board.st-ice { border-left-color: var(--ice); background: linear-gradient(180deg, #082028, var(--card)); }
 .board.st-cold { border-left-color: #64748b; background: linear-gradient(180deg, #141a22, var(--card)); }
 .board.tone-green { border-left-color: var(--ferm); background: linear-gradient(180deg, #102018, var(--card)); }

@@ -105,7 +105,14 @@ function maybeToastLhbSeatEdge(items) {
       body: `${it.name || ""} ${code}${bits.length ? " · " + bits.join("；") : ""}`,
     });
   });
-  try { localStorage.setItem(STORAGE, JSON.stringify(next)); } catch (e) {}
+  try {
+    // Only keep codes still on the LHB list (prune stale) and cap keys.
+    const codes = Object.keys(next);
+    if (codes.length > 80) {
+      codes.slice(0, codes.length - 80).forEach((c) => { delete next[c]; });
+    }
+    localStorage.setItem(STORAGE, JSON.stringify(next));
+  } catch (e) {}
   alerts.slice(0, 3).forEach((a) => pushPageToast(a.title, a.body));
 }
 let _posDiaryAt = 0;

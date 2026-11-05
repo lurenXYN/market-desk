@@ -510,10 +510,11 @@ def ops_shadows(
 @router.get("/api/ops/exec-desk")
 def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
     """vnpy-style execution facade (paper now; attach after gate_readonly_ok; trade after gate_ok)."""
-    del user
     from market_desk.exec import get_exec_engine
+    from market_desk.engine import engine
 
-    return get_exec_engine().snapshot()
+    snap = engine.snapshot_for_user(int(user["id"]))
+    return get_exec_engine().snapshot(sell_advice=snap.get("sell_advice"))
 
 
 @router.get("/api/ops/serverchan-quota")
@@ -528,17 +529,22 @@ def ops_serverchan_quota(user: dict = Depends(current_admin_required)) -> dict:
 @router.get("/api/ops/exec-triggers")
 def ops_exec_triggers(user: dict = Depends(current_admin_required)) -> dict:
     """Map current sell advice into unified exec trigger intents."""
-    del user
     from market_desk.exec import get_exec_engine
+    from market_desk.engine import engine
 
+    snap = engine.snapshot_for_user(int(user["id"]))
     eng = get_exec_engine()
-    triggers = eng.sell_triggers()
+    advice = snap.get("sell_advice") or {}
+    triggers = eng.sell_triggers(advice)
     return {
         "ok": True,
         "n": len(triggers),
         "executable_n": sum(1 for t in triggers if t.get("executable")),
         "triggers": triggers,
         "circuit": eng.circuit.to_dict(),
+        "note": None
+        if (advice.get("alert_items") or advice.get("items"))
+        else "未提供卖点（个人层无仓或暂无卖卡）",
     }
 
 

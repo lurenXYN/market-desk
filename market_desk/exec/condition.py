@@ -18,7 +18,7 @@ class TriggerMode(str, Enum):
     IMMEDIATE = "immediate"  # hard stop / must-clear — fire now
     PRICE_STOP = "price_stop"  # sell when last <= trigger (protective)
     PRICE_LIMIT = "price_limit"  # sell when last <= trigger (soft take/trim)
-    DEFERRED = "deferred"  # open-buffer watching / armed but not released
+    DEFERRED = "deferred"  # open-buffer still watching (not yet armed+ready)
     BLOCKED = "blocked"  # T+1 / pre-match / not ready / soft demoted
 
 
@@ -61,7 +61,7 @@ def sell_item_to_trigger(item: dict[str, Any] | None) -> ExecTrigger:
     Precedence (high → low):
       1. T+1 / pre-match → blocked
       2. open_buffer must / urgency=stop / ready clear → immediate
-      3. open_buffer watch (watching/armed) → deferred
+      3. open_buffer watch still watching → deferred; armed+ready → executable
       4. ready half/trim with trigger_price → price_limit
       5. hold with stop_price → price_stop (protective watch, not ready)
       6. else blocked / not ready
@@ -131,16 +131,24 @@ def sell_item_to_trigger(item: dict[str, Any] | None) -> ExecTrigger:
             **base,
         )
 
-    # Soft open-buffer still watching
-    if track == "watch" and phase in ("watching", "armed", ""):
-        if phase == "released" and bool(it.get("ready")):
-            return ExecTrigger(
-                mode=TriggerMode.PRICE_LIMIT,
-                trigger_price=trigger_px,
-                executable=True,
-                reason="open_buffer_released",
-                **base,
-            )
+    # Soft open-buffer: watching stays deferred; armed+ready may fire (matches sim).
+    if track == "watch" and phase == "watching":
+        return ExecTrigger(
+            mode=TriggerMode.DEFERRED,
+            trigger_price=trigger_px,
+            executable=False,
+            reason="open_buffer_watching",
+            **base,
+        )
+    if track == "watch" and phase == "armed" and ready:
+        return ExecTrigger(
+            mode=TriggerMode.PRICE_LIMIT if exit_mode == "half" else TriggerMode.IMMEDIATE,
+            trigger_price=trigger_px,
+            executable=True,
+            reason="open_buffer_armed",
+            **base,
+        )
+    if track == "watch" and phase in ("armed", "") and not ready:
         return ExecTrigger(
             mode=TriggerMode.DEFERRED,
             trigger_price=trigger_px,
@@ -186,7 +194,7 @@ def sell_item_to_trigger(item: dict[str, Any] | None) -> ExecTrigger:
 
 
 def sell_advice_to_triggers(advice: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Map ``all_items`` / ``items`` of a sell-advice payload to trigger dicts."""
+    """Map ``alert_items`` / ``all_items`` / ``items`` of sell-advice to triggers."""
     adv = advice or {}
-    rows = adv.get("all_items") or adv.get("items") or []
+    rows = adv.get("alert_items") or adv.get("all_items") or adv.get("items") or []
     return [sell_item_to_trigger(r).to_dict() for r in rows if isinstance(r, dict)]

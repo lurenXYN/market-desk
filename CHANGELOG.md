@@ -14,6 +14,51 @@
 
 ---
 
+## [v1.10.66] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 卖箱只画 Top4、告警却用全量；take/trim 无声；传染板缺左边框；复盘藏掉曾亮灯卡；支线历史对照 sticky。
+
+### 【做了什么（What）】
+- **Fixed** 卖箱「另有 N 条」展开 `alert_items`；K 线/词条悬停读全量卖池。
+- **Fixed** 声音认 `sell:take:` / `sell:trim:`；补 `.st-contagion`；删空 `#revAudit`。
+- **Fixed** `isPaperWait` 认 `ever_ready`；历史支线/联动优先 `vs_source`；亏损帽文案标明仅提示；调参跟随 title 对齐真实行为。
+
+### 【影响与验证（Impact & Verification）】
+- 前端契约；既有 wiring 单测。desk.db 无迁移。
+
+---
+
+## [v1.10.65] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- exec `armed` 软卖不可执行；`sell_triggers` 无参恒空；sim 卖缺日线趋势；支线未接分时闸。
+
+### 【做了什么（What）】
+- **Fixed** `armed+ready` 可执行；`watching` 才 deferred；ops 传入个人 `sell_advice`。
+- **Fixed** sim `trends_for` → 止损带 MA20 软减与个人层对齐。
+- **Changed** `_apply_recommend_minutes` 含支线（`side_buy_enabled`），码上限 12；联动/独立仍观察。
+
+### 【影响与验证（Impact & Verification）】
+- `test_wiring_v11064` exec 段。支线亮灯样本自本版分段。desk.db 无迁移。
+
+---
+
+## [v1.10.64] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 多用户后 `load_positions()` 无 uid 恒空：连亏×0.75 / 支线日预算空转；软卖对账先掐持仓码；个人 demote 后顶栏闸摘要过期；卖信号落库静默失败。
+
+### 【做了什么（What）】
+- **Added** `current_user_id` / `current_open_positions`（随 `use_user_settings`）；cool / side budget 读当前用户仓。
+- **Fixed** reconcile 持仓码不计入 buy-conflict；个人层重跑 side cap + `desk_gate_summary`；卖落库 `log.exception`。
+- **Note** 共享空仓 size_cap 刻意保留（纸面信号/sim 不继承个人仓满）。
+
+### 【影响与验证（Impact & Verification）】
+- `test_wiring_v11064`。desk.db 无迁移。
+
+---
+
 ## [v1.10.63] - 2026-11-04
 
 ### 【背景与动机（为什么做 · Why）】
