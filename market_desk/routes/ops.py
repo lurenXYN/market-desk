@@ -514,7 +514,81 @@ def ops_exec_desk(user: dict = Depends(current_admin_required)) -> dict:
     from market_desk.engine import engine
 
     snap = engine.snapshot_for_user(int(user["id"]))
-    return get_exec_engine().snapshot(sell_advice=snap.get("sell_advice"))
+    out = get_exec_engine().snapshot(sell_advice=snap.get("sell_advice"))
+    try:
+        out["reconcile"] = get_exec_engine().reconcile_live(user_id=int(user["id"]))
+    except Exception as exc:
+        out["reconcile"] = {"ok": False, "reason": f"{type(exc).__name__}:{exc}"[:120]}
+    return out
+
+
+class BrokerSnapshotIn(BaseModel):
+    """Broker export payload for stage-1 read-only ingest."""
+
+    account: dict[str, Any] | None = None
+    positions: list[dict[str, Any]] = Field(default_factory=list)
+    trades: list[dict[str, Any]] = Field(default_factory=list)
+    gateway: str = "broker_ro"
+    persist: bool = True
+
+
+@router.post("/api/ops/exec-broker-ingest")
+def ops_exec_broker_ingest(
+    body: BrokerSnapshotIn,
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Ingest a broker JSON snapshot and attach a read-only gateway (stage 1).
+
+    Requires ``gate_readonly_ok`` (or absolute ``gate_ok``). ``send_order`` stays
+    rejected — stage 2 owns live Send after an explicit human confirm.
+    """
+    del user
+    from market_desk.config import DATA_DIR
+    from market_desk.exec import get_exec_engine
+
+    payload = {
+        "gateway": body.gateway or "broker_ro",
+        "account": body.account,
+        "positions": body.positions,
+        "trades": body.trades,
+    }
+    path = None
+    if body.persist:
+        path = str((DATA_DIR / "broker_readonly.json").resolve())
+    return get_exec_engine().ingest_broker_snapshot(payload, persist_path=path)
+
+
+@router.post("/api/ops/exec-broker-attach")
+def ops_exec_broker_attach(
+    path: str | None = Query(default=None),
+    user: dict = Depends(current_admin_required),
+) -> dict:
+    """Attach the last persisted broker_readonly.json (or an explicit path)."""
+    del user
+    from market_desk.config import DATA_DIR
+    from market_desk.exec import get_exec_engine
+
+    target = path or str((DATA_DIR / "broker_readonly.json").resolve())
+    return get_exec_engine().attach_readonly_file(target)
+
+
+@router.post("/api/ops/exec-broker-detach")
+def ops_exec_broker_detach(user: dict = Depends(current_admin_required)) -> dict:
+    """Detach the live/read-only broker gateway (paper remains)."""
+    del user
+    from market_desk.exec import get_exec_engine
+
+    eng = get_exec_engine()
+    eng.detach_live()
+    return {"ok": True, "attached": False}
+
+
+@router.get("/api/ops/exec-reconcile")
+def ops_exec_reconcile(user: dict = Depends(current_admin_required)) -> dict:
+    """Reconcile paper + desk book against the attached read-only broker."""
+    from market_desk.exec import get_exec_engine
+
+    return get_exec_engine().reconcile_live(user_id=int(user["id"]))
 
 
 @router.get("/api/ops/serverchan-quota")

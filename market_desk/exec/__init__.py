@@ -17,6 +17,19 @@ from market_desk.exec.engine import ExecEngine, get_exec_engine, reset_exec_engi
 from market_desk.exec.gateway import BaseGateway
 from market_desk.exec.orders import OrderBook
 from market_desk.exec.paper import PaperGateway
+from market_desk.exec.ptrade_bridge import (
+    build_bridge_ingest_payload,
+    build_exec_intents,
+    normalize_ptrade_positions,
+    set_bridge_token,
+    verify_bridge_token,
+)
+from market_desk.exec.readonly import (
+    ReadonlyBrokerGateway,
+    desk_positions_to_data,
+    positions_from_payload,
+    trades_from_payload,
+)
 from market_desk.exec.reconcile import (
     PositionDiff,
     reconcile_positions,
@@ -60,16 +73,22 @@ __all__ = [
     "PaperGateway",
     "PositionData",
     "PositionDiff",
+    "ReadonlyBrokerGateway",
     "RiskVerdict",
     "Status",
     "TradeData",
     "TriggerMode",
+    "build_bridge_ingest_payload",
+    "build_exec_intents",
     "check_circuit_open",
     "check_order",
     "check_position_limits",
     "check_session",
+    "desk_positions_to_data",
     "get_exec_engine",
     "is_open_intent",
+    "normalize_ptrade_positions",
+    "positions_from_payload",
     "reconcile_positions",
     "reconcile_trade_counts",
     "require_start_gate",
@@ -77,4 +96,7 @@ __all__ = [
     "self_check_gateway",
     "sell_advice_to_triggers",
     "sell_item_to_trigger",
+    "set_bridge_token",
+    "trades_from_payload",
+    "verify_bridge_token",
 ]

@@ -158,6 +158,10 @@ class RefreshMixin:
                         except Exception:
                             log.exception("eod onepager failed")
                     try:
+                        await self._maybe_push_ntfy_prep(now)
+                    except Exception:
+                        log.exception("ntfy prep push failed")
+                    try:
                         await self._maybe_push_morning_brief(now)
                     except Exception:
                         log.exception("morning push failed")

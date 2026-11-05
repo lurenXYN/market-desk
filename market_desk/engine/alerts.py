@@ -34,24 +34,41 @@ class AlertsMixin:
     """Ops alerts, toast emission, and personal sell pushes."""
 
     def _push_personal_sells(self, now: datetime) -> int:
-        """Build each ServerChan user's sell cards and push new ready sells to them.
+        """Push newly ready sells: ntfy always (if configured); Server酱 when enabled.
 
         The shared snapshot never carries personal books, so sell pushes must be
         evaluated per user here rather than in ``_emit_toasts``.
         """
         from market_desk.config import SERVERCHAN_EVENT_PUSH
         from market_desk.notify import is_sell_push_window, push_user_sell_alerts
+        from market_desk.ntfy_push import list_ntfy_recipients, push_user_ntfy_sell_alerts
+        from market_desk.settings import get_settings_for_user
 
-        if not SERVERCHAN_EVENT_PUSH:
-            return 0
         if not is_sell_push_window(now, trading_day=is_trading_day(now)):
             return 0
-        from market_desk.db import list_serverchan_recipients
-
         trade_date = str((self.snapshot or {}).get("trade_date") or now.strftime("%Y-%m-%d"))
         if len(trade_date) == 8 and trade_date.isdigit():
             trade_date = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}"
         ok_n = 0
+        # ntfy: independent of SERVERCHAN_EVENT_PUSH (intraday channel).
+        for user in list_ntfy_recipients():
+            try:
+                uid = int(user.get("id") or 0)
+                if uid <= 0:
+                    continue
+                snap = self.snapshot_for_user(uid)
+                if snap.get("personal_locked"):
+                    continue
+                us = get_settings_for_user(uid)
+                ok_n += push_user_ntfy_sell_alerts(
+                    us, user, snap, trade_date=trade_date
+                )
+            except Exception:
+                log.exception("personal ntfy sell push failed user=%s", user.get("id"))
+        if not SERVERCHAN_EVENT_PUSH:
+            return ok_n
+        from market_desk.db import list_serverchan_recipients
+
         for user in list_serverchan_recipients():
             try:
                 uid = int(user.get("id") or 0)
@@ -269,3 +286,9 @@ class AlertsMixin:
                 push_serverchan_alerts(chosen, current)
             except Exception:
                 log.exception("serverchan fan-out failed")
+            try:
+                from market_desk.ntfy_push import push_ntfy_alerts
+
+                push_ntfy_alerts(chosen, current)
+            except Exception:
+                log.exception("ntfy fan-out failed")

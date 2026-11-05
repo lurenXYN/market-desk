@@ -112,6 +112,13 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-05（v1.10.66）：卖箱展开；声音 take/trim；传染 CSS；ever_ready/vs_source。
 - 2026-11-05（v1.10.67）：生命周期尖峰观察与尖峰禁追解耦（多日走热后再贴尖）；ops lifecycle-reseal。
 - 2026-11-05（v1.10.68）：大盘相位加成交额/较昨放缩量一行。
+- 2026-11-05（v1.10.69）：阶段 1 券商只读——ReadonlyBrokerGateway + ingest/对账 API；Send 仍拒。
+- 2026-11-05（v1.10.70）：国泰海通 PTrade 桥接——bridge token + 持仓上报/意图拉取；策略模板不下单；Send 仍拒。
+- 2026-11-05（v1.10.71）：条件单复制——买/卖卡导出券商通用条件单参数清单（当日撤回）。
+- 2026-11-05（v1.10.72）：撤回条件单复制；真钱执行路径另议。
+- 2026-11-05（v1.10.73）：ntfy 盘中推送——模拟对齐股数 + 盘前准备；Server酱仍管收盘。
+- 2026-11-05（v1.10.74）：接近准备 `near:`——进计划价带半仓预挂/盯盘通知；非可买。
+- 2026-11-05（v1.10.75）：模拟交易日志默认今日 / 按日 / 全部筛选。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -165,6 +172,12 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **接线 v1.10.66**：卖箱 alert_items；声音/传染；ever_ready；vs_source
 - [x] **生命周期尖峰解耦 v1.10.67**：peak 需多日走热；首日尖→萌芽；ops reseal；不改 board_status/ready
 - [x] **大盘成交额行 v1.10.68**：两市成交 + 较昨放缩量/分位；相位卡下一行
+- [x] **券商只读 v1.10.69**：ReadonlyBrokerGateway + ingest/reconcile；模拟页对账条；不下单
+- [x] **PTrade 桥接 v1.10.70**：国泰海通阶段 1——token + `/api/bridge/ptrade/*` + 策略模板；不下单
+- [x] **条件单复制 v1.10.71 → 撤回 v1.10.72**：曾加卡面「条件单」，用户改主意已拆
+- [x] **ntfy 触达 v1.10.73**：盘中可买/硬卖 + 盘前准备；股数对齐模拟；不占 Server酱
+- [x] **接近准备 v1.10.74**：`near:` 进计划价带半仓通知；非可买；设置 `ntfy_near`
+- [x] **模拟日志按日 v1.10.75**：交易日志默认今日；按日下拉；全部
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 
@@ -416,6 +429,7 @@ Agents: **at the start of each session involving this app, read this file before
     - [x] **模拟操盘账本**：初始 2 万 + 买卖各扣手续费；`sim_lot`/`sim_fill` 交易日志；可买进→卖点出
     - [x] **卖点配对 / 回放**：假仓位 → `build_sell_advice`；`?replay=true` 用历史卖点补平
     - [x] **0 提醒**：日终 `sim:digest`（同轮 drain；**v1.10.23** 微信并入 15:05 `eod:`，不再单独占额度）
+    - [x] **0b ntfy 盘中触达** *(v1.10.73)*：可买/硬卖推手机（模拟对齐文案）+ 09:10 盘前准备；Server酱仍只保收盘额度
     - [x] **开工闸仪表**：主导航 **模拟** Tab + `/api/sim-desk` + ops/review-check
   - [x] **0.5 执行分层（参考 vnpy · 不部署）** *(v1.10.19)*：`market_desk/exec/` PaperGateway + `gate_ok` 硬拦 live；`/api/ops/exec-desk`
   - [x] **0.6 高优先（参考 vnpy · 闸前可做）** *(v1.10.20)*
@@ -426,10 +440,12 @@ Agents: **at the start of each session involving this app, read this file before
     - [x] **日损 / 连拒熔断**：`CircuitBreaker`（只拦开仓；`EXEC_DAY_LOSS_FRAC` / `EXEC_REJECT_STREAK_MAX`）
     - [x] **订单跨日持久**：`exec_order` + `OrderBook.restore`
     - [x] **卖点条件触发语义**：`sell_item_to_trigger` + `GET /api/ops/exec-triggers`
-  - [ ] **1 只读**：券商持仓/成交对账 — **须组合累计 >0**（接 `BaseGateway.query_*` + reconcile；仍不装完整 vnpy）
-  - [ ] **2 一键**：可买卡一键送单（人确认）— **须 1**
+  - [x] **1 只读**：券商持仓/成交对账 — **须组合累计 >0**（接 `BaseGateway.query_*` + reconcile；仍不装完整 vnpy）*(v1.10.69：`ReadonlyBrokerGateway` JSON ingest；纸面/记账 vs 券商；Send 恒拒)*
+    - [x] **1b PTrade（国泰海通）** *(v1.10.70)*：作战台 bridge token + `POST/GET /api/bridge/ptrade/{positions,intents}`；券商侧策略模板上报持仓、拉意图；**禁止 order_***；说明见 `deploy/PTRADE_GTHT.md`
+  - [ ] ~~**1c 条件单复制**~~ *(v1.10.71 加 / v1.10.72 撤)*：低资金对照挂单路径暂不做
+  - [ ] **2 一键**：可买卡一键送单（人确认）— **须通道验证（PTrade 等）+ 用户确认 Send**
   - [ ] **3 全自动**：ready/卖点直达 — **须 2 + 用户再点头 + 限额/熔断**
-  - 组合未转正前 **不写 1–3**；闪电复制仍作过渡；低配 VPS **不**部署 VeighNa。
+  - 低配 VPS **不**部署 VeighNa / PTrade；阶段 2 首次真钱 Send 仍须一句确认。
   - **vnpy 学习清单（不部署整仓）**
     - 高：风控独立、订单状态机、持仓/成交对账 ← 见 0.6 / 1
     - 高：决策与执行分离 ← 已 0.5

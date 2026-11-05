@@ -39,6 +39,13 @@ USER_PRIVATE_KEYS = frozenset(
         "tail_mute_minutes",
         "morning_push",
         "serverchan_sell_only",
+        "ntfy_on",
+        "ntfy_topic",
+        "ntfy_token",
+        "ntfy_fly",
+        "ntfy_near",
+        "ntfy_soft_sell",
+        "ntfy_prep",
     }
 )
 
@@ -195,6 +202,14 @@ DEFAULTS: dict[str, Any] = {
     "morning_push": False,
     # Per-user: Server酱 only stop/must-sell (+eod/lhb/ops); mute buy/fly/trim.
     "serverchan_sell_only": False,
+    # ntfy mobile push (intraday; does not burn Server酱 quota).
+    "ntfy_on": False,
+    "ntfy_topic": "",
+    "ntfy_token": "",
+    "ntfy_fly": True,
+    "ntfy_near": True,
+    "ntfy_soft_sell": False,
+    "ntfy_prep": True,
     # Soft link to standalone news-radar (http://host:8770); empty = off.
     "news_radar_enabled": False,
     "news_radar_url": "http://127.0.0.1:8770",
@@ -404,6 +419,13 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     out["sell_open_watch_minutes"] = sow
     out["morning_push"] = bool(out.get("morning_push"))
     out["serverchan_sell_only"] = bool(out.get("serverchan_sell_only"))
+    out["ntfy_on"] = bool(out.get("ntfy_on"))
+    out["ntfy_topic"] = str(out.get("ntfy_topic") or "").strip()[:200]
+    out["ntfy_token"] = str(out.get("ntfy_token") or "").strip()[:200]
+    out["ntfy_fly"] = bool(out.get("ntfy_fly", True))
+    out["ntfy_near"] = bool(out.get("ntfy_near", True))
+    out["ntfy_soft_sell"] = bool(out.get("ntfy_soft_sell"))
+    out["ntfy_prep"] = bool(out.get("ntfy_prep", True))
     out["news_radar_enabled"] = bool(out.get("news_radar_enabled"))
     out["news_radar_url"] = str(out.get("news_radar_url") or "").strip().rstrip("/")
     panic_t = max(5, min(50, int(out.get("phase_panic_temp") or cfg.PHASE_PANIC_TEMP)))

@@ -134,6 +134,7 @@ def build_toast_alerts(
         )
 
     alerts.extend(build_fly_window_alerts(previous, current))
+    alerts.extend(build_near_entry_alerts(previous, current))
     alerts.extend(build_radar_alerts(previous, current))
 
     prev_ready = {
@@ -241,6 +242,7 @@ def _push_title(kind: str, name: Any = "", code: Any = "") -> str:
         "buy": "可买·满",
         "buy_half": "可买·半",
         "fly": "将飞·半仓",
+        "near": "接近·准备",
         "止损": "止损",
         "止盈": "止盈",
         "减仓": "减仓",
@@ -282,6 +284,53 @@ def build_fly_window_alerts(
         note = item.get("fly_note") or "半仓试探窗口，再等可能飞"
         body = f"{name} {code} · {kind} · 建议 {px}\n{note}".strip()
         alerts.append((f"fly:{code}", _push_title("fly", name, code), body))
+    return alerts
+
+
+def _recommend_near_codes(snap: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Map code → recommend item in near_entry while not yet full ready."""
+    out: dict[str, dict[str, Any]] = {}
+    rec = ((snap or {}).get("verdict") or {}).get("recommend") or {}
+    for item in rec.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("ready") and not item.get("ready_relaxed"):
+            # Full ready is buy: territory; skip near prep.
+            continue
+        if not item.get("near_entry"):
+            continue
+        code = str(item.get("code") or "").strip()
+        if code:
+            out[code] = item
+    return out
+
+
+def build_near_entry_alerts(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Edge-fire when a card newly enters the plan-price band (prep, not buy)."""
+    if not previous or not previous.get("ok") or not current.get("ok"):
+        return []
+    prev = _recommend_near_codes(previous)
+    cur = _recommend_near_codes(current)
+    alerts: list[tuple[str, str, str]] = []
+    for code, item in cur.items():
+        if code in prev:
+            continue
+        # Fly window already has its own edge; avoid double ping same code.
+        if item.get("fly_warn"):
+            continue
+        name = item.get("name") or ""
+        px = item.get("buy_price") or item.get("wait_price") or item.get("last") or ""
+        last = item.get("last") or ""
+        body = (
+            f"{name} {code} · 现价 {last} · 计划/回踩 {px}\n"
+            "接近准备 · 非系统可买 · 最多半仓预挂或盯盘"
+        ).strip()
+        alerts.append(
+            (f"near:{code}", _push_title("near", name, code), body)
+        )
     return alerts
 
 
@@ -344,7 +393,7 @@ def toast_priority(key: str) -> int:
         return 0
     if k.startswith("buy:") or k.startswith("fly:"):
         return 1
-    if k.startswith("band:entry:") or k.startswith("wl:suggest:"):
+    if k.startswith("near:") or k.startswith("band:entry:") or k.startswith("wl:suggest:"):
         return 2
     if k.startswith("band:chase:") or k.startswith("wl:chase:"):
         return 3
@@ -367,7 +416,17 @@ def is_decision_toast(key: str) -> bool:
     """Return True for verdict / phase / mainline decision toasts (not sells)."""
     k = str(key or "")
     return k.startswith(
-        ("buy:", "fly:", "exit:", "mainline:", "phase:", "crowd:", "pulse:", "decline:")
+        (
+            "buy:",
+            "fly:",
+            "near:",
+            "exit:",
+            "mainline:",
+            "phase:",
+            "crowd:",
+            "pulse:",
+            "decline:",
+        )
     )
 
 
@@ -387,7 +446,7 @@ def cooldown_for_key(key: str, decision_cooldown: float) -> float:
     k = str(key or "")
     if k.startswith(("sell:", "band:stop:", "wl:stop:")):
         return COOLDOWN_STOP_SEC
-    if k.startswith(("band:entry:", "wl:suggest:", "fly:")):
+    if k.startswith(("band:entry:", "wl:suggest:", "fly:", "near:")):
         return COOLDOWN_ENTRY_SEC
     if k.startswith(("band:chase:", "wl:chase:")):
         return COOLDOWN_CHASE_SEC
@@ -750,10 +809,10 @@ def notify_serverchan(sendkey: str, title: str, desp: str, *, source: str = "des
 def _daily_once_key(alert_key: str) -> str:
     """Return the per-day dedupe id for WeChat alerts, or ``""``.
 
-    ``buy:`` / ``fly:`` are per-code; ``sim:`` is whole-day (belt if filter regresses).
+    ``buy:`` / ``fly:`` / ``near:`` / ``band:entry:`` are per-code; ``sim:`` is whole-day.
     """
     k = str(alert_key or "")
-    if k.startswith(("buy:", "fly:", "sim:")):
+    if k.startswith(("buy:", "fly:", "near:", "band:entry:", "sim:")):
         return k
     return ""
 

@@ -51,6 +51,42 @@ async function openSettings() {
     if (nrOn) nrOn.checked = !!s.news_radar_enabled;
     const nrUrl = document.getElementById("setNewsRadarUrl");
     if (nrUrl) nrUrl.value = s.news_radar_url || "http://127.0.0.1:8770";
+    const ntfyOn = document.getElementById("setNtfyOn");
+    if (ntfyOn) ntfyOn.checked = !!s.ntfy_on;
+    const ntfyTopic = document.getElementById("setNtfyTopic");
+    if (ntfyTopic) ntfyTopic.value = s.ntfy_topic || "";
+    const ntfyToken = document.getElementById("setNtfyToken");
+    if (ntfyToken) ntfyToken.value = s.ntfy_token || "";
+    const ntfyFly = document.getElementById("setNtfyFly");
+    if (ntfyFly) ntfyFly.checked = s.ntfy_fly !== false;
+    const ntfyNear = document.getElementById("setNtfyNear");
+    if (ntfyNear) ntfyNear.checked = s.ntfy_near !== false;
+    const ntfyPrep = document.getElementById("setNtfyPrep");
+    if (ntfyPrep) ntfyPrep.checked = s.ntfy_prep !== false;
+    const ntfySoft = document.getElementById("setNtfySoftSell");
+    if (ntfySoft) ntfySoft.checked = !!s.ntfy_soft_sell;
+    const ntfyTest = document.getElementById("btnNtfyTest");
+    if (ntfyTest && !ntfyTest.dataset.bound) {
+      ntfyTest.dataset.bound = "1";
+      ntfyTest.onclick = async () => {
+        const msg = document.getElementById("ntfyTestMsg");
+        if (msg) msg.textContent = "发送中…";
+        try {
+          const resp = await fetch("/api/me/ntfy-test", {
+            method: "POST",
+            credentials: "same-origin",
+          });
+          const j = await resp.json().catch(() => ({}));
+          if (msg) {
+            msg.textContent = resp.ok
+              ? (j.hint || "已发送")
+              : (j.detail || "失败");
+          }
+        } catch (e) {
+          if (msg) msg.textContent = "请求失败";
+        }
+      };
+    }
     const nrProbe = document.getElementById("btnNrProbe");
     if (nrProbe && !nrProbe.dataset.bound) {
       nrProbe.dataset.bound = "1";
@@ -218,6 +254,13 @@ document.getElementById("settingsSave").addEventListener("click", async () => {
     backup_keep: Number(document.getElementById("setBackupKeep")?.value || 30),
     morning_push: !!document.getElementById("setMorningPush")?.checked,
     serverchan_sell_only: !!document.getElementById("setScSellOnly")?.checked,
+    ntfy_on: !!document.getElementById("setNtfyOn")?.checked,
+    ntfy_topic: (document.getElementById("setNtfyTopic")?.value || "").trim(),
+    ntfy_token: (document.getElementById("setNtfyToken")?.value || "").trim(),
+    ntfy_fly: !!document.getElementById("setNtfyFly")?.checked,
+    ntfy_near: !!document.getElementById("setNtfyNear")?.checked,
+    ntfy_prep: !!document.getElementById("setNtfyPrep")?.checked,
+    ntfy_soft_sell: !!document.getElementById("setNtfySoftSell")?.checked,
     news_radar_enabled: !!document.getElementById("setNewsRadarOn")?.checked,
     news_radar_url: (document.getElementById("setNewsRadarUrl")?.value || "").trim(),
   };

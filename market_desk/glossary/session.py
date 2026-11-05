@@ -167,13 +167,22 @@ ENTRIES: dict[str, dict[str, str]] = {
     "Server酱": {
         "mean": "用 Server酱³ 把收盘一页纸推到微信（每天 15:05 一条）。每人自己的 SendKey；管理员决定谁可以开；无 Key 不推。",
         "algo": "免费版每个 SendKey 每天只能发 5 条，与新闻雷达共用（9:00 盘前 / 13:00 盘中 / 21:00 晚间）。"
-        "因此作战台只推 eod:；盘中 buy: / fly: / sell: / lhb: / ops: 和 9:25 早决策只在页面提醒"
-        "（config.SERVERCHAN_EVENT_PUSH / SERVERCHAN_MORNING_PUSH 可重新打开）。\n"
+        "因此作战台只推 eod:；盘中 buy/卖默认走 ntfy（见词条「ntfy」），页面仍 toast；"
+        "SERVERCHAN_EVENT_PUSH / SERVERCHAN_MORNING_PUSH 可重新打开微信盘中。\n"
         "打开后：推 buy: / sell: / lhb: / eod: / morning:。买点附主线/相位/阶段/作战结论。\n"
         "lhb 含变坏与变好，正文写新增/消退标志与 risk_reason。\n"
         "users.serverchan_sendkey + serverchan_on（本人）+ serverchan_allowed（管理员）。\n"
         "admin 默认允许，也可在设置取消「开启推送」或在账号管理给自己「禁推送」，重启不会被恢复。\n"
         "POST sctapi.ftqq.com/{SendKey}.send；与 Windows toast 并行。Key 只存 desk.db，不进 Git。",
+    },
+    "ntfy": {
+        "mean": "手机推送通道：盘中可买/硬卖与盘前准备发到 ntfy App，不占 Server酱每日额度；股数对齐模拟仓。",
+        "algo": "设置 ntfy_on + ntfy_topic（或完整 URL）；可选 ntfy_token（自建）。\n"
+        "推 buy: / near: / band:entry: / sell:stop:（可选 fly:、软卖）；"
+        "接近/将飞正文强制半仓对齐模拟，并写「非可买」。\n"
+        "盘前 prep：交易日 09:10–09:25 一次（关注清单+持仓预告）。\n"
+        "POST ntfy.sh/{topic}；MARKET_DESK_MUTE_NTFY=1 静音；"
+        "MARKET_DESK_PUBLIC_URL 可作通知 Click。测试：POST /api/me/ntfy-test。",
     },
     "建议卖出": {
         "mean": "对着已记账仓位给卖点：止损清仓、冲高回落/结构回撤、衰退先减或清仓；已减半后有反悔窗，轻止盈过卖侧分时确认。",
@@ -222,14 +231,31 @@ ENTRIES: dict[str, dict[str, str]] = {
         "algo": "成交纪律：连续竞价 09:30–11:30 / 13:00–15:00；买得进/卖得出、T+1、一字板、开盘软卖缓冲。\n"
         "资金：满仓名义≤权益×25%×权重，100 股整手；买卖各扣 TRADE_FEE_CNY（默认 5 元）；现金不足跳过。\n"
         "假仓位走 build_sell_advice；交易日志见「模拟」Tab。\n"
-        "双闸：gate_readonly_ok=已平仓且相对中证1000超额>0（或绝对转正）→券商只读；"
+        "双闸：gate_readonly_ok=已平仓且相对中证1000超额>0（或绝对转正）→券商只读对账；"
         "gate_ok=已平仓且权益/初始−1>0→真钱下单。\n"
-        "API：GET /api/sim-desk；管理端 /api/ops/sim-desk?backfill=true&replay=true；"
+        "API：GET /api/sim-desk（含 trade_date）；管理端 /api/ops/sim-desk?backfill=true&replay=true；"
+        "交易日志 UI：默认今日 / 按日 / 全部。\n"
         "日终页内 toast 仍为 sim:digest，微信并入 15:05 收盘一页纸（不再单独占 Server酱 额度）。",
     },
     "开工闸": {
         "mean": "双档开关：相对大盘超额→券商只读；绝对权益转正→真钱阶段。都要至少一笔卖出。",
         "algo": "见「模拟操盘账本」。只读未过线禁止挂 live 查询；绝对未过线禁止 live 下单。",
+    },
+    "券商只读": {
+        "mean": "阶段 1：把券商持仓/成交快照挂进作战台做对账，绝不下单。",
+        "algo": "须 gate_readonly_ok（或 gate_ok）。ReadonlyBrokerGateway 吃 JSON："
+        "{account, positions[{code,volume,price}], trades[…]}；"
+        "持久化 data/broker_readonly.json。\n"
+        "POST /api/ops/exec-broker-ingest 导入并挂载；attach/detach；"
+        "GET /api/ops/exec-reconcile 比纸面仓+记账仓 vs 券商。\n"
+        "国泰海通 PTrade：策略侧带 X-Desk-Bridge-Token 调 "
+        "/api/bridge/ptrade/positions|intents；管理端轮换 token；"
+        "见 deploy/PTRADE_GTHT.md。send_order 恒拒 readonly_stage1；一键送单属阶段 2。",
+    },
+    "PTrade桥接": {
+        "mean": "国泰海通 PTrade 策略轮询作战台：上报持仓对账、拉买卖意图展示；阶段 1 不下单。",
+        "algo": "settings.ptrade_bridge_token；GET/POST /api/bridge/ptrade/*；"
+        "intents.send_allowed 默认 false，armed 全关。策略模板 scripts/ptrade/gtht_bridge_strategy.py。",
     },
     "减半价": {
         "mean": "今日已减仓时记下的成交价；破此价是反悔窗允许再清的锚之一。",

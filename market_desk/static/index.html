@@ -197,6 +197,32 @@
         <label class="settings-check">
           <input id="setMorningPush" type="checkbox" /> 早决策微信推送（已停用：9 点由新闻雷达推）
         </label>
+        <label class="settings-check" style="grid-column:1/-1;margin-top:8px">
+          <input id="setNtfyOn" type="checkbox" /> ntfy 手机推送（盘中可买/硬卖，不占 Server酱额度） <button type="button" class="q" data-term="ntfy">?</button>
+        </label>
+        <label style="grid-column:1/-1">ntfy topic / URL
+          <input id="setNtfyTopic" type="text" autocomplete="off" placeholder="长随机 topic 或 https://ntfy.sh/xxx" title="相当于密钥，勿用简单词" />
+        </label>
+        <label style="grid-column:1/-1">ntfy Token（自建可选）
+          <input id="setNtfyToken" type="password" autocomplete="off" placeholder="留空=公共实例无需" />
+        </label>
+        <label class="settings-check">
+          <input id="setNtfyFly" type="checkbox" checked /> 推将飞半仓
+        </label>
+        <label class="settings-check">
+          <input id="setNtfyNear" type="checkbox" checked /> 推接近准备（进计划价带；半仓预挂/盯盘）
+        </label>
+        <label class="settings-check">
+          <input id="setNtfyPrep" type="checkbox" checked /> 盘前准备（约 9:10–9:25）
+        </label>
+        <label class="settings-check">
+          <input id="setNtfySoftSell" type="checkbox" /> 推软卖（止盈/减仓；默认只推硬止损）
+        </label>
+        <div class="meta" style="grid-column:1/-1">
+          文案股数对齐模拟仓。手机装 ntfy 订阅同 topic。
+          <button type="button" class="copy-btn" id="btnNtfyTest">测试推送</button>
+          <span id="ntfyTestMsg"></span>
+        </div>
         <label class="settings-check">
           <input id="setNewsRadarOn" type="checkbox" /> 接入新闻雷达（软提示，不改买卖闸门）
         </label>
@@ -686,9 +712,14 @@
         <h2 style="text-transform:none">模拟操盘<button type="button" class="q" data-term="模拟操盘账本">?</button>
           <span class="mod-stamp" id="simStamp" title="模拟账本刷新时间"></span>
         </h2>
-        <p class="meta">纸面账户初始 2 万；亮过可买且可成交才开仓，卖点且可卖出才平仓；买卖各扣 5 元手续费。权益相对初始转正后才允许写券商对接。</p>
+        <p class="meta">纸面账户初始 2 万；亮过可买且可成交才开仓，卖点且可卖出才平仓；买卖各扣 5 元手续费。相对超额或绝对转正后可接<strong>券商只读对账</strong>（不下单）；真钱下单仍须绝对转正 + 一句确认。</p>
         <div class="pos-sum" id="simSum"></div>
         <div class="risk-box" id="simGate" style="margin:8px 0"></div>
+        <div class="risk-box" id="simBroker" style="margin:8px 0" hidden>
+          <div><b>券商只读对账</b><button type="button" class="q" data-term="券商只读">?</button>
+            <span class="meta" id="simBrokerMeta">—</span></div>
+          <div class="meta" id="simBrokerDiffs"></div>
+        </div>
         <div class="meta" id="simAttr" style="margin:8px 0 4px"></div>
         <h3 style="margin:14px 0 6px;font-size:14px">持仓</h3>
         <div class="rev-table-wrap">
@@ -702,7 +733,16 @@
             <tbody id="simPosBody"><tr><td colspan="9" class="meta">加载中…</td></tr></tbody>
           </table>
         </div>
-        <h3 style="margin:16px 0 6px;font-size:14px">交易日志 · 买入 / 卖出</h3>
+        <h3 style="margin:16px 0 6px;font-size:14px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+          <span>交易日志 · 买入 / 卖出</span>
+          <span class="sim-log-filters" id="simLogFilters" style="font-weight:normal;font-size:12px">
+            <button type="button" class="rev-chip gate ok" data-sim-log="today" id="simLogToday">今日</button>
+            <button type="button" class="rev-chip" data-sim-log="day" id="simLogDayBtn">按日</button>
+            <select id="simLogDay" class="meta" style="max-width:9.5rem" hidden title="选择有成交的交易日"></select>
+            <button type="button" class="rev-chip" data-sim-log="all" id="simLogAll">全部</button>
+            <span class="meta" id="simLogMeta"></span>
+          </span>
+        </h3>
         <div class="rev-table-wrap">
           <table class="rev-table" id="simLogTable">
             <thead>

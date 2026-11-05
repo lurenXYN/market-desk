@@ -165,6 +165,30 @@ def me_serverchan_save(
     return {"ok": True, "serverchan": row}
 
 
+@router.post("/api/me/ntfy-test")
+def me_ntfy_test(user: dict = Depends(current_member_required)) -> dict:
+    """Send one test ntfy using the caller's saved topic settings."""
+    from market_desk.ntfy_push import notify_ntfy
+    from market_desk.settings import get_settings_for_user
+
+    uid = int(user["id"])
+    s = get_settings_for_user(uid)
+    topic = str(s.get("ntfy_topic") or "").strip()
+    if not topic:
+        raise HTTPException(400, "请先填写并保存 ntfy topic")
+    ok = notify_ntfy(
+        topic,
+        "作战台 ntfy 测试",
+        "连通正常。盘中可买/硬卖会推到这里；股数对齐模拟仓。",
+        priority="default",
+        tags="white_check_mark",
+        token=str(s.get("ntfy_token") or "").strip() or None,
+    )
+    if not ok:
+        raise HTTPException(502, "ntfy 发送失败（检查 topic / VPS 能否访问 ntfy.sh）")
+    return {"ok": True, "hint": "请看手机 ntfy 通知"}
+
+
 @router.post("/api/admin/users/{uid}/push")
 def admin_user_push(
     uid: int,

@@ -14,6 +14,108 @@
 
 ---
 
+## [v1.10.75] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 模拟交易日志把多日成交堆在一起，跟单时难盯「今日该对券商做的几笔」。
+
+### 【做了什么（What）】
+- **Added** 交易日志筛选：默认「今日」；「按日」下拉有成交日；「全部」；旁注笔数买/卖。
+- **Added** `/api/sim-desk` 返回 `trade_date`（今日 CN）供默认过滤。
+
+### 【影响与验证（Impact & Verification）】
+- 前端过滤，desk.db 无迁移。刷新模拟页即可。
+
+---
+
+## [v1.10.74] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 可买推送偏晚，人想在接近计划价时先打开券商、最多半仓预挂；模拟仓仍等亮灯+触价才买，接近通知须标明「准备≠可买」。
+
+### 【做了什么（What）】
+- **Added** `near:` 边沿提醒（recommend 首次 `near_entry` 且未满仓 ready；与 `fly:` 同码不双推）。
+- **Changed** ntfy：`near:` / `band:entry:` 默认可推；文案强制半仓模拟股数 +「非系统可买」；设置 `ntfy_near`。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_ntfy_near_v11074.py`。desk.db 无迁移。
+
+---
+
+## [v1.10.73] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- VPS 跑策略、人在手机外：Server酱免费额度紧，盘中买卖触达不到；需要不占微信额度的通道，且通知股数要跟模拟仓一致，方便照单手搓。
+
+### 【做了什么（What）】
+- **Added** `ntfy_push.py`：ntfy 推送；买/卖文案对齐 `plan_buy_qty` / 模拟 lot；盘前准备（09:10–09:25）。
+- **Added** 设置项 `ntfy_on/topic/token/fly/prep/soft_sell`；`POST /api/me/ntfy-test`；引擎 toast/卖点旁路推 ntfy（不依赖 `SERVERCHAN_EVENT_PUSH`）。
+- **Kept** Server酱仍以收盘一页纸为主。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_ntfy_push_v11073.py`。desk.db 无迁移；topic 存个人 settings。
+
+---
+
+## [v1.10.72] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 条件单复制与模拟仓尺难对齐，用户暂不走该路径，先撤掉以免界面干扰。
+
+### 【做了什么（What）】
+- **Removed** v1.10.71 条件单复制：`cond_*_block`、买/卖卡「条件单」按钮、词条与文档段落。
+- **Kept** 原「复制」闪电文案；PTrade 桥接（v1.10.70）不动。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_flash_copy.py` 恢复为闪电复制三测。desk.db 无迁移。
+
+---
+
+## [v1.10.71] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 约 2 万资金难开 PTrade；曾试「券商条件单」作真钱执行层（**已于 v1.10.72 撤回**）。
+
+### 【做了什么（What）】
+- **Added（后撤）** 条件单对照文案与卡面按钮 — 见 v1.10.72 Removed。
+
+### 【影响与验证（Impact & Verification）】
+- 历史记录保留；现行代码无条件单按钮。
+
+---
+
+## [v1.10.70] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 用户选定国泰海通 **PTrade** 做真钱通道；PTrade 只能跑在券商侧，VPS 装不了。需要作战台侧 bridge token + 持仓上报/意图拉取，阶段 1 仍禁止 Send。
+
+### 【做了什么（What）】
+- **Added** `exec/ptrade_bridge.py`：token 存 settings、PTrade 字段归一、`build_exec_intents`（`send_allowed=False` 时 `armed` 全关）。
+- **Added** `routes/bridge.py`：`GET/POST /api/bridge/ptrade/{health,positions,intents}`（`X-Desk-Bridge-Token`）；管理端 `GET /api/ops/ptrade-bridge`、`POST /api/ops/ptrade-bridge-token`。
+- **Added** `deploy/PTRADE_GTHT.md` + `scripts/ptrade/gtht_bridge_strategy.py`（策略模板，默认不下单）。
+- **Not changed** 阶段 2 一键 / 阶段 3 全自动；首次真钱 Send 仍须口头确认。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_ptrade_bridge_v11070.py`。desk.db 无迁移；token 在 `settings.ptrade_bridge_token`；持仓仍落 `data/broker_readonly.json`。
+
+---
+
+## [v1.10.69] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 线上模拟闸已绝对转正（`gate_ok`），按排期可开阶段 1「券商只读」；此前只有对账骨架，没有可挂的只读 gateway 与 ingest。
+
+### 【做了什么（What）】
+- **Added** `ReadonlyBrokerGateway`：券商 JSON 快照（文件/ingest）→ `query_*`；`send_order` 恒拒 `readonly_stage1`。
+- **Added** `ExecEngine.ingest_broker_snapshot` / `attach_readonly_file`；`reconcile_live` 比纸面+可选记账仓 vs 券商。
+- **Added** 管理端 `POST /api/ops/exec-broker-ingest|attach|detach`、`GET /api/ops/exec-reconcile`；模拟页「券商只读对账」条。
+- **Not changed** 真钱 Send / 一键下单（仍须阶段 2 + 首次口头确认）；不装具体券商 SDK / vnpy。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_exec_readonly_v11069.py` + 既有 exec 闸测。desk.db 无迁移；快照落 `data/broker_readonly.json`。
+
+---
+
 ## [v1.10.68] - 2026-11-05
 
 ### 【背景与动机（为什么做 · Why）】

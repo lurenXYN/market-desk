@@ -9,7 +9,15 @@ from market_desk.exec.condition import sell_advice_to_triggers
 from market_desk.exec.gateway import BaseGateway
 from market_desk.exec.orders import OrderBook
 from market_desk.exec.paper import PaperGateway
-from market_desk.exec.reconcile import reconcile_positions, self_check_gateway
+from market_desk.exec.readonly import (
+    ReadonlyBrokerGateway,
+    desk_positions_to_data,
+)
+from market_desk.exec.reconcile import (
+    reconcile_positions,
+    reconcile_trade_counts,
+    self_check_gateway,
+)
 from market_desk.exec.risk import check_order, require_start_gate
 from market_desk.exec.types import OrderData, OrderRequest, Status
 from market_desk.sim_desk import portfolio_stats, start_gate_snapshot
@@ -72,11 +80,81 @@ class ExecEngine:
                 "reason": verdict.reason,
                 "hint": "sim gate_readonly_ok (相对超额) or gate_ok (绝对) before live attach",
             }
+        if not gateway.connected:
+            try:
+                gateway.connect()
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "reason": f"connect_failed:{exc}"[:120],
+                }
         self._live = gateway
         return {
             "ok": True,
             "gateway": gateway.gateway_name,
             "gate": verdict.reason,
+            "readonly": isinstance(gateway, ReadonlyBrokerGateway),
+        }
+
+    def ingest_broker_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        persist_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Load a broker export into a read-only gateway and attach it (stage 1).
+
+        Requires ``gate_readonly_ok`` (or absolute ``gate_ok``). Never enables Send.
+        """
+        verdict = require_start_gate(live=True, trade=False)
+        if not verdict.ok:
+            return {
+                "ok": False,
+                "reason": verdict.reason,
+                "hint": "sim gate_readonly_ok or gate_ok before broker ingest",
+            }
+        gw = self._live if isinstance(self._live, ReadonlyBrokerGateway) else ReadonlyBrokerGateway()
+        loaded = gw.load_snapshot(payload, source="ingest")
+        if persist_path:
+            try:
+                gw.save_file(persist_path)
+                loaded["persisted"] = persist_path
+            except Exception as exc:
+                loaded["persisted"] = None
+                loaded["persist_error"] = f"{type(exc).__name__}:{exc}"[:120]
+        attached = self.attach_live(gw)
+        return {
+            "ok": bool(attached.get("ok")),
+            "gate": verdict.reason,
+            "attach": attached,
+            "loaded": loaded,
+            "stage": "1_readonly",
+        }
+
+    def attach_readonly_file(self, path: str) -> dict[str, Any]:
+        """Attach a read-only gateway loaded from a JSON snapshot file."""
+        verdict = require_start_gate(live=True, trade=False)
+        if not verdict.ok:
+            return {
+                "ok": False,
+                "reason": verdict.reason,
+                "hint": "sim gate_readonly_ok or gate_ok before broker attach",
+            }
+        gw = ReadonlyBrokerGateway()
+        try:
+            loaded = gw.load_file(path)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": f"load_failed:{exc}"[:160],
+            }
+        attached = self.attach_live(gw)
+        return {
+            "ok": bool(attached.get("ok")),
+            "gate": verdict.reason,
+            "attach": attached,
+            "loaded": loaded,
+            "stage": "1_readonly",
         }
 
     def detach_live(self) -> None:
@@ -165,20 +243,51 @@ class ExecEngine:
         filled = self.paper.send_order(req)
         return self.orders.upsert(filled)
 
-    def reconcile_live(self) -> dict[str, Any]:
-        """Diff paper positions vs attached live gateway (stage 1 shape)."""
+    def reconcile_live(self, *, user_id: int | None = None) -> dict[str, Any]:
+        """Diff paper (and optional desk book) vs attached live gateway."""
         if self._live is None:
             return {
                 "ok": False,
                 "reason": "live_gateway_not_attached",
                 "positions": None,
+                "trades": None,
             }
+        read_gate = require_start_gate(live=True, trade=False)
+        if not read_gate.ok:
+            return {
+                "ok": False,
+                "reason": read_gate.reason,
+                "hint": "gate_readonly_ok required for live reconcile",
+            }
+        remote_pos = self._live.query_positions()
+        remote_tr = self._live.query_trades(limit=200)
+        paper_pos = reconcile_positions(self.paper.query_positions(), remote_pos)
+        paper_tr = reconcile_trade_counts(self.paper.query_trades(limit=200), remote_tr)
+        desk_block: dict[str, Any] | None = None
+        if user_id is not None:
+            try:
+                from market_desk.db import load_positions
+
+                desk_rows = load_positions(user_id=int(user_id))
+                open_rows = [r for r in desk_rows if int(r.get("qty") or 0) > 0]
+                desk_block = reconcile_positions(
+                    desk_positions_to_data(open_rows),
+                    remote_pos,
+                )
+            except Exception as exc:
+                desk_block = {"ok": False, "error": f"{type(exc).__name__}:{exc}"[:120]}
+        ok = bool(paper_pos.get("ok")) and bool(paper_tr.get("ok"))
+        if isinstance(desk_block, dict) and "ok" in desk_block:
+            ok = ok and bool(desk_block.get("ok"))
         return {
-            "ok": True,
-            "positions": reconcile_positions(
-                self.paper.query_positions(),
-                self._live.query_positions(),
-            ),
+            "ok": ok,
+            "stage": "1_readonly",
+            "gateway": self._live.gateway_name,
+            "connected": self._live.connected,
+            "live": self._live.snapshot(),
+            "paper_vs_live": {"positions": paper_pos, "trades": paper_tr},
+            "desk_vs_live": desk_block,
+            "gate": read_gate.reason,
         }
 
     def sell_triggers(self, advice: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -212,9 +321,14 @@ class ExecEngine:
             by_mode[mode] = by_mode.get(mode, 0) + 1
             if t.get("executable"):
                 exec_n += 1
+        stage = (
+            "1_readonly"
+            if self._live is not None and require_start_gate(live=True, trade=False).ok
+            else "0.7_circuit_persist_triggers"
+        )
         return {
             "ok": True,
-            "stage": "0.7_circuit_persist_triggers",
+            "stage": stage,
             "gate_ok": bool(stats.get("gate_ok")),
             "gate_readonly_ok": bool(stats.get("gate_readonly_ok")),
             "gate": gate,

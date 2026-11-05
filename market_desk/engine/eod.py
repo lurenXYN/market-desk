@@ -256,6 +256,23 @@ class EodMixin:
         )
         log.info("eod onepager push day=%s ok=%s", day_s, ok_n)
 
+    async def _maybe_push_ntfy_prep(self, now: datetime) -> None:
+        """Push sim-aligned pre-open prep via ntfy once (09:10–09:25)."""
+        if not is_trading_day(now):
+            return
+        mins = _minutes(now)
+        if mins < 9 * 60 + 10 or mins >= 9 * 60 + 25:
+            return
+        day_s = now.strftime("%Y-%m-%d")
+        try:
+            from market_desk.ntfy_push import push_ntfy_prep
+
+            ok_n = push_ntfy_prep(self.snapshot, day=day_s)
+            if ok_n:
+                log.info("ntfy prep push day=%s ok=%s", day_s, ok_n)
+        except Exception:
+            log.exception("ntfy prep push failed")
+
     async def _maybe_push_morning_brief(self, now: datetime) -> None:
         """Push morning decision brief once per day (09:25–09:50) when enabled."""
         from market_desk.config import SERVERCHAN_MORNING_PUSH

@@ -24,9 +24,12 @@ def sim_desk_book(
         start_gate_snapshot,
     )
 
+    from market_desk.calendar import today_cn
+
     gate = start_gate_snapshot()
     return {
         "ok": True,
+        "trade_date": today_cn(),
         "account": account_snapshot(),
         "gate": gate,
         "attribution": build_sim_attribution(limit=trades),
