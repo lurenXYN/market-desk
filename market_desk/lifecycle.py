@@ -330,12 +330,15 @@ def build_mainline_lifecycle(
     peak.sort(key=_rank_ongoing, reverse=True)
     ending.sort(key=_rank_ending, reverse=True)
 
-    note = "昨收阶段雷达：萌芽 / 主升 / 尖峰观察 / 衰退（非买卖指令）"
+    note = (
+        "板块多日阶段雷达（主线生命周期）：萌芽 / 主升 / 尖峰观察 / 衰退"
+        "（演员=热门∪置顶∪看好，非只画当前主线；非买卖指令）"
+    )
     if mode == "frozen":
-        note += "；列=昨收密封演员（热门+置顶+看好，去伪板块），盘中阶段不一致只旁注"
+        note += "；列=昨收密封演员，盘中阶段不一致只旁注"
     elif mode == "close":
-        note += "；已按今日收盘密封（热门+置顶+看好，去伪板块；当日只写一次）"
-    note += "；密封键优先 BK / N:规范名，换源可续昨收列"
+        note += "；已按今日收盘密封（当日只写一次）"
+    note += "；尖峰观察=多日走热后再贴尖（≠当日尖峰禁追）；密封键优先 BK / N:规范名"
     if no_hist:
         note += f"；{len(no_hist)} 个新浪板无史·不判阶段"
     if bias.get("strict"):
@@ -512,7 +515,12 @@ def classify_lifecycle(
     *,
     bias: dict[str, Any] | None = None,
 ) -> str | None:
-    """Return starting | ongoing | peak | ending | None for one board card."""
+    """Return starting | ongoing | peak | ending | None for one board card.
+
+    ``peak`` (尖峰观察) is multi-day tip-chase only: tip signal after the theme
+    already ran hot. Same-day tip without prior heat goes to ``starting`` so the
+    peak column stays rare and is not a 1:1 mirror of ``尖峰禁追``.
+    """
     status = board.get("status") or ""
     if status in ("冰点", "冷冻", "相对最冷", "传染预警"):
         return None
@@ -534,6 +542,13 @@ def classify_lifecycle(
     # Strict mode: fade one day earlier when review hit-rate is poor.
     decay_need = 1 if bias.get("strict") else 2
     fade_pct = -0.2 if bias.get("strict") else -0.5
+    try:
+        leader_boards = int(board.get("leader_boards") or 0)
+    except (TypeError, ValueError):
+        leader_boards = 0
+    tip_signal = status == "尖峰禁追" or leader_boards >= 3
+    # hot_days includes today when hot → need ≥2 so at least one prior hot day.
+    multi_day_heat = hot_days >= 2
 
     # Ending / repairing first (including soft decay while status still "确认中").
     if (
@@ -548,18 +563,22 @@ def classify_lifecycle(
             return "ending"
         return None
 
-    # Tip-peak is its own bucket — never labeled 主升 (not a buy signal).
-    if status == "尖峰禁追":
-        return "peak"
-
-    # Starting: ignition, jump, recovery from a quiet base, or early confirm.
+    # Starting: ignition, jump, recovery, early confirm, or first-day tip.
+    # Multi-day tip skips these so peak stays the tip-after-heat bucket.
     recovering = prev_zt <= 1 and zt_n >= 2 and pct >= 1.0 and hot_days <= 2
-    if flags.get("点火") or jumped or recovering:
+    tip_after_heat = tip_signal and multi_day_heat
+    if not tip_after_heat and (flags.get("点火") or jumped or recovering):
         return "starting"
-    if status == "确认中" and hot_days <= 2 and (zt_n >= 2 or pct >= 1.5):
+    if tip_signal and not multi_day_heat:
         return "starting"
-    if status == "观察" and zt_n >= 2 and pct >= 1.2 and hot_days <= 2:
+    if not tip_after_heat and status == "确认中" and hot_days <= 2 and (zt_n >= 2 or pct >= 1.5):
         return "starting"
+    if not tip_after_heat and status == "观察" and zt_n >= 2 and pct >= 1.2 and hot_days <= 2:
+        return "starting"
+
+    # Tip-peak after multi-day heat — never labeled 主升 (not a buy signal).
+    if tip_after_heat:
+        return "peak"
 
     # Ongoing: multi-day confirmation, not tip-peak.
     if status == "确认中" and hot_days >= 2:

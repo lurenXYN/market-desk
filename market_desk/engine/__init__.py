@@ -27,6 +27,7 @@ from market_desk.engine.boards import (  # noqa: F401
     _enrich_board,
     _board_etf_codes,
     _stable_mainline_lifecycle,
+    force_reseal_lifecycle,
 )
 from market_desk.engine.watch import (  # noqa: F401
     _decorate_watchlist,

@@ -14,6 +14,35 @@
 
 ---
 
+## [v1.10.68] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 大盘相位卡缺「两市成交额 / 较昨放缩量」这一行常见盘感信息，只能翻日级明细表才看到成交亿。
+
+### 【做了什么（What）】
+- **Added** `enrich_market_context`：两市成交（上证+深证）优先写入 `amount_yi`；较昨全日算 `amount_tone` / `amount_chg_pct` / `amount_delta_yi`（±5% 内平量）。
+- **Added** 相位卡下「成交额…亿｜放量/缩量…%(±…亿) · 分位」一行（盘中较昨全日，hover 说明）。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_amount_vs_prev_v11068.py`。desk.db 无迁移；历史 `amount_yi` 逐步切到两市口径。
+
+---
+
+## [v1.10.67] - 2026-11-05
+
+### 【背景与动机（为什么做 · Why）】
+- 强势日大量板块摸到「尖峰禁追」，生命周期又 1:1 映射进「尖峰观察」列，四列塌成全尖峰；用户以为功能坏了。买卖闸门仍要尖峰禁追防追高，只改雷达分列。
+
+### 【做了什么（What）】
+- **Changed** `classify_lifecycle`：尖峰观察 = 尖峰信号（状态尖峰禁追或龙头连板≥3）**且** `hot_days≥2`；首日贴尖改入萌芽。不改 `board_status` / ready / sticky。
+- **Changed** 词条「主线生命周期」与 UI note：写明「板块多日阶段雷达」，尖峰观察≠当日尖峰禁追。
+- **Added** 管理员 `POST /api/ops/lifecycle-reseal`：按新规则重写当前生效密封（盘中写昨收键、收盘后写今日），便于立即验证列分布。
+
+### 【影响与验证（Impact & Verification）】
+- 单测：首日尖→萌芽；多日确认后再尖→peak；确认中多日→ongoing；reseal 盘前写 prev_day。下一笔收盘密封（或手动 reseal）起列分布变化。desk.db 无迁移。
+
+---
+
 ## [v1.10.66] - 2026-11-05
 
 ### 【背景与动机（为什么做 · Why）】

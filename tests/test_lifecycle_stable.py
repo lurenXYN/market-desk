@@ -89,6 +89,47 @@ def test_tip_peak_is_peak_not_ongoing(monkeypatch):
     assert out["ongoing"] == []
 
 
+def test_first_day_tip_goes_to_starting(monkeypatch):
+    """Same-day tip without prior heat is 萌芽, not 尖峰观察."""
+    _no_bias(monkeypatch)
+    card = {
+        "bk": "BK_NEW",
+        "name": "新题材",
+        "status": "尖峰禁追",
+        "zt_n": 5,
+        "pct": 5.0,
+        "leader_boards": 3,
+        "hist": [],
+        "tags": [],
+    }
+    assert lc.classify_lifecycle(card) == "starting"
+    out = lc.build_mainline_lifecycle([card], [], final=True)
+    assert [r["bk"] for r in out["starting"]] == ["BK_NEW"]
+    assert out["peak"] == []
+
+
+def test_confirm_multi_day_is_ongoing_not_peak(monkeypatch):
+    _no_bias(monkeypatch)
+    hist = _hist("BK2", [
+        ("2026-09-22", 3, 2.0, "确认中"),
+        ("2026-09-23", 4, 2.5, "确认中"),
+    ])
+    card = {
+        "bk": "BK2",
+        "name": "BK2",
+        "status": "确认中",
+        "zt_n": 4,
+        "pct": 2.0,
+        "leader_boards": 1,
+        "hist": hist,
+        "tags": [],
+    }
+    assert lc.classify_lifecycle(card) == "ongoing"
+    out = lc.build_mainline_lifecycle([card], [], final=True)
+    assert [r["bk"] for r in out["ongoing"]] == ["BK2"]
+    assert out["peak"] == []
+
+
 def test_hist_does_not_invent_column_members(monkeypatch):
     _no_bias(monkeypatch)
     hist_map = {

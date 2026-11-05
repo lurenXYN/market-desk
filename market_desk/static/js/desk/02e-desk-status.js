@@ -103,6 +103,37 @@ function renderDeskStatus(d, v) {
         <div><b>${m.zb ?? 0}</b>${termHtml("炸板")}</div>
         <div><b>${m.dt ?? 0}</b>${termHtml("跌停")}</div>
         <div><b>${m.ups ?? 0}/${m.downs ?? 0}</b>涨跌</div>`;
+  const amtEl = document.getElementById("amountLine");
+  if (amtEl) {
+    const amt = m.amount_yi;
+    const tone = m.amount_tone;
+    const chg = m.amount_chg_pct;
+    const delta = m.amount_delta_yi;
+    const pctile = m.amount_pctile;
+    if (amt == null || amt === "") {
+      amtEl.textContent = "成交额待刷新";
+      amtEl.className = "amount-line meta";
+    } else {
+      const amtTxt = Number(amt).toLocaleString("zh-CN", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+      let vs = "";
+      if (tone && chg != null && delta != null) {
+        const sign = delta > 0 ? "+" : "";
+        const dTxt = Number(delta).toLocaleString("zh-CN", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2,
+        });
+        vs = `｜${tone}${Math.abs(Number(chg)).toFixed(2)}%(${sign}${dTxt}亿)`;
+      }
+      const pctTxt = pctile != null ? ` · 分位${pctile}` : "";
+      amtEl.textContent = `成交额${amtTxt}亿${vs}${pctTxt}`;
+      amtEl.className = "amount-line meta"
+        + (tone === "放量" ? " amt-up" : "")
+        + (tone === "缩量" ? " amt-down" : "");
+    }
+  }
   const cyc = d.cycle || {};
   document.getElementById("cycleNote").textContent = cyc.note || "";
   paintTimeline(d);

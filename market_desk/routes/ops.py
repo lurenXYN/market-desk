@@ -597,6 +597,48 @@ def ops_bench_refresh(
     return {"ok": True, **ensure_bench_cache(force=bool(force))}
 
 
+@router.post("/api/ops/lifecycle-reseal")
+def ops_lifecycle_reseal(user: dict = Depends(current_admin_required)) -> dict:
+    """Reclassify the active lifecycle_close seal under current rules (admin).
+
+    Uses the latest snapshot cast (hot ∪ pin ∪ fav). Before 15:00 rewrites the
+    previous trading-day seal that still drives frozen columns; after the close
+    overwrites today's seal. Does not change board_status or ready.
+    """
+    del user
+    from datetime import datetime
+
+    from market_desk.engine import force_reseal_lifecycle
+    from market_desk.engine.core import CN_TZ
+
+    snap = engine.snapshot or {}
+    hot = list(snap.get("hot_boards") or [])
+    pins = list(snap.get("pin_boards") or [])
+    favs = list(snap.get("favorite_boards") or [])
+    hist_map: dict[str, list] = {}
+    for card in hot + pins + favs:
+        if not isinstance(card, dict):
+            continue
+        bk = str(card.get("bk") or "").strip()
+        hist = card.get("hist")
+        if bk and isinstance(hist, list) and hist:
+            hist_map[bk] = hist
+    now = datetime.now(CN_TZ)
+    result = force_reseal_lifecycle(hot, pins, hist_map, now=now, fav_cards=favs)
+    life = result.get("lifecycle") if isinstance(result.get("lifecycle"), dict) else None
+    if result.get("ok") and life:
+        engine.snapshot["mainline_lifecycle"] = life
+        try:
+            from market_desk.lifecycle import attach_mainline_lifecycle_display
+
+            verdict = engine.snapshot.get("verdict")
+            if isinstance(verdict, dict):
+                attach_mainline_lifecycle_display(verdict, life)
+        except Exception:
+            log.exception("attach lifecycle after reseal failed")
+    return result
+
+
 @router.get("/api/ops/sim-desk")
 def ops_sim_desk(
     backfill: bool = Query(default=False),

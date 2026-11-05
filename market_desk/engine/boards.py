@@ -401,7 +401,8 @@ def _stable_mainline_lifecycle(
             out["mode"] = "close"
             out["sealed"] = True
             out["note"] = (
-                "昨收阶段雷达：萌芽 / 主升 / 尖峰观察 / 衰退（非买卖指令）；"
+                "板块多日阶段雷达（主线生命周期）：萌芽 / 主升 / 尖峰观察 / 衰退"
+                "（非买卖指令；尖峰观察=走热后再贴尖）；"
                 "已按今日收盘密封（热门+置顶+看好，去伪板块；当日只写一次）"
             )
             return out
@@ -430,3 +431,67 @@ def _stable_mainline_lifecycle(
         final=False,
         side_live=side_live,
     )
+
+
+def force_reseal_lifecycle(
+    hot_cards: list[dict[str, Any]],
+    pin_cards: list[dict[str, Any]],
+    hist_map: dict[str, list[dict[str, Any]]] | None,
+    *,
+    now: datetime,
+    fav_cards: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Overwrite the active lifecycle_close seal with a fresh classify (admin).
+
+    After 15:00 writes today's seal; before the close rewrites the previous
+    trading day's seal that still drives the frozen columns, so rule changes
+    can be verified without waiting for the next close.
+    """
+    from market_desk.db import save_setting
+
+    favs = list(fav_cards or [])
+    today = now.strftime("%Y-%m-%d")
+    after_close = is_trading_day(now) and _minutes(now) >= 15 * 60
+    seal_day = today if after_close else (_prev_trading_day(now) or today)
+    out = build_mainline_lifecycle(
+        hot_cards,
+        pin_cards,
+        favs=favs,
+        hist_map=hist_map or {},
+        final=True,
+    )
+    stage_map = out.get("stage_map") if isinstance(out.get("stage_map"), dict) else {}
+    if stage_map:
+        try:
+            save_setting(f"lifecycle_close:{seal_day}", stage_map)
+        except Exception:
+            log.exception("force reseal lifecycle failed")
+            return {
+                "ok": False,
+                "error": "save_failed",
+                "seal_day": seal_day,
+                "lifecycle": out,
+            }
+    rebuilt = build_mainline_lifecycle(
+        hot_cards,
+        pin_cards,
+        favs=favs,
+        hist_map=hist_map or {},
+        frozen=stage_map,
+        final=False,
+    )
+    rebuilt["mode"] = "close" if after_close else "frozen"
+    rebuilt["sealed"] = True
+    rebuilt["resealed"] = True
+    rebuilt["seal_day"] = seal_day
+    rebuilt["note"] = (
+        str(rebuilt.get("note") or "")
+        + f"；管理员已按新规则重密封 {seal_day}"
+    )
+    return {
+        "ok": True,
+        "seal_day": seal_day,
+        "after_close": after_close,
+        "n_stages": sum(1 for s in stage_map.values() if s),
+        "lifecycle": rebuilt,
+    }

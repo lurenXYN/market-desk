@@ -173,8 +173,19 @@ def enrich_market_context(
     indices: list[dict[str, Any]] | None = None,
     history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Attach amount percentile, index bias and volume/index gate flags."""
+    """Attach amount percentile, vs-prev volume tone, index bias and gate flags."""
     m = dict(metrics or {})
+    # Prefer 两市成交 (上证+深证) for the glance line when indices carry amount.
+    try:
+        from market_desk.radar.crowding import market_turnover
+
+        mt = market_turnover(indices)
+    except Exception:  # noqa: BLE001
+        mt = None
+    if mt is not None and mt > 0:
+        # Prefer 两市成交 as the live amount (matches common media "两市成交额").
+        m["turnover_yi"] = round(float(mt) / 1e8, 2)
+        m["amount_yi"] = m["turnover_yi"]
     amounts = [
         float(h.get("amount_yi") or 0)
         for h in (history or [])
@@ -192,6 +203,25 @@ def enrich_market_context(
     m["amount_pctile"] = amt_pctile
     m["thin_volume"] = bool(amt_pctile is not None and amt_pctile < 30)
     m["hot_volume"] = bool(amt_pctile is not None and amt_pctile >= 70)
+
+    # Vs previous full session: 放量/缩量 % and absolute 亿 delta (盘中较昨全日).
+    prev_amt = float(prior[0]) if prior else None
+    m["amount_prev_yi"] = None if prev_amt is None else round(prev_amt, 2)
+    if prev_amt is not None and prev_amt > 0 and today_amt > 0:
+        delta = today_amt - prev_amt
+        chg = round(delta / prev_amt * 100.0, 2)
+        m["amount_delta_yi"] = round(delta, 2)
+        m["amount_chg_pct"] = chg
+        if delta > 0.05 * prev_amt:
+            m["amount_tone"] = "放量"
+        elif delta < -0.05 * prev_amt:
+            m["amount_tone"] = "缩量"
+        else:
+            m["amount_tone"] = "平量"
+    else:
+        m["amount_delta_yi"] = None
+        m["amount_chg_pct"] = None
+        m["amount_tone"] = None
 
     by_name = {(x.get("name") or ""): x for x in (indices or [])}
     by_code = {str(x.get("code") or ""): x for x in (indices or [])}

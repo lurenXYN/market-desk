@@ -282,6 +282,14 @@
 .phases div:nth-child(2) b { color: var(--div); }
 .phases div:nth-child(3) b { color: var(--violet); }
 .phases div:nth-child(4) b { color: var(--blue); }
+.amount-line {
+  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.amount-line.amt-up { color: var(--up); }
+.amount-line.amt-down { color: var(--div); }
 .timeline { display: flex; gap: 4px; margin: 8px 0 12px; overflow-x: auto; }
 .node {
   min-width: 42px; text-align: center; padding: 6px 4px;

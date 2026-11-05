@@ -2,7 +2,7 @@
 function renderMarketBoards(d, v) {
   const life = d.mainline_lifecycle || {};
   document.getElementById("lifeNote").textContent = life.note
-    || "板块阶段雷达 · 非买卖指令；当前主线会高亮";
+    || "板块多日阶段雷达 · 非买卖指令；尖峰观察≠当日尖峰禁追；当前主线会高亮";
   const curLifeName = ((d.verdict || {}).mainline || {}).name || "";
   const sim = d.similar_days || {};
   document.getElementById("similarNote").textContent = sim.note || "近端同相位日对照次日冷热";
