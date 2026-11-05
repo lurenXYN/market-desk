@@ -57,12 +57,21 @@ jobs:
             replayed = replay_exits_from_sell_signals()
             gate = start_gate_snapshot()
             acct = gate.get("account") or {}
+            vs = gate.get("vs_bench") if isinstance(gate.get("vs_bench"), dict) else {}
             print(
                 f"SIM backfill={opened} replay={replayed} "
                 f"open={gate.get('open_n')} closed={gate.get('closed_n')} "
                 f"equity={acct.get('equity') or gate.get('equity')} "
-                f"gate_ok={gate.get('gate_ok')} label={gate.get('gate_label')}"
+                f"ret={gate.get('cum_pnl_pct')} excess={gate.get('excess_cum_pct')} "
+                f"gate_ok={gate.get('gate_ok')} "
+                f"readonly_ok={gate.get('gate_readonly_ok')} "
+                f"label={gate.get('gate_label')}"
             )
+            if vs:
+                print(
+                    f"VS_BENCH book={vs.get('book_cum_pct')} "
+                    f"bench={vs.get('bench_cum_pct')} excess={vs.get('excess_cum_pct')}"
+                )
             print("BARS", bars_cache_stats())
             fr = fill_rules_parity()
             print("FILL_RULES t1_aligned", (fr.get("t1") or {}).get("aligned"),

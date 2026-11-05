@@ -53,9 +53,34 @@ jobs:
             print(
                 "OPS", summary.get("ops_overall"),
                 "GATE", summary.get("sim_gate_ok"),
+                "READONLY", summary.get("sim_gate_readonly_ok"),
                 "JUDGE", summary.get("proposals_judge"),
                 "WATCH", summary.get("proposals_watch"),
             )
+            sim_wrap = out.get("sim") if isinstance(out.get("sim"), dict) else {}
+            gate = sim_wrap.get("gate") if isinstance(sim_wrap.get("gate"), dict) else {}
+            print(
+                "SIM",
+                "closed", gate.get("closed_n"),
+                "open", gate.get("open_n"),
+                "equity", gate.get("equity"),
+                "ret", gate.get("cum_pnl_pct"),
+                "excess", gate.get("excess_cum_pct"),
+                "ok", gate.get("gate_ok"),
+                "readonly", gate.get("gate_readonly_ok"),
+                "label", gate.get("gate_label"),
+            )
+            vs = gate.get("vs_bench") if isinstance(gate.get("vs_bench"), dict) else {}
+            if not vs and isinstance(sim_wrap.get("vs_bench"), dict):
+                vs = sim_wrap.get("vs_bench") or {}
+            if vs:
+                print(
+                    "VS_BENCH",
+                    vs.get("bench"),
+                    "book", vs.get("book_cum_pct"),
+                    "bench_pct", vs.get("bench_cum_pct"),
+                    "excess", vs.get("excess_cum_pct"),
+                )
             # Today buy-card pulse (post env_gate / gate_replay deploy).
             try:
                 from datetime import datetime
@@ -135,3 +160,22 @@ jobs:
                 json.dump(out, f, ensure_ascii=False, indent=2, default=str)
             print("WROTE", path, "bytes", __import__("os").path.getsize(path))
             PY
+
+      - name: Fetch agent-pack.json from VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          source: /tmp/agent-pack.json
+          target: artifacts/
+          strip_components: 1
+
+      - name: Upload agent-pack artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-pack
+          path: artifacts/agent-pack.json
+          if-no-files-found: warn
+          retention-days: 14
