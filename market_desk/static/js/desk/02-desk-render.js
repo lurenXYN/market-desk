@@ -122,6 +122,26 @@ function renderDeskHead(d, v) {
       envPill.className = "meta";
     }
   }
+  const defensePill = document.getElementById("defensePill");
+  if (defensePill) {
+    const df = d.defense || {};
+    const tier = String(df.tier || "");
+    const lab = String(df.label || "").replace(/[<>&"]/g, "");
+    const hint = String(df.hint || "").replace(/[<>&"]/g, "");
+    if (df.ok && tier) {
+      const why = (df.reasons || []).slice(0, 3).join("·");
+      defensePill.innerHTML = `逆境${tier}${lab ? "·" + lab : ""}`
+        + ` <button type="button" class="q" data-term="逆境档位">?</button>`;
+      defensePill.title = (hint || df.note || "逆境档位旁注，不改 ready/仓位")
+        + (why ? "\n触发：" + why : "");
+      defensePill.className = "meta defense-" + tier.toLowerCase()
+        + (tier === "D0" ? "" : " defense-active");
+    } else {
+      defensePill.textContent = "";
+      defensePill.title = "";
+      defensePill.className = "meta";
+    }
+  }
   const gateEl = document.getElementById("gateHint");
   const gate = d.desk_gate_summary || {};
   if (gateEl) {

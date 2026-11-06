@@ -136,6 +136,10 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
         from market_desk.news_radar import freeze_news_radar as _freeze_news_radar
     except Exception:
         _freeze_news_radar = None  # type: ignore[assignment]
+    try:
+        from market_desk.defense import freeze_defense as _freeze_defense
+    except Exception:
+        _freeze_defense = None  # type: ignore[assignment]
     deep_v_day_row = None
     prev_deep = False
     try:
@@ -321,6 +325,11 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                             }
                             if _freeze_news_radar
                             else {}
+                        ),
+                        **(
+                            (lambda d: {"defense": d} if d else {})(
+                                _freeze_defense(snapshot) if _freeze_defense else None
+                            )
                         ),
                         **_slip_fields(item),
                         **deep_v_fields(

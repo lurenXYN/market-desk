@@ -412,6 +412,16 @@ ENV_FRIENDLY_GATE = 0.90          # <1 loosens minute/off_high when friendly
 ENV_HOSTILE_GATE = 1.10           # >1 tightens when hostile
 ENV_ETF_SCALE = 0.85              # compress env deviation toward 1.0 for ETF
 ENV_STOCK_SCALE = 1.0
+# Defense tier (逆境档位) — display + freeze only in v1.10.80.
+# D1 = regime below OR env hostile; D2 = both; D3 = sim stress.
+# size_mult is recorded for shadow; live apply stays off until TODO clears.
+DEFENSE_SHADOW_SINCE = "2026-11-06"
+DEFENSE_D1_SIZE_MULT = 0.85
+DEFENSE_D2_SIZE_MULT = 0.65
+DEFENSE_D3_LOSS_STREAK = 3
+DEFENSE_D3_LOOKBACK_DAYS = 5
+DEFENSE_D3_DRAWDOWN_PCT = 3.0
+DEFENSE_SIZE_LIVE = False         # hard off until shadow window passes
 
 # Deep-V bounce shadow (display only; pre-registered 2026-10-28). Sample starts
 # the day this code ships — days before SINCE do not count as evidence.

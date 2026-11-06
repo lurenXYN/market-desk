@@ -762,6 +762,27 @@ class RefreshMixin:
                 except Exception:
                     log.exception("env_gate build failed")
                     env_gate_live = None
+                defense_live: dict[str, Any] | None = None
+                try:
+                    from market_desk.defense import (
+                        annotate_verdict_defense,
+                        classify_defense_tier,
+                    )
+
+                    defense_live = classify_defense_tier(
+                        market_regime=market_regime_live
+                        if isinstance(market_regime_live, dict)
+                        else None,
+                        env_gate=env_gate_live
+                        if isinstance(env_gate_live, dict)
+                        else None,
+                    )
+                    annotated_def = annotate_verdict_defense(verdict, defense_live)
+                    verdict.clear()
+                    verdict.update(annotated_def)
+                except Exception:
+                    log.exception("defense tier failed")
+                    defense_live = None
                 payload = {
                     "ok": True,
                     "error": None,
@@ -818,6 +839,7 @@ class RefreshMixin:
                             else None,
                         )
                     ),
+                    "defense": defense_live,
                     "fund_flow": fund_flow,
                     "hot_boards": hot_cards,
                     "pin_boards": pin_cards,

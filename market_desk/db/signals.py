@@ -139,6 +139,11 @@ def upsert_signal(row: dict[str, Any]) -> None:
             merged["news_radar"] = old_payload["news_radar"]
         elif isinstance(incoming.get("news_radar"), dict):
             merged["news_radar"] = incoming["news_radar"]
+        # Defense tier: fill-once freeze (display-only in v1.10.80).
+        if isinstance(old_payload.get("defense"), dict):
+            merged["defense"] = old_payload["defense"]
+        elif isinstance(incoming.get("defense"), dict):
+            merged["defense"] = incoming["defense"]
         # Gate-replay inputs: keep first high / cross counts / thin_confirm.
         for _gk in ("high", "cross_n", "cross_theme_n", "thin_confirm"):
             if old_payload.get(_gk) is not None:

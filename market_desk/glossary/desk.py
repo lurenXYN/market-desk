@@ -184,6 +184,12 @@ ENTRIES: dict[str, dict[str, str]] = {
         "尺下存活压力：abs_win（三日%>0）与 xs_win（超额>0）并排；只旁注，不改 ready。\n"
         "门槛见 TODO；约 10/28 后才允许软排序叠 regime，永不硬切 ready。另见「环境闸」。",
     },
+    "逆境档位": {
+        "mean": "把大盘尺 + 环境闸 + 模拟账本压力合成 D0–D3 防守档：顺境/谨慎/防守/保命。只旁注与冻结，不改 ready。",
+        "algo": "classify_defense_tier：D1=尺下或 env=hostile；D2=尺下且敌意；D3=模拟连亏≥3 或近5日实现回撤≥3%。\n"
+        "顶栏 defensePill + 卡面 defense_tag；买卡冻结 payload.defense（size_live 默认关）。\n"
+        "v1.10.80 只展示/记账；仓位乘子与推送降噪等影子过线后再开（见 TODO）。借鉴趋势过滤+波动管理+账本熔断，不关 ready。",
+    },
     "环境闸": {
         "mean": "把大盘好坏变成买闸软倍率：坏环境更严、好环境略松，并区分 ETF/个股。默认只记账，不关亮灯。顶栏「环境·影子」小标只旁注。",
         "algo": "build_env_gate：尺上下 + 波动档 + 道氏/均线/MACD·RSI/ATR/ADX/BOLL/量能 + 缺口细分与精简K线软标签 → score → hostile|neutral|friendly。\n"

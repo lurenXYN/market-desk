@@ -13,7 +13,7 @@ from typing import Any
 from market_desk.calendar import now_cn
 
 
-AGENT_PACK_SCHEMA = "agent_pack.v5"
+AGENT_PACK_SCHEMA = "agent_pack.v6"
 
 _GATE_LIVE_KEYS = ("minute", "off_high", "thin")
 
@@ -420,6 +420,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
     from market_desk.calendar import today_cn
     from market_desk.config import (
         DEEP_V_SHADOW_SINCE,
+        DEFENSE_SHADOW_SINCE,
         EDGE_SHADOW_SINCE,
         ENV_GATE_SHADOW_SINCE,
         REGIME_SHADOW_SINCE,
@@ -590,6 +591,15 @@ def build_agent_pack_sync() -> dict[str, Any]:
     dual = review.get("dual_wins") if isinstance(review.get("dual_wins"), dict) else {}
     vs_bench = gate.get("vs_bench") if isinstance(gate.get("vs_bench"), dict) else {}
 
+    defense_snap: dict[str, Any] | None = None
+    try:
+        from market_desk.defense import build_defense_from_snapshot
+        from market_desk.engine import engine
+
+        defense_snap = build_defense_from_snapshot(engine.snapshot or {})
+    except Exception as exc:  # noqa: BLE001
+        defense_snap = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+
     return {
         "ok": True,
         "schema": AGENT_PACK_SCHEMA,
@@ -600,6 +610,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "edge": EDGE_SHADOW_SINCE,
             "regime": REGIME_SHADOW_SINCE,
             "env_gate": ENV_GATE_SHADOW_SINCE,
+            "defense": DEFENSE_SHADOW_SINCE,
             "deep_v": DEEP_V_SHADOW_SINCE,
             "zt_share": ZT_SHARE_SHADOW_SINCE,
         },
@@ -609,6 +620,13 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "sim_gate_readonly_ok": bool(gate.get("gate_readonly_ok")),
             "sim_cum_pnl_pct": gate.get("cum_pnl_pct"),
             "sim_vs_bench": vs_bench,
+            "defense_tier": (defense_snap.get("tier") if isinstance(defense_snap, dict) else None),
+            "defense_label": (defense_snap.get("label") if isinstance(defense_snap, dict) else None),
+            "defense_reasons": (
+                list(defense_snap.get("reasons") or [])[:4]
+                if isinstance(defense_snap, dict)
+                else []
+            ),
             "dual_wins": {
                 "all": (dual.get("all") or {}) if dual.get("ok") else dual,
                 "lit": (dual.get("lit") or {}) if dual.get("ok") else None,
@@ -635,11 +653,13 @@ def build_agent_pack_sync() -> dict[str, Any]:
                 "abs_win=绝对胜率，xs_win=跑赢大盘胜率。"
                 "env_gate 默认影子；env_gate_live 才软乘阈值（默认仅 minute）。"
                 "adapt_live=当日现倍率；adapt_effect=分档成绩/今日卡/漏买/题材（看效果用，不自动改闸）。"
+                "defense=逆境档位旁注（v1.10.80 size_live 关）。"
             ),
         },
         "adapt_live": adapt_live,
         "adapt_effect": adapt_effect,
         "np_review": np_review,
+        "defense": defense_snap,
         "proposals": proposals,
         "dual_wins": dual,
         "review_check": review,

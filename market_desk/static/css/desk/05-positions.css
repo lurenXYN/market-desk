@@ -245,6 +245,11 @@ tr.rev-flash { outline: 1px solid #fbbf24; outline-offset: -1px; background: rgb
 #envGatePill.env-friendly { color: var(--ferm); }
 #envGatePill.env-neutral { color: var(--muted); }
 #envGatePill.env-hostile { color: var(--warn); }
+#defensePill.defense-d0 { color: var(--ferm); }
+#defensePill.defense-d1 { color: var(--muted); }
+#defensePill.defense-d2,
+#defensePill.defense-d3 { color: var(--warn); }
+#defensePill.defense-active { font-weight: 600; }
 .rev-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .rev-actions .rev-up {
   background: #1a3a28; color: var(--ferm); border: 1px solid #2f5a3a;

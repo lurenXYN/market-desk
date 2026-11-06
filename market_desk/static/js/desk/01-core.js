@@ -252,6 +252,13 @@ const recCard = (it) => {
       : tag.tone === "warn" ? "entry-badge-warn" : "entry-badge-soft";
     return `<span class="entry-badge ${tone}" title="${tip}">${tag.label}</span>`;
   })();
+  const defenseBadge = (() => {
+    const tag = it.defense_tag;
+    if (!tag || !tag.label) return "";
+    const tip = String(tag.note || "逆境档位旁注，不关亮灯").replace(/"/g, "");
+    const tone = tag.tone === "warn" ? "entry-badge-warn" : "entry-badge-soft";
+    return `<span class="entry-badge ${tone}" title="${tip}">${tag.label}</span>`;
+  })();
   const entryBadge = (() => {
     if (fly) {
       return `<span class="entry-badge entry-badge-fly" title="${it.fly_note || "半仓试探窗口，再等可能飞"}">将飞·半仓</span>`;
@@ -318,7 +325,7 @@ const recCard = (it) => {
           (it.size_mult != null && Number(it.size_mult) < 0.999)
             ? ` ×${Number(it.size_mult).toFixed(1)}`
             : ""
-        }</span>${entryBadge}${softRankBadge}${regimeBadge}${fmtPct(it.pct)}</div>
+        }</span>${entryBadge}${softRankBadge}${regimeBadge}${defenseBadge}${fmtPct(it.pct)}</div>
         <div class="nm">${tickerHtml(it.name, it.code)}</div>
         ${absorbBanner}
         ${trendHtml}
