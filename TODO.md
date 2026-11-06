@@ -123,6 +123,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-05：新闻雷达进入效果观察窗（手标+共振次日；不改买闸）— 见独立仓 `news-radar/TODO.md`。
 - 2026-11-05（v1.10.77）：新闻雷达影子记账 + 雷达侧无共振不发/次日超额。
 - 2026-11-06（v1.10.78）：修复设置保存丢掉 ntfy_*（SettingsIn 静默丢字段）。
+- 2026-11-06（v1.10.79）：新闻雷达 freeze 必写；雷达侧超额回填/入簇降噪/手标催促。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 

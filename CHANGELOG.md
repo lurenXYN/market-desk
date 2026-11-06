@@ -14,6 +14,20 @@
 
 ---
 
+## [v1.10.79] - 2026-11-06
+
+### 【背景与动机（为什么做 · Why）】
+- VPS 效果窗样本：亮灯卡 `missing_freeze`、影子 hit 侧为空；雷达侧超额列大量未填却仍出超额 hint。
+
+### 【做了什么（What）】
+- **Fixed** `freeze_news_radar` 始终返回 dict（含 `status=missing/disabled` + `board_names`），建卡必写入 `payload.news_radar`。
+- **Note** 雷达仓同期：超额回填、入簇/词表降噪、手标催促 — 见 news-radar。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_news_radar_shadow_v11077.py`。desk.db 无迁移。不改 ready/买卖闸。
+
+---
+
 ## [v1.10.78] - 2026-11-06
 
 ### 【背景与动机（为什么做 · Why）】

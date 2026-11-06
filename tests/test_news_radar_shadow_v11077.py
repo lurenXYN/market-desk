@@ -44,7 +44,11 @@ def test_freeze_news_radar_hit_and_miss():
 
 
 def test_freeze_disabled_and_missing():
-    assert freeze_news_radar({}) is None
+    missing = freeze_news_radar({})
+    assert missing is not None
+    assert missing["hit"] is False
+    assert missing["status"] == "missing"
+    assert missing["matches_n"] == 0
     off = freeze_news_radar({"news_radar": {"enabled": False}})
     assert off is not None
     assert off["hit"] is False

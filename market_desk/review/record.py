@@ -309,16 +309,18 @@ def record_session_signals(snapshot: dict[str, Any]) -> int:
                             )
                         ),
                         **(
-                            (lambda nr: {"news_radar": nr} if nr else {})(
-                                _freeze_news_radar(
+                            {
+                                "news_radar": _freeze_news_radar(
                                     snapshot,
-                                    board_names=list(item.get("board_names") or board_names or []),
+                                    board_names=list(
+                                        item.get("board_names") or board_names or []
+                                    ),
                                     mainline=str(board_fallback or mainline or ""),
                                     source_board=str(source_board or ""),
                                 )
-                                if _freeze_news_radar
-                                else None
-                            )
+                            }
+                            if _freeze_news_radar
+                            else {}
                         ),
                         **_slip_fields(item),
                         **deep_v_fields(

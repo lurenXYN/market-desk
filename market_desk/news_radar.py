@@ -212,28 +212,52 @@ def freeze_news_radar(
     board_names: list[str] | None = None,
     mainline: str = "",
     source_board: str = "",
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Freeze a compact news-radar shadow blob for one buy signal payload.
 
-    Matches radar sectors against the card's boards / mainline. ``hit`` is True
-    only for resonance / board_lead overlap. Never affects ready gates.
+    Always returns a dict (even when radar is offline / disabled) so shadow
+    accounting never hits ``missing_freeze``. ``hit`` is True only for
+    resonance / board_lead overlap. Never affects ready gates.
     """
+    stamp = datetime.now(_CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    names = [str(x).strip() for x in (board_names or []) if str(x).strip()]
+    for extra in (source_board, mainline):
+        e = str(extra or "").strip()
+        if e and e not in names:
+            names.append(e)
     snap = snapshot if isinstance(snapshot, dict) else {}
     nr = snap.get("news_radar") if isinstance(snap.get("news_radar"), dict) else {}
     if not nr:
-        return None
+        return {
+            "ok": False,
+            "status": "missing",
+            "status_label": "快照无雷达",
+            "hit": False,
+            "confirm": None,
+            "confirm_label": None,
+            "sector": None,
+            "board_pct": None,
+            "matches_n": 0,
+            "board_names": names[:8],
+            "at": stamp,
+        }
     if not nr.get("enabled", True):
         return {
             "ok": False,
             "status": "disabled",
+            "status_label": "未接入",
             "hit": False,
-            "at": datetime.now(_CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "confirm": None,
+            "confirm_label": None,
+            "sector": None,
+            "board_pct": None,
+            "matches_n": 0,
+            "board_names": names[:8],
+            "at": stamp,
         }
-    names = [str(x).strip() for x in (board_names or []) if str(x).strip()]
-    for extra in (source_board, mainline, str(nr.get("mainline_name") or "")):
-        e = str(extra or "").strip()
-        if e and e not in names:
-            names.append(e)
+    ml = str(nr.get("mainline_name") or "").strip()
+    if ml and ml not in names:
+        names.append(ml)
     rows = list(nr.get("sectors") or [])
     matches: list[dict[str, Any]] = []
     for r in rows:
@@ -276,7 +300,8 @@ def freeze_news_radar(
         "sector": (best or {}).get("sector") if best else None,
         "board_pct": (best or {}).get("board_pct") if best else None,
         "matches_n": len(matches),
-        "at": datetime.now(_CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "board_names": names[:8],
+        "at": stamp,
     }
 
 
