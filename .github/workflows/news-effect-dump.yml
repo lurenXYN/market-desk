@@ -1,0 +1,82 @@
+# Dump news-radar effect window + desk freeze samples from VPS.
+name: News effect dump
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: news-effect-dump
+  cancel-in-progress: true
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dump effect samples over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+            echo "=== /api/effect ==="
+            curl -sS "http://127.0.0.1:8770/api/effect?days=30" || echo "effect_curl_failed"
+            echo
+            echo "=== shadow_summary ==="
+            cd /opt/market-desk
+            .venv/bin/python - <<'PY'
+            import json
+            from market_desk.news_radar import news_radar_shadow_summary
+            print(json.dumps(news_radar_shadow_summary(days=30), ensure_ascii=False, indent=2))
+            PY
+            echo "=== radar sql ==="
+            sqlite3 /opt/news-radar/data/radar.db <<'SQL'
+            .headers on
+            .mode line
+            SELECT 'push_fb' AS tag, IFNULL(feedback,'(empty)') AS feedback, COUNT(*) AS n
+            FROM push_log WHERE substr(created_at,1,10)>='2026-11-05' GROUP BY feedback;
+            SELECT 'push_kind' AS tag, kind, COUNT(*) AS n
+            FROM push_log WHERE substr(created_at,1,10)>='2026-11-01' GROUP BY kind;
+            SELECT 'rmark' AS tag, trade_date, confirm, COUNT(*) AS n
+            FROM resonance_mark WHERE trade_date>='2026-11-01'
+            GROUP BY trade_date, confirm ORDER BY trade_date DESC;
+            SELECT 'rout_n' AS tag, COUNT(*) AS n,
+              ROUND(AVG(next_board_pct),3) AS avg_next,
+              ROUND(AVG(next_excess_pct),3) AS avg_ex,
+              SUM(CASE WHEN next_excess_pct>0 THEN 1 ELSE 0 END) AS ex_up
+            FROM resonance_outcome
+            WHERE trade_date>='2026-11-01' AND next_board_pct IS NOT NULL;
+            SELECT trade_date, sector, next_board_pct, next_bench_pct, next_excess_pct
+            FROM resonance_outcome WHERE trade_date>='2026-11-01'
+            ORDER BY trade_date DESC LIMIT 30;
+            SELECT 'cluster_n' AS tag, COUNT(*) AS n FROM event_cluster;
+            SELECT 'art_clustered' AS tag, COUNT(*) AS n FROM articles WHERE cluster_id IS NOT NULL;
+            SELECT id, n_articles, substr(title,1,48) AS title, substr(sectors,1,36) AS sectors,
+                   substr(last_seen,1,16) AS last_seen
+            FROM event_cluster ORDER BY n_articles DESC, last_seen DESC LIMIT 15;
+            SQL
+            echo "=== desk freeze lit buys ==="
+            sqlite3 /opt/market-desk/data/desk.db <<'SQL'
+            .headers on
+            .mode column
+            SELECT trade_date, code, ready,
+              json_extract(payload,'$.news_radar.hit') AS hit,
+              json_extract(payload,'$.news_radar.confirm') AS confirm,
+              json_extract(payload,'$.ever_ready') AS ever_ready,
+              outcome_label, outcome_day1_pct, outcome_day3_pct
+            FROM signals
+            WHERE trade_date>='2026-11-05'
+              AND COALESCE(owner_user_id,0)=0
+              AND signal_type LIKE 'buy%'
+              AND (
+                ready=1
+                OR json_extract(payload,'$.ever_ready')=1
+                OR json_extract(payload,'$.first_ready_at') IS NOT NULL
+              )
+            ORDER BY trade_date DESC, id DESC
+            LIMIT 50;
+            SQL
