@@ -122,6 +122,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-05（v1.10.76）：ntfy 补发今日 + 模拟成交字段分行；中文 Title 编码修复。
 - 2026-11-05：新闻雷达进入效果观察窗（手标+共振次日；不改买闸）— 见独立仓 `news-radar/TODO.md`。
 - 2026-11-05（v1.10.77）：新闻雷达影子记账 + 雷达侧无共振不发/次日超额。
+- 2026-11-06（v1.10.78）：修复设置保存丢掉 ntfy_*（SettingsIn 静默丢字段）。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -183,6 +184,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **模拟日志按日 v1.10.75**：交易日志默认今日；按日下拉；全部
 - [x] **ntfy 补发 v1.10.76**：补发今日 API/按钮；模拟成交分行；Title 中文编码修复
 - [x] **新闻雷达影子 v1.10.77**：买卡冻结 news_radar；review-check 对比有/无共振三日；不改闸门
+- [x] **设置 ntfy 保存 v1.10.78**：`POST /api/settings` 白名单收 raw dict，不再静默丢 ntfy_*
 
 ### 自学习闭环清单（2026-11-02 登记 · 当日瘦身）
 

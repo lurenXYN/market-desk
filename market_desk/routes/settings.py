@@ -54,8 +54,19 @@ class SettingsIn(BaseModel):
     # Soft-sell open buffer minutes after 09:30.
     sell_open_watch_minutes: int | None = None
     morning_push: bool | None = None
+    serverchan_sell_only: bool | None = None
+    # ntfy (per-user); must be declared or Pydantic drops them on POST.
+    ntfy_on: bool | None = None
+    ntfy_topic: str | None = None
+    ntfy_token: str | None = None
+    ntfy_fly: bool | None = None
+    ntfy_near: bool | None = None
+    ntfy_soft_sell: bool | None = None
+    ntfy_prep: bool | None = None
     news_radar_enabled: bool | None = None
     news_radar_url: str | None = None
+    env_gate_live: bool | None = None
+    env_gate_live_keys: str | None = None
     phase_panic_temp: int | None = None
     phase_ferment_temp: int | None = None
     phase_climax_temp: int | None = None
@@ -122,13 +133,26 @@ def import_settings_payload(
 
 @router.post("/api/settings")
 def write_settings(
-    body: SettingsIn,
+    body: dict[str, Any],
     user: dict = Depends(current_member_required),
 ) -> dict:
-    """Patch settings: private keys per user; global keys require admin."""
-    patch = {k: v for k, v in body.model_dump().items() if v is not None}
-    from market_desk.settings import USER_PRIVATE_KEYS
+    """Patch settings: private keys per user; global keys require admin.
 
+    Accept a raw dict filtered by ``DEFAULTS | USER_PRIVATE_KEYS`` so newly
+    added knobs (e.g. ntfy_*) are not silently dropped by a stale Pydantic
+    model. ``None`` values are ignored to keep partial patches safe; empty
+    strings and ``False`` still persist.
+    """
+    from market_desk.settings import DEFAULTS, USER_PRIVATE_KEYS
+
+    allowed = frozenset(DEFAULTS) | USER_PRIVATE_KEYS
+    patch = {
+        k: v
+        for k, v in (body or {}).items()
+        if k in allowed and v is not None
+    }
+    if not patch:
+        raise HTTPException(400, "无有效设置字段")
     global_keys = [k for k in patch if k not in USER_PRIVATE_KEYS]
     if global_keys and user.get("role") != "admin":
         raise HTTPException(403, "全局参数仅管理员可改：" + "、".join(global_keys[:6]))

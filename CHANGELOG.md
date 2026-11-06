@@ -14,6 +14,20 @@
 
 ---
 
+## [v1.10.78] - 2026-11-06
+
+### 【背景与动机（为什么做 · Why）】
+- 设置页保存 ntfy 后仍像没开：`SettingsIn` 未声明 `ntfy_*`，Pydantic 静默丢弃，接口仍返回 200。
+
+### 【做了什么（What）】
+- **Fixed** `POST /api/settings` 改为按 `DEFAULTS | USER_PRIVATE_KEYS` 白名单收 raw dict，避免新字段再被模型丢掉。
+- **Added** `SettingsIn` 补齐 ntfy / serverchan_sell_only / env_gate_live*（文档与兼容）。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_settings_ntfy_save_v11078.py`。desk.db 无迁移；保存后请再点一次连通测试。
+
+---
+
 ## [v1.10.77] - 2026-11-05
 
 ### 【背景与动机（为什么做 · Why）】
