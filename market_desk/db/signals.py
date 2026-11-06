@@ -134,11 +134,24 @@ def upsert_signal(row: dict[str, Any]) -> None:
         # Env-gate shadow: same fill-once semantics as market_regime.
         if isinstance(old_payload.get("env_gate"), dict):
             merged["env_gate"] = old_payload["env_gate"]
-        # News-radar soft shadow: freeze first non-empty capture.
-        if isinstance(old_payload.get("news_radar"), dict):
-            merged["news_radar"] = old_payload["news_radar"]
-        elif isinstance(incoming.get("news_radar"), dict):
-            merged["news_radar"] = incoming["news_radar"]
+        # News-radar soft shadow: freeze first *real* capture. Placeholder
+        # status (missing/disabled/offline/empty) may fill once when a later
+        # upsert brings a live snapshot — same idea as board_stage "none".
+        _nr_placeholder = frozenset({"missing", "disabled", "offline", "empty", ""})
+        old_nr = old_payload.get("news_radar")
+        new_nr = incoming.get("news_radar")
+        if isinstance(old_nr, dict):
+            old_st = str(old_nr.get("status") or "").strip().lower()
+            if (
+                old_st in _nr_placeholder
+                and isinstance(new_nr, dict)
+                and str(new_nr.get("status") or "").strip().lower() not in _nr_placeholder
+            ):
+                merged["news_radar"] = new_nr
+            else:
+                merged["news_radar"] = old_nr
+        elif isinstance(new_nr, dict):
+            merged["news_radar"] = new_nr
         # Defense tier: fill-once freeze (display-only in v1.10.80).
         if isinstance(old_payload.get("defense"), dict):
             merged["defense"] = old_payload["defense"]

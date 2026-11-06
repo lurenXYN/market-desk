@@ -62,8 +62,9 @@ ENTRIES: dict[str, dict[str, str]] = {
     },
     "新闻雷达影子": {
         "mean": "买卡落库时冻结当时新闻雷达是否与板块共振；事后对比「有共振 vs 无共振」亮灯卡的次日/三日表现。只观察，不改 ready。",
-        "algo": "freeze_news_radar → payload.news_radar（fill-once）；review-check / news_radar_shadow_summary；"
-        "自 NEWS_RADAR_SHADOW_SINCE。雷达侧总报默认无共振不发、次日超额=板块涨幅−全板块中位数。",
+        "algo": "freeze_news_radar → payload.news_radar（首个非占位 fill-once；missing/disabled/offline/empty 可被覆盖）；"
+        "review-check / news_radar_shadow_summary（占位不进对照桶）；自 NEWS_RADAR_SHADOW_SINCE。"
+        "雷达侧总报默认无共振不发、次日超额=板块涨幅−全板块中位数。",
     },
     "提醒分级": {
         "mean": "价带提醒范围；决策提醒单独开关。",

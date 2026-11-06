@@ -295,10 +295,11 @@ def _news_radar_item() -> dict[str, Any]:
             "without_hit": wo,
             "delta_day3": s.get("delta_day3"),
             "missing_freeze": s.get("missing_freeze"),
+            "placeholder_freeze": s.get("placeholder_freeze"),
             "hint": s.get("hint"),
         },
         ui_verdict=str(s.get("hint") or ""),
-        hint="亮灯卡：有共振 vs 无共振的三日均；差≥0.5 才谈保留/降级，不改闸门",
+        hint="亮灯卡：有共振 vs 无共振的三日均；占位冻结不进对照；差≥0.5 才谈保留/降级，不改闸门",
         level="ok" if n >= 10 else "warn",
     )
 

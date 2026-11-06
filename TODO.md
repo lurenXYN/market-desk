@@ -125,6 +125,7 @@ Agents: **at the start of each session involving this app, read this file before
 - 2026-11-06（v1.10.78）：修复设置保存丢掉 ntfy_*（SettingsIn 静默丢字段）。
 - 2026-11-06（v1.10.79）：新闻雷达 freeze 必写；雷达侧超额回填/入簇降噪/手标催促。
 - 2026-11-06（v1.10.80）：逆境档位 D0–D3 旁注+冻结（size_live 关）；借鉴趋势过滤/波动管理/账本熔断。
+- 2026-11-06（v1.10.81）：新闻冻结占位可覆盖 + 影子对照去污染；雷达侧超额回填/探活修复。
 
 ### 约 10/28 复盘检查清单（只看 → 记结论 → 最多改一处）
 
@@ -188,6 +189,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **新闻雷达影子 v1.10.77**：买卡冻结 news_radar；review-check 对比有/无共振三日；不改闸门
 - [x] **设置 ntfy 保存 v1.10.78**：`POST /api/settings` 白名单收 raw dict，不再静默丢 ntfy_*
 - [x] **逆境档位旁注 v1.10.80**：D0–D3 展示/冻结；不改 ready/仓位/推送
+- [x] **新闻冻结/影子 hygiene v1.10.81**：占位可覆盖；对照桶剔 missing/disabled/offline/empty
 - [ ] **逆境档位仓位乘子（下一处）**：`DEFENSE_SIZE_LIVE` 默认关；影子对比缩仓 vs 未缩仓回撤/超额，满 ≥10 日 D1/D2 再开
 - [ ] **逆境档位推送降噪（再下一处）**：D2 只推曾亮灯；D3 不推新买（ntfy 层）
 

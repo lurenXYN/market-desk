@@ -215,8 +215,10 @@ def freeze_news_radar(
 ) -> dict[str, Any]:
     """Freeze a compact news-radar shadow blob for one buy signal payload.
 
-    Always returns a dict (even when radar is offline / disabled) so shadow
-    accounting never hits ``missing_freeze``. ``hit`` is True only for
+    Always returns a dict (even when radar is offline / disabled) so the
+    payload field is present. Placeholder ``status`` values (missing /
+    disabled / offline / empty) stay out of the with/without hit buckets and
+    may be overwritten once by a later real freeze. ``hit`` is True only for
     resonance / board_lead overlap. Never affects ready gates.
     """
     stamp = datetime.now(_CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -339,7 +341,10 @@ def news_radar_shadow_summary(*, days: int = 30) -> dict[str, Any]:
     with_nr = _bucket()
     without = _bucket()
     missing = 0
+    placeholder = 0
     days_seen: set[str] = set()
+    # Placeholder freeze must not dilute the without_news_hit control arm.
+    _placeholder_status = frozenset({"missing", "disabled", "offline", "empty", ""})
 
     for row in rows:
         day = str(row["trade_date"] or "")[:10]
@@ -360,6 +365,13 @@ def news_radar_shadow_summary(*, days: int = 30) -> dict[str, Any]:
         nr = payload.get("news_radar") if isinstance(payload.get("news_radar"), dict) else None
         if nr is None:
             missing += 1
+            continue
+        st = str(nr.get("status") or "").strip().lower()
+        if st in _placeholder_status:
+            if st in ("missing", ""):
+                missing += 1
+            else:
+                placeholder += 1
             continue
         bucket = with_nr if bool(nr.get("hit")) else without
         bucket["n"] += 1
@@ -409,9 +421,13 @@ def news_radar_shadow_summary(*, days: int = 30) -> dict[str, Any]:
         "days": len(days_seen),
         "window_days": cutoff_days,
         "missing_freeze": missing,
+        "placeholder_freeze": placeholder,
         "with_news_hit": w,
         "without_news_hit": wo,
         "delta_day3": delta_d3,
         "hint": hint,
-        "note": "只统计亮过灯的买卡；hit=当时板块有共振/盘面已动。不改闸门。",
+        "note": (
+            "只统计亮过灯的买卡；hit=当时板块有共振/盘面已动。"
+            "missing/disabled/offline/empty 不进对照桶。不改闸门。"
+        ),
     }

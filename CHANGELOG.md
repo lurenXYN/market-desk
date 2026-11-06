@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.81] - 2026-11-06
+
+### 【背景与动机（为什么做 · Why）】
+- 审计：`status=missing` 被 fill-once 永久锁死，占位冻结污染「无共振」对照桶；雷达侧超额回填挂在 settle 早退后、探活被 lifespan 阻塞。
+
+### 【做了什么（What）】
+- **Fixed** `payload.news_radar`：占位 status（missing/disabled/offline/empty）允许被后续真实快照覆盖一次；真实冻结仍 fill-once。
+- **Fixed** `news_radar_shadow_summary`：占位不进 `without_news_hit`；新增 `placeholder_freeze`；review-check 透出。
+- **Note** 雷达仓同期：超额回填脱离 settle 早退 + 启动调用；`/api/health` lifespan 立即 yield。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_news_radar_freeze_fill_v11081.py`。desk.db 无迁移。不改 ready/买卖闸。
+
+---
+
 ## [v1.10.80] - 2026-11-06
 
 ### 【背景与动机（为什么做 · Why）】
