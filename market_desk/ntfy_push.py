@@ -327,6 +327,12 @@ def enrich_ntfy_alert(
 def ntfy_priority_for(key: str) -> tuple[str, str]:
     """Return (priority, tags) for an alert key."""
     k = str(key or "")
+    if k.startswith("sim:sell:") and ":half" in k:
+        return "high", "chart_with_downwards_trend"
+    if k.startswith("sim:sell:"):
+        return "urgent", "warning,rotating_light"
+    if k.startswith("sim:buy:"):
+        return "high", "chart_with_upwards_trend"
     if k.startswith("sell:stop:"):
         return "urgent", "warning,rotating_light"
     if k.startswith("sell:"):
@@ -420,6 +426,130 @@ def push_ntfy_alerts(
                 ok_n += 1
                 log.info(
                     "ntfy -> user %s | %s",
+                    user.get("username") or user.get("id"),
+                    title,
+                )
+    return ok_n
+
+
+def _sim_fill_alert(
+    event: dict[str, Any],
+) -> tuple[str, str, str] | None:
+    """Build one ntfy tuple from a live sim fill event, or None if invalid."""
+    side = str(event.get("side") or "").lower()
+    code = normalize_code(event.get("code")) or str(event.get("code") or "").zfill(6)
+    name = str(event.get("name") or code)
+    day = str(event.get("trade_date") or "")[:10]
+    try:
+        lot_id = int(event.get("lot_id") or 0)
+    except (TypeError, ValueError):
+        lot_id = 0
+    try:
+        qty = int(event.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    try:
+        px = float(event.get("px")) if event.get("px") is not None else 0.0
+    except (TypeError, ValueError):
+        px = 0.0
+    if not day or not code or qty <= 0:
+        return None
+    note = str(event.get("note") or "").strip()
+    px_s = f"{px:.3f}" if px > 0 else "—"
+    if side == "buy":
+        tag = str(event.get("size_tag") or "")
+        tag_zh = _SIZE_ZH.get(tag, tag or "买入")
+        key = f"sim:buy:{day}:{code}:{lot_id or qty}"
+        title = f"模拟买入·请跟单 {name}"
+        body = (
+            f"买入 {code} {name} {qty}股 · 约 {px_s} · {tag_zh}\n"
+            f"{note}\n"
+            f"⚠ 模拟仓已成交 — 请在券商按同股数手动跟"
+        ).strip()
+        return key, title, body
+    if side == "sell":
+        mode = str(event.get("exit_mode") or "clear")
+        mode_zh = "减半" if mode == "half" else "清仓"
+        key = f"sim:sell:{day}:{lot_id or code}:{mode}"
+        title = f"模拟{mode_zh}·请跟单 {name}"
+        pnl = event.get("pnl_pct")
+        try:
+            pnl_s = f"{float(pnl):+.2f}%" if pnl is not None else "—"
+        except (TypeError, ValueError):
+            pnl_s = "—"
+        body = (
+            f"卖出 {code} {name} {qty}股 · 约 {px_s} · {mode_zh} · 盈亏 {pnl_s}\n"
+            f"{note}\n"
+            f"⚠ 模拟仓已成交 — 请在券商按同股数手动跟"
+        ).strip()
+        return key, title, body
+    return None
+
+
+def is_ntfy_sim_fill(
+    event: dict[str, Any],
+    *,
+    soft_sell: bool = False,
+) -> bool:
+    """Return True when a sim fill should hit ntfy for this user."""
+    side = str(event.get("side") or "").lower()
+    if side == "buy":
+        return True
+    if side == "sell":
+        mode = str(event.get("exit_mode") or "clear")
+        if mode == "half":
+            return bool(soft_sell)
+        return True  # clear = hard follow (stop / full exit)
+    return False
+
+
+def push_ntfy_sim_fills(events: list[dict[str, Any]] | None) -> int:
+    """Fan-out live sim fills so the user can mirror the paper book by hand.
+
+    Dedupes per day with ``sim:buy:…`` / ``sim:sell:…`` keys. Half-size sells
+    honor ``ntfy_soft_sell``; buys and clear exits always push when ntfy is on.
+    Backfill / replay paths must pass ``notify=False`` upstream and skip this.
+    """
+    raw = [e for e in (events or []) if isinstance(e, dict)]
+    if not raw:
+        return 0
+    recipients = list_ntfy_recipients()
+    if not recipients:
+        return 0
+    built: list[tuple[str, str, str, dict[str, Any]]] = []
+    day = ""
+    for ev in raw:
+        day = day or str(ev.get("trade_date") or "")[:10]
+        alert = _sim_fill_alert(ev)
+        if alert:
+            built.append((*alert, ev))
+    if not built:
+        return 0
+    alerts_only = [(k, t, b) for k, t, b, _ev in built]
+    alerts_only, once_keys = drop_daily_repeats(alerts_only, trade_date=day)
+    if not alerts_only:
+        return 0
+    keep = {a[0] for a in alerts_only}
+    built = [row for row in built if row[0] in keep]
+    _mark_daily_once(day, once_keys)
+    ok_n = 0
+    for user in recipients:
+        soft = bool(user.get("ntfy_soft_sell", False))
+        for key, title, body, ev in built:
+            if not is_ntfy_sim_fill(ev, soft_sell=soft):
+                continue
+            pri, tags = ntfy_priority_for(key)
+            if notify_ntfy(
+                str(user.get("ntfy_topic") or ""),
+                title,
+                body,
+                priority=pri,
+                tags=tags,
+                token=str(user.get("ntfy_token") or "") or None,
+            ):
+                ok_n += 1
+                log.info(
+                    "ntfy sim-fill -> user %s | %s",
                     user.get("username") or user.get("id"),
                     title,
                 )

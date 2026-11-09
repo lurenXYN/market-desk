@@ -176,9 +176,11 @@ ENTRIES: dict[str, dict[str, str]] = {
         "POST sctapi.ftqq.com/{SendKey}.send；与 Windows toast 并行。Key 只存 desk.db，不进 Git。",
     },
     "ntfy": {
-        "mean": "手机推送通道：盘中可买/硬卖与盘前准备发到 ntfy App，不占 Server酱每日额度；股数对齐模拟仓。",
+        "mean": "手机推送：跟着模拟仓手动下单。模拟买入/清仓成交即推「请跟单」；盘中亮灯/硬卖仍推并对齐股数；不占 Server酱额度。",
         "algo": "设置 ntfy_on + ntfy_topic（或完整 URL）；可选 ntfy_token（自建）。\n"
-        "推 buy: / near: / band:entry: / sell:stop:（可选 fly:、软卖）；"
+        "① 模拟成交边沿：`sim:buy:` / `sim:sell:`（清仓默认推；减半需 ntfy_soft_sell）；"
+        "回填/回放 notify=False 不推。\n"
+        "② 作战台提醒：buy: / near: / band:entry: / sell:stop:（可选 fly:、软卖）；"
         "接近/将飞正文强制半仓对齐模拟，并写「非可买」。\n"
         "盘前 prep：交易日 09:10–09:25 一次（关注清单+持仓预告）。\n"
         "POST ntfy.sh/{topic}；MARKET_DESK_MUTE_NTFY=1 静音；"

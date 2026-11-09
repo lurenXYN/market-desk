@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.82] - 2026-11-09
+
+### 【背景与动机（为什么做 · Why）】
+- ntfy 产品目标是「人手跟着模拟仓下」；此前只挂作战台亮灯/个人卖点，模拟仓 `sim_fill`（含开盘必卖止损）静默，跟单断环。
+
+### 【做了什么（What）】
+- **Added** 直播路径模拟成交 → ntfy：`sim:buy:` / `sim:sell:`，标题带「请跟单」；清仓默认推，减半跟 `ntfy_soft_sell`。
+- **Changed** `open_lots_from_signals` / `_apply_ready_sells` 支持 `notify=`；回填/回放 `notify=False` 不推。
+- **Changed** 设置文案与词条「ntfy」写明模拟成交边沿。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_ntfy_sim_fills_v11082.py`。desk.db 无迁移。仍需 `ntfy_on` + topic；`MARKET_DESK_MUTE_NTFY=1` 仍静音。
+
+---
+
 ## [v1.10.81] - 2026-11-06
 
 ### 【背景与动机（为什么做 · Why）】

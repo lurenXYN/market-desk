@@ -198,7 +198,7 @@
           <input id="setMorningPush" type="checkbox" /> 早决策微信推送（已停用：9 点由新闻雷达推）
         </label>
         <label class="settings-check" style="grid-column:1/-1;margin-top:8px">
-          <input id="setNtfyOn" type="checkbox" /> ntfy 手机推送（盘中可买/硬卖，不占 Server酱额度） <button type="button" class="q" data-term="ntfy">?</button>
+          <input id="setNtfyOn" type="checkbox" /> ntfy 手机推送（模拟成交跟单 + 盘中可买/硬卖，不占 Server酱额度） <button type="button" class="q" data-term="ntfy">?</button>
         </label>
         <label style="grid-column:1/-1">ntfy topic / URL
           <input id="setNtfyTopic" type="text" autocomplete="off" placeholder="长随机 topic 或 https://ntfy.sh/xxx" title="相当于密钥，勿用简单词" />
@@ -219,7 +219,7 @@
           <input id="setNtfySoftSell" type="checkbox" /> 推软卖（止盈/减仓；默认只推硬止损）
         </label>
         <div class="meta" style="grid-column:1/-1">
-          文案股数对齐模拟仓。手机装 ntfy 订阅同 topic。
+          模拟仓买入/清仓成交即推「请跟单」；减半跟软卖开关。亮灯提醒仍附对齐股数。手机装 ntfy 订阅同 topic。
           <button type="button" class="copy-btn" id="btnNtfyTest">连通测试</button>
           <button type="button" class="copy-btn" id="btnNtfyReplay">补发今日</button>
           <span id="ntfyTestMsg"></span>

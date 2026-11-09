@@ -945,9 +945,16 @@ def open_lots_from_signals(
     *,
     include_probe: bool = True,
     quotes: dict[str, dict[str, Any]] | None = None,
+    notify: bool = True,
 ) -> int:
-    """Open sim lots for lit buy cards that are fillable and affordable."""
+    """Open sim lots for lit buy cards that are fillable and affordable.
+
+    When ``notify`` is True (live engine path), successful buys fan out to
+    ntfy so the user can mirror the paper book by hand. Backfill / ops
+    replays must pass ``notify=False``.
+    """
     opened = 0
+    ntfy_events: list[dict[str, Any]] = []
     qmap = quotes or {}
     acct = account_snapshot()
     cash = float(acct["cash"])
@@ -1029,7 +1036,7 @@ def open_lots_from_signals(
             fill_px=px,
             mainline=row.get("mainline") or payload.get("mainline"),
         )
-        apply_sim_buy_fill(
+        buy_ok = apply_sim_buy_fill(
             lot_id=lot_id,
             trade_date=day,
             filled_at=open_at,
@@ -1043,6 +1050,27 @@ def open_lots_from_signals(
         cash = cash_after
         equity = cash + mark_to_market()
         opened += 1
+        if notify and buy_ok:
+            ntfy_events.append(
+                {
+                    "side": "buy",
+                    "code": code,
+                    "name": row.get("name") or "",
+                    "qty": qty,
+                    "px": px,
+                    "trade_date": day,
+                    "lot_id": lot_id,
+                    "size_tag": tag,
+                    "note": buy_note,
+                }
+            )
+    if notify and ntfy_events:
+        try:
+            from market_desk.ntfy_push import push_ntfy_sim_fills
+
+            push_ntfy_sim_fills(ntfy_events)
+        except Exception:
+            log.exception("ntfy sim buy fills failed")
     return opened
 
 
@@ -1065,7 +1093,7 @@ def backfill_open_from_db(*, limit: int = 2000) -> int:
         ).fetchall()
     signals = _decode_signal_rows(rows)
     signals.sort(key=lambda r: (str(r.get("trade_date") or ""), int(r.get("id") or 0)))
-    return open_lots_from_signals(signals)
+    return open_lots_from_signals(signals, notify=False)
 
 
 def replay_exits_from_sell_signals(*, limit: int = 3000) -> int:
@@ -1320,9 +1348,14 @@ def _apply_ready_sells(
     trade_date: str,
     signaled_at: str | None,
     quotes: dict[str, dict[str, Any]] | None = None,
+    notify: bool = True,
 ) -> int:
-    """Apply ready sell cards onto matching open lots. Return fill count."""
+    """Apply ready sell cards onto matching open lots. Return fill count.
+
+    Live path pushes clear exits (and half if ``ntfy_soft_sell``) via ntfy.
+    """
     filled = 0
+    ntfy_events: list[dict[str, Any]] = []
     day = str(trade_date or "")[:10]
     at = (signaled_at or "")[:19] or None
     qmap = quotes or {}
@@ -1412,6 +1445,28 @@ def _apply_ready_sells(
             if lot["qty"] <= 0:
                 lot["status"] = "closed"
                 lot["remaining"] = 0.0
+            if notify:
+                ntfy_events.append(
+                    {
+                        "side": "sell",
+                        "code": code,
+                        "name": lot.get("name") or item.get("name") or "",
+                        "qty": sell_qty,
+                        "px": float(exit_px),
+                        "trade_date": day,
+                        "lot_id": int(lot_id),
+                        "exit_mode": mode,
+                        "pnl_pct": pnl,
+                        "note": str(item.get("role_label") or mode),
+                    }
+                )
+    if notify and ntfy_events:
+        try:
+            from market_desk.ntfy_push import push_ntfy_sim_fills
+
+            push_ntfy_sim_fills(ntfy_events)
+        except Exception:
+            log.exception("ntfy sim sell fills failed")
     return filled
 
 
