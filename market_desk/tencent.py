@@ -7,7 +7,13 @@ from typing import Any
 
 import httpx
 
-from market_desk.config import ETF_WATCH, HTTP_HEADERS, CHINEXT_STAR_ETFS, INDEX_WATCH
+from market_desk.config import (
+    ETF_WATCH,
+    GLOBAL_WATCH,
+    HTTP_HEADERS,
+    CHINEXT_STAR_ETFS,
+    INDEX_WATCH,
+)
 from market_desk.numbers import num
 
 
@@ -57,6 +63,141 @@ async def fetch_indices(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         row["kind"] = "index"
         out.append(row)
     return out
+
+
+def _median(xs: list[float]) -> float | None:
+    """Return the median of ``xs``, or None when empty."""
+    if not xs:
+        return None
+    s = sorted(xs)
+    mid = len(s) // 2
+    if len(s) % 2:
+        return float(s[mid])
+    return (float(s[mid - 1]) + float(s[mid])) / 2.0
+
+
+def global_tone_label(pcts: list[float]) -> str:
+    """Map a list of day-change percents to 偏强 / 平淡 / 偏弱 / —."""
+    med = _median(pcts)
+    if med is None:
+        return "—"
+    if med >= 0.5:
+        return "偏强"
+    if med <= -0.5:
+        return "偏弱"
+    return "平淡"
+
+
+def parse_global_quote_chunk(sym: str, body: str) -> dict[str, Any] | None:
+    """Parse one Tencent qt body for a GLOBAL_WATCH symbol.
+
+    Equity/index quotes use ``~`` fields (same layout as A-share indices).
+    Commodity/futures ``hf_*`` quotes use a comma-separated layout:
+    price,pct,...,name.
+    """
+    body = (body or "").strip()
+    if not body:
+        return None
+    if "~" in body:
+        fields = body.split("~")
+        if len(fields) < 33:
+            return None
+        price = num(fields[3])
+        pct = num(fields[32])
+        if price is None and pct is None:
+            return None
+        return {
+            "sym": sym,
+            "price": price,
+            "pct": pct,
+            "prev": num(fields[4]),
+            "name_raw": str(fields[1] or ""),
+        }
+    # hf_* / futures: "4080.25,-0.83,...,2026-11-10,纽约黄金"
+    parts = body.split(",")
+    if len(parts) < 2:
+        return None
+    price = num(parts[0])
+    pct = num(parts[1])
+    if price is None and pct is None:
+        return None
+    return {
+        "sym": sym,
+        "price": price,
+        "pct": pct,
+        "prev": num(parts[7]) if len(parts) > 7 else None,
+        "name_raw": str(parts[-1] or "").strip(),
+    }
+
+
+def build_global_watch_payload(
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Assemble snapshot ``global_watch`` with rule-based tone labels."""
+    by_bucket: dict[str, list[float]] = {
+        "asia": [],
+        "commodity": [],
+        "us_fut": [],
+    }
+    for row in items:
+        pct = row.get("pct")
+        bucket = row.get("tone_bucket")
+        if pct is None or not bucket:
+            continue
+        try:
+            by_bucket.setdefault(str(bucket), []).append(float(pct))
+        except (TypeError, ValueError):
+            continue
+    tone = {
+        "us_fut": global_tone_label(by_bucket.get("us_fut") or []),
+        "commodity": global_tone_label(by_bucket.get("commodity") or []),
+        "asia": global_tone_label(by_bucket.get("asia") or []),
+        "us_fut_med": _median(by_bucket.get("us_fut") or []),
+        "commodity_med": _median(by_bucket.get("commodity") or []),
+        "asia_med": _median(by_bucket.get("asia") or []),
+    }
+    return {"items": items, "tone": tone}
+
+
+async def fetch_global_watch(client: httpx.AsyncClient) -> dict[str, Any]:
+    """Fetch curated global index / commodity / futures quotes for 外盘脉搏."""
+    if not GLOBAL_WATCH:
+        return build_global_watch_payload([])
+    url = "https://qt.gtimg.cn/q=" + ",".join(sym for sym, *_ in GLOBAL_WATCH)
+    resp = await client.get(url, headers=HTTP_HEADERS, timeout=15.0)
+    resp.raise_for_status()
+    text = resp.content.decode("gbk", errors="ignore")
+    by_sym: dict[str, dict[str, Any]] = {}
+    for chunk in text.split(";"):
+        chunk = chunk.strip()
+        if '="' not in chunk:
+            continue
+        key, body = chunk.split('="', 1)
+        body = body.rstrip('";')
+        key = key.strip()
+        # Response vars are usually ``v_<sym>`` (e.g. v_hf_GC, v_hkHSI).
+        sym = key[2:] if key.startswith("v_") else key
+        parsed = parse_global_quote_chunk(sym, body)
+        if parsed:
+            by_sym[sym] = parsed
+    items: list[dict[str, Any]] = []
+    for sym, code, name, group, tone_bucket in GLOBAL_WATCH:
+        hit = by_sym.get(sym)
+        if not hit:
+            continue
+        items.append(
+            {
+                "sym": sym,
+                "code": code,
+                "name": name,
+                "group": group,
+                "tone_bucket": tone_bucket,
+                "price": hit.get("price"),
+                "pct": hit.get("pct"),
+                "prev": hit.get("prev"),
+            }
+        )
+    return build_global_watch_payload(items)
 
 
 async def fetch_etfs(client: httpx.AsyncClient) -> list[dict[str, Any]]:

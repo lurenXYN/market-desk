@@ -201,6 +201,7 @@ Agents: **at the start of each session involving this app, read this file before
 - [x] **ntfy 模拟成交跟单 v1.10.82**：直播 `sim_fill` → 请跟单；清仓默认、减半跟软卖；回填不推
 - [x] **区间涨跌按板块 v1.10.83**：冻结板名聚合均三日%；个股/板块切换
 - [x] **观察闭环 v1.10.84**：shadow news/defense；复盘列筛选；sim 闸三态；observe_windows→agent-pack v7
+- [x] **外盘脉搏 v1.10.90**：大盘 tab 全球指数/商品/期货只读卡；不进闸门；腾讯码缺日经韩综纳指期货暂不列
 - [x] **板块榜拆行业/概念 v1.10.85**（规格已定，预登记）：
   - 分类：种子精确名 → 概念/行业后缀 → 归一名（含快照补缺）；读取时判，不回写历史。
   - 计权：每票在所选范围内 1/k 分摊；排序用加权均值，同时展示不加权对照。

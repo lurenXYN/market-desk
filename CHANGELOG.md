@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.90] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 大盘 tab 只有 A 股指数/相位，缺隔夜外盘上下文；对照行情终端的全球指数·商品·期货，补一张只读「外盘脉搏」卡，方便开盘前扫风险偏好。
+
+### 【做了什么（What）】
+- **Added** `GLOBAL_WATCH` + `fetch_global_watch`（腾讯 qt；指数 `~` 与 `hf_*` 逗号两种体）；snapshot `global_watch`（items + 偏强/平淡/偏弱基调）。
+- **Added** 大盘 grid-top「外盘脉搏」卡：美股期货/商品/亚太三行基调 + 指数·商品·期货 chip；词条与单测。
+- **Changed** `.grid-top` 改为 2×2，与竞价基调同级；失败粘上次成功快照，不进 env_gate / ready。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest tests/test_global_watch_v11090.py`；日经/韩综/纳指期货腾讯码为空，首版未列。观察 only。
+
+---
+
 ## [v1.10.89] - 2026-11-10
 
 ### 【背景与动机（为什么做 · Why）】

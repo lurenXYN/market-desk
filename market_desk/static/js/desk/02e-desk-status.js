@@ -155,4 +155,28 @@ function renderDeskStatus(d, v) {
           <div class="c ${cls}">${pct == null ? "—" : ((pct > 0 ? "+" : "") + Number(pct).toFixed(2) + "%")}</div>
         </div>`;
   }).join("") || `<div class="meta">指数待刷新</div>`;
+  paintGlobalPulse(d);
+}
+
+function paintGlobalPulse(d) {
+  const gw = (d && d.global_watch) || {};
+  const tone = gw.tone || {};
+  const setTone = (id, label) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = label || "—";
+  };
+  setTone("gwUsFut", tone.us_fut);
+  setTone("gwCmdty", tone.commodity);
+  setTone("gwAsia", tone.asia);
+  const items = Array.isArray(gw.items) ? gw.items : [];
+  const chip = (x) =>
+    `<span class="chip">${x.name || x.code || ""} ${fmtPct(x.pct)}</span>`;
+  const byGroup = (g) => items.filter((x) => x.group === g).map(chip).join("")
+    || `<span class="meta">待刷新</span>`;
+  const idxEl = document.getElementById("gwIdx");
+  const cmdEl = document.getElementById("gwCmd");
+  const futEl = document.getElementById("gwFut");
+  if (idxEl) idxEl.innerHTML = byGroup("index");
+  if (cmdEl) cmdEl.innerHTML = byGroup("commodity");
+  if (futEl) futEl.innerHTML = byGroup("future");
 }

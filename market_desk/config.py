@@ -120,6 +120,25 @@ INDEX_WATCH = [
     ("sh000016", "000016", "上证50"),
 ]
 
+# Global pulse (大盘「外盘脉搏」): Tencent qt.gtimg symbols only.
+# Tuple: (sym, code, name, group, tone_bucket)
+# group ∈ {index, commodity, future}; tone_bucket ∈ {asia, commodity, us_fut, None}.
+# Nikkei / KOSPI / Nasdaq futures are omitted — Tencent returns empty for those codes.
+GLOBAL_WATCH: list[tuple[str, str, str, str, str | None]] = [
+    ("hkHSI", "HSI", "恒生", "index", "asia"),
+    ("hkHSTECH", "HSTECH", "恒生科技", "index", "asia"),
+    ("usDJI", "DJI", "道指", "index", None),
+    ("usIXIC", "IXIC", "纳指", "index", None),
+    ("usINX", "INX", "标普", "index", None),
+    ("usNDX", "NDX", "纳指100", "index", None),
+    ("hf_GC", "GC", "黄金", "commodity", "commodity"),
+    ("hf_SI", "SI", "白银", "commodity", "commodity"),
+    ("hf_CL", "CL", "WTI原油", "commodity", "commodity"),
+    ("hf_OIL", "OIL", "布油", "commodity", "commodity"),
+    ("hf_CAD", "CAD", "伦铜", "commodity", "commodity"),
+    ("hf_ES", "ES", "标普期货", "future", "us_fut"),
+]
+
 # These two ETFs are tradable. ChiNext / STAR stocks are not recommended.
 CHINEXT_STAR_ETFS = frozenset({"159915", "588000"})
 

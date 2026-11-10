@@ -56,7 +56,12 @@ from market_desk.sentiment import (
     score_temperature,
 )
 from market_desk.radar import apply_crowding_gate
-from market_desk.tencent import fetch_etfs, fetch_indices, fetch_quotes
+from market_desk.tencent import (
+    fetch_etfs,
+    fetch_global_watch,
+    fetch_indices,
+    fetch_quotes,
+)
 from market_desk.verdict import (
     align_action_with_ready,
     apply_size_cap_gate,
@@ -208,7 +213,7 @@ class RefreshMixin:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 # Hot path: day fund-flow only (week/month via /api/fund-flow).
                 (
-                    zt, zb, quotes, boards, etfs, indices,
+                    zt, zb, quotes, boards, etfs, indices, global_watch,
                     flow_ind_d, flow_con_d,
                 ) = await asyncio.gather(
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
@@ -217,6 +222,7 @@ class RefreshMixin:
                     _safe(fetch_hot_boards, client, errors=errors, label="boards"),
                     _safe(fetch_etfs, client, errors=errors, label="etf"),
                     _safe(fetch_indices, client, errors=errors, label="index"),
+                    _safe(fetch_global_watch, client, errors=errors, label="global"),
                     _safe(fetch_board_fund_flow, client, "industry", 80, "day", errors=errors, label="flow-hy-d"),
                     _safe(fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"),
                 )
@@ -230,6 +236,14 @@ class RefreshMixin:
                 yesterday_zt = yesterday_zt or []
                 self._day_flow_fresh = (trade_date_dash, list(flow_ind_d or []), list(flow_con_d or []))
                 prev_snap = self.snapshot or {}
+                # Sticky last good 外盘脉搏 when Tencent overseas quotes fail.
+                if not (isinstance(global_watch, dict) and (global_watch.get("items") or [])):
+                    prev_gw = prev_snap.get("global_watch") if isinstance(prev_snap, dict) else None
+                    global_watch = (
+                        prev_gw
+                        if isinstance(prev_gw, dict)
+                        else {"items": [], "tone": {"us_fut": "—", "commodity": "—", "asia": "—"}}
+                    )
                 src_state, src_replay = self._track_boards_source(now, prev_snap)
                 prev_flow = prev_snap.get("fund_flow") or {}
                 prev_periods = (prev_flow.get("api_raw") or {}) if isinstance(prev_flow, dict) else {}
@@ -811,6 +825,9 @@ class RefreshMixin:
                     ),
                     "etfs": etfs,
                     "indices": indices,
+                    "global_watch": global_watch
+                    if isinstance(global_watch, dict)
+                    else {"items": [], "tone": {"us_fut": "—", "commodity": "—", "asia": "—"}},
                     "radar": radar,
                     "boards_source": src_state,
                     "emotion_wave": build_emotion_wave(
