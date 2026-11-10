@@ -38,10 +38,8 @@ async function loadReview(force, date, opts) {
       }
     }
     paintReview(d);
-    const rangeEl = document.getElementById("revRange");
-    if (typeof loadRevRangeBoard === "function" && rangeEl && rangeEl.open) {
-      loadRevRangeBoard();
-    }
+    // Range board is week/month observation — do not hitch it to the 30s live
+    // review poll; it reloads on open / window·side·view·kind toggles only.
     const tSeq = ++reviewTrendSeq;
     loadReviewTrends(day, tSeq, d.trends_fp || "");
     loadReviewZtYtd(day, seq);
