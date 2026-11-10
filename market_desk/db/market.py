@@ -176,6 +176,28 @@ def sanitize_daily_row(row: dict[str, Any] | None) -> dict[str, Any]:
     return item
 
 
+def load_daily_day(trade_date: str) -> dict[str, Any] | None:
+    """Return one sanitized daily snapshot by date, or None when missing."""
+    day = str(trade_date or "")[:10]
+    if not day:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT trade_date, payload FROM daily_snapshot WHERE trade_date = ?",
+            (day,),
+        ).fetchone()
+    if not row or not row["payload"]:
+        return None
+    try:
+        item = json.loads(row["payload"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(item, dict):
+        return None
+    item["trade_date"] = row["trade_date"]
+    return sanitize_daily_row(item)
+
+
 def load_daily(limit: int = 14) -> list[dict[str, Any]]:
     """Return recent daily snapshots, newest first (closed-calendar days skipped)."""
     with _connect() as conn:

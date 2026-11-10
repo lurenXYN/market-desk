@@ -82,7 +82,7 @@ const tickerHtml = (name, code, extra, opts) => {
   const revId = opts && opts.rev_id != null && opts.rev_id !== ""
     ? ` data-rev-id="${String(opts.rev_id).replace(/"/g, "")}"`
     : "";
-  return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig}${revId} title="点开看图与信号描述">${label}</a>`
+  return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig}${revId} title="点开共用明细：分时/日线 + 信号历史 + 发散/锅底">${label}</a>`
     + `<span class="meta"> ${c}${extra || ""}</span>`
     + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
 };

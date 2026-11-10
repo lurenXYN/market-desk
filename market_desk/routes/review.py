@@ -154,13 +154,16 @@ async def review_range_board(
     window: str = Query(default="1w", description="1w | 2w | 1m"),
     side: str = Query(default="worst", description="worst | best"),
     limit: int = Query(default=30, ge=5, le=100),
+    source: str = Query(default="all", description="all | signal | ma_fan | pot"),
     user: dict = Depends(current_user_required),
 ) -> dict:
     """Return week/month winners or losers across signals + MA-fan + pot."""
     del user
     from market_desk.review.range_board import (
+        RANGE_SOURCES,
         attach_live_vs_chase,
         build_range_leaderboard,
+        normalize_range_source,
     )
 
     win = str(window or "1w").strip().lower()
@@ -169,7 +172,10 @@ async def review_range_board(
     sd = str(side or "worst").strip().lower()
     if sd not in ("worst", "best"):
         raise HTTPException(400, "side must be worst or best")
-    pack = build_range_leaderboard(window=win, side=sd, limit=limit)
+    src = normalize_range_source(source)
+    if src not in RANGE_SOURCES:
+        raise HTTPException(400, "source must be all, signal, ma_fan, or pot")
+    pack = build_range_leaderboard(window=win, side=sd, limit=limit, source=src)
     return await attach_live_vs_chase(pack)
 
 
@@ -180,11 +186,17 @@ def review_range_board_agg(
     limit: int = Query(default=40, ge=5, le=80),
     min_n: int | None = Query(default=None, ge=1, le=20),
     kind: str = Query(default="industry", description="all | industry | concept"),
+    source: str = Query(default="all", description="all | signal | ma_fan | pot"),
     user: dict = Depends(current_user_required),
 ) -> dict:
     """Aggregate range day3 outcomes by frozen board tags (industry / concept)."""
     del user
-    from market_desk.review.range_board import BOARD_KINDS, build_range_board_agg
+    from market_desk.review.range_board import (
+        BOARD_KINDS,
+        RANGE_SOURCES,
+        build_range_board_agg,
+        normalize_range_source,
+    )
 
     win = str(window or "1w").strip().lower()
     if win not in ("1w", "2w", "1m"):
@@ -195,6 +207,9 @@ def review_range_board_agg(
     kd = str(kind or "industry").strip().lower()
     if kd not in BOARD_KINDS:
         raise HTTPException(400, "kind must be all, industry, or concept")
+    src = normalize_range_source(source)
+    if src not in RANGE_SOURCES:
+        raise HTTPException(400, "source must be all, signal, ma_fan, or pot")
     mainline = ""
     try:
         ml = ((engine.snapshot or {}).get("verdict") or {}).get("mainline") or {}
@@ -207,6 +222,7 @@ def review_range_board_agg(
         limit=limit,
         min_n=min_n,
         kind=kd,
+        source=src,
         mainline=mainline,
     )
 

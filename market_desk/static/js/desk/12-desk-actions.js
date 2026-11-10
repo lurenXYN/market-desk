@@ -732,14 +732,21 @@ document.getElementById("posBody").addEventListener("click", async (ev) => {
 document.addEventListener("click", (ev) => {
   const xqOnly = ev.target.closest("a.xq-link");
   if (xqOnly) return; // let browser open Xueqiu
-  const hit = ev.target.closest(".js-chart");
+  // Shared detail drawer: tickers + explicit 明细/历史 buttons across tabs.
+  const hit = ev.target.closest(
+    ".js-chart, .js-sig-hist, .rev-hist-btn, .rev-range-hist, .rev-range-code"
+  );
   if (!hit) return;
+  if (hit.closest("a.xq-link")) return;
   ev.preventDefault();
-  openChart(
-    hit.dataset.code,
-    hit.dataset.name,
-    hit.dataset.signalAt || hit.getAttribute("data-signal-at") || "",
-    hit.dataset.revId || hit.getAttribute("data-rev-id") || ""
+  if (typeof openSigHist !== "function") return;
+  openSigHist(
+    hit.dataset.code || hit.getAttribute("data-code"),
+    hit.dataset.name || hit.getAttribute("data-name") || "",
+    {
+      signalAt: hit.dataset.signalAt || hit.getAttribute("data-signal-at") || "",
+      revId: hit.dataset.revId || hit.getAttribute("data-rev-id") || "",
+    }
   );
 });
 document.getElementById("sigHistBody").addEventListener("click", (ev) => {
@@ -759,7 +766,11 @@ document.getElementById("sigHistMask").addEventListener("click", (ev) => {
   if (ev.target.id === "sigHistMask") closeSigHist();
 });
 document.getElementById("sigHistRefresh").addEventListener("click", () => {
-  if (sigHistCode) openSigHist(sigHistCode, sigHistName);
+  if (!sigHistCode || typeof openSigHist !== "function") return;
+  openSigHist(sigHistCode, sigHistName, {
+    signalAt: chartSignalAt || "",
+    revId: chartRevId || "",
+  });
 });
 document.getElementById("sigHistBody").addEventListener("click", (ev) => {
   const btn = ev.target.closest(".sig-hist-day");
@@ -794,7 +805,11 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 document.getElementById("chartRefresh").addEventListener("click", () => {
-  if (chartCode) openChart(chartCode, "", chartSignalAt, chartRevId);
+  if (!chartCode || typeof openSigHist !== "function") return;
+  openSigHist(chartCode, sigHistName || "", {
+    signalAt: chartSignalAt || "",
+    revId: chartRevId || "",
+  });
 });
 function deskFileDate() {
   const d = (lastData && lastData.trade_date)

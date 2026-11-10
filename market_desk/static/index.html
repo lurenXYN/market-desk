@@ -877,6 +877,12 @@
               <button type="button" class="rev-col-btn" data-kind="concept">概念</button>
               <button type="button" class="rev-col-btn" data-kind="all">全部</button>
             </div>
+            <div class="rev-range-toggles" id="revRangeSrc" title="按出现来源筛选；折叠前过滤，三日%只来自所选源">
+              <button type="button" class="rev-col-btn on" data-src="all">全部</button>
+              <button type="button" class="rev-col-btn" data-src="signal">复盘</button>
+              <button type="button" class="rev-col-btn" data-src="ma_fan">发散</button>
+              <button type="button" class="rev-col-btn" data-src="pot">锅底</button>
+            </div>
             <label class="rev-range-search">搜代码/板块
               <input id="revRangeQ" type="search" placeholder="600519 或 固态电池" autocomplete="off" />
             </label>
@@ -1330,18 +1336,30 @@
       </section>
     </section>
   </div>
+  <!-- Legacy chart-only drawer kept hidden; all tickers open the shared sigHist drawer. -->
   <div class="chart-mask" id="chartMask" hidden>
-    <aside class="chart-drawer" id="chartDrawer">
+    <aside class="chart-drawer" id="chartDrawer" hidden>
+      <h3 id="chartTitle" hidden>—</h3>
+      <div class="meta" id="chartMeta" hidden></div>
+      <a id="chartXq" href="#" hidden></a>
+      <button type="button" id="chartClose" hidden>关闭</button>
+      <button type="button" id="chartRefresh" hidden>刷新图</button>
+    </aside>
+  </div>
+
+  <div class="chart-mask" id="sigHistMask" hidden>
+    <aside class="chart-drawer sig-hist-drawer" id="sigHistDrawer">
       <div class="chart-hd">
         <div>
-          <h3 id="chartTitle">—</h3>
-          <div class="meta" id="chartMeta"></div>
+          <h3 id="sigHistTitle">明细</h3>
+          <div class="meta" id="sigHistMeta"></div>
         </div>
-        <button type="button" class="pos-del" id="chartClose">关闭</button>
+        <button type="button" class="pos-del" id="sigHistClose">关闭</button>
       </div>
       <div class="chart-actions">
-        <a id="chartXq" href="#" target="_blank" rel="noopener noreferrer">雪球看盘</a>
-        <button type="button" class="ghost" id="chartRefresh">刷新图</button>
+        <a id="sigHistXq" href="#" target="_blank" rel="noopener noreferrer">雪球看盘</a>
+        <button type="button" class="ghost" id="sigHistRefresh">刷新</button>
+        <button type="button" class="q" data-term="信号历史">?</button>
       </div>
       <div class="chart-desc" id="chartDesc" hidden></div>
       <div class="chart-levels" id="chartLevels" hidden></div>
@@ -1352,23 +1370,6 @@
       <div class="chart-box">
         <h4>日线 · MA5 / MA20</h4>
         <div id="chartDaily"></div>
-      </div>
-    </aside>
-  </div>
-
-  <div class="chart-mask" id="sigHistMask" hidden>
-    <aside class="chart-drawer sig-hist-drawer" id="sigHistDrawer">
-      <div class="chart-hd">
-        <div>
-          <h3 id="sigHistTitle">信号历史</h3>
-          <div class="meta" id="sigHistMeta"></div>
-        </div>
-        <button type="button" class="pos-del" id="sigHistClose">关闭</button>
-      </div>
-      <div class="chart-actions">
-        <a id="sigHistXq" href="#" target="_blank" rel="noopener noreferrer">雪球看盘</a>
-        <button type="button" class="ghost" id="sigHistRefresh">刷新</button>
-        <button type="button" class="q" data-term="信号历史">?</button>
       </div>
       <div class="sig-hist-sum" id="sigHistSum"></div>
       <div class="chart-desc sig-hist-desc" id="sigHistDesc" hidden></div>

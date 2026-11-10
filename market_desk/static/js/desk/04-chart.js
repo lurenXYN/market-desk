@@ -132,20 +132,31 @@ function paintChartLevels(levels) {
     ).join("");
 }
 
-function paintChart(payload) {
+function paintChart(payload, opts) {
+  const chrome = !(opts && opts.chrome === false);
   const trend = (payload && payload.trend) || {};
   const sig = payload && payload.signal_at;
-  document.getElementById("chartTitle").textContent =
-    `${payload.name || "—"} · ${payload.symbol || payload.code || ""}`;
-  document.getElementById("chartMeta").textContent =
-    `日线 ${trend.label || "—"}` +
-    (trend.ma5 != null ? ` · MA5 ${trend.ma5}` : "") +
-    (trend.ma20 != null ? ` · MA20 ${trend.ma20}` : "") +
-    (sig ? ` · 信号 ${String(sig).slice(11, 16) || sig}` : "");
-  const xq = payload.xueqiu_url || xueqiuUrl(payload.code);
-  const a = document.getElementById("chartXq");
-  a.href = xq || "#";
-  a.textContent = xq ? `雪球看盘 · ${payload.symbol || ""}` : "雪球看盘";
+  if (chrome) {
+    const titleEl = document.getElementById("chartTitle");
+    const metaEl = document.getElementById("chartMeta");
+    if (titleEl) {
+      titleEl.textContent =
+        `${payload.name || "—"} · ${payload.symbol || payload.code || ""}`;
+    }
+    if (metaEl) {
+      metaEl.textContent =
+        `日线 ${trend.label || "—"}` +
+        (trend.ma5 != null ? ` · MA5 ${trend.ma5}` : "") +
+        (trend.ma20 != null ? ` · MA20 ${trend.ma20}` : "") +
+        (sig ? ` · 信号 ${String(sig).slice(11, 16) || sig}` : "");
+    }
+    const xq = payload.xueqiu_url || xueqiuUrl(payload.code);
+    const a = document.getElementById("chartXq");
+    if (a) {
+      a.href = xq || "#";
+      a.textContent = xq ? `雪球看盘 · ${payload.symbol || ""}` : "雪球看盘";
+    }
+  }
   const levels = resolveChartLevels();
   paintChartLevels(levels);
   const minuteRows = payload.minute || [];
@@ -161,9 +172,12 @@ function paintChart(payload) {
       }
     }
   }
-  document.getElementById("chartMinute").innerHTML = sparkSvg(minutes, {
-    color: "#34d399", empty: "分时暂无数据（休市或源失败）", markerIndex, levels,
-  });
+  const minuteEl = document.getElementById("chartMinute");
+  if (minuteEl) {
+    minuteEl.innerHTML = sparkSvg(minutes, {
+      color: "#34d399", empty: "分时暂无数据（休市或源失败）", markerIndex, levels,
+    });
+  }
   const closes = (payload.daily || []).map((x) => x.close);
   const ma = (n) => closes.map((_, i) => {
     if (i + 1 < n) return null;
@@ -172,15 +186,18 @@ function paintChart(payload) {
   });
   const ma5 = ma(5).map((v, i) => v == null ? closes[i] : v);
   const ma20 = ma(20).map((v, i) => v == null ? closes[i] : v);
-  document.getElementById("chartDaily").innerHTML = sparkSvg(closes, {
-    color: "#60a5fa",
-    empty: "日线暂无数据",
-    overlays: [
-      { values: ma5, color: "#fbbf24", width: 1.1 },
-      { values: ma20, color: "#fb923c", width: 1.1 },
-    ],
-    levels,
-  });
+  const dailyEl = document.getElementById("chartDaily");
+  if (dailyEl) {
+    dailyEl.innerHTML = sparkSvg(closes, {
+      color: "#60a5fa",
+      empty: "日线暂无数据",
+      overlays: [
+        { values: ma5, color: "#fbbf24", width: 1.1 },
+        { values: ma20, color: "#fb923c", width: 1.1 },
+      ],
+      levels,
+    });
+  }
 }
 
 function findRevSignal(id) {
@@ -248,38 +265,37 @@ function paintChartDesc(r) {
 }
 
 async function openChart(code, name, signalAt, revId) {
-  const c = String(code || "").replace(/\D/g, "");
-  if (!c) return;
-  chartCode = c;
-  chartSignalAt = signalAt || "";
-  chartRevId = revId || "";
-  const mask = document.getElementById("chartMask");
-  mask.hidden = false;
-  document.getElementById("chartTitle").textContent = `${name || c} · ${c}`;
-  document.getElementById("chartMeta").textContent = "加载中…";
-  paintChartDesc(resolveChartDescContext(chartRevId));
-  paintChartLevels([]);
-  document.getElementById("chartMinute").innerHTML = `<div class="chart-empty">加载分时…</div>`;
-  document.getElementById("chartDaily").innerHTML = `<div class="chart-empty">加载日线…</div>`;
-  const xq = xueqiuUrl(c);
-  const a = document.getElementById("chartXq");
-  a.href = xq;
-  a.textContent = `雪球看盘 · ${xq.split("/").pop()}`;
-  try {
-    const q = chartSignalAt ? ("?signal_at=" + encodeURIComponent(chartSignalAt)) : "";
-    const r = await fetch("/api/chart/" + c + q);
-    const d = await r.json();
-    if (!d.ok) throw new Error("bad");
-    if (name && !d.name) d.name = name;
-    if (chartSignalAt && !d.signal_at) d.signal_at = chartSignalAt;
-    paintChart(d);
-  } catch (e) {
-    document.getElementById("chartMeta").textContent = "拉取失败，仍可点雪球看盘";
-  }
+  // Shared drawer: charts + signal history + fan/pot appearances.
+  return openSigHist(code, name, { signalAt: signalAt || "", revId: revId || "" });
 }
 
 function closeChart() {
-  document.getElementById("chartMask").hidden = true;
+  const mask = document.getElementById("chartMask");
+  if (mask) mask.hidden = true;
+  closeSigHist();
+}
+
+async function loadSigHistChart(code, name, seq) {
+  const minuteEl = document.getElementById("chartMinute");
+  const dailyEl = document.getElementById("chartDaily");
+  if (minuteEl) minuteEl.innerHTML = `<div class="chart-empty">加载分时…</div>`;
+  if (dailyEl) dailyEl.innerHTML = `<div class="chart-empty">加载日线…</div>`;
+  paintChartDesc(resolveChartDescContext(chartRevId));
+  paintChartLevels([]);
+  try {
+    const q = chartSignalAt ? ("?signal_at=" + encodeURIComponent(chartSignalAt)) : "";
+    const r = await fetch("/api/chart/" + code + q);
+    const d = await r.json();
+    if (seq != null && seq !== sigHistSeq) return;
+    if (!d.ok) throw new Error("bad");
+    if (name && !d.name) d.name = name;
+    if (chartSignalAt && !d.signal_at) d.signal_at = chartSignalAt;
+    paintChart(d, { chrome: false });
+  } catch (e) {
+    if (seq != null && seq !== sigHistSeq) return;
+    if (minuteEl) minuteEl.innerHTML = `<div class="chart-empty">分时拉取失败</div>`;
+    if (dailyEl) dailyEl.innerHTML = `<div class="chart-empty">日线拉取失败</div>`;
+  }
 }
 
 let sigHistCode = "";
@@ -443,16 +459,23 @@ function paintSigHistScans(d) {
   }).join("");
 }
 
-async function openSigHist(code, name) {
+async function openSigHist(code, name, opts) {
   const c = String(code || "").replace(/\D/g, "").padStart(6, "0");
   if (c.length !== 6) return;
+  const o = opts || {};
   sigHistCode = c;
   sigHistName = name || c;
+  chartCode = c;
+  chartSignalAt = o.signalAt || o.signal_at || "";
+  chartRevId = o.revId != null && o.revId !== "" ? o.revId : (o.rev_id || "");
   const seq = ++sigHistSeq;
+  // Prefer the shared drawer; keep legacy chart mask closed.
+  const chartMask = document.getElementById("chartMask");
+  if (chartMask) chartMask.hidden = true;
   const mask = document.getElementById("sigHistMask");
   mask.hidden = false;
   document.getElementById("sigHistTitle").textContent = `${sigHistName} · ${c}`;
-  document.getElementById("sigHistMeta").textContent = "加载历史信号…";
+  document.getElementById("sigHistMeta").textContent = "加载明细…";
   document.getElementById("sigHistSum").innerHTML = "";
   document.getElementById("sigHistBody").innerHTML =
     `<tr><td colspan="10" class="meta">加载中…</td></tr>`;
@@ -464,8 +487,8 @@ async function openSigHist(code, name) {
   const a = document.getElementById("sigHistXq");
   a.href = xq || "#";
   a.textContent = xq ? `雪球看盘 · ${xq.split("/").pop()}` : "雪球看盘";
-  // Fire both reads together — appearances is local-index fast and must not wait
-  // behind the history enrich (trend / holders network).
+  // Charts + history + appearances in parallel (shared comprehensive drawer).
+  const chartP = loadSigHistChart(c, sigHistName, seq);
   const histP = fetch("/api/review/history/" + c)
     .then((r) => r.json())
     .then((d) => {
@@ -492,5 +515,5 @@ async function openSigHist(code, name) {
         scanBody.innerHTML = `<tr><td colspan="8" class="meta">发散/锅底列表加载失败</td></tr>`;
       }
     });
-  await Promise.all([histP, scanP]);
+  await Promise.all([chartP, histP, scanP]);
 }

@@ -61,6 +61,7 @@ from market_desk.db.market import (  # noqa: F401
     _has_good_breadth,
     sanitize_daily_row,
     load_daily,
+    load_daily_day,
     save_auction,
     load_auction,
     save_board_daily,

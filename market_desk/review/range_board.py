@@ -12,6 +12,34 @@ from market_desk.filters import normalize_code
 from market_desk.numbers import num
 
 WINDOW_DAYS = {"1w": 5, "2w": 10, "1m": 20}
+RANGE_SOURCES = ("all", "signal", "ma_fan", "pot")
+_SOURCE_ALIASES = {
+    "review": "signal",
+    "复盘": "signal",
+    "信号": "signal",
+    "发散": "ma_fan",
+    "锅底": "pot",
+    "全部": "all",
+}
+_SOURCE_ZH = {"signal": "复盘", "ma_fan": "发散", "pot": "锅底", "all": "全部"}
+
+
+def normalize_range_source(source: str | None) -> str:
+    """Map UI / API source labels onto ``all | signal | ma_fan | pot``."""
+    raw = str(source or "all").strip()
+    key = _SOURCE_ALIASES.get(raw) or _SOURCE_ALIASES.get(raw.lower()) or raw.lower()
+    return key if key in RANGE_SOURCES else "all"
+
+
+def _filter_events_by_source(
+    events: list[dict[str, Any]],
+    source: str | None,
+) -> tuple[list[dict[str, Any]], str]:
+    """Keep events whose ``source`` matches; ``all`` leaves the list unchanged."""
+    src = normalize_range_source(source)
+    if src == "all":
+        return list(events), src
+    return [e for e in events if str(e.get("source") or "") == src], src
 
 
 def _payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -267,10 +295,12 @@ def build_range_leaderboard(
     window: str = "1w",
     side: str = "worst",
     limit: int = 30,
+    source: str = "all",
 ) -> dict[str, Any]:
     """Rank folded codes by outcome_day3_pct over the active window."""
     pack = collect_range_events(window=window)
-    folded = _fold_by_code(pack["events"], side=side)
+    events, src = _filter_events_by_source(pack["events"], source)
+    folded = _fold_by_code(events, side=side)
     scored = [r for r in folded if num(r.get("outcome_day3_pct")) is not None]
     unscored_n = len(folded) - len(scored)
     reverse = str(side or "worst").lower() == "best"
@@ -298,18 +328,20 @@ def build_range_leaderboard(
                 "desk_source": r.get("desk_source"),
             }
         )
+    src_note = "" if src == "all" else f"仅 {_SOURCE_ZH.get(src, src)}；"
     return {
         "ok": True,
         "window": pack["window"],
         "window_days": pack["window_days"],
         "days": pack["days"],
         "side": "best" if reverse else "worst",
+        "source": src,
         "n": len(items),
         "scored_n": len(scored),
         "unscored_n": unscored_n,
         "items": items,
         "note": (
-            "按三日%排序；相对不追·三日=三日收相对冻结不追价；"
+            f"{src_note}按三日%排序；相对不追·三日=三日收相对冻结不追价；"
             "相对不追·现价=现价相对不追价（同复盘表偏离）。"
             "发散/锅底无不通价则两列皆空；无三日%不进榜。"
         ),
@@ -413,6 +445,7 @@ def build_range_board_agg(
     limit: int = 40,
     min_n: int | None = None,
     kind: str = "all",
+    source: str = "all",
     mainline: str = "",
 ) -> dict[str, Any]:
     """Aggregate folded codes by frozen board tags (sector / concept heat).
@@ -427,7 +460,8 @@ def build_range_board_agg(
     if kind_s not in BOARD_KINDS:
         kind_s = "all"
     pack = collect_range_events(window=window)
-    folded = _fold_by_code(pack["events"], side=side)
+    events, src = _filter_events_by_source(pack["events"], source)
+    folded = _fold_by_code(events, side=side)
     scored = [r for r in folded if num(r.get("outcome_day3_pct")) is not None]
 
     # board -> list of (row, weight); kinds[board] -> industry|concept|other
@@ -511,6 +545,7 @@ def build_range_board_agg(
         "side": "best" if reverse else "worst",
         "group": "board",
         "kind": kind_s,
+        "source": src,
         "weighted": True,
         "mainline": mainline or None,
         "min_n": need,
@@ -521,7 +556,8 @@ def build_range_board_agg(
         "no_tag_n": no_tag_n,
         "items": items[:lim],
         "note": (
-            "按冻结板名聚合；行业/概念按名称查种子+快照分类（读取时判，不改历史）。"
+            ("" if src == "all" else f"仅 {_SOURCE_ZH.get(src, src)}；")
+            + "按冻结板名聚合；行业/概念按名称查种子+快照分类（读取时判，不改历史）。"
             "每票在所选范围内按 1/k 分摊权重，均三日%为加权；不加权见 avg_raw。"
             f"至少 {need} 只已评分才进榜；1 周噪声大，2 周/1 月更可信。"
             "只观察，不改 ready。"

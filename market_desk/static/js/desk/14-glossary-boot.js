@@ -515,12 +515,8 @@ document.getElementById("revRestoreFile").addEventListener("change", async (ev) 
   }
 });
 document.getElementById("revBody").addEventListener("click", async (ev) => {
-  const histBtn = ev.target.closest(".rev-hist-btn");
-  if (histBtn) {
-    ev.preventDefault();
-    openSigHist(histBtn.getAttribute("data-code"), histBtn.getAttribute("data-name"));
-    return;
-  }
+  // 明细 / ticker → shared openSigHist via 12-desk-actions document listener.
+  if (ev.target.closest(".rev-hist-btn, .js-sig-hist, .js-chart")) return;
   const trade = ev.target.closest(".rev-trade");
   if (trade) {
     const id = trade.getAttribute("data-id");

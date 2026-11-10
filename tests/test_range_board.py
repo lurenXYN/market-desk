@@ -10,6 +10,7 @@ from market_desk.review.range_board import (
     _vs_chase_pct,
     build_range_board_agg,
     build_range_leaderboard,
+    normalize_range_source,
 )
 
 
@@ -173,6 +174,43 @@ def test_leaderboard_sort_and_skip_unscored(monkeypatch):
 
     best = build_range_leaderboard(window="1w", side="best", limit=10)
     assert [r["code"] for r in best["items"]] == ["600011", "600010"]
+
+    only_sig = build_range_leaderboard(window="1w", side="worst", source="signal")
+    assert only_sig["source"] == "signal"
+    assert [r["code"] for r in only_sig["items"]] == ["600010"]
+    only_fan = build_range_leaderboard(window="1w", side="best", source="ma_fan")
+    assert [r["code"] for r in only_fan["items"]] == ["600011"]
+    only_pot = build_range_leaderboard(window="1w", side="worst", source="pot")
+    assert only_pot["scored_n"] == 0
+    assert normalize_range_source("复盘") == "signal"
+    assert normalize_range_source("weird") == "all"
+
+
+def test_board_agg_source_filter(monkeypatch):
+    events = [
+        {"trade_date": "2026-11-04", "code": "600010", "name": "甲", "source": "signal",
+         "boards": ["半导体"], "outcome_day3_pct": 10.0},
+        {"trade_date": "2026-11-04", "code": "600011", "name": "乙", "source": "ma_fan",
+         "boards": ["半导体"], "outcome_day3_pct": 2.0},
+        {"trade_date": "2026-11-04", "code": "600012", "name": "丙", "source": "pot",
+         "boards": ["半导体"], "outcome_day3_pct": -4.0},
+    ]
+    monkeypatch.setattr(
+        "market_desk.review.range_board.collect_range_events",
+        lambda *, window="1w": {
+            "window": window, "window_days": 5, "days": ["2026-11-04"], "events": events,
+        },
+    )
+    monkeypatch.setattr(
+        "market_desk.review.range_board.classify_board_kind",
+        lambda name: "industry",
+    )
+    out = build_range_board_agg(window="1w", side="best", kind="industry", source="signal", min_n=1)
+    assert out["source"] == "signal"
+    assert out["items"][0]["n"] == 1
+    assert out["items"][0]["avg_day3"] == 10.0
+    pot = build_range_board_agg(window="1w", side="worst", kind="industry", source="pot", min_n=1)
+    assert pot["items"][0]["avg_day3"] == -4.0
 
 
 def test_board_agg_groups_by_frozen_tag(monkeypatch):

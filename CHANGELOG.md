@@ -14,6 +14,49 @@
 
 ---
 
+## [v1.10.89] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 锅底/发散/作战点名称只开「分时+日线」简抽屉，复盘「历史」才是信号+发散/锅底；两套不一致，观察同一票要来回点。
+
+### 【做了什么（What）】
+- **Changed** 全站 `tickerHtml` / `openChart` 统一进共用 `openSigHist` 抽屉：分时/日线 + 信号史 + 发散/锅底出现；保留 signal_at / rev_id 叠价位。
+- **Changed** 复盘/区间榜「历史」按钮改为「明细」，与名称点击共用同一 document 监听；刷新保留价位上下文。
+- **Changed** 词条「信号历史」「图叠关键位」口径改为共用明细。
+
+### 【影响与验证（Impact & Verification）】
+- 观察 only；旧 chartMask 壳保留隐藏以免断引用。同发含 v1.10.87–88（来源筛选 + patch 按日点读），避免部署后再踩近窗校验 500。
+
+---
+
+## [v1.10.88] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 部署 health 已绿，但 `daily-patches/apply` 返回 500 导致 CI 红。根因：patch 写库后用 `load_daily(30)` 回读校验，`2026-09-21` 一旦滚出近窗就验空抛错。
+
+### 【做了什么（What）】
+- **Fixed** `apply_pending_daily_patches` / `verify_day_breadth` 改为按日 `load_daily_day` 点读。
+- **Changed** 部署脚本：patch API 失败时打印响应体，并短重试（重启后 DB 忙）。
+
+### 【影响与验证（Impact & Verification）】
+- 服务本身此前已起来；本版修部署后置校验。单测 `test_daily_patches_verify_v11088.py`。
+
+---
+
+## [v1.10.87] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 区间涨跌把复盘买信号、发散、锅底混在一起，难单独看某一来源近周/月的强弱。
+
+### 【做了什么（What）】
+- **Added** 来源筛选 `source=all|signal|ma_fan|pot`（UI：全部|复盘|发散|锅底）；折叠前过滤，个股榜与板块聚合共用。
+- **Changed** 表内来源文案「信号」改为「复盘」，与筛选项一致。
+
+### 【影响与验证（Impact & Verification）】
+- 观察 only；`tests/test_range_board.py` 覆盖单源过滤。
+
+---
+
 ## [v1.10.86] - 2026-11-10
 
 ### 【背景与动机（为什么做 · Why）】

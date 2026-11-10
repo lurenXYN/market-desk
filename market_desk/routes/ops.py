@@ -855,7 +855,10 @@ def _apply_daily_patches_payload(*, force: bool = True) -> dict:
     from market_desk.db import load_daily
     from market_desk.patches_apply import apply_pending_daily_patches, verify_day_breadth
 
-    applied = apply_pending_daily_patches(force=bool(force))
+    try:
+        applied = apply_pending_daily_patches(force=bool(force))
+    except Exception as exc:
+        raise HTTPException(500, f"daily patch apply failed: {exc}") from exc
     hist = load_daily(14)
     try:
         if isinstance(engine.snapshot, dict):

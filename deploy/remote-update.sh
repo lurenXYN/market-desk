@@ -181,16 +181,30 @@ if command -v curl >/dev/null 2>&1; then
       echo "$body"
       echo "==> apply daily_snapshot patches via localhost API (force)"
       PATCH_URL="http://127.0.0.1:8765/api/internal/daily-patches/apply?force=true"
-      patch_body="$(curl -fsS --max-time 30 -X POST "$PATCH_URL")" || {
-        echo "patch API failed"
+      # Give the just-restarted process a beat before force-writing patches.
+      sleep 2
+      # Retry a few times: right after restart the DB may still be busy.
+      # Capture body even on HTTP errors so CI logs show the 500 detail.
+      patch_body=""
+      patch_ok=0
+      for pi in 1 2 3 4 5 6; do
+        http_code="$(curl -sS --max-time 45 -o /tmp/md-patch-body.json -w '%{http_code}' -X POST "$PATCH_URL" || echo "000")"
+        patch_body="$(cat /tmp/md-patch-body.json 2>/dev/null || true)"
+        if [[ "$http_code" == "200" ]] \
+          && { echo "$patch_body" | grep -q '"ups": 2631' || echo "$patch_body" | grep -q '"ups":2631'; }; then
+          patch_ok=1
+          break
+        fi
+        echo "patch API attempt $pi → HTTP $http_code"
+        echo "$patch_body"
+        sleep 3
+      done
+      if [[ "$patch_ok" != "1" ]]; then
+        echo "patch API failed after retries"
         echo "$patch_body"
         exit 1
-      }
-      echo "$patch_body"
-      if ! echo "$patch_body" | grep -q '"ups": 2631' && ! echo "$patch_body" | grep -q '"ups":2631'; then
-        echo "ERROR: 2026-09-21 ups not 2631 after patch; deploy aborted"
-        exit 1
       fi
+      echo "$patch_body"
       echo "Deploy OK"
       exit 0
     fi

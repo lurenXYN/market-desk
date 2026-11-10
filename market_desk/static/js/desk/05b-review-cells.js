@@ -416,7 +416,7 @@ function revCellHtml(col, r, ctx) {
   if (col === "name") {
     const code = r.code || "";
     const histBtn = code
-      ? ` <button type="button" class="rev-col-btn rev-hist-btn" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="查看该代码历史信号">历史</button>`
+      ? ` <button type="button" class="rev-col-btn rev-hist-btn js-sig-hist" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="共用明细：图 + 信号史 + 发散/锅底">明细</button>`
       : "";
     const cvDeg = (r.cv_degraded || (r.cv && r.cv.degraded))
       ? ` <span class="rev-chip cv-warn" title="筹码/量能日线不足或拉取失败">CV降级</span>`

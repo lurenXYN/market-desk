@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from market_desk.db import init_db, load_daily, load_setting, save_daily, save_setting
+from market_desk.db import init_db, load_daily_day, load_setting, save_daily, save_setting
 
 log = logging.getLogger("market_desk.patches")
 
@@ -52,9 +52,9 @@ def apply_pending_daily_patches(*, force: bool = False) -> list[str]:
             log.warning("skip patch %s: missing trade_date/payload", path.name)
             continue
         save_daily(day, payload, merge=False)
-        # Verify round-trip so silent failures cannot mark applied.
-        rows = {str(r.get("trade_date")): r for r in load_daily(30)}
-        got = rows.get(day) or {}
+        # Point-read the day — do not use load_daily(N); Sep patches fall out of
+        # the recent window and would false-fail verify once history grows.
+        got = load_daily_day(day) or {}
         if _has_nonzero_breadth(payload) and not _has_nonzero_breadth(got):
             raise RuntimeError(
                 f"patch {patch_id} write verify failed for {day}: "
@@ -79,18 +79,18 @@ def apply_pending_daily_patches(*, force: bool = False) -> list[str]:
 def verify_day_breadth(trade_date: str) -> dict[str, Any]:
     """Return the stored daily row fields used to confirm a patch landed."""
     day = str(trade_date or "")[:10]
-    for row in load_daily(40):
-        if str(row.get("trade_date") or "")[:10] == day:
-            return {
-                "trade_date": day,
-                "ups": row.get("ups"),
-                "downs": row.get("downs"),
-                "amount_yi": row.get("amount_yi"),
-                "phase": row.get("phase"),
-                "event": row.get("event"),
-                "breadth_degraded": row.get("breadth_degraded"),
-            }
-    return {"trade_date": day, "missing": True}
+    row = load_daily_day(day)
+    if not row:
+        return {"trade_date": day, "missing": True}
+    return {
+        "trade_date": day,
+        "ups": row.get("ups"),
+        "downs": row.get("downs"),
+        "amount_yi": row.get("amount_yi"),
+        "phase": row.get("phase"),
+        "event": row.get("event"),
+        "breadth_degraded": row.get("breadth_degraded"),
+    }
 
 
 def list_daily_patches() -> list[dict[str, Any]]:

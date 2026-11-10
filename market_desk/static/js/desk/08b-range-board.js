@@ -3,8 +3,10 @@ let revRangeWin = "1w";
 let revRangeSide = "worst";
 let revRangeView = "code"; // code | board
 let revRangeKind = "industry"; // industry | concept | all (board view only)
+let revRangeSrc = "all"; // all | signal | ma_fan | pot
 let revRangeBusy = false;
 const REV_RANGE_BOARD_COLS = 10;
+const REV_RANGE_SRC_ZH = { all: "全部", signal: "复盘", ma_fan: "发散", pot: "锅底" };
 
 function _syncRevRangeKindBar() {
   const bar = document.getElementById("revRangeKind");
@@ -12,7 +14,7 @@ function _syncRevRangeKindBar() {
 }
 
 function _revRangeSrcLabel(sources) {
-  const map = { signal: "信号", ma_fan: "发散", pot: "锅底" };
+  const map = { signal: "复盘", ma_fan: "发散", pot: "锅底" };
   const arr = Array.isArray(sources) ? sources : [sources];
   return arr.map((s) => map[s] || s || "—").filter(Boolean).join("+") || "—";
 }
@@ -69,13 +71,16 @@ async function loadRevRangeBoard() {
         side: revRangeSide,
         limit: "40",
         kind: revRangeKind,
+        source: revRangeSrc,
       });
       const r = await fetch("/api/review/range-board-agg?" + q.toString());
       const d = await r.json();
       if (!d.ok && d.ok !== undefined) throw new Error("bad");
       if (meta) {
+        const srcLab = REV_RANGE_SRC_ZH[d.source || revRangeSrc] || "全部";
         meta.textContent =
-          `${d.window_days || "—"} 个活动日 · 已评分 ${d.scored_n ?? 0}`
+          `${d.window_days || "—"} 个活动日 · ${srcLab}`
+          + ` · 已评分 ${d.scored_n ?? 0}`
           + ` · 板块 ${d.board_n ?? 0}`
           + (d.thin_skipped ? ` · 剔薄板 ${d.thin_skipped}` : "")
           + (d.no_tag_n ? ` · 无此类标签 ${d.no_tag_n}` : "")
@@ -114,13 +119,16 @@ async function loadRevRangeBoard() {
       window: revRangeWin,
       side: revRangeSide,
       limit: "30",
+      source: revRangeSrc,
     });
     const r = await fetch("/api/review/range-board?" + q.toString());
     const d = await r.json();
     if (!d.ok && d.ok !== undefined) throw new Error("bad");
     if (meta) {
+      const srcLab = REV_RANGE_SRC_ZH[d.source || revRangeSrc] || "全部";
       meta.textContent =
-        `${d.window_days || "—"} 个活动日 · 已评分 ${d.scored_n ?? 0}`
+        `${d.window_days || "—"} 个活动日 · ${srcLab}`
+        + ` · 已评分 ${d.scored_n ?? 0}`
         + (d.unscored_n ? ` · 无三日 ${d.unscored_n}` : "");
     }
     const rows = d.items || [];
@@ -145,7 +153,7 @@ async function loadRevRangeBoard() {
         <td>${_revRangePct(it.outcome_day3_pct)}</td>
         <td title="三日收相对不追">${_revRangePct(it.vs_chase_pct)}</td>
         <td title="${escAttr(nowTip)}">${_revRangePct(it.vs_chase_now_pct)}</td>
-        <td><button type="button" class="rev-col-btn rev-range-hist" data-code="${escAttr(code)}" data-name="${escAttr(name)}">历史</button></td>
+        <td><button type="button" class="rev-col-btn rev-range-hist js-sig-hist" data-code="${escAttr(code)}" data-name="${escAttr(name)}">明细</button></td>
       </tr>`;
     }).join("");
   } catch (e) {
@@ -172,7 +180,7 @@ function paintRevRangeAppearances(d) {
   ).join(" · ") || "—";
   box.innerHTML =
     `<div class="hd">${escAttr(d.name || "")} · ${escAttr(d.code || "")}`
-    + ` <button type="button" class="rev-col-btn rev-range-hist" data-code="${escAttr(d.code || "")}" data-name="${escAttr(d.name || "")}">打开历史</button></div>`
+    + ` <button type="button" class="rev-col-btn rev-range-hist js-sig-hist" data-code="${escAttr(d.code || "")}" data-name="${escAttr(d.name || "")}">打开明细</button></div>`
     + `<div class="meta">信号 ${d.signal_n ?? 0} · 发散 ${d.ma_fan_n ?? 0} · 锅底 ${d.pot_n ?? 0}</div>`
     + `<div class="meta">当时板：${boards}</div>`
     + (curBoards ? `<div class="meta" title="今日成分快照，仅供对照">现况板（非当时）：${curBoards}</div>` : "")
@@ -200,7 +208,7 @@ function paintRevRangeRoster(d) {
       <td>${it.price != null ? escAttr(Number(it.price).toFixed(2)) : "—"}</td>
       <td>${it.days_ago != null ? escAttr(it.days_ago + " 天前") : "—"}</td>
       <td>${_revRangePct(it.outcome_day3_pct)}</td>
-      <td><button type="button" class="rev-col-btn rev-range-hist" data-code="${escAttr(code)}" data-name="${escAttr(it.name || "")}">历史</button></td>
+      <td><button type="button" class="rev-col-btn rev-range-hist js-sig-hist" data-code="${escAttr(code)}" data-name="${escAttr(it.name || "")}">明细</button></td>
     </tr>`;
   }).join("");
   box.innerHTML =
@@ -297,6 +305,16 @@ function bindRevRangeBoard() {
       loadRevRangeBoard();
     });
   }
+  const srcBar = document.getElementById("revRangeSrc");
+  if (srcBar) {
+    srcBar.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-src]");
+      if (!btn) return;
+      revRangeSrc = btn.getAttribute("data-src") || "all";
+      srcBar.querySelectorAll("[data-src]").forEach((b) => b.classList.toggle("on", b === btn));
+      loadRevRangeBoard();
+    });
+  }
   const searchBtn = document.getElementById("revRangeSearchBtn");
   if (searchBtn) searchBtn.addEventListener("click", () => runRevRangeSearch());
   const qEl = document.getElementById("revRangeQ");
@@ -323,11 +341,7 @@ function bindRevRangeBoard() {
         if (board) runRevRangeSearch(board);
         return;
       }
-      const hist = ev.target.closest(".rev-range-hist, .rev-range-code");
-      if (!hist) return;
-      const code = hist.getAttribute("data-code");
-      const name = hist.getAttribute("data-name") || "";
-      if (code && typeof openSigHist === "function") openSigHist(code, name);
+      // Code / 明细 clicks are handled by the shared document listener in 12-desk-actions.
     });
     // Default collapsed: load only when first opened (or reopen with empty body).
     root.addEventListener("toggle", () => {
