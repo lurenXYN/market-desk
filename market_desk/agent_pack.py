@@ -13,7 +13,7 @@ from typing import Any
 from market_desk.calendar import now_cn
 
 
-AGENT_PACK_SCHEMA = "agent_pack.v6"
+AGENT_PACK_SCHEMA = "agent_pack.v7"
 
 _GATE_LIVE_KEYS = ("minute", "off_high", "thin")
 
@@ -423,6 +423,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
         DEFENSE_SHADOW_SINCE,
         EDGE_SHADOW_SINCE,
         ENV_GATE_SHADOW_SINCE,
+        NEWS_RADAR_SHADOW_SINCE,
         REGIME_SHADOW_SINCE,
         ZT_SHARE_SHADOW_SINCE,
     )
@@ -432,6 +433,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
     from market_desk.review.signals import _dragon_hide_from_review, is_buy_signal
     from market_desk.review_check import build_review_check_sync
     from market_desk.routes.ops import build_ops_check
+    from market_desk.observe_windows import build_observe_windows
     from market_desk.shadow_health import shadow_check, shadow_health
     from market_desk.sim_desk import build_sim_attribution, start_gate_snapshot
     from market_desk.zt_share import build_zt_share_review
@@ -600,6 +602,11 @@ def build_agent_pack_sync() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         defense_snap = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
 
+    try:
+        observe_windows = build_observe_windows(asof=day)
+    except Exception as exc:  # noqa: BLE001
+        observe_windows = {"ok": False, "note": f"{type(exc).__name__}: {exc}"[:120]}
+
     return {
         "ok": True,
         "schema": AGENT_PACK_SCHEMA,
@@ -613,6 +620,7 @@ def build_agent_pack_sync() -> dict[str, Any]:
             "defense": DEFENSE_SHADOW_SINCE,
             "deep_v": DEEP_V_SHADOW_SINCE,
             "zt_share": ZT_SHARE_SHADOW_SINCE,
+            "news_radar": NEWS_RADAR_SHADOW_SINCE,
         },
         "summary": {
             "ops_overall": ops.get("overall"),
@@ -626,6 +634,11 @@ def build_agent_pack_sync() -> dict[str, Any]:
                 list(defense_snap.get("reasons") or [])[:4]
                 if isinstance(defense_snap, dict)
                 else []
+            ),
+            "observe_due_n": (
+                int(observe_windows.get("due_n") or 0)
+                if isinstance(observe_windows, dict)
+                else 0
             ),
             "dual_wins": {
                 "all": (dual.get("all") or {}) if dual.get("ok") else dual,
@@ -653,13 +666,15 @@ def build_agent_pack_sync() -> dict[str, Any]:
                 "abs_win=绝对胜率，xs_win=跑赢大盘胜率。"
                 "env_gate 默认影子；env_gate_live 才软乘阈值（默认仅 minute）。"
                 "adapt_live=当日现倍率；adapt_effect=分档成绩/今日卡/漏买/题材（看效果用，不自动改闸）。"
-                "defense=逆境档位旁注（v1.10.80 size_live 关）。"
+                "defense=逆境档位旁注（size_live 关）。"
+                "observe_windows=观察窗到期清单（可复核≠自动改）。"
             ),
         },
         "adapt_live": adapt_live,
         "adapt_effect": adapt_effect,
         "np_review": np_review,
         "defense": defense_snap,
+        "observe_windows": observe_windows,
         "proposals": proposals,
         "dual_wins": dual,
         "review_check": review,

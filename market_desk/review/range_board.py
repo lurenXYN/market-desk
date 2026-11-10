@@ -316,6 +316,219 @@ def build_range_leaderboard(
     }
 
 
+BOARD_KINDS = ("all", "industry", "concept")
+# Pre-registered thresholds (v1.10.85): concept tags are noisier → need more codes.
+DEFAULT_BOARD_MIN_N = {"all": 2, "industry": 2, "concept": 3}
+_KIND_ZH = {"industry": "行业", "concept": "概念", "other": "其他"}
+
+_KIND_MAP: dict[str, str] | None = None
+_KIND_MAP_AT: float = 0.0
+_KIND_MAP_TTL_S = 600.0
+
+
+def _build_board_kind_map() -> dict[str, str]:
+    """Return normalized board key → ``industry`` | ``concept`` (seed first, snap fills gaps)."""
+    from market_desk.board_alias import normalize_board_name
+
+    out: dict[str, str] = {}
+    try:
+        from market_desk.board_fallback import _em_boards
+
+        for name, (_bk, kind) in _em_boards().items():
+            if kind not in ("industry", "concept"):
+                continue
+            # Exact seed names win over normalized keys (see classify_board_kind).
+            out[f"={name}"] = kind
+            key = normalize_board_name(name)
+            if not key:
+                continue
+            prev = out.get(key)
+            # Same normalized key in both kinds → prefer industry (stable, narrower).
+            if prev is None or (prev == "concept" and kind == "industry"):
+                out[key] = kind
+    except Exception:
+        pass
+    try:
+        from market_desk.db import load_board_members_snap
+
+        for source in ("em", "sina"):
+            for item in load_board_members_snap(source, with_codes=False).values():
+                kind = str(item.get("kind") or "")
+                if kind not in ("industry", "concept"):
+                    continue
+                raw = str(item.get("name") or "").strip()
+                if raw:
+                    out.setdefault(f"={raw}", kind)
+                key = normalize_board_name(raw)
+                if key and key not in out:
+                    out[key] = kind
+    except Exception:
+        pass
+    return out
+
+
+def classify_board_kind(name: str | None) -> str:
+    """Classify a frozen board name as ``industry``, ``concept`` or ``other``.
+
+    Name-only lookup (seed + snapshot kinds); does not rewrite history.
+    """
+    import time
+
+    from market_desk.board_alias import normalize_board_name
+
+    global _KIND_MAP, _KIND_MAP_AT
+    nm = str(name or "").strip()
+    if not nm or nm.startswith("（"):
+        return "other"
+    now = time.monotonic()
+    if _KIND_MAP is None or (now - _KIND_MAP_AT) > _KIND_MAP_TTL_S:
+        _KIND_MAP = _build_board_kind_map()
+        _KIND_MAP_AT = now
+    # Order: exact seed name → explicit 概念/行业 suffix → normalized key.
+    kind = _KIND_MAP.get(f"={nm}")
+    if kind:
+        return kind
+    if nm.endswith("概念"):
+        return "concept"
+    if nm.endswith("行业"):
+        return "industry"
+    return _KIND_MAP.get(normalize_board_name(nm)) or "other"
+
+
+def _is_mainline_board(board: str, mainline: str) -> bool:
+    """True when a board name overlaps today's mainline label (display tag only)."""
+    from market_desk.board_alias import normalize_board_name
+
+    b = normalize_board_name(board)
+    m = normalize_board_name(mainline)
+    if len(b) < 2 or len(m) < 2:
+        return False
+    return b in m or m in b
+
+
+def build_range_board_agg(
+    *,
+    window: str = "1w",
+    side: str = "worst",
+    limit: int = 40,
+    min_n: int | None = None,
+    kind: str = "all",
+    mainline: str = "",
+) -> dict[str, Any]:
+    """Aggregate folded codes by frozen board tags (sector / concept heat).
+
+    Each scored code contributes its extreme day3 to every tag of the chosen
+    ``kind`` it carries, with weight ``1/k`` (k = tags in that scope) so a
+    many-tag ticker does not inflate every concept bucket. ``avg_day3`` is the
+    weighted mean; ``avg_raw`` is the unweighted mean for comparison. Boards
+    with fewer than ``min_n`` distinct codes are dropped. Observation only.
+    """
+    kind_s = str(kind or "all").lower()
+    if kind_s not in BOARD_KINDS:
+        kind_s = "all"
+    pack = collect_range_events(window=window)
+    folded = _fold_by_code(pack["events"], side=side)
+    scored = [r for r in folded if num(r.get("outcome_day3_pct")) is not None]
+
+    # board -> list of (row, weight); kinds[board] -> industry|concept|other
+    buckets: dict[str, list[tuple[dict[str, Any], float]]] = {}
+    kinds: dict[str, str] = {}
+    no_tag_n = 0
+    for r in scored:
+        names: list[str] = []
+        for b in r.get("boards") or []:
+            s = str(b).strip()
+            if s and s not in names:
+                names.append(s)
+        tagged = [(b, classify_board_kind(b)) for b in names]
+        if kind_s != "all":
+            tagged = [(b, k) for b, k in tagged if k == kind_s]
+        elif not tagged:
+            tagged = [("（无板名）", "other")]
+        if not tagged:
+            no_tag_n += 1
+            continue
+        w = 1.0 / len(tagged)
+        for b, k in tagged:
+            buckets.setdefault(b, []).append((r, w))
+            kinds[b] = k
+
+    need = (
+        max(1, min(int(min_n), 20))
+        if min_n is not None
+        else DEFAULT_BOARD_MIN_N.get(kind_s, 2)
+    )
+    reverse = str(side or "worst").lower() == "best"
+    items: list[dict[str, Any]] = []
+    skipped_thin = 0
+    for board, pairs in buckets.items():
+        rows = [p[0] for p in pairs]
+        if len(rows) < need:
+            skipped_thin += 1
+            continue
+        vals = [float(num(r.get("outcome_day3_pct")) or 0.0) for r in rows]
+        wts = [float(p[1]) for p in pairs]
+        wsum = sum(wts) or 1.0
+        avg_w = round(sum(v * w for v, w in zip(vals, wts)) / wsum, 2)
+        avg_raw = round(sum(vals) / len(vals), 2)
+        vals_sorted = sorted(vals)
+        mid = len(vals_sorted) // 2
+        if len(vals_sorted) % 2:
+            median = vals_sorted[mid]
+        else:
+            median = round((vals_sorted[mid - 1] + vals_sorted[mid]) / 2.0, 2)
+        win_n = sum(1 for v in vals if v > 0)
+        best_row = max(rows, key=lambda x: float(num(x.get("outcome_day3_pct")) or 0.0))
+        worst_row = min(rows, key=lambda x: float(num(x.get("outcome_day3_pct")) or 0.0))
+        k = kinds.get(board, "other")
+        items.append(
+            {
+                "board": board,
+                "kind": k,
+                "kind_zh": _KIND_ZH.get(k, "其他"),
+                "n": len(rows),
+                "n_eff": round(wsum, 2),
+                "avg_day3": avg_w,
+                "avg_raw": avg_raw,
+                "median_day3": round(float(median), 2),
+                "hit_rate": round(100.0 * win_n / len(rows), 1),
+                "is_mainline": bool(mainline and _is_mainline_board(board, mainline)),
+                "best_code": best_row.get("code"),
+                "best_name": best_row.get("name"),
+                "best_day3": num(best_row.get("outcome_day3_pct")),
+                "worst_code": worst_row.get("code"),
+                "worst_name": worst_row.get("name"),
+                "worst_day3": num(worst_row.get("outcome_day3_pct")),
+            }
+        )
+    items.sort(key=lambda r: float(r.get("avg_day3") or 0.0), reverse=reverse)
+    lim = max(1, min(int(limit), 80))
+    return {
+        "ok": True,
+        "window": pack["window"],
+        "window_days": pack["window_days"],
+        "days": pack["days"],
+        "side": "best" if reverse else "worst",
+        "group": "board",
+        "kind": kind_s,
+        "weighted": True,
+        "mainline": mainline or None,
+        "min_n": need,
+        "n": min(len(items), lim),
+        "board_n": len(items),
+        "scored_n": len(scored),
+        "thin_skipped": skipped_thin,
+        "no_tag_n": no_tag_n,
+        "items": items[:lim],
+        "note": (
+            "按冻结板名聚合；行业/概念按名称查种子+快照分类（读取时判，不改历史）。"
+            "每票在所选范围内按 1/k 分摊权重，均三日%为加权；不加权见 avg_raw。"
+            f"至少 {need} 只已评分才进榜；1 周噪声大，2 周/1 月更可信。"
+            "只观察，不改 ready。"
+        ),
+    }
+
+
 async def attach_live_vs_chase(pack: dict[str, Any]) -> dict[str, Any]:
     """Fill ``vs_chase_now_pct`` / ``live_last`` from a short quote round-trip."""
     import httpx

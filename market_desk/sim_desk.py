@@ -1576,6 +1576,10 @@ def sync_exits_from_snapshot(
             log.exception("sim_desk sell advice failed")
 
     stats = portfolio_stats()
+    try:
+        gate = start_gate_snapshot()
+    except Exception:
+        gate = stats
     return {
         "ok": True,
         "opened": opened,
@@ -1584,7 +1588,10 @@ def sync_exits_from_snapshot(
         "open_n": stats["open_n"],
         "closed_n": stats["closed_n"],
         "cum_pnl_pct": stats["cum_pnl_pct"],
-        "gate_ok": stats["gate_ok"],
+        "gate_ok": bool(gate.get("gate_ok")),
+        "gate_readonly_ok": bool(gate.get("gate_readonly_ok")),
+        "gate_label": gate.get("gate_label"),
+        "to_green_cny": gate.get("to_green_cny"),
     }
 
 

@@ -142,6 +142,63 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
                     missing.append("env_gate")
         except Exception:
             pass
+        # News-radar soft shadow: real freeze (not placeholder status).
+        news_cover = None
+        news_placeholder = None
+        try:
+            from market_desk.config import NEWS_RADAR_SHADOW_SINCE
+
+            _nr_placeholder = frozenset({"missing", "disabled", "offline", "empty", ""})
+            if day >= str(NEWS_RADAR_SHADOW_SINCE)[:10] and rows:
+                def _nr_status(p: dict[str, Any]) -> str:
+                    nr = p.get("news_radar")
+                    if not isinstance(nr, dict):
+                        return ""
+                    return str(nr.get("status") or "").strip().lower()
+
+                def _has_news(p: dict[str, Any]) -> bool:
+                    return _nr_status(p) not in _nr_placeholder
+
+                def _is_placeholder(p: dict[str, Any]) -> bool:
+                    nr = p.get("news_radar")
+                    if not isinstance(nr, dict):
+                        return False
+                    return _nr_status(p) in _nr_placeholder
+
+                news_cover = round(sum(1 for p in rows if _has_news(p)) / len(rows), 2)
+                news_placeholder = round(
+                    sum(1 for p in rows if _is_placeholder(p)) / len(rows), 2
+                )
+                # Radar may be off → placeholders expected; do not mark missing.
+                # Only flag when almost nothing frozen at all (no dict either).
+                has_any = sum(
+                    1 for p in rows if isinstance(p.get("news_radar"), dict)
+                ) / len(rows)
+                if has_any < FIELD_MIN_COVER:
+                    missing.append("news_radar")
+        except Exception:
+            pass
+        defense_cover = None
+        try:
+            from market_desk.config import DEFENSE_SHADOW_SINCE
+
+            if day >= str(DEFENSE_SHADOW_SINCE)[:10] and rows:
+                def _has_defense(p: dict[str, Any]) -> bool:
+                    d = p.get("defense")
+                    return isinstance(d, dict) and str(d.get("tier") or "") in (
+                        "D0",
+                        "D1",
+                        "D2",
+                        "D3",
+                    )
+
+                defense_cover = round(
+                    sum(1 for p in rows if _has_defense(p)) / len(rows), 2
+                )
+                if defense_cover < FIELD_MIN_COVER:
+                    missing.append("defense")
+        except Exception:
+            pass
         out.append(
             {
                 "date": day,
@@ -151,6 +208,9 @@ def shadow_health(days: int = 5) -> list[dict[str, Any]]:
                 "lit_fields": {k: cover(lit, k) for k in LIT_FIELDS},
                 "regime_freeze": regime_cover,
                 "env_gate_freeze": env_cover,
+                "news_radar_freeze": news_cover,
+                "news_radar_placeholder": news_placeholder,
+                "defense_freeze": defense_cover,
                 "missing": missing,
                 "narrative": narrative.get(day, 0),
                 "narrative_snap": narrative_snap.get(day, 0),
@@ -186,6 +246,18 @@ def shadow_check(rows: list[dict[str, Any]], narrative_live: dict[str, Any] | No
     ef = r.get("env_gate_freeze")
     if ef is not None:
         parts.append(f"环境闸冻结{int(round(float(ef) * 100))}%")
+    nf = r.get("news_radar_freeze")
+    if nf is not None:
+        nph = r.get("news_radar_placeholder")
+        ph = (
+            f"（占位{int(round(float(nph) * 100))}%）"
+            if nph is not None and float(nph) > 0
+            else ""
+        )
+        parts.append(f"新闻冻结{int(round(float(nf) * 100))}%{ph}")
+    df = r.get("defense_freeze")
+    if df is not None:
+        parts.append(f"逆境冻结{int(round(float(df) * 100))}%")
     ind = (r.get("crowd_max") or {}).get("industry")
     crowd_why = f"（行业最高 {ind['name']} {ind['share']}% < {CROWD_ABS_EXTREME_PCT}%）" if ind and not r["crowd"] else ""
     parts.append(f"拥挤{r['crowd']}{crowd_why}")

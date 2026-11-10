@@ -53,6 +53,48 @@ def test_shadow_health_flags_missing_fields_and_explains_empty_crowd(monkeypatch
     assert shadow_check(rows[1:], None)["level"] == "bad"
 
 
+def test_shadow_health_news_and_defense_freeze(monkeypatch, tmp_path) -> None:
+    _setup(monkeypatch, tmp_path)
+    base = {
+        "book_open": {},
+        "cf": {},
+        "stop_atr": 1.0,
+        "market_gates": [],
+        "first_last": 1.0,
+    }
+    with _connect() as conn:
+        _card(
+            conn,
+            "2026-11-09",
+            "600001",
+            {
+                **base,
+                "news_radar": {"status": "online", "hit": True},
+                "defense": {"tier": "D1"},
+            },
+        )
+        _card(
+            conn,
+            "2026-11-09",
+            "600002",
+            {
+                **base,
+                "news_radar": {"status": "missing", "hit": False},
+                "defense": {"tier": "D0"},
+            },
+        )
+        conn.commit()
+    day = shadow_health(1)[0]
+    assert day["news_radar_freeze"] == 0.5
+    assert day["news_radar_placeholder"] == 0.5
+    assert day["defense_freeze"] == 1.0
+    assert "news_radar" not in day["missing"]
+    assert "defense" not in day["missing"]
+    detail = shadow_check([day], {"pool": "snap", "concepts": 10})["detail"]
+    assert "新闻冻结50%" in detail and "占位50%" in detail
+    assert "逆境冻结100%" in detail
+
+
 def test_narrative_rows_keep_pool_of_first_sighting(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path)
     with _connect() as conn:

@@ -368,10 +368,26 @@ function paintReview(payload) {
   const type = (document.getElementById("revType") || {}).value || "";
   const kind = (document.getElementById("revKind") || {}).value || "";
   const srcFilter = (document.getElementById("revSource") || {}).value || "";
+  const defenseFlt = (document.getElementById("revDefense") || {}).value || "";
+  const newsFlt = (document.getElementById("revNews") || {}).value || "";
   const main = ((document.getElementById("revMain") || {}).value || "").trim();
   const hideWait = !!(document.getElementById("revHideWait") || {}).checked;
   const foldChannels = !!(document.getElementById("revFoldChannels") || {}).checked;
   const srcOf = (r) => revNormSrc(r);
+  const defenseOk = (r) => {
+    if (!defenseFlt) return true;
+    const t = String(r.defense_tier || "");
+    if (defenseFlt === "D3") return t === "D3";
+    if (defenseFlt === "D2+") return t === "D2" || t === "D3";
+    if (defenseFlt === "D1+") return t === "D1" || t === "D2" || t === "D3";
+    return true;
+  };
+  const newsOk = (r) => {
+    if (!newsFlt) return true;
+    if (newsFlt === "hit") return r.news_hit === true;
+    if (newsFlt === "miss") return r.news_hit === false;
+    return true;
+  };
   const isPaperWait = (r) => {
     const st = String(r.signal_type || "");
     if (!(st === "buy" || st.startsWith("buy_"))) return false;
@@ -400,6 +416,8 @@ function paintReview(payload) {
     } else if (type && r.signal_type !== type) return false;
     if (kind && (r.kind || "") !== kind) return false;
     if (srcFilter && srcOf(r) !== srcFilter) return false;
+    if (!defenseOk(r)) return false;
+    if (!newsOk(r)) return false;
     if (main && !(String(r.mainline || "").includes(main))) return false;
     if (hideWait && isPaperWait(r)) return false;
     return true;

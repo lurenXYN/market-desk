@@ -252,6 +252,12 @@ th.rev-sort .sort-ind { color: var(--muted); font-size: 10px; margin-left: 2px; 
   font-size: 12px;
 }
 .risk-box .warn { color: var(--warn); }
+.risk-box.ok { border-color: color-mix(in srgb, var(--up, #22c55e) 45%, transparent); }
+.risk-box.readonly {
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 50%, transparent);
+  background: color-mix(in srgb, var(--accent, #38bdf8) 8%, transparent);
+}
+.risk-box.warn { border-color: color-mix(in srgb, var(--warn, #f59e0b) 45%, transparent); }
 .detail { color: var(--muted); font-size: 14px; margin: 0; }
 .clock {
   text-align: right; min-width: 240px;

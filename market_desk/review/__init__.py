@@ -120,6 +120,7 @@ from market_desk.review.payload import (  # noqa: F401
 from market_desk.review.range_board import (  # noqa: F401
     attach_live_vs_chase,
     build_range_leaderboard,
+    build_range_board_agg,
     build_code_appearances,
     build_board_roster,
 )

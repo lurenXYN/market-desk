@@ -58,6 +58,8 @@ const REV_COL_CATALOG = [
   { id: "chase", label: "不追" },
   { id: "mainline", label: "主线" },
   { id: "board", label: "板块" },
+  { id: "defense", label: "逆境" },
+  { id: "news", label: "新闻" },
   { id: "vs_ml", label: "对照主线" },
   { id: "phase", label: "相位" },
   { id: "holder_n", label: "股东户数" },
@@ -235,6 +237,12 @@ function revSortValue(r, id) {
   if (id === "phase") return String(r.phase || "");
   if (id === "mainline") return String(r.mainline || "");
   if (id === "board") return String(r.board_text || ((r.boards || []).join("/")) || "");
+  if (id === "defense") return String(r.defense_tier || "");
+  if (id === "news") {
+    if (r.news_hit === true) return 1;
+    if (r.news_hit === false) return 0;
+    return null;
+  }
   if (id === "holder_n") return r.holder_num == null ? null : Number(r.holder_num);
   if (id === "holder_chg") return r.holder_chg_pct == null ? null : Number(r.holder_chg_pct);
   if (id === "holder_avg") return r.holder_avg_wan == null ? null : Number(r.holder_avg_wan);

@@ -1,7 +1,15 @@
-/** Review range leaderboard (1w/2w/1m) + code/board search. */
+/** Review range leaderboard (1w/2w/1m) + code/board search + board agg. */
 let revRangeWin = "1w";
 let revRangeSide = "worst";
+let revRangeView = "code"; // code | board
+let revRangeKind = "industry"; // industry | concept | all (board view only)
 let revRangeBusy = false;
+const REV_RANGE_BOARD_COLS = 10;
+
+function _syncRevRangeKindBar() {
+  const bar = document.getElementById("revRangeKind");
+  if (bar) bar.hidden = revRangeView !== "board";
+}
 
 function _revRangeSrcLabel(sources) {
   const map = { signal: "信号", ma_fan: "发散", pot: "锅底" };
@@ -16,13 +24,92 @@ function _revRangePct(v) {
   return `<span class="${cls}">${(n > 0 ? "+" : "") + n.toFixed(2)}%</span>`;
 }
 
+function _paintRevRangeCodeHead() {
+  const head = document.getElementById("revRangeHead");
+  if (!head) return;
+  head.innerHTML = `<tr>
+    <th>日期</th><th>代码</th><th>名称</th><th>板块</th><th>来源</th>
+    <th>三日%</th>
+    <th title="三日收相对冻结不追价">相对不追·三日</th>
+    <th title="现价相对冻结不追价，同复盘表不追价下「偏离」">相对不追·现价</th>
+    <th></th>
+  </tr>`;
+}
+
+function _paintRevRangeBoardHead() {
+  const head = document.getElementById("revRangeHead");
+  if (!head) return;
+  head.innerHTML = `<tr>
+    <th>板块</th>
+    <th>类型</th>
+    <th title="窗内已评分的不同票数；括号内为 1/k 分摊后的有效票数">票数</th>
+    <th title="每票在所选范围内按 1/k 分摊权重后的加权均值">均三日%</th>
+    <th title="不加权均值，对照用">不加权%</th>
+    <th>中位%</th>
+    <th title="三日%&gt;0 占比">红盘率</th>
+    <th>最强票</th>
+    <th>最惨票</th>
+    <th></th>
+  </tr>`;
+}
+
 async function loadRevRangeBoard() {
   if (revRangeBusy) return;
   revRangeBusy = true;
   const body = document.getElementById("revRangeBody");
   const meta = document.getElementById("revRangeMeta");
-  if (body) body.innerHTML = `<tr><td colspan="9" class="meta">加载中…</td></tr>`;
+  const cols = revRangeView === "board" ? REV_RANGE_BOARD_COLS : 9;
+  _syncRevRangeKindBar();
+  if (body) body.innerHTML = `<tr><td colspan="${cols}" class="meta">加载中…</td></tr>`;
   try {
+    if (revRangeView === "board") {
+      _paintRevRangeBoardHead();
+      const q = new URLSearchParams({
+        window: revRangeWin,
+        side: revRangeSide,
+        limit: "40",
+        kind: revRangeKind,
+      });
+      const r = await fetch("/api/review/range-board-agg?" + q.toString());
+      const d = await r.json();
+      if (!d.ok && d.ok !== undefined) throw new Error("bad");
+      if (meta) {
+        meta.textContent =
+          `${d.window_days || "—"} 个活动日 · 已评分 ${d.scored_n ?? 0}`
+          + ` · 板块 ${d.board_n ?? 0}`
+          + (d.thin_skipped ? ` · 剔薄板 ${d.thin_skipped}` : "")
+          + (d.no_tag_n ? ` · 无此类标签 ${d.no_tag_n}` : "")
+          + (d.mainline ? ` · 今日主线 ${d.mainline}` : "");
+      }
+      const rows = d.items || [];
+      if (!body) return;
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="${REV_RANGE_BOARD_COLS}" class="meta">该窗口暂无足够票数的板块（至少 ${d.min_n ?? 2} 只）；可换 2 周/1 月</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.map((it) => {
+        const board = String(it.board || "");
+        const bestCode = String(it.best_code || "");
+        const worstCode = String(it.worst_code || "");
+        const bestLab = `${escAttr(it.best_name || bestCode)} ${_revRangePct(it.best_day3)}`;
+        const worstLab = `${escAttr(it.worst_name || worstCode)} ${_revRangePct(it.worst_day3)}`;
+        return `<tr>
+          <td><button type="button" class="rev-col-btn rev-range-board" data-board="${escAttr(board)}" title="点开板内名单">${escAttr(board)}</button>${it.is_mainline ? ` <span class="meta" title="与今日主线重合，仅标记">主线</span>` : ""}</td>
+          <td>${escAttr(it.kind_zh || "—")}</td>
+          <td>${escAttr(String(it.n ?? "—"))}${it.n_eff != null && Number(it.n_eff) !== Number(it.n) ? ` <span class="meta">(${escAttr(String(it.n_eff))})</span>` : ""}</td>
+          <td>${_revRangePct(it.avg_day3)}</td>
+          <td>${_revRangePct(it.avg_raw)}</td>
+          <td>${_revRangePct(it.median_day3)}</td>
+          <td>${it.hit_rate != null ? escAttr(String(it.hit_rate)) + "%" : "—"}</td>
+          <td><button type="button" class="rev-col-btn rev-range-code" data-code="${escAttr(bestCode)}" data-name="${escAttr(it.best_name || "")}">${bestLab}</button></td>
+          <td><button type="button" class="rev-col-btn rev-range-code" data-code="${escAttr(worstCode)}" data-name="${escAttr(it.worst_name || "")}">${worstLab}</button></td>
+          <td><button type="button" class="rev-col-btn rev-range-board" data-board="${escAttr(board)}">名单</button></td>
+        </tr>`;
+      }).join("");
+      return;
+    }
+
+    _paintRevRangeCodeHead();
     const q = new URLSearchParams({
       window: revRangeWin,
       side: revRangeSide,
@@ -62,7 +149,9 @@ async function loadRevRangeBoard() {
       </tr>`;
     }).join("");
   } catch (e) {
-    if (body) body.innerHTML = `<tr><td colspan="9" class="meta">区间榜加载失败</td></tr>`;
+    if (body) {
+      body.innerHTML = `<tr><td colspan="${revRangeView === "board" ? REV_RANGE_BOARD_COLS : 9}" class="meta">区间榜加载失败</td></tr>`;
+    }
     if (meta) meta.textContent = "";
   } finally {
     revRangeBusy = false;
@@ -132,14 +221,15 @@ function _revealRevRangeSearch() {
   }
 }
 
-async function runRevRangeSearch() {
+async function runRevRangeSearch(forcedQ) {
   const input = document.getElementById("revRangeQ");
-  const raw = String((input && input.value) || "").trim();
+  const raw = String(forcedQ != null ? forcedQ : ((input && input.value) || "")).trim();
   const box = document.getElementById("revRangeSearchOut");
   if (!raw) {
     if (box) { box.hidden = true; box.innerHTML = ""; }
     return;
   }
+  if (input && forcedQ != null) input.value = raw;
   const code = raw.replace(/\D/g, "");
   if (box) {
     box.hidden = false;
@@ -187,6 +277,26 @@ function bindRevRangeBoard() {
       loadRevRangeBoard();
     });
   }
+  const view = document.getElementById("revRangeView");
+  if (view) {
+    view.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-view]");
+      if (!btn) return;
+      revRangeView = btn.getAttribute("data-view") || "code";
+      view.querySelectorAll("[data-view]").forEach((b) => b.classList.toggle("on", b === btn));
+      loadRevRangeBoard();
+    });
+  }
+  const kindBar = document.getElementById("revRangeKind");
+  if (kindBar) {
+    kindBar.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-kind]");
+      if (!btn) return;
+      revRangeKind = btn.getAttribute("data-kind") || "industry";
+      kindBar.querySelectorAll("[data-kind]").forEach((b) => b.classList.toggle("on", b === btn));
+      loadRevRangeBoard();
+    });
+  }
   const searchBtn = document.getElementById("revRangeSearchBtn");
   if (searchBtn) searchBtn.addEventListener("click", () => runRevRangeSearch());
   const qEl = document.getElementById("revRangeQ");
@@ -207,6 +317,12 @@ function bindRevRangeBoard() {
       });
     }
     root.addEventListener("click", (ev) => {
+      const boardBtn = ev.target.closest(".rev-range-board");
+      if (boardBtn) {
+        const board = boardBtn.getAttribute("data-board") || "";
+        if (board) runRevRangeSearch(board);
+        return;
+      }
       const hist = ev.target.closest(".rev-range-hist, .rev-range-code");
       if (!hist) return;
       const code = hist.getAttribute("data-code");
@@ -217,7 +333,7 @@ function bindRevRangeBoard() {
     root.addEventListener("toggle", () => {
       if (!root.open || typeof loadRevRangeBoard !== "function") return;
       const body = document.getElementById("revRangeBody");
-      const hasRows = !!(body && body.querySelector("tr .rev-range-code, tr .rev-range-hist"));
+      const hasRows = !!(body && body.querySelector("tr .rev-range-code, tr .rev-range-hist, tr .rev-range-board"));
       if (!hasRows) loadRevRangeBoard();
     });
   }

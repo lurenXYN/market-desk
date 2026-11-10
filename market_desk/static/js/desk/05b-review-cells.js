@@ -484,6 +484,24 @@ function revCellHtml(col, r, ctx) {
     if (!boards.length) return "—";
     return `<div class="board-lines">${boards.map((b) => `<span>${b}</span>`).join("")}</div>`;
   }
+  if (col === "defense") {
+    const tier = String(r.defense_tier || "");
+    if (!tier) return "—";
+    const lab = r.defense_label || tier;
+    const tone = tier === "D3" ? "down" : (tier === "D0" ? "meta" : "up");
+    return `<span class="${tone}" title="${escAttr(lab)}">${escAttr(tier)}</span>`;
+  }
+  if (col === "news") {
+    if (r.news_hit === true) {
+      const tip = r.news_confirm ? `confirm=${r.news_confirm}` : "有共振/盘面已动";
+      return `<span class="up" title="${escAttr(tip)}">有</span>`;
+    }
+    if (r.news_hit === false) {
+      return `<span class="meta" title="当时雷达在线但无共振">无</span>`;
+    }
+    const st = r.news_status || "";
+    return st ? `<span class="meta" title="占位/未接入">${escAttr(st)}</span>` : "—";
+  }
   if (col === "vs_ml") {
     const role = r.vs_compare_role || r.desk_source || "";
     const useSrc = (role === "side" || role === "link") && (r.vs_source || (r.payload && r.payload.vs_source));

@@ -806,7 +806,7 @@ document.getElementById("revApply").addEventListener("click", () => {
   saveRevFilters();
   paintReview(lastReview);
 });
-["revSource", "revHideWait", "revFoldChannels", "revType", "revKind"].forEach((id) => {
+["revSource", "revDefense", "revNews", "revHideWait", "revFoldChannels", "revType", "revKind"].forEach((id) => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("change", () => {
     saveRevFilters();

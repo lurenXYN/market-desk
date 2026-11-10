@@ -173,6 +173,44 @@ async def review_range_board(
     return await attach_live_vs_chase(pack)
 
 
+@router.get("/api/review/range-board-agg")
+def review_range_board_agg(
+    window: str = Query(default="1w", description="1w | 2w | 1m"),
+    side: str = Query(default="worst", description="worst | best"),
+    limit: int = Query(default=40, ge=5, le=80),
+    min_n: int | None = Query(default=None, ge=1, le=20),
+    kind: str = Query(default="industry", description="all | industry | concept"),
+    user: dict = Depends(current_user_required),
+) -> dict:
+    """Aggregate range day3 outcomes by frozen board tags (industry / concept)."""
+    del user
+    from market_desk.review.range_board import BOARD_KINDS, build_range_board_agg
+
+    win = str(window or "1w").strip().lower()
+    if win not in ("1w", "2w", "1m"):
+        raise HTTPException(400, "window must be 1w, 2w, or 1m")
+    sd = str(side or "worst").strip().lower()
+    if sd not in ("worst", "best"):
+        raise HTTPException(400, "side must be worst or best")
+    kd = str(kind or "industry").strip().lower()
+    if kd not in BOARD_KINDS:
+        raise HTTPException(400, "kind must be all, industry, or concept")
+    mainline = ""
+    try:
+        ml = ((engine.snapshot or {}).get("verdict") or {}).get("mainline") or {}
+        mainline = str(ml.get("name") or "").strip()
+    except Exception:
+        mainline = ""
+    return build_range_board_agg(
+        window=win,
+        side=sd,
+        limit=limit,
+        min_n=min_n,
+        kind=kd,
+        mainline=mainline,
+    )
+
+
 @router.get("/api/review/appearances/{code}")
 def review_code_appearances(
     code: str,

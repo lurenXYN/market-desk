@@ -210,6 +210,8 @@
         type: (document.getElementById("revType") || {}).value || "",
         kind: (document.getElementById("revKind") || {}).value || "",
         source: (document.getElementById("revSource") || {}).value || "",
+        defense: (document.getElementById("revDefense") || {}).value || "",
+        news: (document.getElementById("revNews") || {}).value || "",
         main: ((document.getElementById("revMain") || {}).value || "").trim(),
         hideWait: !!(document.getElementById("revHideWait") || {}).checked,
         foldChannels: !!(document.getElementById("revFoldChannels") || {}).checked,
@@ -231,6 +233,8 @@
       setVal("revType", raw.type);
       setVal("revKind", raw.kind);
       setVal("revSource", raw.source);
+      setVal("revDefense", raw.defense || "");
+      setVal("revNews", raw.news || "");
       setVal("revMain", raw.main || "");
       if (typeof raw.hideWait === "boolean") {
         setVal("revHideWait", raw.hideWait);

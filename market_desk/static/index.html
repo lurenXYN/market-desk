@@ -868,6 +868,15 @@
               <button type="button" class="rev-col-btn on" data-side="worst">最惨</button>
               <button type="button" class="rev-col-btn" data-side="best">最强</button>
             </div>
+            <div class="rev-range-toggles" id="revRangeView" title="个股=原名单；板块=按冻结板名聚合均三日%">
+              <button type="button" class="rev-col-btn on" data-view="code">个股</button>
+              <button type="button" class="rev-col-btn" data-view="board">板块</button>
+            </div>
+            <div class="rev-range-toggles" id="revRangeKind" hidden title="行业/概念按名称查种子+快照；一票多标签按 1/k 分摊">
+              <button type="button" class="rev-col-btn on" data-kind="industry">行业</button>
+              <button type="button" class="rev-col-btn" data-kind="concept">概念</button>
+              <button type="button" class="rev-col-btn" data-kind="all">全部</button>
+            </div>
             <label class="rev-range-search">搜代码/板块
               <input id="revRangeQ" type="search" placeholder="600519 或 固态电池" autocomplete="off" />
             </label>
@@ -876,7 +885,7 @@
           <div class="rev-range-search-out" id="revRangeSearchOut" hidden></div>
           <div class="table-wrap">
             <table class="rev-table compact" id="revRangeTable">
-              <thead>
+              <thead id="revRangeHead">
                 <tr>
                   <th>日期</th>
                   <th>代码</th>
@@ -925,6 +934,21 @@
                 <option value="link">联动回踩</option>
                 <option value="watch_trial">自选试探</option>
                 <option value="independent_pop">独立人气</option>
+              </select>
+            </label>
+            <label>逆境
+              <select id="revDefense" title="买卡冻结的逆境档位（D1+起）">
+                <option value="">全部</option>
+                <option value="D1+">D1+</option>
+                <option value="D2+">D2+</option>
+                <option value="D3">D3</option>
+              </select>
+            </label>
+            <label>新闻
+              <select id="revNews" title="买卡冻结的新闻共振；占位不计">
+                <option value="">全部</option>
+                <option value="hit">有共振</option>
+                <option value="miss">无共振</option>
               </select>
             </label>
             <label>主线<input id="revMain" placeholder="关键词，可空" /></label>

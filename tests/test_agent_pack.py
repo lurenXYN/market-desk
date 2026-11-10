@@ -134,8 +134,10 @@ def test_build_agent_pack_sync(tmp_path, monkeypatch):
     pack = build_agent_pack_sync()
     assert pack["ok"] is True
     assert pack["schema"] == AGENT_PACK_SCHEMA
-    assert pack["schema"] == "agent_pack.v6"
+    assert pack["schema"] == "agent_pack.v7"
     assert "proposals" in pack and "review_check" in pack and "dual_wins" in pack
+    assert "observe_windows" in pack and pack["observe_windows"].get("ok") is True
+    assert "observe_due_n" in pack["summary"]
     assert "sim" in pack and pack["sim"].get("vs_bench") is not None
     assert any(p.get("id") == "sim_desk_gate" for p in pack["proposals"])
     assert "proposals_hold" in pack["summary"]

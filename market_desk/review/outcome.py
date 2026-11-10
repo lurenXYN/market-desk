@@ -497,6 +497,23 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         from market_desk.chip_volume import cv_tags
 
         item["cv_tags"] = cv_tags(item["cv"])
+    # Soft shadow freezes for review columns / filters (display only).
+    if item.get("defense_tier") is None:
+        d = payload.get("defense") if isinstance(payload.get("defense"), dict) else None
+        if isinstance(d, dict) and str(d.get("tier") or "") in ("D0", "D1", "D2", "D3"):
+            item["defense_tier"] = str(d.get("tier"))
+            item["defense_label"] = d.get("label")
+    if item.get("news_hit") is None:
+        nr = payload.get("news_radar") if isinstance(payload.get("news_radar"), dict) else None
+        if isinstance(nr, dict):
+            st = str(nr.get("status") or "").strip().lower()
+            if st in ("missing", "disabled", "offline", "empty", ""):
+                item["news_hit"] = None
+                item["news_status"] = st or "missing"
+            else:
+                item["news_hit"] = bool(nr.get("hit"))
+                item["news_status"] = st or "online"
+                item["news_confirm"] = nr.get("confirm")
     return item
 
 

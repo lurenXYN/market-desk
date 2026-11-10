@@ -14,6 +14,53 @@
 
 ---
 
+## [v1.10.85] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 区间涨跌「板块」视图把行业和概念混在一个榜里，且一票多概念会在每个概念桶里满额计数，热度被放大；看不出「行业强/惨」与「题材强/惨」。
+
+### 【做了什么（What）】
+- **Added** `classify_board_kind`：板名 → industry / concept / other。顺序：`seeds/em_boards.json` 精确名 → 名称带「概念/行业」后缀 → 归一名（含 `board_members_snap` 补缺）。读取时判，不改写历史冻结。
+- **Changed** `build_range_board_agg(kind=…)`：`industry | concept | all`；每票在所选范围内按 1/k 分摊权重，`avg_day3` 为加权均值，另给 `avg_raw`（不加权）与 `n_eff`；默认门槛行业 ≥2 只、概念 ≥3 只（可传 `min_n` 覆盖）。
+- **Added** 板与当日主线重合时标 `is_mainline`（只展示，不进排序）；`GET /api/review/range-board-agg` 增 `kind` 参数（默认 industry）。
+- **Changed** 复盘区间涨跌「板块」视图增「行业 | 概念 | 全部」切换，表增类型/不加权列。
+
+### 【影响与验证（Impact & Verification）】
+- 观察 only：不改 ready / size / 推送。新闻共振并表本轮不做。
+- 真实库 313 个板名分类覆盖约 99%（仅空名/个别新概念归其他）；`tests/test_range_board.py` 覆盖行业过滤、概念加权、all 保留其他、非法 kind 回退。
+
+---
+
+## [v1.10.84] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 影子账本看不到 news/defense 冻结；复盘页看不到已冻结旁注；sim 闸只读过线也绿；观察窗到期靠人记。
+
+### 【做了什么（What）】
+- **Added** `shadow_health`：`news_radar_freeze` / placeholder / `defense_freeze` + ops 文案。
+- **Added** 复盘列「逆境」「新闻」+ 筛选；`_flatten_signal_prices` 压平 `defense_tier` / `news_hit`。
+- **Fixed** sim 开工闸 UI 三态（绝对绿 / 只读蓝 / 未过线警示）；`sync_exits` 返回补 `gate_readonly_ok` / `gate_label` / `to_green_cny`。
+- **Added** `observe_windows` 到期清单；agent-pack 升 **v7**。
+
+### 【影响与验证（Impact & Verification）】
+- `test_shadow_health` / `test_review_shadow_cols_v11084` / `test_observe_windows_v11084` / `test_agent_pack`。desk.db 无迁移。不改 ready/买闸。
+
+---
+
+## [v1.10.83] - 2026-11-10
+
+### 【背景与动机（为什么做 · Why）】
+- 区间涨跌只有个股扁名单，难一眼看出最近哪类行业/概念强或惨。
+
+### 【做了什么（What）】
+- **Added** 视图「板块」：`build_range_board_agg` + `GET /api/review/range-board-agg`；按冻结板名聚合均/中位三日%、红盘率、最强/最惨票（默认 ≥2 票）。
+- **Added** 复盘区间涨跌栏「个股 | 板块」切换；点板名打开原名单检索。
+
+### 【影响与验证（Impact & Verification）】
+- `tests/test_range_board.py` 增聚合用例。desk.db 无迁移。只观察，不改 ready。
+
+---
+
 ## [v1.10.82] - 2026-11-09
 
 ### 【背景与动机（为什么做 · Why）】
