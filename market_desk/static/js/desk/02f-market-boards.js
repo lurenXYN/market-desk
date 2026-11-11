@@ -179,7 +179,7 @@ function renderMarketBoards(d, v) {
       : "obs-muted";
     const obsTip = (w.observe_note || "").replace(/"/g, "&quot;");
     return `<tr>
-          <td data-label="名称">${tickerHtml(w.name, w.code)}</td>
+          <td data-label="名称">${tickerHtml(w.name, w.code)} ${volToneHtml(w)}</td>
           <td data-label="代码">${w.code || ""}</td>
           <td data-label="首次">${t || "—"}</td>
           <td data-label="建议价">${w.suggest_price ?? "—"}</td>

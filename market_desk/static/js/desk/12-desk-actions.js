@@ -800,8 +800,14 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if ((ev.key === "t" || ev.key === "T") && currentMain === "review") {
-    const btn = document.querySelector("#revBody .rev-trade:not(.on)");
-    if (btn) btn.click();
+    // Prefer 操作列「已交易」; when that column is hidden, fall back to first empty「填成交」.
+    const tradeBtn = document.querySelector("#revBody .rev-trade:not(.on):not([disabled])");
+    if (tradeBtn) {
+      tradeBtn.click();
+      return;
+    }
+    const fillBtn = document.querySelector("#revBody .rev-fill-edit");
+    if (fillBtn && !fillBtn.closest(".rev-fill")) fillBtn.click();
   }
 });
 document.getElementById("chartRefresh").addEventListener("click", () => {

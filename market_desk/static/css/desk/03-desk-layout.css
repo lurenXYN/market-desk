@@ -162,6 +162,22 @@ body.commute-mode #commuteBtn.on {
 a.rev-chip:hover { filter: brightness(1.12); }
 .rev-chip.up { color: var(--up); border-color: #5a2a2a; background: #1a1014; }
 .rev-chip.down { color: var(--down, #38bdf8); border-color: #1e3a5f; background: #0c1a28; }
+.vol-chip {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.vol-chip.vol-expand { color: var(--up); border-color: #5a2a2a; background: #1a1014; }
+.vol-chip.vol-shrink { color: #93c5fd; border-color: #1e3a5f; background: #0c1a28; }
+.vol-chip.vol-flat { color: #9aa4b2; border-color: #3a4558; background: #121820; }
+.col-name .ticker { font-weight: 650; }
+.col-name .meta { display: block; margin-top: 2px; }
 .rev-chip.gate {
   border-color: #5b4a2a; color: #fbbf24; background: #1a1508; cursor: pointer;
 }

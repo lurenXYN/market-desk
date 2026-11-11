@@ -23,6 +23,12 @@ def _decorate_watchlist(
         item["name"] = item.get("name") or q.get("name") or code
         item["last"] = q.get("price")
         item["last_pct"] = q.get("pct")
+        from market_desk.volume_tone import classify_vol_ratio
+
+        vol = classify_vol_ratio(q.get("vol_ratio"))
+        item["vol_ratio"] = vol.get("ratio")
+        item["vol_tone"] = vol.get("tone")
+        item["vol_label"] = vol.get("label")
         out.append(item)
     return _annotate_watchlist_observe(out, verdict)
 

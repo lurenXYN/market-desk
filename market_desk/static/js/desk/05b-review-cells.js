@@ -414,16 +414,6 @@ function revCellHtml(col, r, ctx) {
     return ctx.typ;
   }
   if (col === "name") {
-    const code = r.code || "";
-    const histBtn = code
-      ? ` <button type="button" class="rev-col-btn rev-hist-btn js-sig-hist" data-code="${escAttr(code)}" data-name="${escAttr(r.name || code)}" title="共用明细：图 + 信号史 + 发散/锅底">明细</button>`
-      : "";
-    const cvDeg = (r.cv_degraded || (r.cv && r.cv.degraded))
-      ? ` <span class="rev-chip cv-warn" title="筹码/量能日线不足或拉取失败">CV降级</span>`
-      : "";
-    const cvChips = cvDeg + (r.cv_tags || []).map((t) =>
-      ` <span class="rev-chip cv-${t.tone === "good" ? "good" : "warn"}" title="${escAttr(t.title || "")}">${escAttr(t.label || "")}</span>`
-    ).join("");
     const st = String(r.signal_type || "");
     const pickChk = (r.id != null && (st === "buy" || st.startsWith("buy_")))
       ? `<input type="checkbox" class="rev-pick-chk" data-id="${escAttr(String(r.id))}" title="加入纠结对比"${revPickIds.has(String(r.id)) ? " checked" : ""} />`
@@ -432,13 +422,16 @@ function revCellHtml(col, r, ctx) {
     const chBadge = chN > 1
       ? ` <span class="rev-chip channel" title="${escAttr("同日同码通道：" + (r._channel_tip || "") + "（已收拢）")}">多通道 ${chN}</span>`
       : "";
+    // Compact: name link only (代码/雪球/明细另有列或点名称进抽屉)；旁注保留现价/标记。
     return pickChk
-      + `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id })}`
+      + `${tickerHtml(r.name, r.code, "", { signal_at: r.signaled_at || "", rev_id: r.id, compact: true })}`
       + chBadge
       + revTrendChips(r)
-      + cvChips
-      + histBtn
       + `${ctx.liveHtml}${ctx.markHtml}${ctx.cautionHtml}`;
+  }
+  if (col === "vol") {
+    if (r.vol_label) return volToneHtml(r);
+    return `<span class="meta" title="仅当日有腾讯量比">—</span>`;
   }
   if (col === "score") {
     const st = String(r.signal_type || "");

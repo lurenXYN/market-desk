@@ -601,6 +601,9 @@ def _recommend_item(
         role_label = f"{kind_label} 主推" if role == "primary" else f"{kind_label} 备选"
     else:
         role_label = f"{kind_label} 盯回踩"
+    from market_desk.volume_tone import classify_vol_ratio
+
+    vol = classify_vol_ratio(quote.get("vol_ratio"))
     item = {
         "kind": "etf" if etf else "stock",
         "kind_label": kind_label,
@@ -614,6 +617,9 @@ def _recommend_item(
         "amount": quote.get("amount"),
         "volume": quote.get("volume"),
         "turnover": quote.get("turnover"),
+        "vol_ratio": vol.get("ratio"),
+        "vol_tone": vol.get("tone"),
+        "vol_label": vol.get("label"),
         "buy_price": _px(buy, digits),
         # Canonical suggest for review/backtest; survives demote-to-wait on the card.
         "plan_price": _px(buy, digits),

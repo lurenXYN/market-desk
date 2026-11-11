@@ -76,15 +76,31 @@ const tickerHtml = (name, code, extra, opts) => {
   const label = name || c || "—";
   if (!c) return label;
   const xq = xueqiuUrl(c);
+  const compact = !!(opts && opts.compact);
   const sig = opts && opts.signal_at
     ? ` data-signal-at="${String(opts.signal_at).replace(/"/g, "")}"`
     : "";
   const revId = opts && opts.rev_id != null && opts.rev_id !== ""
     ? ` data-rev-id="${String(opts.rev_id).replace(/"/g, "")}"`
     : "";
-  return `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig}${revId} title="点开共用明细：分时/日线 + 信号历史 + 发散/锅底">${label}</a>`
-    + `<span class="meta"> ${c}${extra || ""}</span>`
-    + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
+  const tip = compact
+    ? `${label} ${c} · 点开明细`
+    : "点开共用明细：分时/日线 + 信号历史 + 发散/锅底";
+  let html = `<a class="ticker js-chart" href="${xq}" data-code="${c}" data-name="${label}"${sig}${revId} title="${tip}">${label}</a>`;
+  if (!compact) {
+    html += `<span class="meta"> ${c}${extra || ""}</span>`
+      + (xq ? ` <a class="xq-link" href="${xq}" target="_blank" rel="noopener noreferrer" title="雪球">雪球</a>` : "");
+  } else if (extra) {
+    html += `<span class="meta">${extra}</span>`;
+  }
+  return html;
+};
+const volToneHtml = (it) => {
+  const label = it && it.vol_label;
+  if (!label) return "";
+  const tone = String((it && it.vol_tone) || "flat");
+  const cls = tone === "expand" ? "vol-expand" : (tone === "shrink" ? "vol-shrink" : "vol-flat");
+  return `<span class="vol-chip ${cls}" title="腾讯量比 · 观察旁注">${label}</span>`;
 };
 const dragonItemsHtml = (items) => {
   const order = ["main", "side", "link"];
@@ -326,7 +342,7 @@ const recCard = (it) => {
             ? ` ×${Number(it.size_mult).toFixed(1)}`
             : ""
         }</span>${entryBadge}${softRankBadge}${regimeBadge}${defenseBadge}${fmtPct(it.pct)}</div>
-        <div class="nm">${tickerHtml(it.name, it.code)}</div>
+        <div class="nm">${tickerHtml(it.name, it.code)} ${volToneHtml(it)}</div>
         ${absorbBanner}
         ${trendHtml}
         ${(() => {
@@ -481,7 +497,7 @@ const sellCard = (it) => {
   }
   return `<article class="rec-card${sellNow ? " sell-now" : " wait"}${t1 ? " t1-lock" : ""}${phase === "watching" ? " near-touch" : ""}">
         <div class="role"><span>${it.role_label || "仓位"}</span>${fmtPct(it.pct)}</div>
-        <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)}</div>
+        <div class="nm">${tickerHtml(it.name, it.code, ` · ${it.qty || 0}股${sellPct}`)} ${volToneHtml(it)}</div>
         ${bufHtml}
         <div class="rec-prices">
           <div><div class="lab">现价</div><div class="val">${fmtPx(it.last, kind)}</div></div>

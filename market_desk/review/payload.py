@@ -177,6 +177,13 @@ def enrich_signals_with_live_marks(
             if last is not None:
                 item["last"] = last
             item.update(live_price_slope(code, last))
+            # Soft 量能旁注 from Tencent 量比; observe only, not a gate.
+            from market_desk.volume_tone import classify_vol_ratio
+
+            vol = classify_vol_ratio(q.get("vol_ratio"))
+            item["vol_ratio"] = vol.get("ratio")
+            item["vol_tone"] = vol.get("tone")
+            item["vol_label"] = vol.get("label")
             ref_px = last
         else:
             # Historical: expose frozen day close separately; do not pretend it is
@@ -185,6 +192,9 @@ def enrich_signals_with_live_marks(
             item["day_close"] = day_close
             item["live_last"] = None
             item["live_pct"] = None
+            item["vol_ratio"] = None
+            item["vol_tone"] = None
+            item["vol_label"] = None
             ref_px = day_close
         if item.get("plan_qty") is None:
             pq = num(payload.get("qty"))

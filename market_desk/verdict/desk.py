@@ -148,6 +148,9 @@ def build_watch_trial_recommend(
                 "pct": None
                 if row.get("last_pct") is None
                 else round(float(row["last_pct"]), 2),
+                "vol_ratio": row.get("vol_ratio"),
+                "vol_tone": row.get("vol_tone"),
+                "vol_label": row.get("vol_label"),
                 "buy_price": _px(buy, digits),
                 "wait_price": _px(suggest, digits),
                 "stop_price": _px(stop, digits),

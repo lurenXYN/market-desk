@@ -130,7 +130,7 @@ function renderPositionsPanel(d, v) {
     return `
         <tr class="${closed ? "pos-closed" : ""}">
           <td data-label="状态">${p.status || (closed ? "今日已平" : "持仓")}</td>
-          <td data-label="名称">${tickerHtml(p.name, p.code)}</td>
+          <td data-label="名称">${tickerHtml(p.name, p.code)} ${volToneHtml(p)}</td>
           <td data-label="代码">${p.code || ""}</td>
           <td data-label="买价">${p.buy_price ?? ""}</td>
           <td data-label="分批">${lotsCell}</td>

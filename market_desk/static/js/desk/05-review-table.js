@@ -1,4 +1,4 @@
-const REV_COL_STORAGE = "md_rev_cols_v1";
+const REV_COL_STORAGE = "md_rev_cols_v2";
 const REV_FILTER_STORAGE = (window.MDReview && MDReview.FILTER_STORAGE) || "md_rev_filters_v1";
 function saveRevFilters() {
   if (window.MDReview && MDReview.saveFilters) MDReview.saveFilters();
@@ -51,6 +51,7 @@ const REV_COL_CATALOG = [
   { id: "date", label: "信号时间" },
   { id: "type", label: "类型" },
   { id: "name", label: "名称" },
+  { id: "vol", label: "量能" },
   { id: "score", label: "风险清单" },
   { id: "code", label: "代码" },
   { id: "price", label: "建议价" },
@@ -72,7 +73,11 @@ const REV_COL_CATALOG = [
   { id: "result", label: "结果" },
   { id: "ops", label: "操作" },
 ];
-const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({ id: c.id, on: true }));
+// 操作列与「成交」重复；默认关，列设置里可再开。量能默认开。
+const REV_COL_DEFAULT = REV_COL_CATALOG.map((c) => ({
+  id: c.id,
+  on: c.id !== "ops",
+}));
 // Review signal ids ticked for 纠结对比; survives table repaints / auto-refresh.
 const revPickIds = new Set();
 // Per-row pick scores from /api/review/scores (today live, past days stored at signal time).
@@ -215,6 +220,7 @@ function revSortValue(r, id) {
   if (id === "date") return String(r.signaled_at || r.trade_date || "");
   if (id === "type") return String(r.signal_type || "");
   if (id === "name") return String(r.name || r.code || "");
+  if (id === "vol") return r.vol_ratio == null ? null : Number(r.vol_ratio);
   if (id === "code") return String(r.code || "");
   if (id === "price") {
     const n = Number(r.price);

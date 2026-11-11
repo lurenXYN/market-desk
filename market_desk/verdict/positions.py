@@ -292,6 +292,17 @@ def decorate_positions(
         item["low"] = q.get("low")
         item["open"] = None if closed else q.get("open")
         item["prev"] = None if closed else prev
+        if closed:
+            item["vol_ratio"] = None
+            item["vol_tone"] = None
+            item["vol_label"] = None
+        else:
+            from market_desk.volume_tone import classify_vol_ratio
+
+            vol = classify_vol_ratio(q.get("vol_ratio"))
+            item["vol_ratio"] = vol.get("ratio")
+            item["vol_tone"] = vol.get("tone")
+            item["vol_label"] = vol.get("label")
         item["bought_today"] = False if closed else bought_today
         item["today_lot_qty"] = today_lot_qty if not closed else 0
         item["cost"] = cost
