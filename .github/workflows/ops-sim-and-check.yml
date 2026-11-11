@@ -156,5 +156,55 @@ jobs:
                     d.get("px"),
                     (d.get("note") or "")[:70],
                 )
+            # Why lit late / missing: dump 11-10 buy cards for the two local fills.
+            print("DIAG_CARD_DETAIL")
+            for code in ("512480", "603626"):
+                rows = list(
+                    con.execute(
+                        "SELECT id, code, name, signal_type, ready, signaled_at, price, last, payload "
+                        "FROM signals WHERE trade_date='2026-11-10' AND code=? "
+                        "AND (signal_type='buy' OR signal_type LIKE 'buy_%') "
+                        "ORDER BY signal_type, id",
+                        (code,),
+                    )
+                )
+                if not rows:
+                    print(f"DIAG_CARD {code} MISSING")
+                    continue
+                for r in rows:
+                    d = dict(r)
+                    try:
+                        p = json.loads(d.get("payload") or "{}")
+                    except Exception:
+                        p = {}
+                    keys = (
+                        "ever_ready",
+                        "first_ready_at",
+                        "first_ready_px",
+                        "first_last",
+                        "touched_plan",
+                        "ready_relaxed",
+                        "confirm_fail",
+                        "confirm_fail_hist",
+                        "final_fail",
+                        "confirm_soft",
+                        "market_gates",
+                        "thin_confirm",
+                        "block_ready",
+                    )
+                    bits = []
+                    for k in keys:
+                        if k in p:
+                            bits.append(f"{k}={p.get(k)!r}")
+                    print(
+                        f"DIAG_CARD {code} id={d.get('id')} type={d.get('signal_type')} "
+                        f"ready={d.get('ready')} signaled_at={d.get('signaled_at')} "
+                        f"price={d.get('price')} last={d.get('last')} "
+                        + " ".join(bits)
+                    )
             con.close()
             PY
+            echo "==> journal market-desk 2026-11-10 14:00-16:00 CST"
+            journalctl -u market-desk --since "2026-11-10 14:00:00" --until "2026-11-10 16:00:00" --no-pager -n 200 || true
+            echo "==> journal attribution 2026-11-10"
+            journalctl -u market-desk-attribution --since "2026-11-10 00:00:00" --until "2026-11-11 00:00:00" --no-pager -n 80 || true
