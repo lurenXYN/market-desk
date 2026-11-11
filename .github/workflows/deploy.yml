@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force_restart:
+        description: "Restart even during A-share quiet window 09:00-15:30 CST (true/false)"
+        required: false
+        default: "false"
 
 concurrency:
   group: deploy-main
@@ -25,12 +30,13 @@ jobs:
           script_stop: true
           # Prefer ed25519 deploy key; command_timeout covers pip + restart.
           command_timeout: 10m
-          envs: REPO_DIR,INSTALL_DIR
+          envs: REPO_DIR,INSTALL_DIR,FORCE_RESTART
           script: |
             set -euo pipefail
             REPO_DIR="${REPO_DIR:-$HOME/github/market-desk}"
             INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
-            export REPO_DIR INSTALL_DIR
+            FORCE_RESTART="${FORCE_RESTART:-0}"
+            export REPO_DIR INSTALL_DIR FORCE_RESTART
             if [[ ! -d "$REPO_DIR/.git" ]]; then
               echo "Missing git clone at $REPO_DIR"
               echo "On the server first: git clone https://github.com/lurenXYN/market-desk.git \"$REPO_DIR\""
@@ -40,9 +46,10 @@ jobs:
             git fetch --prune origin
             git checkout main
             git reset --hard origin/main
-            chmod +x deploy/remote-update.sh
+            chmod +x deploy/remote-update.sh deploy/run-deferred-deploy.sh || true
             SKIP_PULL=1 bash deploy/remote-update.sh
         env:
           # Optional overrides (set as repo Variables, not required).
           REPO_DIR: ${{ vars.DEPLOY_REPO_DIR }}
           INSTALL_DIR: ${{ vars.DEPLOY_INSTALL_DIR }}
+          FORCE_RESTART: ${{ github.event.inputs.force_restart || 'false' }}

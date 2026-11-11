@@ -8,6 +8,7 @@
 #   SERVICE_NAME  systemd unit           (default: market-desk)
 #   HEALTH_URL    post-restart probe     (default: http://127.0.0.1:8765/api/health)
 #   SKIP_PULL=1   skip git fetch/reset
+#   FORCE_RESTART=1  restart even inside the A-share quiet window (09:00–15:30 CST)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +18,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
 SERVICE_NAME="${SERVICE_NAME:-market-desk}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8765/api/health}"
 SKIP_PULL="${SKIP_PULL:-0}"
+FORCE_RESTART="${FORCE_RESTART:-0}"
 
 run_root() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -28,9 +30,77 @@ run_root() {
   fi
 }
 
+install_deferred_timer() {
+  # Keep the after-close oneshot timer in sync so staged deploys still apply.
+  local svc="market-desk-deferred-deploy.service"
+  local timer="market-desk-deferred-deploy.timer"
+  local src_svc="${INSTALL_DIR}/deploy/${svc}"
+  local src_timer="${INSTALL_DIR}/deploy/${timer}"
+  local wrapper="${INSTALL_DIR}/deploy/run-deferred-deploy.sh"
+  # On first defer, units may only exist in REPO_DIR (install dir not rsynced yet).
+  if [[ ! -f "$src_svc" || ! -f "$src_timer" ]]; then
+    src_svc="${REPO_DIR}/deploy/${svc}"
+    src_timer="${REPO_DIR}/deploy/${timer}"
+    wrapper="${REPO_DIR}/deploy/run-deferred-deploy.sh"
+  fi
+  if [[ ! -f "$src_svc" || ! -f "$src_timer" ]]; then
+    echo "WARN: deferred-deploy units missing; pending stamp written but no timer"
+    return 0
+  fi
+  local svc_user
+  svc_user="$(run_root systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  if [[ -z "$svc_user" || "$svc_user" == "-" ]]; then
+    svc_user="$(id -un)"
+  fi
+  echo "==> refresh deferred-deploy timer (15:35 Asia/Shanghai)"
+  run_root chmod +x "$wrapper" || true
+  local tmp
+  tmp="$(mktemp)"
+  sed \
+    -e "s|REPLACE_USER|${svc_user}|g" \
+    -e "s|/opt/market-desk|${INSTALL_DIR}|g" \
+    "$src_svc" > "$tmp"
+  run_root cp "$tmp" "/etc/systemd/system/${svc}"
+  rm -f "$tmp"
+  run_root cp "$src_timer" "/etc/systemd/system/${timer}"
+  # Ensure wrapper is reachable from the unit ExecStart path even before rsync.
+  run_root mkdir -p "${INSTALL_DIR}/deploy"
+  if [[ "$wrapper" != "${INSTALL_DIR}/deploy/run-deferred-deploy.sh" ]]; then
+    run_root cp "$wrapper" "${INSTALL_DIR}/deploy/run-deferred-deploy.sh"
+    run_root chmod +x "${INSTALL_DIR}/deploy/run-deferred-deploy.sh"
+  fi
+  # remote-update.sh itself may be needed before full rsync on timer fire.
+  run_root cp "${REPO_DIR}/deploy/remote-update.sh" "${INSTALL_DIR}/deploy/remote-update.sh"
+  run_root chmod +x "${INSTALL_DIR}/deploy/remote-update.sh"
+  run_root systemctl daemon-reload
+  run_root systemctl enable --now "$timer" || true
+}
+
+stage_deferred_deploy() {
+  # Leave the live process alone; REPO_DIR already holds origin/main from CI.
+  run_root mkdir -p "${INSTALL_DIR}/data"
+  local sha
+  sha="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  local stamp
+  stamp="$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+  local pending="${INSTALL_DIR}/data/deploy-pending"
+  {
+    echo "repo_dir=${REPO_DIR}"
+    echo "sha=${sha}"
+    echo "staged_at=${stamp}"
+    echo "quiet=09:00-15:30 Asia/Shanghai trading day"
+  } | run_root tee "$pending" >/dev/null
+  echo "==> DEPLOY_DEFERRED quiet window (no rsync / no restart)"
+  echo "    pending: $pending"
+  echo "    sha:     $sha @ $stamp"
+  echo "    apply:   market-desk-deferred-deploy.timer (~15:35 CST) or FORCE_RESTART=1"
+  install_deferred_timer
+}
+
 echo "==> repo:    $REPO_DIR"
 echo "==> install: $INSTALL_DIR"
 echo "==> service: $SERVICE_NAME"
+echo "==> force:   $FORCE_RESTART"
 
 cd "$REPO_DIR"
 
@@ -44,6 +114,18 @@ fi
 if [[ ! -x "$REPO_DIR/deploy/remote-update.sh" ]]; then
   echo "remote-update.sh missing after pull; abort."
   exit 1
+fi
+
+# A-share quiet window: do not restart the live desk mid-session.
+if [[ "$FORCE_RESTART" != "1" && "$FORCE_RESTART" != "true" && "$FORCE_RESTART" != "yes" ]]; then
+  if PYTHONPATH="$REPO_DIR" python3 -c \
+    "from market_desk.deploy_gate import should_defer_deploy_restart; raise SystemExit(0 if should_defer_deploy_restart() else 1)"; then
+    stage_deferred_deploy
+    echo "Deploy staged (deferred)"
+    exit 0
+  fi
+else
+  echo "==> FORCE_RESTART set; skipping quiet-window defer"
 fi
 
 if ! command -v rsync >/dev/null 2>&1; then
@@ -142,10 +224,16 @@ if [[ -f "$ATTR_SRC_SVC" && -f "$ATTR_SRC_TIMER" ]]; then
   run_root cp "$ATTR_SRC_TIMER" "/etc/systemd/system/${ATTR_TIMER}"
 fi
 
+# Keep deferred-deploy timer installed so quiet-window stages still apply at 15:35.
+install_deferred_timer
+
 run_root systemctl daemon-reload
 if [[ -f "$ATTR_SRC_TIMER" ]]; then
   run_root systemctl enable --now "$ATTR_TIMER" || true
 fi
+
+# Successful live apply clears any leftover quiet-window stamp.
+run_root rm -f "${INSTALL_DIR}/data/deploy-pending"
 
 echo "==> restart $SERVICE_NAME"
 run_root systemctl restart "$SERVICE_NAME"

@@ -3,10 +3,13 @@
 push `main`（或手动 Run workflow）后，GitHub Actions 用 SSH 登录服务器，执行：
 
 1. `git fetch` + `reset --hard origin/main`（仓库克隆目录）
-2. `rsync` 到运行目录（默认 `/opt/market-desk`，**保留** `.venv` 与 `data/`）
-3. `pip install -r requirements.txt`
-4. `systemctl restart market-desk`
-5. 访问 `/api/health` 做健康检查
+2. **交易日 09:00–15:30（Asia/Shanghai）默认不 rsync / 不 restart**（防盘中撞车：重启打断刷新 → `first_ready_at` 落到 15:00 后 → 模拟仓 `outside_session`）
+   - 写入 `/opt/market-desk/data/deploy-pending`，由 `market-desk-deferred-deploy.timer` 在 **15:35 CST（UTC 07:35）** 自动补部署
+   - 紧急：Actions → Deploy → Run workflow，把 `force_restart=true`（或服务器 `FORCE_RESTART=1`）
+3. 窗外 / 强制时：`rsync` 到运行目录（默认 `/opt/market-desk`，**保留** `.venv` 与 `data/`）
+4. `pip install -r requirements.txt`
+5. `systemctl restart market-desk`
+6. 访问 `/api/health` 做健康检查
 
 ## 一次性准备（服务器）
 
@@ -83,13 +86,21 @@ journalctl -u market-desk-attribution -n 20 --no-pager
 盘中归因定时器由 `remote-update.sh` 同步安装；休市/窗外会 skip（exit 0），不标失败。
 Timer 的 `OnCalendar` 用 **UTC**（上海盘中 −8h），适配 VPS `Etc/UTC`；脚本内仍用 `TZ=Asia/Shanghai` 判窗口。改 timer 后需 `daemon-reload` + `restart` timer（部署脚本会做）。
 
-也可在 Actions 页点 **Run workflow** 手动部署。
+也可在 Actions 页点 **Run workflow** 手动部署；盘中紧急重启勾选 `force_restart`。
+
+```bash
+# 看是否有延后部署在排队
+cat /opt/market-desk/data/deploy-pending
+systemctl list-timers market-desk-deferred-deploy.timer
+journalctl -u market-desk-deferred-deploy -n 30 --no-pager
+```
 
 ## 注意
 
 - `data/desk.db` 不会被 rsync 覆盖（排除了 `data/`）。
 - 多用户：首次启动若无用户会创建管理员 `admin` / `admin123`（可用环境变量 `MARKET_DESK_ADMIN_USER` / `MARKET_DESK_ADMIN_PASSWORD` 覆盖）；他人自助注册后需管理员在页头「审批」同意。
 - Actions 并发组会取消进行中的旧部署，避免叠两次 restart。
+- 盘中 push 会绿勾但日志写 `DEPLOY_DEFERRED`：代码已在 git 克隆目录，**进程要等 15:35 或 force** 才换新。
 - 私钥只放在 GitHub Secrets，不要提交进仓库；本机测完可删本地 `market-desk-deploy` 或锁进密码器。
 - 若仓库是 private，服务器 `git fetch` 需已配置 deploy key / token（当前 public 则无需）。
 - 公网务必 Nginx + HTTPS，勿长期裸奔 `0.0.0.0:8765`。

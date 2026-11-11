@@ -1,0 +1,12 @@
+[Unit]
+Description=牛来-作战台 盘中延后部署定时器（交易日收盘后补 restart）
+
+[Timer]
+# Wall times below are UTC (= Asia/Shanghai − 8h, no DST).
+# Shanghai 15:35 → UTC 07:35. Persistent=true so a missed fire still applies.
+OnCalendar=Mon-Fri *-*-* 07:35:00
+Persistent=true
+Unit=market-desk-deferred-deploy.service
+
+[Install]
+WantedBy=timers.target

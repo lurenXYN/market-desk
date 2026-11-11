@@ -14,6 +14,21 @@
 
 ---
 
+## [v1.10.92] - 2026-11-11
+
+### 【背景与动机（为什么做 · Why）】
+- 11-10 VPS 盘中 Deploy 重启后，半导体 ETF 到 **15:24** 才首次 `ready`，已过连续竞价 → 模拟仓 `outside_session` 拒填；本地 14:33 已成交。要防止「盘中推送重启」与亮灯/成交撞车。
+
+### 【做了什么（What）】
+- **Added** `deploy_gate.should_defer_deploy_restart`：交易日 **09:00–15:30** Asia/Shanghai 默认延后 live restart。
+- **Added** `market-desk-deferred-deploy.{service,timer}` + `run-deferred-deploy.sh`：写入 `data/deploy-pending`，**15:35 CST** 自动补 rsync/restart。
+- **Changed** `remote-update.sh` / Deploy workflow：窗外照常部署；紧急 `FORCE_RESTART=1` 或 workflow `force_restart=true`。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest tests/test_deploy_gate_v11092.py`；不改 ready/填单规则。盘中 push 日志见 `DEPLOY_DEFERRED`。
+
+---
+
 ## [v1.10.91] - 2026-11-11
 
 ### 【背景与动机（为什么做 · Why）】

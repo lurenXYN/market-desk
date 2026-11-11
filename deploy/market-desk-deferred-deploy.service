@@ -1,0 +1,15 @@
+[Unit]
+Description=牛来-作战台 盘中延后部署（交易日 15:35 补 restart）
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=REPLACE_USER
+WorkingDirectory=/opt/market-desk
+Environment=TZ=Asia/Shanghai
+Environment=INSTALL_DIR=/opt/market-desk
+# REPO_DIR comes from data/deploy-pending (written when a push is deferred).
+ExecStart=/opt/market-desk/deploy/run-deferred-deploy.sh
+
+[Install]
+WantedBy=multi-user.target
