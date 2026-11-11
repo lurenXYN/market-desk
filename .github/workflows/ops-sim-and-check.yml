@@ -92,22 +92,43 @@ jobs:
             con = sqlite3.connect(str(DB_PATH))
             con.row_factory = sqlite3.Row
             print("DIAG_DB", DB_PATH)
+            from market_desk.sim_desk import (
+                BUY_TYPES,
+                assess_buy_fill,
+                sim_lot_exists,
+            )
+            from market_desk.filters import normalize_code
             for day in ("2026-11-11", "2026-11-10", "2026-11-09"):
                 rows = list(
                     con.execute(
-                        "SELECT ready, payload FROM signals WHERE trade_date=? "
+                        "SELECT id, code, name, signal_type, ready, payload, signaled_at, price "
+                        "FROM signals WHERE trade_date=? "
                         "AND (signal_type='buy' OR signal_type LIKE 'buy_%')",
                         (day,),
                     )
                 )
                 lit = 0
                 for r in rows:
+                    d = dict(r)
                     try:
-                        p = json.loads(r["payload"] or "{}")
+                        p = json.loads(d.get("payload") or "{}")
                     except Exception:
                         p = {}
-                    if r["ready"] or p.get("ever_ready") or p.get("first_ready_at"):
-                        lit += 1
+                    d["payload"] = p
+                    is_lit = bool(d.get("ready") or p.get("ever_ready") or p.get("first_ready_at"))
+                    if not is_lit:
+                        continue
+                    lit += 1
+                    code = normalize_code(d.get("code"))
+                    st = str(d.get("signal_type") or "")
+                    exists = sim_lot_exists(day, code, st) if st in BUY_TYPES else False
+                    verdict = assess_buy_fill(d, quote=None)
+                    print(
+                        f"DIAG_LIT {day} {code} {d.get('name')} {st} "
+                        f"ready={d.get('ready')} first_ready_at={str(p.get('first_ready_at') or '')[:19]} "
+                        f"lot_exists={exists} fill_ok={verdict.get('ok')} "
+                        f"reason={verdict.get('reason')} px={verdict.get('fill_px')}"
+                    )
                 fills = list(
                     con.execute(
                         "SELECT side, COUNT(*) n FROM sim_fill WHERE trade_date=? GROUP BY 1",
@@ -116,7 +137,7 @@ jobs:
                 )
                 print(
                     f"DIAG_DAY {day} buys={len(rows)} lit={lit} fills="
-                    + ",".join(f"{d['side']}:{d['n']}" for d in fills)
+                    + ",".join(f"{x['side']}:{x['n']}" for x in fills)
                 )
             print("DIAG_FILL_RECENT")
             for r in con.execute(
