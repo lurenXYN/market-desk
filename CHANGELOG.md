@@ -14,6 +14,20 @@
 
 ---
 
+## [v1.10.94] - 2026-11-12
+
+### 【背景与动机（为什么做 · Why）】
+- 大盘 tab「外盘脉搏」一直「待刷新」：后端已拉腾讯外盘，但 `/api/snapshot?view=market` 切片漏掉 `global_watch`，前端轮询拿不到。
+
+### 【做了什么（What）】
+- **Fixed** `slice_snapshot("market")` 补上 `global_watch`。
+- **Added** 单测防止大盘切片再漏外盘字段。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest tests/test_glossary_slice.py`；刷新大盘 tab 应见基调与 chip，不改 ready/闸门。
+
+---
+
 ## [v1.10.93] - 2026-11-12
 
 ### 【背景与动机（为什么做 · Why）】

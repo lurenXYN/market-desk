@@ -398,6 +398,7 @@ class DeskEngine(
                 "kpis",
                 "indices",
                 "etfs",
+                "global_watch",
                 "auction",
                 "emotion_wave",
                 "seasonality",
