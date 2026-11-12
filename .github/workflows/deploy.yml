@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       force_restart:
-        description: "Restart even during A-share quiet window 09:00-15:30 CST (true/false)"
+        description: "Restart even during quiet windows 09:00-12:30 / 13:00-15:30 CST (true/false)"
         required: false
         default: "false"
 

@@ -70,7 +70,7 @@ chmod +x start.sh deploy/install-systemd.sh
 ### 自动部署（push → VPS）
 
 推送 `main` 后由 GitHub Actions SSH 更新服务器。配置步骤见 [`deploy/GITHUB_ACTIONS_DEPLOY.md`](./deploy/GITHUB_ACTIONS_DEPLOY.md)。  
-交易日 **09:00–15:30**（上海）默认**不重启**进程（防盘中撞车），写入 `deploy-pending`，约 **15:35** 自动补部署；紧急用 workflow `force_restart`。
+交易日 **09:00–12:30 / 13:00–15:30**（上海）默认**不重启**；**午休 12:30–13:00 可重启**。写入 `deploy-pending` 后约 **12:30 / 15:35** 自动补部署；紧急用 workflow `force_restart`。
 
 浏览器打开：http://127.0.0.1:8765/
 

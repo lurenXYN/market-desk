@@ -14,14 +14,28 @@
 
 ---
 
+## [v1.10.93] - 2026-11-12
+
+### 【背景与动机（为什么做 · Why）】
+- 全天 09:00–15:30 禁重启过宽；午休 **12:00–13:00** 本就可重启。上午改动应在 **12:30** 落地，不必拖到 15:35。
+
+### 【做了什么（What）】
+- **Changed** 静默窗拆成 **09:00–12:30** 与 **13:00–15:30**；**12:30–13:00** 开放 live restart。
+- **Changed** `market-desk-deferred-deploy.timer` 增加 **12:30 CST（UTC 04:30）**，保留 **15:35**；pending 日志标下一档 apply。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest tests/test_deploy_gate_v11092.py`；不改 ready/填单规则。
+
+---
+
 ## [v1.10.92] - 2026-11-11
 
 ### 【背景与动机（为什么做 · Why）】
 - 11-10 VPS 盘中 Deploy 重启后，半导体 ETF 到 **15:24** 才首次 `ready`，已过连续竞价 → 模拟仓 `outside_session` 拒填；本地 14:33 已成交。要防止「盘中推送重启」与亮灯/成交撞车。
 
 ### 【做了什么（What）】
-- **Added** `deploy_gate.should_defer_deploy_restart`：交易日 **09:00–15:30** Asia/Shanghai 默认延后 live restart。
-- **Added** `market-desk-deferred-deploy.{service,timer}` + `run-deferred-deploy.sh`：写入 `data/deploy-pending`，**15:35 CST** 自动补 rsync/restart。
+- **Added** `deploy_gate.should_defer_deploy_restart`：交易日连续竞价默认延后 live restart（初版整窗 09:00–15:30，见 v1.10.93 拆午休）。
+- **Added** `market-desk-deferred-deploy.{service,timer}` + `run-deferred-deploy.sh`：写入 `data/deploy-pending`，定时自动补 rsync/restart。
 - **Changed** `remote-update.sh` / Deploy workflow：窗外照常部署；紧急 `FORCE_RESTART=1` 或 workflow `force_restart=true`。
 
 ### 【影响与验证（Impact & Verification）】

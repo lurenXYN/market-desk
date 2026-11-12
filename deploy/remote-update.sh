@@ -8,7 +8,7 @@
 #   SERVICE_NAME  systemd unit           (default: market-desk)
 #   HEALTH_URL    post-restart probe     (default: http://127.0.0.1:8765/api/health)
 #   SKIP_PULL=1   skip git fetch/reset
-#   FORCE_RESTART=1  restart even inside the A-share quiet window (09:00–15:30 CST)
+#   FORCE_RESTART=1  restart even inside quiet windows (09:00–12:30 / 13:00–15:30 CST)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,7 +52,7 @@ install_deferred_timer() {
   if [[ -z "$svc_user" || "$svc_user" == "-" ]]; then
     svc_user="$(id -un)"
   fi
-  echo "==> refresh deferred-deploy timer (15:35 Asia/Shanghai)"
+  echo "==> refresh deferred-deploy timer (12:30 + 15:35 Asia/Shanghai)"
   run_root chmod +x "$wrapper" || true
   local tmp
   tmp="$(mktemp)"
@@ -88,12 +88,16 @@ stage_deferred_deploy() {
     echo "repo_dir=${REPO_DIR}"
     echo "sha=${sha}"
     echo "staged_at=${stamp}"
-    echo "quiet=09:00-15:30 Asia/Shanghai trading day"
+    echo "quiet=09:00-12:30|13:00-15:30 Asia/Shanghai trading day"
+    echo "lunch_open=12:30-13:00"
   } | run_root tee "$pending" >/dev/null
+  next_apply="$(PYTHONPATH="$REPO_DIR" python3 -c \
+    "from market_desk.deploy_gate import next_deferred_apply_label; print(next_deferred_apply_label())" \
+    2>/dev/null || echo "12:30/15:35 Asia/Shanghai")"
   echo "==> DEPLOY_DEFERRED quiet window (no rsync / no restart)"
   echo "    pending: $pending"
   echo "    sha:     $sha @ $stamp"
-  echo "    apply:   market-desk-deferred-deploy.timer (~15:35 CST) or FORCE_RESTART=1"
+  echo "    apply:   ~${next_apply} (timer) or FORCE_RESTART=1"
   install_deferred_timer
 }
 
@@ -224,7 +228,7 @@ if [[ -f "$ATTR_SRC_SVC" && -f "$ATTR_SRC_TIMER" ]]; then
   run_root cp "$ATTR_SRC_TIMER" "/etc/systemd/system/${ATTR_TIMER}"
 fi
 
-# Keep deferred-deploy timer installed so quiet-window stages still apply at 15:35.
+# Keep deferred-deploy timer installed so quiet-window stages still apply at 12:30/15:35.
 install_deferred_timer
 
 run_root systemctl daemon-reload

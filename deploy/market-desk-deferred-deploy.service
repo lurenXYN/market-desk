@@ -1,5 +1,5 @@
 [Unit]
-Description=牛来-作战台 盘中延后部署（交易日 15:35 补 restart）
+Description=牛来-作战台 盘中延后部署（交易日 12:30 / 15:35 补 restart）
 After=network-online.target
 
 [Service]

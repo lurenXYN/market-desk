@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Apply a deploy that was staged during the A-share session quiet window.
-# Invoked by market-desk-deferred-deploy.timer (15:35 Asia/Shanghai / 07:35 UTC).
+# Invoked by market-desk-deferred-deploy.timer
+# (12:30 Asia/Shanghai / 04:30 UTC, and 15:35 / 07:35 UTC).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
