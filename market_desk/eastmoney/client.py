@@ -14,9 +14,13 @@ log = logging.getLogger("market_desk.eastmoney")
 
 
 # Prefer push2 for clist; delay edge often returns 502 on quotes/boards.
+# Extra numbered edges sit on different front-end IPs; on the VPS only the
+# canonical host got cut, so rotating through them keeps clist alive.
 _CLIST_HOSTS: tuple[str, ...] = (
     "push2.eastmoney.com",
     "push2delay.eastmoney.com",
+    "82.push2.eastmoney.com",
+    "1.push2.eastmoney.com",
     "push2his.eastmoney.com",
 )
 

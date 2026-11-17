@@ -262,6 +262,19 @@ async def _fetch_minute_trends_unlocked(
     out = await tencent_client.fetch_minute_trends(client, c)
     if out:
         _note_minute_fallback(em_tried)
+        return out
+    # Third independent host: EM trends2 and Tencent both blank (the VPS case)
+    # → Tonghuashun minute line, same point shape.
+    try:
+        from market_desk.ths import fetch_minute_trends as ths_minute
+
+        out = await ths_minute(client, c)
+    except Exception:
+        out = []
+    if out:
+        # _note_minute_fallback() stamps "tencent"; set the real source after it.
+        _note_minute_fallback(em_tried)
+        _MINUTE_SOURCE = "ths"
     return out
 
 
