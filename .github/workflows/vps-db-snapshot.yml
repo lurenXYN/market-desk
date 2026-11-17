@@ -36,11 +36,12 @@ jobs:
           PORT: ${{ secrets.DEPLOY_PORT || 22 }}
         run: |
           set -euo pipefail
+          # UTC date on both sides: VPS clock is UTC, runner is UTC.
+          DAY=$(date -u +%F)
           ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'bash -s' <<'REMOTE'
+            "DAY=$DAY bash -s" <<'REMOTE'
           set -euo pipefail
           INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
-          DAY=$(date +%F)
           OUT="/tmp/desk-${DAY}.db"
           rm -f "$OUT" "$OUT.gz"
           python3 - "$INSTALL_DIR/data/desk.db" "$OUT" <<'PY'
@@ -65,7 +66,7 @@ jobs:
           PORT: ${{ secrets.DEPLOY_PORT || 22 }}
         run: |
           set -euo pipefail
-          DAY=$(date -u -d '+8 hours' +%F)
+          DAY=$(date -u +%F)
           scp -i ~/.ssh/id_deploy -P "$PORT" -o StrictHostKeyChecking=yes \
             "$USER@$HOST:/tmp/desk-${DAY}.db.gz" ./desk-${DAY}.db.gz
           sha256sum ./desk-${DAY}.db.gz > SHA256SUMS

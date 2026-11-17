@@ -9,3 +9,5 @@ data/backup/
 data/logs/
 scripts/_*
 scripts/*.out.json
+data/vps-db/
+data/tmp/
