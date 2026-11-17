@@ -549,6 +549,6 @@ function paintReview(payload) {
       if (id === "day1" || id === "day3") return html;
       return `<td class="col-${id}">${html}</td>`;
     }).join("");
-    return `<tr class="${r.signal_type === "sell" ? "rev-sell" : ""}">${tds}</tr>`;
+    return `<tr class="${r.signal_type === "sell" ? "rev-sell" : ""}" data-sig-id="${r.id ?? ""}">${tds}</tr>`;
   }).join("") || `<tr><td colspan="${colspan}" class="meta">${viewDate || "该日"}暂无信号。盘中出现「可买入」或仓位「建议卖」后会自动记录。</td></tr>`;
 }

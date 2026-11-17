@@ -154,24 +154,24 @@ function renderDeskHead(d, v) {
       gateEl.className = "gate-hint"
         + (gate.can_buy ? " on-buy" : (gate.can_probe ? " on-probe" : ""));
       if (gate.can_buy) {
-        gateEl.innerHTML = `<b>可现买</b> · ${hint || act}`;
+        gateEl.innerHTML = `<b>可现买</b> · ${escHtml(hint || act)}`;
       } else if (gate.can_probe) {
-        gateEl.innerHTML = `<b>可小仓试探</b> · ${hint || reasons[0] || act}`
+        gateEl.innerHTML = `<b>可小仓试探</b> · ${escHtml(hint || reasons[0] || act)}`
           + (gate.short_miss
-            ? `<span class="short-miss">${gate.short_miss}</span>`
+            ? `<span class="short-miss">${escHtml(gate.short_miss)}</span>`
             : (reasons.length > 1
-              ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+              ? `<span class="meta">（${escHtml(reasons.slice(0, 3).join(" · "))}）</span>`
               : ""));
       } else {
         const missLine = gate.short_miss
           || ((gate.progress && gate.progress.missing && gate.progress.missing.length)
-            ? `还差：${gate.progress.missing.slice(0, 3).join(" · ")}`
+            ? `还差：${escHtml(gate.progress.missing.slice(0, 3).join(" · "))}`
             : "");
-        gateEl.innerHTML = `<b>${(hint || "").startsWith("靠近买点") ? "靠近买点" : "为何不能现买"}</b> · ${hint || reasons[0] || act}`
+        gateEl.innerHTML = `<b>${(hint || "").startsWith("靠近买点") ? "靠近买点" : "为何不能现买"}</b> · ${escHtml(hint || reasons[0] || act)}`
           + (missLine
             ? `<span class="short-miss">${missLine}</span>`
             : (reasons.length > 1
-              ? `<span class="meta">（${reasons.slice(0, 3).join(" · ")}）</span>`
+              ? `<span class="meta">（${escHtml(reasons.slice(0, 3).join(" · "))}）</span>`
               : ""));
       }
     } else {

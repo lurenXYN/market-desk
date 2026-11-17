@@ -293,7 +293,7 @@ async function ensurePosLhb(force) {
     }
     const d = await r.json().catch(() => ({}));
     if (!d.ok) {
-      if (body) body.innerHTML = `<div class="meta">${d.detail || "龙虎榜暂不可用"}</div>`;
+      if (body) body.innerHTML = `<div class="meta">${escHtml(d.detail) || "龙虎榜暂不可用"}</div>`;
       return;
     }
     _posLhbKey = openCodes;

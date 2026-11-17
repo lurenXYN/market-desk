@@ -1,6 +1,10 @@
 let tickTimer = null;
 let tickLive = null;
 let tickMs = null;
+// 提交防抖：同一动作 1.5 秒内重复触发只放行一次（连点会产生两条写入）。
+let __posPostBusy = 0;
+let __watchPostBusy = 0;
+
 function scheduleTick(live) {
   const ms = tickIntervalMs(!!live);
   if (tickLive === !!live && tickTimer && tickMs === ms) return;
@@ -458,6 +462,8 @@ document.getElementById("posForm").addEventListener("submit", async (ev) => {
     note: f.note.value.trim(),
     match_signal: !!(f.match_signal && f.match_signal.checked),
   };
+  if (Date.now() - __posPostBusy < 1500) return;
+  __posPostBusy = Date.now();
   try {
     const r = await fetch("/api/positions", {
       method: "POST",
@@ -509,6 +515,8 @@ document.getElementById("wlForm").addEventListener("submit", async (ev) => {
     stop_price: numOrNull(f.stop_price.value),
     chase_price: numOrNull(f.chase_price.value),
   };
+  if (Date.now() - __watchPostBusy < 1500) return;
+  __watchPostBusy = Date.now();
   try {
     const r = await fetch("/api/watchlist", {
       method: "POST",

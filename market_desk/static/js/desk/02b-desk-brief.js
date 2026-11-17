@@ -91,7 +91,7 @@ function renderDeskBrief(d, v) {
                 : `<li>${t}</li>`;
             }).join("");
             const etfs = (r.etfs || []).join(" ");
-            nrPanel.innerHTML = `<div><b>${r.sector || ""}</b>`
+            nrPanel.innerHTML = `<div><b>${escHtml(r.sector)}</b>`
               + (r.confirm_label ? ` · ${r.confirm_label}` : "")
               + (r.tone_label ? ` · ${r.tone_label}` : "")
               + `</div>`
@@ -111,7 +111,7 @@ function renderDeskBrief(d, v) {
           };
         });
       } else {
-        nrStrip.innerHTML = `<div class="meta">暂无热板块 · ${st || "无数据"}</div>`;
+        nrStrip.innerHTML = `<div class="meta">暂无热板块 · ${escHtml(st) || "无数据"}</div>`;
         if (nrPanel) { nrPanel.style.display = "none"; nrPanel.innerHTML = ""; nrPanel.dataset.open = ""; }
       }
       if (nrNote) {

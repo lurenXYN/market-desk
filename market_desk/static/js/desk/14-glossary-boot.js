@@ -59,7 +59,7 @@ function paintGlossaryDetail(key) {
     return;
   }
   glossaryKey = key;
-  box.innerHTML = `<h4>${key}</h4><p class="mean">${g.mean || ""}</p><p class="algo">${g.algo || ""}</p>`;
+  box.innerHTML = `<h4>${key}</h4><p class="mean">${escHtml(g.mean)}</p><p class="algo">${escHtml(g.algo)}</p>`;
 }
 
 function paintGlossaryList() {
@@ -261,7 +261,13 @@ document.addEventListener("click", (ev) => {
   gPanel.hidden = true;
 });
 document.getElementById("revExport").addEventListener("click", () => {
-  const rows = lastReview.signals || [];
+  // Export exactly what the table shows: painted row ids preserve the active
+  // filter and sort order, so a filtered view no longer dumps every signal.
+  const byId = new Map((lastReview.signals || []).map((s) => [String(s.id), s]));
+  const painted = Array.from(document.querySelectorAll("#revBody tr[data-sig-id]"))
+    .map((tr) => byId.get(String(tr.getAttribute("data-sig-id") || "")))
+    .filter(Boolean);
+  const rows = painted.length ? painted : (lastReview.signals || []);
   const cols = visibleRevCols().filter((id) => id !== "ops");
   const header = cols.map(revColLabel);
   const lines = [header.join(",")].concat(rows.map((r) => cols.map((id) => {

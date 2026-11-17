@@ -138,7 +138,7 @@ async function refreshAdminUsers() {
   const r = await fetch("/api/admin/users", { credentials: "same-origin" });
   const d = await r.json();
   if (!d.ok) {
-    box.innerHTML = `<div class="meta">${d.detail || "加载失败"}</div>`;
+    box.innerHTML = `<div class="meta">${escHtml(d.detail) || "加载失败"}</div>`;
     return;
   }
   const selfId = authUser && authUser.id;

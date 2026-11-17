@@ -141,21 +141,21 @@ async function pollBacktestJob(jobId, bodyEl) {
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {
-      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "任务查询失败"}</td></tr>`;
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${escHtml(d.detail) || "任务查询失败"}</td></tr>`;
       return null;
     }
     const job = d.job || {};
     const prog = job.progress || {};
     if (bodyEl) {
       const pct = prog.pct != null ? prog.pct : "…";
-      bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步回测 ${job.status || "…"} · ${pct}%`
+      bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步回测 ${escHtml(job.status) || "…"} · ${pct}%`
         + (prog.done != null ? `（${prog.done}/${prog.total || "?"}）` : "")
         + ` · #${jobId}</td></tr>`;
     }
     if (job.status === "done" && job.result) return job.result;
     if (job.status === "error") {
       if (bodyEl) {
-        bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步失败：${job.error || "unknown"}</td></tr>`;
+        bodyEl.innerHTML = `<tr><td colspan="10" class="meta">异步失败：${escHtml(job.error) || "unknown"}</td></tr>`;
       }
       return null;
     }
@@ -267,7 +267,7 @@ document.getElementById("btArchiveList")?.addEventListener("click", async (ev) =
       const r = await fetch("/api/backtest/runs/" + id, { credentials: "same-origin" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "加载失败"}</td></tr>`;
+        if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${escHtml(d.detail) || "加载失败"}</td></tr>`;
         return;
       }
       if (d.date_from) document.getElementById("btFrom").value = d.date_from;
@@ -320,7 +320,7 @@ document.getElementById("btPreview")?.addEventListener("click", async () => {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.ok === false) {
       if (bodyEl) {
-        bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "预览失败"}</td></tr>`;
+        bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${escHtml(d.detail) || "预览失败"}</td></tr>`;
       }
       return;
     }
@@ -352,7 +352,7 @@ document.getElementById("btGrid")?.addEventListener("click", async () => {
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.ok === false) {
-      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "网格失败"}</td></tr>`;
+      if (bodyEl) bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${escHtml(d.detail) || "网格失败"}</td></tr>`;
       return;
     }
     if (bodyEl) {
@@ -425,7 +425,7 @@ document.getElementById("btForm")?.addEventListener("submit", async (ev) => {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.ok === false) {
       if (bodyEl) {
-        bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${d.detail || "回测失败"}</td></tr>`;
+        bodyEl.innerHTML = `<tr><td colspan="10" class="meta">${escHtml(d.detail) || "回测失败"}</td></tr>`;
       }
       return;
     }
