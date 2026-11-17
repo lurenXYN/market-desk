@@ -29,6 +29,11 @@ USER_PRIVATE_KEYS = frozenset(
         "toast_cooldown",
         "decision_alerts",
         "hit_rate_mode",
+        "strategy_profile",
+        "portfolio_board_cap_pct",
+        "portfolio_corr_cap",
+        "portfolio_dd_cap_pct",
+        "portfolio_dd_hard_pct",
         "outcome_standard",
         "adapt_follow_outcome",
         "env_gate_live",
@@ -67,6 +72,11 @@ SETTINGS_PORTABLE_KEYS = frozenset(
         "open_mute_minutes",
         "tail_mute_minutes",
         "hit_rate_mode",
+        "strategy_profile",
+        "portfolio_board_cap_pct",
+        "portfolio_corr_cap",
+        "portfolio_dd_cap_pct",
+        "portfolio_dd_hard_pct",
         "outcome_standard",
         "adapt_follow_outcome",
         "env_gate_live",
@@ -186,6 +196,14 @@ DEFAULTS: dict[str, Any] = {
     "tail_mute_minutes": 30,
     # Review hit-rate: traded (executed only) | all (paper signals too).
     "hit_rate_mode": "traded",
+    # Trading-philosophy profile (see market_desk/profiles.py). Default keeps the
+    # historical behaviour; switching is explicit.
+    "strategy_profile": "standard",
+    # Portfolio-level soft caps (percent of book value).
+    "portfolio_board_cap_pct": 50.0,
+    "portfolio_corr_cap": 0.75,
+    "portfolio_dd_cap_pct": 8.0,
+    "portfolio_dd_hard_pct": 15.0,
     # Review outcome standard: classic | same_day_plan | filled (display overlay).
     "outcome_standard": "classic",
     # Soft adapt always uses persisted classic labels unless True (reserved; v1 still classic).

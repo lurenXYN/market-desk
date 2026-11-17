@@ -14,6 +14,33 @@
 
 ---
 
+## [v1.10.102] - 2026-11-17
+
+### 【背景与动机（为什么做 · Why）】
+- 策略哲学是隐式的：所有阈值散在 config/settings 里，「保守/标准/激进」只能靠人逐项改，改完无法解释边界。
+- 风控只到单票：四张同主线卡各自 15% 风险，主线一退潮就是 4 倍暴露，组合层没有任何约束。
+- 相位用固定阈值 28/45/72，状态切换滞后 1-2 天，而滞后窗口正是回撤起点。
+- 有信号表与复盘表，却没有「当时看到什么→做了什么→结果如何」的一条链路，反事实与归因每次都要手写脚本。
+- 有预注册样本外的意识，但没有承载它的工具，判据只能记在脑子里。
+
+### 【做了什么（What）】
+- **Added** `market_desk/profiles.py`：保守/标准/激进三档案，含哲学说明、适用场景、失效条件与 gate/size/entry 三组阈值；`profile_summary()` 供 UI/API 读取，未切换时一律 standard。
+- **Added** `market_desk/portfolio_risk.py`：单板块暴露上限、持仓平均相关性惩罚、组合回撤两级预算，输出 [0.4,1.0] 软倍率与说明，不动 ready。
+- **Added** `market_desk/changepoint.py`：双尾 CUSUM（基线取前段，避免被后段拖均值），输出方向、强度、距今天数；以旁注接入快照，不直接改闸门。
+- **Added** `decision_trace` 表与读写：记录证据快照 hash、动作、相位/主线，同日同代码同证据不重复写；EOD 回填结果字段。
+- **Added** `experiments.json` + `market_desk/experiments.py`：预注册实验的校验、到期判断与按判据打分（样本不足→inconclusive，提升不足→fail）。
+- **Added** 接口：`/api/strategy-profile`、`/api/portfolio-risk`、`/api/decisions`、`/api/experiments`。
+- **Changed** `settings` 新增 `strategy_profile` 与四个组合风控阈值；`scoring` 在单票倍率后叠加组合层软降档；`refresh` 发布 `changepoint` 并在每轮写决策记录；schema 版本升到 2026111702。
+
+### 【影响与验证（Impact & Verification）】
+- 全量 `pytest -q`：**764 passed**（原 748 + 新增 16）；`compileall` 通过；`experiments.json` 可被 `load_experiments()` 正常解析。
+- 兼容性：仅新增表与快照字段，现有 desk.db 打开即自动建表；未切换档案时行为与 v1.10.101 一致。
+- 边界：组合相关性需要日线序列，未持仓或无缓存时该检查自动跳过；变点与组合倍率都只做旁注/软降档，不阻断买入。
+
+---
+
+---
+
 ## [v1.10.101] - 2026-11-17
 
 ### 【背景与动机（为什么做 · Why）】

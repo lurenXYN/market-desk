@@ -171,6 +171,14 @@ class RefreshMixin:
                             eod_ok = False
                             log.exception("eod onepager failed")
                         try:
+                            from market_desk.db.decision_trace import sync_outcomes_from_signals
+
+                            filled = sync_outcomes_from_signals()
+                            if filled:
+                                log.info("decision trace outcomes filled: %s", filled)
+                        except Exception:
+                            log.exception("decision trace outcome sync failed")
+                        try:
                             from market_desk.db.bars_cache import prune_bars
 
                             removed = prune_bars(
@@ -479,6 +487,18 @@ class RefreshMixin:
                     metrics["breadth_soft"] = True
             save_daily(trade_date_dash, daily_payload)
             history = load_daily(14)
+            try:
+                from market_desk.changepoint import state_shift
+
+                temps = [
+                    r.get("temperature")
+                    for r in history
+                    if isinstance(r, dict) and r.get("temperature") is not None
+                ]
+                changepoint_note = state_shift(temps)
+            except Exception:
+                log.exception("changepoint detect failed")
+                changepoint_note = {"ok": False, "note": "变点检测不可用"}
             cycle = _cycle_view(history, trade_date_dash)
             similar = build_similar_days(
                 phase=phase,
@@ -987,6 +1007,7 @@ class RefreshMixin:
                     log.exception("news_radar attach failed")
                 payload["health"] = _build_health(now, errors, updated_at, payload)
                 payload["deltas"] = build_deltas(payload, prev)
+                payload["changepoint"] = changepoint_note
                 payload["morning_brief"] = build_morning_brief(payload)
                 try:
                     from market_desk.report import ready_cross_day_tip
@@ -995,6 +1016,35 @@ class RefreshMixin:
                 except Exception:
                     log.exception("ready cross-day tip failed")
                     payload["ready_cross_day"] = None
+                try:
+                    from market_desk.db.decision_trace import save_decision
+
+                    verdict_now = payload.get("verdict") or {}
+                    rec_now = verdict_now.get("recommend") or {}
+                    ml_name = str((verdict_now.get("mainline") or {}).get("name") or "")
+                    for item in (rec_now.get("items") or [])[:5]:
+                        save_decision(
+                            trade_date=trade_date_dash,
+                            code=str(item.get("code") or ""),
+                            name=str(item.get("name") or ""),
+                            side="buy",
+                            action=str(item.get("action") or ""),
+                            phase=str(payload.get("phase") or ""),
+                            mainline=ml_name,
+                            evidence={
+                                "ready": bool(item.get("ready")),
+                                "wait": item.get("wait_price"),
+                                "chase": item.get("chase_price"),
+                                "stop": item.get("stop_price"),
+                                "size_hint": item.get("size_hint"),
+                                "phase": payload.get("phase"),
+                                "temperature": payload.get("temperature"),
+                                "mainline": ml_name,
+                                "changepoint": (payload.get("changepoint") or {}).get("direction"),
+                            },
+                        )
+                except Exception:
+                    log.exception("decision trace save failed")
                 try:
                     self._maybe_ops_health_alert(payload)
                 except Exception:

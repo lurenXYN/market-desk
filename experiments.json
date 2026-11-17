@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "note": "预注册实验：先写判据，再跑数据；样本不足或提升不够即判 inconclusive/fail。不允许事后改判据。",
+  "experiments": [
+    {
+      "id": "phase_hit_min_n_30",
+      "hypothesis": "相位命中率闸门要求 n>=30 后，可买入卡不再被小样本永久压制，命中率不下降",
+      "switch": "review.hit_rates.PHASE_HIT_MIN_N",
+      "metric": "hit_rate",
+      "min_n": 30,
+      "min_lift_pp": 3.0,
+      "start": "2026-11-18",
+      "end": "2027-02-28",
+      "status": "running",
+      "note": "对照组取改动前同等样本；只看可买入卡的次日命中"
+    },
+    {
+      "id": "portfolio_board_cap_50",
+      "hypothesis": "同一板块合计暴露不超过 50% 后，组合回撤（主线退潮日）显著小于原来 4 卡同押",
+      "switch": "settings.portfolio_board_cap_pct",
+      "metric": "avg_day3",
+      "min_n": 40,
+      "min_lift_pp": 1.5,
+      "start": "2026-11-18",
+      "end": "2027-02-28",
+      "status": "planned",
+      "note": "以组合日收益为口径，不以单卡命中率为口径"
+    },
+    {
+      "id": "changepoint_down_guard",
+      "hypothesis": "CUSUM 向下变点出现后 2 个交易日内降档，可减少退潮初期的可买入卡数量而不漏掉修复",
+      "switch": "market_desk.changepoint.state_shift",
+      "metric": "hit_rate",
+      "min_n": 25,
+      "min_lift_pp": 5.0,
+      "start": "2026-12-01",
+      "end": "2027-03-31",
+      "status": "planned",
+      "note": "先跑旁注模式（不改 ready），攒够样本再评估是否接入闸门"
+    }
+  ]
+}

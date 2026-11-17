@@ -17,6 +17,7 @@ from market_desk.routes import (
     backtest,
     sim_desk,
     bridge,
+    strategy,
 )
 
 ROUTERS = [
@@ -33,4 +34,5 @@ ROUTERS = [
     backtest.router,
     sim_desk.router,
     bridge.router,
+    strategy.router,
 ]

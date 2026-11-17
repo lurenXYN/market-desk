@@ -111,7 +111,7 @@ def _migrate_signals_owner_user(conn: sqlite3.Connection) -> None:
         pass
 
 
-SCHEMA_VERSION = 2026111701
+SCHEMA_VERSION = 2026111702
 
 
 @contextmanager
@@ -696,6 +696,9 @@ def init_db() -> None:
         ensure_sim_desk_tables(conn)
         ensure_bars_cache_tables(conn)
         ensure_exec_tables(conn)
+        from market_desk.db.decision_trace import ensure_decision_trace_tables
+
+        ensure_decision_trace_tables(conn)
         try:
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         except sqlite3.Error:

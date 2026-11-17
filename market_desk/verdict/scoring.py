@@ -734,6 +734,19 @@ def _attach_risk_sizing(
 
     composed = compose_size_mult(factors)
     size_mult = float(composed.get("size_mult") or 1.0)
+    # Portfolio overlay: same-board concentration / correlation / drawdown.
+    try:
+        from market_desk.portfolio_risk import portfolio_gate
+        from market_desk.settings import current_open_positions
+
+        pg = portfolio_gate(positions=current_open_positions())
+        if pg.get("size_mult", 1.0) < 1.0:
+            size_mult = round(size_mult * float(pg["size_mult"]), 3)
+            factors = list(factors) + [
+                {"key": "portfolio_cap", "label": "组合降档", "mult": float(pg["size_mult"])}
+            ]
+    except Exception:
+        pg = {"note": ""}
     risk_pct = round(max(0.15, risk_pct * size_mult), 3)
     heat_note = str((adapt.get("size_heat") or {}).get("note") or "")
     cool_note = str(composed.get("note") or "")
