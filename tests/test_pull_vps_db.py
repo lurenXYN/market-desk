@@ -59,3 +59,23 @@ def test_verify_db_flags_corruption(tmp_path):
     except sqlite3.DatabaseError:
         return  # sqlite 直接拒绝打开也算检出损坏
     assert out["ok"] is False
+
+
+def test_vps_backup_prune_by_age(tmp_path, monkeypatch):
+    """VPS 侧备份：超过 30 天必须删，未超期的保留。"""
+    import os
+    import time
+
+    import market_desk.backup_store as bs
+
+    monkeypatch.setattr(bs, "BACKUP_DIR", tmp_path)
+    old = tmp_path / "desk-2026-09-01-150000.db"
+    new = tmp_path / "desk-2026-11-16-150000.db"
+    old.write_bytes(b"x")
+    new.write_bytes(b"y")
+    past = time.time() - 40 * 86400
+    os.utime(old, (past, past))
+
+    bs._prune_backups(limit=99, keep_days=30)
+    assert not old.exists()
+    assert new.exists()

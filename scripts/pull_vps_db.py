@@ -41,9 +41,27 @@ DEST_DIR = Path("data/vps-db")
 DEFAULT_KEEP_DAYS = 30
 
 
+class _NoAuthOnStorageRedirect(urllib.request.HTTPRedirectHandler):
+    """Drop the GitHub Bearer header once the download redirects to storage.
+
+    artifact 下载会 302 到 Azure Blob；把 GitHub token 带过去会被拒 401
+    ("Server failed to authenticate the request")。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and "api.github.com" not in urllib.parse.urlsplit(newurl).netloc:
+            for key in list(new.headers):
+                if key.lower() == "authorization":
+                    new.remove_header(key)
+        return new
+
+
 def _opener() -> urllib.request.OpenerDirector:
     """Opener that ignores HTTP(S)_PROXY (they break api.github.com here)."""
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoAuthOnStorageRedirect()
+    )
 
 
 def token() -> str:
@@ -145,17 +163,44 @@ def verify_db(path: Path) -> dict[str, Any]:
     return {"ok": integrity == "ok", "integrity": integrity, "tables": tables, "row_counts": counts}
 
 
+def _gh_download(run_id: int, out_dir: Path, artifact: str = ARTIFACT) -> bool:
+    """Use the gh CLI when present: it handles artifact auth/redirects itself."""
+    try:
+        env = {k: v for k, v in os.environ.items() if k.upper() not in ("HTTP_PROXY", "HTTPS_PROXY")}
+        out_dir.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(
+            ["gh", "run", "download", str(run_id), "-n", artifact, "-D", str(out_dir)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+            check=False,
+        )
+        return proc.returncode == 0 and any(out_dir.glob("*.db.gz"))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def pull(*, tok: str, dest: Path = DEST_DIR, keep_days: int = DEFAULT_KEEP_DAYS, dry_run: bool = False) -> dict[str, Any]:
     art = newest_artifact(tok)
     if not art:
         return {"ok": False, "detail": "没有可用的 vps-db artifact（先触发一次 vps-db-snapshot 工作流）"}
-    blob = _api(art["url"], tok=tok, raw=True)
-    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-        gz_names = [n for n in zf.namelist() if n.endswith(".db.gz")]
-        if not gz_names:
-            return {"ok": False, "detail": "artifact 内没有 .db.gz"}
-        gz_name = gz_names[0]
-        raw_gz = zf.read(gz_name)
+    tmp_dir = dest / ".incoming"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    raw_gz: bytes | None = None
+    gz_name = ""
+    if not dry_run and _gh_download(int(art["run_id"]), tmp_dir):
+        gz_files = sorted(tmp_dir.glob("*.db.gz"))
+        gz_name = gz_files[0].name
+        raw_gz = gz_files[0].read_bytes()
+    else:
+        blob = _api(art["url"], tok=tok, raw=True)
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            gz_names = [n for n in zf.namelist() if n.endswith(".db.gz")]
+            if not gz_names:
+                return {"ok": False, "detail": "artifact 内没有 .db.gz"}
+            gz_name = gz_names[0]
+            raw_gz = zf.read(gz_name)
     day = snapshot_day(gz_name) or date.today()
     dest.mkdir(parents=True, exist_ok=True)
     target = dest / f"desk-{day.isoformat()}.db"

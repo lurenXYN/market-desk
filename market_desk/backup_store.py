@@ -34,7 +34,13 @@ def write_auto_backup(
         db_dest = BACKUP_DIR / f"desk-{day}-{stamp}.db"
         _copy_db_consistent(db_dest)
     lim = max(5, min(90, int(keep or 30)))
-    _prune_backups(limit=lim)
+    try:
+        from market_desk.settings import setting as _setting
+
+        keep_days = int(_setting("backup_keep_days", 30) or 30)
+    except Exception:
+        keep_days = 30
+    _prune_backups(limit=lim, keep_days=keep_days)
     return path
 
 
@@ -61,17 +67,25 @@ def _copy_db_consistent(dest: Path) -> None:
                 pass
 
 
-def _prune_backups(*, limit: int = 30) -> None:
-    """Keep only the newest ``limit`` auto JSON and desk-*.db copies each."""
+def _prune_backups(*, limit: int = 30, keep_days: int = 30) -> None:
+    """Keep the newest ``limit`` files per pattern and drop anything older than ``keep_days``.
+
+    The count-only rule let a 3GB data directory accumulate: 30 copies of a
+    100MB database. Age is the contract the operator actually wants (一个月)。
+    """
+    import time as _time
+
+    cutoff = _time.time() - max(1, int(keep_days)) * 86400
     for pattern in ("auto-*.json", "desk-*.db"):
         files = sorted(
             BACKUP_DIR.glob(pattern),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        for old in files[limit:]:
+        for idx, old in enumerate(files):
             try:
-                old.unlink()
+                if idx >= limit or old.stat().st_mtime < cutoff:
+                    old.unlink()
             except OSError:
                 pass
 
