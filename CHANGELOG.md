@@ -14,6 +14,23 @@
 
 ---
 
+## [v1.10.105] - 2026-11-17
+
+### 【背景与动机（Why）】
+- v1.10.104 的板块 TTL 改造把 `_boards_bundle` 传给 `_safe` 时参数错位（`errors` 被当成位置参数），线上每轮刷新抛 `TypeError: _safe() missing 2 required keyword-only arguments`，刷新循环连续失败、`/api/health` 持续 503。
+
+### 【做了什么（What）】
+- **Fixed** 调用改为 `_safe(self._boards_bundle, client, errors, errors=errors, label="boards-bundle")`。
+- **Added** 回归用例：按 `_safe(fn, *args, errors=, label=)` 的真实签名调用 `_boards_bundle`，断言无异常且错误列表为空。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest -q`：774 passed（773 + 1）。
+- 部署后需确认 `/api/health` 恢复 200、刷新耗时恢复、板块卡按 300s 刷新。
+
+---
+
+---
+
 ## [v1.10.104] - 2026-11-17
 
 ### 【背景与动机（为什么做 · Why）】

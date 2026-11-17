@@ -285,7 +285,7 @@ class RefreshMixin:
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
                     _safe(fetch_zb_pool, client, trade_date, errors=errors, label="zb"),
                     _safe(fetch_main_quotes, client, errors=errors, label="quotes"),
-                    _safe(self._boards_bundle, client, errors),
+                    _safe(self._boards_bundle, client, errors, errors=errors, label="boards-bundle"),
                     _safe(fetch_etfs, client, errors=errors, label="etf"),
                     _safe(fetch_indices, client, errors=errors, label="index"),
                     _safe(fetch_global_watch, client, errors=errors, label="global"),
