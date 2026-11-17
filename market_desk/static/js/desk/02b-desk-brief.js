@@ -57,8 +57,8 @@ function renderDeskBrief(d, v) {
       if (nrHd) {
         nrHd.innerHTML = `<span class="nr-dot ${dotCls}" title="新闻雷达状态"></span>`
           + `<span class="nr-title">新闻雷达</span>`
-          + `<span>${st || "—"}</span>`
-          + (nr.updated_at ? `<span class="meta">${nr.updated_at}</span>` : "");
+          + `<span>${escHtml(st) || "—"}</span>`
+          + (nr.updated_at ? `<span class="meta">${escHtml(nr.updated_at)}</span>` : "");
       }
       if (rows.length) {
         nrStrip.innerHTML = rows.map((r, i) => {
@@ -68,7 +68,7 @@ function renderDeskBrief(d, v) {
             .filter(Boolean).join(" · ");
           const clash = (r.mainline_match === false && nr.mainline_name) ? " clash" : "";
           return `<button type="button" class="nr-chip${clash}" data-nr-i="${i}">`
-            + `<b>${r.sector || ""}</b>`
+            + `<b>${escHtml(r.sector)}</b>`
             + (bits ? `<span class="sub">${bits}</span>` : "")
             + `</button>`;
         }).join("");

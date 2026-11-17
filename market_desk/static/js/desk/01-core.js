@@ -607,6 +607,30 @@ function fmtDelta(item) {
       </div>`;
 }
 
+/** Escape a value before it is interpolated into innerHTML. */
+function escHtml(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** fetch + status check in one place; resolves parsed JSON or throws with detail. */
+async function fetchJson(url, opts) {
+  const r = await fetch(url, Object.assign({ credentials: "same-origin" }, opts || {}));
+  if (!r.ok) {
+    let msg = "HTTP " + r.status;
+    try {
+      const body = await r.json();
+      if (body && body.detail) msg = String(body.detail);
+    } catch (e) {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
 function dataAgeText(updatedAt) {
   if (!updatedAt) return "数据尚未刷新";
   // Server stamps are Shanghai wall-clock without an offset; parsing them as

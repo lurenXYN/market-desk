@@ -33,7 +33,7 @@ function renderPositionsPanel(d, v) {
   const pnlCls = (dayPnl || 0) >= 0 ? "up" : "down";
   const floatCls = (floatPnl || 0) >= 0 ? "up" : "down";
   const realCls = (realized || 0) >= 0 ? "up" : "down";
-  const riskNote = sum.risk_note ? `<span class="bans">${sum.risk_note}</span>` : "";
+  const riskNote = sum.risk_note ? `<span class="bans">${escHtml(sum.risk_note)}</span>` : "";
   const closedBit = sum.closed_count ? ` · 今日已平 ${sum.closed_count}` : "";
   document.getElementById("posSum").innerHTML =
     `<span class="day-primary">当日盈亏（相对昨收） <b class="${pnlCls}">${fmtMoney(dayPnl)}${dayPct == null ? "" : " (" + (dayPct > 0 ? "+" : "") + dayPct + "%)"}</b></span>` +
@@ -86,7 +86,7 @@ function renderPositionsPanel(d, v) {
       : (p.day_sold_qty ? `${p.qty}（已卖 ${p.day_sold_qty}）` : (p.qty ?? ""));
     const actions = closed
       ? `<button type="button" class="pos-del" data-id="${p.id}">删除</button>`
-      : `<button type="button" class="pos-del pos-add" data-id="${p.id}" data-code="${p.code}" data-name="${p.name || ""}">加仓</button>
+      : `<button type="button" class="pos-del pos-add" data-id="${p.id}" data-code="${p.code}" data-name="${escAttr(p.name || "")}">加仓</button>
             <button type="button" class="pos-del pos-half" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}" title="对半减仓，按100股四舍五入；≤100股则清仓">减半</button>
             <button type="button" class="pos-del pos-clear" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">清仓</button>
             <button type="button" class="pos-del pos-trim" data-id="${p.id}" data-qty="${p.qty}" data-last="${p.last ?? ""}">自定义</button>

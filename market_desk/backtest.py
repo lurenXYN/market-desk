@@ -39,6 +39,21 @@ DEFAULT_SLIP_PCT = 0.15
 DEFAULT_GAP_PCT = 1.0
 VOL_LOOKBACK = 10
 
+# Round-trip cost model: commission both sides + stamp duty on the sell leg.
+COMMISSION_PCT = 0.025
+STAMP_PCT = 0.05
+ROUND_TRIP_COST_PCT = round(COMMISSION_PCT * 2 + STAMP_PCT, 4)
+
+
+def _signal_minutes(signal_at: str) -> int:
+    """Minutes since midnight for a ``YYYY-MM-DD HH:MM[:SS]`` signal stamp."""
+    import re
+
+    m = re.search(r"(\d{2}):(\d{2})", str(signal_at or ""))
+    if not m:
+        return 9 * 60 + 30
+    return int(m.group(1)) * 60 + int(m.group(2))
+
 
 def validate_backtest_range(
     date_from: str, date_to: str, *, max_span: int | None = None
@@ -303,6 +318,7 @@ def simulate_buy_fill(
     gap_pct: float = DEFAULT_GAP_PCT,
     minutes: list[dict[str, Any]] | None = None,
     fidelity: str = "daily",
+    signal_at: str = "",
 ) -> dict[str, Any] | None:
     """Simulate a buy fill on signal day or the next ``look_ahead`` sessions.
 
@@ -358,8 +374,15 @@ def simulate_buy_fill(
 
     liq_skips = 0
     limit_skips = 0
+    late_skips = 0
     last_liq_note = ""
+    # Daily bars cannot prove the day's low came after a late card: a 10:30 signal
+    # must not be filled by the 09:35 low. Skip day0 when there is no minute data.
+    late_signal = bool(signal_at) and _signal_minutes(signal_at) > 9 * 60 + 35
     for day in days:
+        if day == day0 and late_signal and fid != "minute":
+            late_skips += 1
+            continue
         bar = bars_by_day.get(day) or {}
         o = num(bar.get("open"))
         lo = num(bar.get("low"))
@@ -452,9 +475,14 @@ def simulate_buy_fill(
         "fill_date": None,
         "target": target,
         "mode": mode_s,
-        "note": "一字涨停买不进" if limit_skips else "未触达",
+        "note": (
+            "一字涨停买不进"
+            if limit_skips
+            else ("信号晚于开盘窗口·当日不计成交(缺分钟数据)" if late_skips else "未触达")
+        ),
         "liq_skips": liq_skips,
         "limit_skips": limit_skips,
+        "late_skips": late_skips,
     }
 
 
@@ -739,6 +767,47 @@ def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
         "other_n": 0,
     }
 
+    # Net-of-cost view: gross day1 minus commission+stamp, compounded per trade.
+    net_vals = [
+        round(float(x["outcome_day1_pct"]) - ROUND_TRIP_COST_PCT, 3)
+        for x in buy_scored
+        if x.get("outcome_day1_pct") is not None
+    ]
+    equity = 1.0
+    equity_curve: list[dict[str, Any]] = []
+    for x in sorted(buy_scored, key=lambda r: str(r.get("trade_date") or "")):
+        val = x.get("outcome_day1_pct")
+        day = str(x.get("trade_date") or "")[:10]
+        if val is None or not day:
+            continue
+        equity *= 1.0 + (float(val) - ROUND_TRIP_COST_PCT) / 100.0
+        equity_curve.append({"date": day, "equity": round(equity, 4)})
+    net_cum = round((equity - 1.0) * 100.0, 3) if equity_curve else None
+    bench_pct = None
+    bench_note = "未取得中证1000缓存，基准超额标 N/A"
+    try:
+        from market_desk.dual_score import load_bench_closes
+
+        closes = load_bench_closes(limit=240, allow_http=False)
+        if len(closes) >= 2 and equity_curve:
+            d0, d1 = equity_curve[0]["date"], equity_curve[-1]["date"]
+            start_px = end_px = None
+            for d, c in closes:
+                if d <= d0:
+                    start_px = c
+                if d <= d1:
+                    end_px = c
+            if start_px and end_px:
+                bench_pct = round((float(end_px) / float(start_px) - 1.0) * 100.0, 3)
+                bench_note = f"中证1000 {d0}→{d1}"
+    except Exception:
+        bench_pct = None
+    bench_excess = (
+        round(net_cum - bench_pct, 3)
+        if (net_cum is not None and bench_pct is not None)
+        else None
+    )
+
     return {
         "buy_n": len(buys),
         "buy_filled_n": len(buy_filled),
@@ -770,6 +839,18 @@ def _summarize_backtest(items: list[dict[str, Any]]) -> dict[str, Any]:
             else None
         ),
         "sim_exec": sim_exec,
+        "cost_model": {
+            "commission_pct": COMMISSION_PCT,
+            "stamp_pct": STAMP_PCT,
+            "round_trip_pct": ROUND_TRIP_COST_PCT,
+            "note": "佣金双边万2.5 + 卖出印花税万5；不含滑点(已由 slip_pct 单独处理)",
+        },
+        "buy_net_avg_day1": (round(sum(net_vals) / len(net_vals), 2) if net_vals else None),
+        "net_cum_pct": net_cum,
+        "equity_curve": equity_curve[-120:],
+        "bench_cum_pct": bench_pct,
+        "bench_excess_pct": bench_excess,
+        "bench_note": bench_note,
     }
 
 
@@ -963,6 +1044,7 @@ async def run_signal_backtest(
                 gap_pct=gap,
                 minutes=mins,
                 fidelity=fid,
+                signal_at=str(row.get("signaled_at") or ""),
             ) or {"filled": False, "note": "无结果"}
             item: dict[str, Any] = {
                 "id": row.get("id"),
