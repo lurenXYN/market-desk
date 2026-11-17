@@ -14,6 +14,24 @@
 
 ---
 
+## [v1.10.108] - 2026-11-17
+
+### 【背景与动机（Why）】
+- `tests.yml` 自 v1.10.96 引入后 8 次运行**全红**：2 例在 CI 失败、本机全绿，真回归会被这盏常亮红灯淹没。
+- 根因是节流哨兵口径错：`_LAST_RUN` 初值 `0.0` 却与 `time.monotonic()` 比较。容器和新机器的 `monotonic()` 起点接近 0，只要 uptime < `MA_FAN_EXTRAS_RETRY_S`（900s），首次刷新就被判定为「刚刚跑过」而直接 `skipped`。
+
+### 【做了什么（What）】
+- **Fixed** `ma_fan/extras.py`：`_LAST_RUN` 初值改为 `-MA_FAN_EXTRAS_RETRY_S`，保证任何非负 `monotonic()` 下首次都不触发节流。
+- **Changed** `test_ma_fan_extras.py` / `test_pot_bottom.py` 两个夹具同步哨兵值，避免测试继续沿用旧口径。
+- **Added** 1 例守护用例：哨兵一旦漂回 `0.0` 即失败。
+
+### 【影响与验证（Impact & Verification）】
+- 本机 `pytest -q`：**781 passed**（780 + 1 守护）。
+- CI run `44065107205` **success**（此前 `506d390`→`1aefb5b` 连续 8 次 failure）。
+- 线上无行为变化：VPS uptime 远大于 900s，新旧哨兵都视为「未跑过」。
+
+---
+
 ## [v1.10.107] - 2026-11-17
 
 ### 【背景与动机（Why）】
