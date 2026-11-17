@@ -607,6 +607,57 @@ function fmtDelta(item) {
       </div>`;
 }
 
+/** Show a transient, page-level failure banner (write requests used to fail silently). */
+function notifyFailure(msg) {
+  const text = String(msg || "请求失败");
+  console.warn("request failed:", text);
+  try {
+    let el = document.getElementById("reqFailBanner");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "reqFailBanner";
+      el.className = "req-fail-banner";
+      el.setAttribute("role", "alert");
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.display = "block";
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(() => { el.style.display = "none"; }, 8000);
+  } catch (e) {}
+}
+
+// Non-GET requests must never fail invisibly: surface status + server detail.
+(function installWriteFailureWatch() {
+  const nativeFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (!nativeFetch) return;
+  window.fetch = function (input, init) {
+    const method = String((init && init.method) || "GET").toUpperCase();
+    const p = nativeFetch(input, init);
+    if (method === "GET") return p;
+    return p.then(
+      (r) => {
+        if (!r.ok && r.status !== 401) {
+          const path = String(typeof input === "string" ? input : (input && input.url) || "").split("?")[0];
+          notifyFailure("写入失败 HTTP " + r.status + " · " + path);
+          try {
+            r.clone().json()
+              .then((j) => {
+                if (j && j.detail) notifyFailure("写入失败：" + j.detail);
+              })
+              .catch(() => {});
+          } catch (e) {}
+        }
+        return r;
+      },
+      (err) => {
+        notifyFailure("网络失败：" + (err && err.message ? err.message : err));
+        throw err;
+      }
+    );
+  };
+})();
+
 /** Escape a value before it is interpolated into innerHTML. */
 function escHtml(v) {
   return String(v == null ? "" : v)

@@ -190,3 +190,21 @@ html, body {
   color: #fde68a;
   background: #1a1608;
 }
+
+/* Page-level failure banner for non-GET requests (see notifyFailure in 01-core.js). */
+.req-fail-banner {
+  position: fixed;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  z-index: 90;
+  max-width: min(560px, 92vw);
+  padding: 8px 14px;
+  border: 1px solid #b4453a;
+  border-radius: 8px;
+  background: #2a1414;
+  color: #ffd9d4;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}

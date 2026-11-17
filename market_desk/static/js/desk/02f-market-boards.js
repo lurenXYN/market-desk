@@ -30,7 +30,7 @@ function renderMarketBoards(d, v) {
           <div class="meta">${termHtml("聚集度")} ${b.cluster || (b.zt_n ?? 0)} · 热度日 ${b.hot_days ?? 0}</div>
           <div class="meta" style="margin-top:4px">${termHtml("总龙头")} ${b.leader_name || "—"} ${b.leader_boards || 0}板 · ${fmtPct(b.pct)}</div>
           ${b.live_hint ? `<div class="meta" style="margin-top:4px;color:var(--amber, #e0a84a)">⏱ ${b.live_hint}</div>` : ""}
-          <div class="note" style="margin-top:6px">${b.note || ""}</div>
+          <div class="note" style="margin-top:6px">${escHtml(b.note)}</div>
         </article>`;
   };
   const freshRows = life.fresh || [];
@@ -119,7 +119,7 @@ function renderMarketBoards(d, v) {
             }).join("/")}`
           : "")
       }</div>
-          <div class="note">${b.note || ""}</div>
+          <div class="note">${escHtml(b.note)}</div>
           <ul class="members">${(b.members || []).slice(0,4).map(x =>
         `<li><span>${x.name}</span><span>${fmtPct(x.pct)}</span></li>`).join("")}</ul>
           ${favBtn}
@@ -210,7 +210,7 @@ function renderMarketBoards(d, v) {
             <td data-label="名称">${tickerHtml(b.name, b.code)}</td>
             <td data-label="代码">${b.code || ""}</td>
             <td data-label="来源">${src}</td>
-            <td data-label="原因" class="meta">${b.reason || b.note || "—"}</td>
+            <td data-label="原因" class="meta">${escHtml(b.reason || b.note) || "—"}</td>
             <td data-label="打击">${b.strike_n ?? "—"}</td>
             <td data-label="正常日">${b.clean_streak ?? 0}</td>
             <td data-label="加入" class="meta">${(b.blocked_at || "").slice(0, 16) || "—"}</td>
