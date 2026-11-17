@@ -64,13 +64,17 @@ class RecommendMixin:
             for code in need:
                 dates, closes, ohlc = fetched.get(code) or ([], [], {})
                 closes = list(closes or [])
-                self._kline_cache[code] = closes
-                self._kline_ok[code] = bool(closes)
                 highs = list((ohlc or {}).get("high") or [])
                 lows = list((ohlc or {}).get("low") or [])
                 done = len(closes)
                 if done and dates and str(dates[-1]).replace("-", "")[:8] == day_key:
                     done -= 1
+                # Trend gating must use completed sessions only. Feeding the
+                # in-progress bar into the MA gate made "price is down today"
+                # feed back into "daily downtrend -> no buy", the same bar twice.
+                completed = closes[:done] if done > 0 else closes
+                self._kline_cache[code] = completed
+                self._kline_ok[code] = bool(completed)
                 self._kline_atr[code] = daily_atr_pct(
                     highs[:done], lows[:done], closes[:done]
                 )

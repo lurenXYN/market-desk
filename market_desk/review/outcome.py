@@ -335,6 +335,10 @@ def score_signal_with_closes(
     return {
         "outcome_day1_pct": d1,
         "outcome_day3_pct": d3,
+        # Split the two horizons: one combined "hit" rate used to hide the fact
+        # that a next-day win could still close red on day 3.
+        "hit_next": None if d1 is None else bool(d1 >= 1.0),
+        "hit_3d": None if d3 is None else bool(d3 >= 2.0),
         "outcome_mfe_pct": mfe,
         "outcome_mae_pct": mae,
         "outcome_label": label,

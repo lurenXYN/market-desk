@@ -90,6 +90,7 @@ def _exit_band_params(
         mode_zh = f"{mode_zh}·相对偏强"
     table = SELL_BAND_ETF if etf else SELL_BAND_STOCK
     band = dict(table[mode])
+    base_band = dict(band)
     if daily_up:
         up_mult = float(SELL_UPTREND_BAND_MULT)
         for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
@@ -172,4 +173,26 @@ def _exit_band_params(
         "note": bias.get("note"),
     }
     band["segment_sell"] = seg_info
+    _clamp_band(base_band, band)
     return band
+
+
+def _clamp_band(base_band: dict[str, Any], band: dict[str, Any]) -> None:
+    """Keep the stacked multipliers inside [0.8x, 1.6x] of the mode table.
+
+    Uptrend, bias, segment, MFE and ATR multipliers apply in sequence, so five
+    small adjustments could push a 1.5% band past 3.9% on the same day. The
+    stop is clamped on a wider range because more negative == more room.
+    """
+    for key in ("pb_light", "pb_deep", "take_pnl", "take_deep_pnl", "pocket_pnl"):
+        base = base_band.get(key)
+        val = band.get(key)
+        if base in (None, 0) or val is None:
+            continue
+        ratio = max(0.8, min(1.6, float(val) / float(base)))
+        band[key] = round(float(base) * ratio, 4)
+    base_stop = base_band.get("pnl_stop")
+    val_stop = band.get("pnl_stop")
+    if base_stop not in (None, 0) and val_stop is not None:
+        ratio = max(0.85, min(1.6, float(val_stop) / float(base_stop)))
+        band["pnl_stop"] = round(float(base_stop) * ratio, 4)
