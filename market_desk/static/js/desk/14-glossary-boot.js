@@ -282,10 +282,21 @@ document.getElementById("revExport").addEventListener("click", () => {
     if (id === "zt_ytd") return r.zt_ytd ?? "";
     if (id === "day1") return r.outcome_day1_pct;
     if (id === "day3") return r.outcome_day3_pct;
+    if (id === "hit_next") return r.hit_next == null
+      ? (r.outcome_day1_pct == null ? "" : (Number(r.outcome_day1_pct) >= 1 ? "✓" : "·"))
+      : (r.hit_next ? "✓" : "·");
+    if (id === "hit_3d") return r.hit_3d == null
+      ? (r.outcome_day3_pct == null ? "" : (Number(r.outcome_day3_pct) >= 2 ? "✓" : "·"))
+      : (r.hit_3d ? "✓" : "·");
     if (id === "excess") return r.excess_d3_pct ?? "";
     if (id === "result") return r.outcome_label;
     return "";
-  }).map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")));
+  }).map((x) => {
+    let cell = String(x ?? "");
+    // Spreadsheet formula injection: prefix values that open with = + - @.
+    if (/^[=+\-@]/.test(cell)) cell = "'" + cell;
+    return `"${cell.replace(/"/g, '""')}"`;
+  }).join(",")));
   const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);

@@ -26,7 +26,7 @@ function paintPosLhb(payload) {
   const items = payload.items || [];
   maybeToastLhbSeatEdge(items);
   if (!items.length) {
-    body.innerHTML = `<div class="meta">${payload.note || "暂无持仓龙虎数据"}</div>`;
+    body.innerHTML = `<div class="meta">${escHtml(payload.note) || "暂无持仓龙虎数据"}</div>`;
     return;
   }
   body.innerHTML = items.map((it) => {

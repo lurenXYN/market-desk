@@ -148,16 +148,25 @@ def mainline_score(board: dict[str, Any]) -> float:
     flow_adj = float(board.get("flow_adj") or 0.0)
     # Theme reputation (一日游 memory) + inherited similar-theme drag.
     rep_adj = float(board.get("rep_adj") or 0.0)
-    return (
+    # Normalise the components before summing. Breadth used to contribute up to
+    # 92 points while a 5% board move contributed 5, so one raw count decided the
+    # ranking; and pct ≥1.5% plus the carrier's own trend counted momentum twice.
+    pct_val = min(8.0, max(-3.0, float(board.get("pct") or 0)))
+    breadth_pts = min(42.0, zt_breadth_points(zt_n) * 0.45)
+    trend_pts = float(etf_trend_adj)
+    if pct_val >= 1.5:
+        trend_pts = trend_pts * 0.5
+    ladder_pts = min(12.0, max(-8.0, ladder_adj))
+    score = (
         rank
-        + zt_breadth_points(zt_n)
-        + float(board.get("pct") or 0)
+        + breadth_pts
+        + pct_val
         + float(board.get("focus") or 0) * 0.15
         + min(persist, 6) * 3.0
-        + ladder_adj
+        + ladder_pts
         + etf_adj
         + leader_adj
-        + etf_trend_adj
+        + trend_pts
         + flow_adj
         + rep_adj
         - zb_pen
@@ -165,6 +174,7 @@ def mainline_score(board: dict[str, Any]) -> float:
         - late_pen
         - thin_pen
     )
+    return round(min(100.0, max(-40.0, score)), 3)
 
 
 def theme_key(board_name: str | None) -> str:

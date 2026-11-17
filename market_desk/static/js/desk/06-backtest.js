@@ -57,7 +57,7 @@ function paintBacktest(payload) {
             + (sum.sim_exec.chase_n ? `·追高${sum.sim_exec.chase_n}` : "")
           : "",
       ].filter(Boolean);
-      sumEl.innerHTML = bits.map((b) => `<span>${b}</span>`).join("");
+      sumEl.innerHTML = bits.map((b) => `<span>${escHtml(b)}</span>`).join("");
     }
   }
   const items = (payload && payload.items) || [];

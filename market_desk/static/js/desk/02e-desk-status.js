@@ -78,7 +78,7 @@ function renderDeskStatus(d, v) {
         + `<th>源</th><th>ok</th><th>fail</th><th>timeout</th><th>失败率</th>`
         + `</tr></thead><tbody>${rows}</tbody></table></details>`;
     }
-    warnEl.innerHTML = `⚠ ${warns.join(" · ")} <button type="button" class="q" data-term="健康度">?</button>${drill}`;
+    warnEl.innerHTML = `⚠ ${escHtml(warns.join(" · "))} <button type="button" class="q" data-term="健康度">?</button>${drill}`;
   } else {
     warnEl.className = "data-banner";
     warnEl.textContent = "";

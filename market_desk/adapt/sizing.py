@@ -49,7 +49,7 @@ def compose_size_mult(
     floor = float(ADAPT_META_SIZE_MIN if lo is None else lo)
     ceil = float(ADAPT_META_SIZE_MAX if hi is None else hi)
     cleaned: list[dict[str, Any]] = []
-    raw = 1.0
+    product = 1.0
     for raw_f in factors or []:
         if not isinstance(raw_f, dict):
             continue
@@ -62,12 +62,27 @@ def compose_size_mult(
         key = str(raw_f.get("key") or "f")
         label = str(raw_f.get("label") or key)
         cleaned.append({"key": key, "label": label, "mult": round(m, 4)})
-        raw *= m
+        product *= m
+    # Single calibration entry: multiplying every factor meant six different
+    # views of the same 240-row sample compounded into one size hint. Apply the
+    # strongest deviation only and keep the rest as attribution.
+    active_all = [f for f in cleaned if abs(float(f["mult"]) - 1.0) > 0.02]
+    strongest = (
+        max(active_all, key=lambda f: abs(float(f["mult"]) - 1.0)) if active_all else None
+    )
+    raw = float(strongest["mult"]) if strongest else 1.0
     clamped = _clamp(raw, floor, ceil)
     hit_floor = raw < floor - 1e-9
     hit_ceil = raw > ceil + 1e-9
-    active = [f for f in cleaned if abs(float(f["mult"]) - 1.0) > 0.02]
-    bits = [f"{f['label']}×{f['mult']:.2f}" for f in active[:6]]
+    active = active_all
+    bits = []
+    if strongest is not None:
+        bits.append(f"{strongest['label']}×{strongest['mult']:.2f}")
+        suppressed = [f for f in active if f["key"] != strongest["key"]]
+        if suppressed:
+            bits.append(f"其余{len(suppressed)}项仅记录")
+    else:
+        suppressed = []
     if hit_floor:
         bits.append(f"合流夹底→×{clamped:.2f}")
     elif hit_ceil:
@@ -77,7 +92,9 @@ def compose_size_mult(
     return {
         "ok": True,
         "size_mult": round(clamped, 3),
-        "raw_product": round(raw, 4),
+        "raw_product": round(product, 4),
+        "applied": (strongest or {}).get("key"),
+        "suppressed": [f["key"] for f in suppressed],
         "clamped": bool(hit_floor or hit_ceil),
         "floor": floor,
         "ceil": ceil,

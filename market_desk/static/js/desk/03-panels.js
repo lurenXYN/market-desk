@@ -295,7 +295,7 @@ function paintElliott(d) {
       : "");
   const rows = box.scenarios || [];
   if (!rows.length) {
-    body.innerHTML = `<div class="meta">${box.note || "暂无波浪情景"}</div>`;
+    body.innerHTML = `<div class="meta">${escHtml(box.note) || "暂无波浪情景"}</div>`;
     return;
   }
   const topId = primary.id;

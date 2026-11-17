@@ -234,7 +234,14 @@ document.addEventListener("click", (ev) => {
   }
   sPanel.hidden = true;
 });
-document.getElementById("settingsSave").addEventListener("click", async () => {
+document.getElementById("settingsSave").addEventListener("click", async (ev) => {
+  const saveBtn = ev && ev.currentTarget ? ev.currentTarget : document.getElementById("settingsSave");
+  if (saveBtn) {
+    if (saveBtn.dataset.busy === "1") return;
+    saveBtn.dataset.busy = "1";
+    saveBtn.disabled = true;
+    setTimeout(() => { saveBtn.dataset.busy = ""; saveBtn.disabled = false; }, 1500);
+  }
   const poolMode = document.getElementById("setPoolMode")?.value || "industry_first";
   const prevMode = (window.__lastSettings || {}).mainline_pool_mode || "industry_first";
   if (poolMode === "all" && prevMode !== "all") {

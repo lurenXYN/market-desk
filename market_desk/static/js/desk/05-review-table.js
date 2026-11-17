@@ -71,6 +71,8 @@ const REV_COL_CATALOG = [
   { id: "day3", label: "三日%" },
   { id: "excess", label: "超中证1000" },
   { id: "result", label: "结果" },
+  { id: "hit_next", label: "次日命中" },
+  { id: "hit_3d", label: "三日命中" },
   { id: "ops", label: "操作" },
 ];
 // 操作列与「成交」重复；默认关，列设置里可再开。量能默认开。
@@ -237,6 +239,17 @@ function revSortValue(r, id) {
   }
   if (id === "day1") return r.outcome_day1_pct == null ? null : Number(r.outcome_day1_pct);
   if (id === "day3") return r.outcome_day3_pct == null ? null : Number(r.outcome_day3_pct);
+  if (id === "hit_next") {
+    // Prefer the stored split flag; fall back to the raw day-1 return for old rows.
+    if (r.hit_next != null) return r.hit_next ? "✓" : "·";
+    const d1 = r.outcome_day1_pct == null ? null : Number(r.outcome_day1_pct);
+    return d1 == null ? "" : (d1 >= 1 ? "✓" : "·");
+  }
+  if (id === "hit_3d") {
+    if (r.hit_3d != null) return r.hit_3d ? "✓" : "·";
+    const d3 = r.outcome_day3_pct == null ? null : Number(r.outcome_day3_pct);
+    return d3 == null ? "" : (d3 >= 2 ? "✓" : "·");
+  }
   if (id === "excess") return r.excess_d3_pct == null ? null : Number(r.excess_d3_pct);
   if (id === "result") return String(r.outcome_label || "");
   if (id === "vs_ml") return String(r.vs_mainline || "");

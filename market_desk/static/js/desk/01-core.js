@@ -34,7 +34,7 @@ function showTermPop(btn, key, g) {
   if (!btn) return;
   const mean = (g && g.mean) ? g.mean : "（暂无摘要）";
   const algo = (g && g.algo) ? g.algo : "（暂无算法说明）";
-  pop.innerHTML = `<h4>${key || "术语"}</h4>`
+  pop.innerHTML = `<h4>${escHtml(key) || "术语"}</h4>`
     + `<p class="mean">${mean}</p>`
     + `<p class="algo">${algo}</p>`
     + `<p class="meta" style="margin-top:8px">Alt+点击 ? 打开术语表</p>`;

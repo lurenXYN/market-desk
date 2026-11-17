@@ -172,7 +172,7 @@ function paintReview(payload) {
         + `</div>`
         + `<div class="meta" style="margin-top:6px">${we.note || ""}</div>`;
     } else {
-      weekBox.innerHTML = `<div class="hd">近周归因</div><span class="meta">${we.note || "暂无"}</span>`;
+      weekBox.innerHTML = `<div class="hd">近周归因</div><span class="meta">${escHtml(we.note) || "暂无"}</span>`;
     }
   }
   paintEodBrief(sum, today, dayLabel);

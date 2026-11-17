@@ -17,7 +17,7 @@ function paintAuthUser(user) {
     const tag = isGuestUser(authUser)
       ? " · 游客"
       : (authUser.role === "admin" ? " · 管理员" : "");
-    label.innerHTML = `<b>${authUser.username}</b>${tag}`;
+    label.innerHTML = `<b>${escHtml(authUser.username)}</b>${tag}`;
     if (switchBtn) switchBtn.hidden = false;
     if (logoutBtn) logoutBtn.hidden = false;
     if (adminBtn) adminBtn.hidden = authUser.role !== "admin";

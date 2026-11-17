@@ -41,45 +41,93 @@ def build_pullback_sweet(
     except Exception:
         rows = []
     scored = _buy_scored(rows)
-    wins = [r for r in scored if _is_win(str(r.get("outcome_label") or ""))]
+    # Depth → win/loss pairs over ALL scored buys. The old rule took the p80 of
+    # winning trades' MAE, which answers "how deep did winners dip" rather than
+    # "which pullback band actually wins more often".
+    pairs: list[tuple[float, bool]] = []
     maes: list[float] = []
-    for r in wins:
+    for r in scored:
         mae = _num(r.get("outcome_mae_pct"))
         if mae is None:
             continue
-        # MAE is typically ≤0 (adverse); use absolute depth.
         depth = abs(mae) if mae <= 0 else 0.0
-        if 0.3 <= depth <= 12.0:
+        if not (0.3 <= depth <= 12.0):
+            continue
+        pairs.append((depth, _is_win(str(r.get("outcome_label") or ""))))
+        if pairs[-1][1]:
             maes.append(depth)
     base_sweet = float(STOCK_PULLBACK_SWEET_MAX)
     base_max = float(STOCK_PULLBACK_BAND_MAX)
-    if len(maes) < int(ADAPT_HEAT_MIN_N):
+    min_n = int(ADAPT_HEAT_MIN_N)
+    edges = [(0.3, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 5.0), (5.0, 8.0), (8.0, 12.0)]
+    layers: list[dict[str, Any]] = []
+    for lo, hi in edges:
+        bucket = [w for d, w in pairs if lo <= d < hi]
+        if not bucket:
+            continue
+        layers.append(
+            {
+                "lo": lo,
+                "hi": hi,
+                "n": len(bucket),
+                "win_rate": round(100.0 * sum(bucket) / len(bucket), 1),
+            }
+        )
+    overall = round(100.0 * sum(w for _d, w in pairs) / len(pairs), 1) if pairs else None
+    best = None
+    for layer in layers:
+        if overall is None or layer["n"] < min_n:
+            continue
+        if layer["win_rate"] - overall < 8.0:
+            continue
+        if best is None or layer["win_rate"] > best["win_rate"]:
+            best = layer
+    clamp = float(ADAPT_PULLBACK_CLAMP)
+    if len(pairs) < min_n:
         out = {
             "ok": False,
-            "n": len(maes),
+            "n": len(pairs),
+            "layers": layers,
+            "overall_win_rate": overall,
             "sweet_max": base_sweet,
             "band_max": base_max,
-            "note": f"MAE甜区样本不足（n={len(maes)}）",
+            "note": f"回撤分层样本不足（n={len(pairs)}）",
+        }
+    elif best is None:
+        out = {
+            "ok": False,
+            "n": len(pairs),
+            "layers": layers,
+            "overall_win_rate": overall,
+            "sweet_max": base_sweet,
+            "band_max": base_max,
+            "note": (
+                f"分层胜率无显著优势（整体{overall}%，无档位≥{min_n}样本且领先8pp），"
+                "沿用默认甜区"
+            ),
         }
     else:
-        maes.sort()
-        p50 = maes[len(maes) // 2]
-        p80 = maes[min(len(maes) - 1, int(len(maes) * 0.8))]
-        clamp = float(ADAPT_PULLBACK_CLAMP)
-        sweet = _clamp(p80, base_sweet * (1.0 - clamp), base_sweet * (1.0 + clamp))
+        sweet = _clamp(best["hi"], base_sweet * (1.0 - clamp), base_sweet * (1.0 + clamp))
         band = _clamp(
-            max(p80 * 1.25, sweet + 0.6),
+            max(best["hi"] * 1.25, sweet + 0.6),
             base_max * (1.0 - clamp),
             base_max * (1.0 + clamp),
         )
         out = {
             "ok": True,
-            "n": len(maes),
-            "mae_p50": round(p50, 2),
-            "mae_p80": round(p80, 2),
+            "n": len(pairs),
+            "layers": layers,
+            "overall_win_rate": overall,
+            "best_layer": best,
+            "mae_p80_wins": (
+                round(sorted(maes)[min(len(maes) - 1, int(len(maes) * 0.8))], 2) if maes else None
+            ),
             "sweet_max": round(sweet, 2),
             "band_max": round(band, 2),
-            "note": f"胜单MAE p50={p50:.1f}% p80={p80:.1f}%→甜区≤{sweet:.1f}%",
+            "note": (
+                f"分层胜率：回撤{best['lo']}-{best['hi']}% 档 {best['win_rate']}%"
+                f"（n={best['n']}，整体{overall}%）→甜区≤{sweet:.1f}%"
+            ),
         }
     if use_cache and rows is None:
         _ADAPT_CACHE["day"] = _cache_day()

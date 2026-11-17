@@ -124,7 +124,7 @@ function _paintSimLog(data) {
     return;
   }
   if (!trades.length) {
-    logBody.innerHTML = `<tr><td colspan="11" class="meta">${scope} 无成交；可切「全部」或其它日期</td></tr>`;
+    logBody.innerHTML = `<tr><td colspan="11" class="meta">${escHtml(scope)} 无成交；可切「全部」或其它日期</td></tr>`;
     return;
   }
   logBody.innerHTML = trades.map((t) => {
