@@ -139,15 +139,17 @@ class RefreshMixin:
                 try:
                     await self.refresh()
                     if after_close:
-                        self._eod_date = today
+                        eod_ok = True
                         try:
                             self._ensure_eod_breadth(today)
                         except Exception:
+                            eod_ok = False
                             log.exception("eod breadth guard failed")
                         try:
                             await self._refetch_eod_fund_flow(today)
                             self._save_eod_fund_flow(today)
                         except Exception:
+                            eod_ok = False
                             log.exception("eod fund flow snapshot failed")
                         if bool(setting("auto_backup", True)):
                             try:
@@ -155,6 +157,7 @@ class RefreshMixin:
                                 path = write_auto_backup(trade_date=today, keep=keep)
                                 log.info("auto backup written %s", path)
                             except Exception as backup_exc:
+                                eod_ok = False
                                 log.exception("auto backup failed")
                                 self._queue_ops_alert(
                                     f"ops:backup:{today}",
@@ -165,7 +168,29 @@ class RefreshMixin:
                         try:
                             await self._write_eod_onepager(today)
                         except Exception:
+                            eod_ok = False
                             log.exception("eod onepager failed")
+                        try:
+                            from market_desk.db.bars_cache import prune_bars
+
+                            removed = prune_bars(
+                                keep_days=int(setting("bars_keep_days", 500) or 500)
+                            )
+                            if removed:
+                                log.info("pruned %s old bars", removed)
+                        except Exception:
+                            log.exception("bars prune failed")
+                        # Only latch the day when every EOD step stuck. A failed
+                        # backup used to be swallowed while the latch still
+                        # flipped, so that day never retried.
+                        if eod_ok:
+                            self._eod_date = today
+                            self._eod_retry = 0
+                        else:
+                            self._eod_retry = int(getattr(self, "_eod_retry", 0)) + 1
+                            if self._eod_retry >= 3:
+                                self._eod_date = today
+                                log.warning("eod steps failed 3x; giving up for %s", today)
                     try:
                         await self._maybe_push_ntfy_prep(now)
                     except Exception:
@@ -210,6 +235,7 @@ class RefreshMixin:
     async def refresh(self) -> None:
         """Pull public snapshots and rebuild the dashboard payload."""
         async with self._lock:
+            t_start = time.monotonic()
             now = datetime.now(CN_TZ)
             trade_date = now.strftime("%Y%m%d")
             trade_date_dash = now.strftime("%Y-%m-%d")
@@ -231,6 +257,7 @@ class RefreshMixin:
                     _safe(fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"),
                 )
                 yesterday_zt = await self._yesterday(client, now, errors)
+                t_fetch = time.monotonic()
                 zt = zt or []
                 zb = zb or []
                 quotes = quotes or []
@@ -485,9 +512,19 @@ class RefreshMixin:
                 fav_cards = attach_boards_fund_flow(fav_cards, fund_flow)
                 theme_settle: dict[str, Any] = {}
                 try:
-                    if self._theme_settle_date != trade_date_dash:
-                        theme_settle = settle_theme_reputation(trade_date_dash) or {}
-                        self._theme_settle_date = trade_date_dash
+                    # Settle only after the close, and only the PREVIOUS session:
+                    # intraday board heat is still forming, so settling on the
+                    # first tick labelled yesterday with data that later moved.
+                    settle_day = ""
+                    if _minutes(now) >= 15 * 60 + 5:
+                        for row in history:
+                            d = str(row.get("trade_date") or "")[:10]
+                            if d and d < trade_date_dash:
+                                settle_day = d
+                                break
+                    if settle_day and self._theme_settle_date != settle_day:
+                        theme_settle = settle_theme_reputation(settle_day) or {}
+                        self._theme_settle_date = settle_day
                 except Exception:
                     log.exception("theme reputation settle failed")
                     theme_settle = {"ok": False}
@@ -991,7 +1028,21 @@ class RefreshMixin:
                 except Exception:
                     log.exception("sim_desk sync failed")
                     payload["sim_desk"] = {"ok": False}
+                # Coarse phase timings so a slow round is attributable instead of
+                # only being noticed via updated_at drift.
+                total_ms = round((time.monotonic() - t_start) * 1000.0, 1)
+                phases = {
+                    "fetch": round((t_fetch - t_start) * 1000.0, 1),
+                    "compute": round((time.monotonic() - t_fetch) * 1000.0, 1),
+                }
+                payload["refresh_ms"] = total_ms
+                payload["refresh_ms_phases"] = phases
+                hist = list(getattr(self, "_refresh_ms_hist", []))
+                hist.append(total_ms)
+                self._refresh_ms_hist = hist[-20:]
+                payload["refresh_ms_recent"] = list(self._refresh_ms_hist)
                 self.snapshot = payload
+                self._trim_caches()
                 self._maybe_capture_pick_scores(now)
                 try:
                     await asyncio.to_thread(self._push_personal_sells, now)

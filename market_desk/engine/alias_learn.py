@@ -87,7 +87,15 @@ class AliasLearnMixin:
             ) >= float(ALIAS_EM_COVERAGE_MIN):
                 self._alias_learn_now(now)
         except Exception:
-            log.exception("alias learning step failed")
+            # A dead Sina endpoint retried every 120s used to flood the 2MB
+            # rotating log with identical tracebacks and bury real failures.
+            now_mono = time.monotonic()
+            last = float(getattr(self, "_alias_err_at", 0.0) or 0.0)
+            if now_mono - last >= 600.0:
+                self._alias_err_at = now_mono
+                log.exception("alias learning step failed (throttled 10m)")
+            else:
+                log.debug("alias learning step failed (suppressed)")
 
     def _spawn_alias_learn(self, now: datetime) -> None:
         """In-session variant: run one learning step as a background task.

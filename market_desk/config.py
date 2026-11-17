@@ -54,6 +54,7 @@ MAINLINE_THEME_GROUPS: tuple[tuple[str, ...], ...] = (
     ("房地产", "地产", "物业"),
     ("物流", "快递", "航运", "港口"),
     ("电力", "火电", "水电", "电网", "公用"),
+    ("农林牧渔", "畜禽饲料", "养殖", "种植业", "饲料", "林业", "渔业", "水产"),
     ("农业", "种植", "养殖", "饲料", "农产品", "果蔬", "农药", "化肥", "氮肥", "钾肥"),
     ("教育", "培训"),
 )
@@ -1003,7 +1004,7 @@ SELL_MFE_WIDEN_MULT = 1.10
 SELL_MFE_TIGHTEN_MULT = 0.94
 
 # White-box logistic feature weights (soft score only).
-WHITEBOX_MIN_N = 12
+WHITEBOX_MIN_N = 40
 WHITEBOX_L2 = 0.35
 WHITEBOX_LR = 0.35
 WHITEBOX_MAX_ITERS = 250

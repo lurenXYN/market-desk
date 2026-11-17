@@ -106,7 +106,7 @@
         <button type="button" data-main="backtest">回测</button>
       </div>
     </div>
-    <div class="glossary-panel" id="glossaryPanel" hidden>
+    <div class="glossary-panel" id="glossaryPanel" hidden role="dialog" aria-modal="true" aria-label="术语表">
       <div class="hd">
         <span>术语表</span>
         <button type="button" class="pos-del" id="glossaryClose">关闭</button>
@@ -120,7 +120,7 @@
         </div>
       </div>
     </div>
-    <div class="rev-col-panel settings-panel" id="settingsPanel" hidden style="position:fixed;right:16px;top:58px;z-index:40;">
+    <div class="rev-col-panel settings-panel" id="settingsPanel" hidden role="dialog" aria-modal="true" aria-label="运行参数" style="position:fixed;right:16px;top:58px;z-index:40;">
       <div class="hd"><span>运行参数</span><button type="button" class="pos-del" id="settingsClose">关闭</button></div>
       <div class="settings-body">
       <div class="pos-form" style="grid-template-columns:1fr 1fr;margin:0;">
@@ -1348,18 +1348,7 @@
       </section>
     </section>
   </div>
-  <!-- Legacy chart-only drawer kept hidden; all tickers open the shared sigHist drawer. -->
-  <div class="chart-mask" id="chartMask" hidden>
-    <aside class="chart-drawer" id="chartDrawer" hidden>
-      <h3 id="chartTitle" hidden>—</h3>
-      <div class="meta" id="chartMeta" hidden></div>
-      <a id="chartXq" href="#" hidden></a>
-      <button type="button" id="chartClose" hidden>关闭</button>
-      <button type="button" id="chartRefresh" hidden>刷新图</button>
-    </aside>
-  </div>
-
-  <div class="chart-mask" id="sigHistMask" hidden>
+  <div class="chart-mask" id="sigHistMask" hidden role="dialog" aria-modal="true" aria-label="信号历史与图表">
     <aside class="chart-drawer sig-hist-drawer" id="sigHistDrawer">
       <div class="chart-hd">
         <div>

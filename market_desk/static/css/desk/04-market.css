@@ -333,10 +333,25 @@
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 th { color: var(--muted); font-weight: 600; }
+/* Glossary triggers were 12-14px on mobile; enforce a 24px hit area. */
+button.q,
+.term-q {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px 4px;
+}
+
 .rev-table {
   table-layout: auto;
   width: 100%;
 }
+.rev-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface, #151a22);
+}
+
 .rev-table th,
 .rev-table td {
   white-space: nowrap;

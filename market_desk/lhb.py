@@ -542,4 +542,7 @@ async def build_positions_lhb(
         "cache_hit": False,
     }
     _CACHE[cache_key] = (now, payload)
+    if len(_CACHE) > 200:
+        for stale_key, _v in sorted(_CACHE.items(), key=lambda kv: kv[1][0])[: len(_CACHE) - 200]:
+            _CACHE.pop(stale_key, None)
     return payload

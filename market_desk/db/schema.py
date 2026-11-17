@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 
 from market_desk.db.core import _connect, _table_cols
 from market_desk.db.positions import _backfill_position_lots
@@ -84,8 +85,11 @@ def _migrate_signals_owner_user(conn: sqlite3.Connection) -> None:
         FROM signals
         """
     )
-    conn.execute("DROP TABLE signals")
-    conn.execute("ALTER TABLE signals_owner_mig RENAME TO signals")
+    # DROP + RENAME must be one unit: a crash between them used to leave no
+    # signals table at all.
+    with _atomic(conn, "mig_signals_owner"):
+        conn.execute("DROP TABLE signals")
+        conn.execute("ALTER TABLE signals_owner_mig RENAME TO signals")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON signals(trade_date)"
     )
@@ -105,6 +109,28 @@ def _migrate_signals_owner_user(conn: sqlite3.Connection) -> None:
             )
     except sqlite3.Error:
         pass
+
+
+SCHEMA_VERSION = 2026111701
+
+
+@contextmanager
+def _atomic(conn: sqlite3.Connection, name: str):
+    """Make a destructive migration all-or-nothing via a savepoint."""
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except Exception:
+        conn.execute(f"ROLLBACK TO {name}")
+        conn.execute(f"RELEASE {name}")
+        raise
+    conn.execute(f"RELEASE {name}")
+
+
+def schema_version() -> int:
+    """Return the stamped schema version (0 for databases created before v1.10.96)."""
+    with _connect() as conn:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
 
 
 def init_db() -> None:
@@ -670,6 +696,10 @@ def init_db() -> None:
         ensure_sim_desk_tables(conn)
         ensure_bars_cache_tables(conn)
         ensure_exec_tables(conn)
+        try:
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        except sqlite3.Error:
+            pass
         conn.commit()
     try:
         from market_desk.db.code_board_seen import backfill_code_board_seen
@@ -946,8 +976,9 @@ def _migrate_watchlist_user_scope(conn: sqlite3.Connection) -> None:
         FROM watchlist
         """
     )
-    conn.execute("DROP TABLE watchlist")
-    conn.execute("ALTER TABLE watchlist_v2 RENAME TO watchlist")
+    with _atomic(conn, "mig_watchlist_user"):
+        conn.execute("DROP TABLE watchlist")
+        conn.execute("ALTER TABLE watchlist_v2 RENAME TO watchlist")
 
 
 def _migrate_favorite_boards_user_scope(conn: sqlite3.Connection) -> None:
@@ -979,5 +1010,6 @@ def _migrate_favorite_boards_user_scope(conn: sqlite3.Connection) -> None:
         SELECT id, 1, bk, name, kind, note, created_at FROM favorite_boards
         """
     )
-    conn.execute("DROP TABLE favorite_boards")
-    conn.execute("ALTER TABLE favorite_boards_v2 RENAME TO favorite_boards")
+    with _atomic(conn, "mig_fav_boards_user"):
+        conn.execute("DROP TABLE favorite_boards")
+        conn.execute("ALTER TABLE favorite_boards_v2 RENAME TO favorite_boards")

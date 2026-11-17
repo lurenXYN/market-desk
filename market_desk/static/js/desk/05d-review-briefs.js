@@ -87,7 +87,7 @@ async function loadReviewTrends(date, seq, wantFp) {
       label: "日线趋势",
       title: "日线趋势命中本地缓存（同日且信号集未变）",
     });
-    paintReview(lastReview);
+    schedulePaintReview(lastReview);
     return;
   }
   setModStamp("revTrendStamp", null, { loading: true, label: "日线趋势" });
@@ -108,7 +108,7 @@ async function loadReviewTrends(date, seq, wantFp) {
       label: "日线趋势",
       title: d.cache_hit ? "日线趋势命中服务端缓存" : "日线趋势已补齐",
     });
-    paintReview(lastReview);
+    schedulePaintReview(lastReview);
   } catch (e) {
     if (seq !== reviewTrendSeq) return;
     setModStamp("revTrendStamp", reviewTrendRefreshedAt || null, {
@@ -117,7 +117,7 @@ async function loadReviewTrends(date, seq, wantFp) {
       title: "日线趋势补齐失败",
     });
     if (lastReview && (lastReview.signals || []).length) {
-      paintReview(lastReview);
+      schedulePaintReview(lastReview);
     }
   }
 }
@@ -161,7 +161,7 @@ async function loadReviewZtYtd(date, seq) {
       label: "年内涨停",
       title: "年内涨停列异步补齐完成",
     });
-    paintReview(lastReview);
+    schedulePaintReview(lastReview);
   } catch (e) {
     if (seq !== reviewZtSeq) return;
     reviewZtLoading = false;
@@ -171,7 +171,7 @@ async function loadReviewZtYtd(date, seq) {
       title: "年内涨停补齐失败",
     });
     if (lastReview && (lastReview.signals || []).length) {
-      paintReview(lastReview);
+      schedulePaintReview(lastReview);
     }
   }
 }

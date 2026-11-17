@@ -74,6 +74,8 @@ class DeskEngine(
         self._loop_restarts = 0
         self._loop_heartbeat = 0.0
         self._eod_date: str | None = None
+        self._eod_retry = 0
+        self._refresh_ms_hist: list[float] = []
         self._morning_push_date: str | None = None
         self._theme_settle_date: str | None = None
         self._ma_fan_date: str | None = None
@@ -137,34 +139,55 @@ class DeskEngine(
         self._alias_progress: dict[str, Any] = {}
 
     def _note_source(self, label: str, *, ok: bool = False, timeout: bool = False) -> None:
-        """Increment one source outcome counter for the data-health strip."""
+        """Record one source outcome inside a 15-minute sliding window.
+
+        Counters used to accumulate for the whole process life, so an early
+        failure burst was diluted by later successes and ``degraded`` stopped
+        firing on the real condition.
+        """
         key = str(label or "src").strip() or "src"
         bucket = self._source_stats.setdefault(key, {"ok": 0, "fail": 0, "timeout": 0})
-        if timeout:
-            bucket["timeout"] = int(bucket.get("timeout") or 0) + 1
-            bucket["fail"] = int(bucket.get("fail") or 0) + 1
-        elif ok:
-            bucket["ok"] = int(bucket.get("ok") or 0) + 1
-        else:
-            bucket["fail"] = int(bucket.get("fail") or 0) + 1
+        events = bucket.setdefault("_events", [])
+        kind = "timeout" if timeout else ("ok" if ok else "fail")
+        now = time.monotonic()
+        events.append((now, kind))
+        cutoff = now - 900.0
+        if events and events[0][0] < cutoff:
+            events[:] = [e for e in events if e[0] >= cutoff]
+        if len(events) > 2000:
+            del events[:-2000]
+        bucket["ok"] = sum(1 for _t, k in events if k == "ok")
+        bucket["fail"] = sum(1 for _t, k in events if k in ("fail", "timeout"))
+        bucket["timeout"] = sum(1 for _t, k in events if k == "timeout")
+
+    def _trim_caches(self) -> None:
+        """Bound process-lifetime caches that previously only had TTLs."""
+        mc = self._minute_cache
+        if len(mc) > 400:
+            newest = sorted(mc.items(), key=lambda kv: kv[1][0], reverse=True)[:400]
+            self._minute_cache = dict(newest)
+        for name, cap in (
+            ("_kline_cache", 400),
+            ("_review_cache", 64),
+            ("_review_kline_cache", 400),
+            ("_cf_cache", 32),
+            ("_zt_ytd_cache", 400),
+        ):
+            cache = getattr(self, name, None)
+            if isinstance(cache, dict) and len(cache) > cap:
+                setattr(self, name, dict(list(cache.items())[-cap:]))
 
     def start(self) -> None:
         """Create tables and start the polling task."""
         init_db()
+        # PRAGMA integrity_check scans the whole 76MB+ database; run it off the
+        # startup path so the first snapshot is not delayed by it.
         try:
-            from market_desk.backup_store import check_db_integrity
+            import threading
 
-            integrity = check_db_integrity()
-            self.snapshot["db_integrity"] = integrity
-            if not integrity.get("ok") and not integrity.get("skipped"):
-                log.error("desk.db integrity failed: %s", integrity.get("detail"))
-                self._queue_ops_alert(
-                    f"ops:db:{datetime.now().strftime('%Y-%m-%d')}",
-                    "数据库损坏",
-                    str(integrity.get("detail") or "integrity_check failed")[:180],
-                )
+            threading.Thread(target=self._check_integrity_bg, daemon=True).start()
         except Exception:
-            log.exception("db integrity check failed")
+            log.exception("db integrity check dispatch failed")
         try:
             from market_desk.theme_memory import rebuild_all_theme_reputation
 
@@ -182,6 +205,23 @@ class DeskEngine(
         except Exception:
             log.exception("learned board alias load failed")
         self._task = asyncio.create_task(self._supervise_loop())
+
+    def _check_integrity_bg(self) -> None:
+        """Background ``PRAGMA integrity_check``; publishes its verdict late."""
+        try:
+            from market_desk.backup_store import check_db_integrity
+
+            integrity = check_db_integrity()
+            self.snapshot["db_integrity"] = integrity
+            if not integrity.get("ok") and not integrity.get("skipped"):
+                log.error("desk.db integrity failed: %s", integrity.get("detail"))
+                self._queue_ops_alert(
+                    f"ops:db:{datetime.now().strftime('%Y-%m-%d')}",
+                    "数据库损坏",
+                    str(integrity.get("detail") or "integrity_check failed")[:180],
+                )
+        except Exception:
+            log.exception("db integrity check failed")
 
     async def stop(self) -> None:
         """Cancel the polling task and wait for it to unwind."""

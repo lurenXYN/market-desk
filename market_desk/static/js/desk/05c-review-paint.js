@@ -24,6 +24,22 @@ function benchExcessHtml(be) {
     + `相对${lab}<button type="button" class="q" data-term="相对中证1000超额">?</button>：${parts.join("；")}</div>`;
 }
 
+let reviewPaintQueued = false;
+let reviewPaintPending = null;
+
+/** Coalesce repeated paintReview(payload) calls from one refresh into one frame. */
+function schedulePaintReview(payload) {
+  reviewPaintPending = payload || lastReview;
+  if (reviewPaintQueued) return;
+  reviewPaintQueued = true;
+  requestAnimationFrame(() => {
+    reviewPaintQueued = false;
+    const next = reviewPaintPending;
+    reviewPaintPending = null;
+    if (next) paintReview(next);
+  });
+}
+
 function paintReview(payload) {
   lastReview = payload || { signals: [], summary: {} };
   const sum = lastReview.summary || {};

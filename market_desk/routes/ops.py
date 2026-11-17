@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -780,7 +781,8 @@ async def ops_review_check(
     from market_desk.engine import engine
     from market_desk.review_check import build_review_check_sync, merge_counterfactual
 
-    base = build_review_check_sync()
+    # 4000-row scan + greedy attribution is CPU-bound; keep it off the loop.
+    base = await asyncio.to_thread(build_review_check_sync)
     if not cf:
         base["counterfactual"] = {"ok": False, "skipped": True}
         base["curl"] = "GET /api/ops/review-check  (?cf=false skips gate What-If)"

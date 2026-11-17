@@ -7,7 +7,9 @@ function render(d) {
   renderDeskInsights(d, v);
   renderDeskStatus(d, v);
   renderMarketBoards(d, v);
-  renderPositionsPanel(d, v);
+  // Positions table is heavy and lives on another tab; skip it while hidden.
+  const posPanel = document.getElementById("panel-pos");
+  if (!posPanel || !posPanel.hidden) renderPositionsPanel(d, v);
 }
 
 /** Paint the banner, action pills, gate hint, mainline trio, meter, and no-ETF notice. */

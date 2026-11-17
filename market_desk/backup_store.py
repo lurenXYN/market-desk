@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -32,13 +32,33 @@ def write_auto_backup(
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     if copy_db and DB_PATH.exists():
         db_dest = BACKUP_DIR / f"desk-{day}-{stamp}.db"
-        try:
-            shutil.copy2(DB_PATH, db_dest)
-        except OSError:
-            pass
+        _copy_db_consistent(db_dest)
     lim = max(5, min(90, int(keep or 30)))
     _prune_backups(limit=lim)
     return path
+
+
+def _copy_db_consistent(dest: Path) -> None:
+    """Copy the live WAL database through sqlite's backup API.
+
+    ``shutil.copy2`` on a WAL database misses pages that only live in ``-wal``
+    (not yet checkpointed), so a restore could silently lose the latest writes.
+    """
+    src = dst = None
+    try:
+        src = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30.0)
+        dst = sqlite3.connect(dest)
+        with dst:
+            src.backup(dst)
+    except (sqlite3.Error, OSError):
+        pass
+    finally:
+        for conn in (dst, src):
+            try:
+                if conn is not None:
+                    conn.close()
+            except sqlite3.Error:
+                pass
 
 
 def _prune_backups(*, limit: int = 30) -> None:

@@ -157,7 +157,7 @@ async function loadReviewScores(date) {
   } finally {
     if (seq === reviewScoreSeq) {
       revScores.loading = false;
-      if (lastReview && (lastReview.signals || []).length) paintReview(lastReview);
+      if (lastReview && (lastReview.signals || []).length) schedulePaintReview(lastReview);
     }
   }
 }

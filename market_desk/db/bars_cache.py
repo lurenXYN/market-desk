@@ -293,6 +293,31 @@ def find_bar_gaps(
     }
 
 
+def prune_bars(*, keep_days: int = 500) -> int:
+    """Delete bars older than the newest ``keep_days`` trade dates.
+
+    Nothing used to delete from ``market_bar_daily``: 356k rows at v1.10.95 and
+    growing one row per code per session, which also slows backups and the
+    startup integrity check.
+    """
+    keep = max(60, min(2000, int(keep_days or 500)))
+    with _connect() as conn:
+        ensure_bars_cache_tables(conn)
+        dates = [
+            str(r[0])
+            for r in conn.execute(
+                "SELECT DISTINCT trade_date FROM market_bar_daily ORDER BY trade_date DESC LIMIT ?",
+                (keep,),
+            ).fetchall()
+        ]
+        if len(dates) < keep:
+            return 0
+        cutoff = dates[-1]
+        cur = conn.execute("DELETE FROM market_bar_daily WHERE trade_date < ?", (cutoff,))
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
 def bars_cache_stats() -> dict[str, Any]:
     """Ops summary of cached bar coverage."""
     with _connect() as conn:

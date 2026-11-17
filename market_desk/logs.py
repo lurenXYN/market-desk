@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -13,6 +15,24 @@ LOG_FILE = LOG_DIR / "market-desk.log"
 LOG_MAX_BYTES = 2_000_000
 LOG_BACKUPS = 5
 _FMT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+class _JsonFormatter(logging.Formatter):
+    """One JSON object per line (``MARKET_DESK_LOG_JSON=1``)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)[:2000]
+        for key in ("code", "user", "src", "ms"):
+            if hasattr(record, key):
+                payload[key] = getattr(record, key)
+        return json.dumps(payload, ensure_ascii=False)
 _MARK = "_market_desk_file_log"
 
 
@@ -34,7 +54,10 @@ def setup_file_logging() -> Path:
         LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8"
     )
     handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter(_FMT))
+    if os.environ.get("MARKET_DESK_LOG_JSON", "").strip().lower() in ("1", "true", "yes", "on"):
+        handler.setFormatter(_JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(_FMT))
     setattr(handler, _MARK, True)
     for lg in targets:
         lg.addHandler(handler)

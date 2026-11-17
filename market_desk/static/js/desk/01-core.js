@@ -609,8 +609,13 @@ function fmtDelta(item) {
 
 function dataAgeText(updatedAt) {
   if (!updatedAt) return "数据尚未刷新";
-  const t = updatedAt.replace(" ", "T");
-  const then = new Date(t);
+  // Server stamps are Shanghai wall-clock without an offset; parsing them as
+  // local time made non-CST clients report a stale pack as "0 秒".
+  const raw = String(updatedAt).trim();
+  const iso = raw.length >= 19 && !/[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? raw.replace(" ", "T") + "+08:00"
+    : raw.replace(" ", "T");
+  const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return "刷新时间 " + updatedAt;
   const sec = Math.max(0, Math.round((Date.now() - then.getTime()) / 1000));
   return "数据时间 " + updatedAt + " · 已过 " + sec + " 秒";

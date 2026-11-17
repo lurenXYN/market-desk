@@ -14,6 +14,27 @@
 
 ---
 
+## [v1.10.96] - 2026-11-17
+
+### 【背景与动机（为什么做 · Why）】
+- 上一轮审查余下的 36 条里，数据层与运维项会随使用持续放大：每个鉴权请求跑两次 `init_db`（约 100 条 DDL + 写锁）、连接从不 close、迁移用 `DROP→RENAME` 且无版本号、备份用 `copy2` 复制 WAL 活动库、EOD 门闩在备份失败时仍置位、`market_bar_daily` 只增不减、`_source_stats` 累计计数把早盘失败率稀释掉。
+- 信号侧仍有两处「薄证据变硬规则」与一处结算时点错误：题材信誉在当日首次刷新（板块热度尚未成形）就结算昨日；白盒 12 个样本拟合 14 个特征；止损取当日最低价使风险距离趋近 0。
+
+### 【做了什么（What）】
+- **Added** `db.schema.SCHEMA_VERSION` / `schema_version()`，迁移 `DROP→RENAME` 改用 SAVEPOINT 原子化；`db.bars_cache.prune_bars()`；`logs._JsonFormatter`（`MARKET_DESK_LOG_JSON=1`）；`.github/workflows/tests.yml` 接入 pytest 门禁。
+- **Changed** `ensure_bootstrap_admin()` 每个库文件只建表一次；`_connect()` 改为退出即 close 的连接；备份改 `sqlite3.backup`；EOD 三步全部成功才落 `_eod_date`（失败最多重试 3 次）；刷新发布 `refresh_ms` / `refresh_ms_phases` / `refresh_ms_recent`；`review_check` 与仓位 LHB 推送走 `asyncio.to_thread`；`_source_stats` 改 15 分钟滑动窗口；进程级缓存加上限；题材信誉改为收盘后结算上一个交易日；白盒最小样本 12→40；止损保留 1.2%/1.5% 最小风险距离；主题同族补「农林牧渔/畜禽饲料」。
+- **Changed**（前端）`render()` 跳过隐藏的仓位面板；复盘重绘合并到 `requestAnimationFrame`（原一次刷新 6 处直接 `paintReview`）；`dataAgeText` 按 `+08:00` 解析无 offset 时间串；术语「?」按钮 24px 点击区、三个模态补 `role=dialog/aria-modal`；复盘表头 sticky；移除遗留隐藏图表抽屉与无调用点的 `openChart`。
+- **Fixed** 启动 `PRAGMA integrity_check` 改为后台线程；首包 30 秒未就绪会打 warning；alias learning 异常 10 分钟限噪一次。
+
+### 【影响与验证（Impact & Verification）】
+- 全量 `pytest -q`：**735 passed**；`compileall` 与改后 JS `node --check` 全部通过。
+- 数据兼容：只新增 `payload` 字段（`refresh_ms*`）与表内 `user_version` 标记，无破坏性结构变更，现有 `desk.db` 可直接打开。
+- 行为变化：止损价不再等于当日最低价；白盒模型在 n<40 时不参与打分；题材信誉只在收盘后结算上一交易日。这三项会改变部分买卖卡与复盘口径，属预期调整。
+
+---
+
+---
+
 ## [v1.10.95] - 2026-11-17
 
 ### 【背景与动机（为什么做 · Why）】

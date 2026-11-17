@@ -246,12 +246,18 @@ def _wait_price(last: float | None, low: float | None, etf: bool) -> float | Non
 
 
 def _stop_price(last: float | None, low: float | None, etf: bool) -> float | None:
-    """Use the session low as the invalidation level, with a last-price fallback."""
-    if low not in (None, 0):
-        return float(low)
+    """Session low as invalidation, but never tighter than a minimum risk distance.
+
+    Using the raw session low made ``buy - stop`` a few ticks wide whenever the
+    card sat near the day low, so position sizing always hit the 15% cap.
+    """
+    gap = 0.988 if etf else 0.985  # at least 1.2% / 1.5% below the last price
     if last is None:
-        return None
-    return float(last) * (0.985 if etf else 0.97)
+        return float(low) if low not in (None, 0) else None
+    floor = float(last) * gap
+    if low not in (None, 0):
+        return min(float(low), floor)
+    return floor
 
 
 def atr_shadow_stop(

@@ -757,10 +757,11 @@ document.getElementById("sigHistBody").addEventListener("click", (ev) => {
   if (!Number.isFinite(idx) || !sigHistRows[idx]) return;
   paintSigHistDesc(sigHistRows[idx], idx);
 });
-document.getElementById("chartClose").addEventListener("click", closeChart);
-document.getElementById("chartMask").addEventListener("click", (ev) => {
-  if (ev.target.id === "chartMask") closeChart();
-});
+// Legacy chart drawer was removed in v1.10.96; keep the handlers optional so a
+// missing node can never break the whole boot script.
+if (document.getElementById("chartClose")) {
+  document.getElementById("chartClose").addEventListener("click", closeChart);
+}
 document.getElementById("sigHistClose").addEventListener("click", closeSigHist);
 document.getElementById("sigHistMask").addEventListener("click", (ev) => {
   if (ev.target.id === "sigHistMask") closeSigHist();

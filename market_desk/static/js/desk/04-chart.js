@@ -264,11 +264,6 @@ function paintChartDesc(r) {
   box.innerHTML = `<div class="hd">信号描述</div>${html}`;
 }
 
-async function openChart(code, name, signalAt, revId) {
-  // Shared drawer: charts + signal history + fan/pot appearances.
-  return openSigHist(code, name, { signalAt: signalAt || "", revId: revId || "" });
-}
-
 function closeChart() {
   const mask = document.getElementById("chartMask");
   if (mask) mask.hidden = true;

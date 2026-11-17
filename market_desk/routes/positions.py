@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -299,7 +300,8 @@ async def positions_lhb(
         alerts, next_fp = lhb_seat_edge_alerts(payload.get("items") or [], prev_fp=prev)
         save_setting(fp_key, next_fp)
         if alerts:
-            push_serverchan_alerts(alerts, snap)
+            # Sync HTTP (5s timeout per recipient) must not run on the event loop.
+            await asyncio.to_thread(push_serverchan_alerts, alerts, snap)
             payload["pushed_alerts"] = len(alerts)
     except Exception:
         pass

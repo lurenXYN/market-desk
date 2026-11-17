@@ -42,6 +42,8 @@ async def lifespan(_app: FastAPI):
         if engine.snapshot.get("updated_at"):
             break
         await asyncio.sleep(0.25)
+    else:
+        log.warning("first snapshot not ready after 30s; serving starting state")
     # Re-run after first tick so history in memory is rebuilt next refresh.
     try:
         from market_desk.db import load_daily

@@ -126,9 +126,23 @@ def ensure_guest_user() -> dict[str, Any] | None:
     return public_user(row)
 
 
+_BOOTSTRAPPED_PATH: str | None = None
+
+
 def ensure_bootstrap_admin() -> dict[str, Any] | None:
-    """Create the first admin when needed, and always ensure guest exists."""
-    init_db()
+    """Create the first admin when needed, and always ensure guest exists.
+
+    ``init_db`` runs at most once per database file: it issues ~100 DDL/PRAGMA
+    statements and takes the write lock, and this helper sits on every
+    authenticated request (including the 20s snapshot poll).
+    """
+    global _BOOTSTRAPPED_PATH
+    import market_desk.db as _db
+
+    key = str(getattr(_db, "DB_PATH", ""))
+    if _BOOTSTRAPPED_PATH != key:
+        init_db()
+        _BOOTSTRAPPED_PATH = key
     created: dict[str, Any] | None = None
     if user_count() == 0:
         username = (os.environ.get("MARKET_DESK_ADMIN_USER") or "admin").strip() or "admin"

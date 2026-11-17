@@ -731,9 +731,10 @@ def build_gate_kill_stats(
             "true_kill_n": tk,
             "false_kill_rate": false_rate,
             "note": (
-                "误杀偏多" if fk >= 3 and (false_rate or 0) >= 50 else
-                ("挡得住" if tk >= 3 and fk == 0 else "")
+                "误杀偏多" if scored_n >= 8 and fk >= 8 and (false_rate or 0) >= 50 else
+                ("挡得住" if scored_n >= 8 and fk == 0 else "")
             ),
+            "low_n": scored_n < 8,
         }
         if kind_f in ("etf", "stock"):
             row_out["kind"] = kind_f
