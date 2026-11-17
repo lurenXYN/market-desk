@@ -19,7 +19,7 @@ def _fresh(monkeypatch, tmp_path):
     desk_db.init_db()
     mf_job._PROGRESS.clear()
     mf_job._PROGRESS["running"] = False
-    monkeypatch.setattr(mx, "_LAST_RUN", 0.0)
+    monkeypatch.setattr(mx, "_LAST_RUN", -mx.MA_FAN_EXTRAS_RETRY_S)
     monkeypatch.setattr(mx, "_RUNNING", False)
     yield
 
@@ -139,3 +139,8 @@ def test_outcome_summary_day_and_recent() -> None:
     assert rec["days"] == 1 and rec["d3"] == {"n": 2, "win": 50.0, "avg": 1.0}
     assert rec["excess_d3"] == 0.0
     assert rec["by_grade"]["可以考虑"]["win"] == 100.0
+
+
+def test_idle_sentinel_allows_first_run_on_low_uptime_host() -> None:
+    """Fresh containers report monotonic() near 0 — the idle sentinel must not look recent."""
+    assert mx._LAST_RUN + mx.MA_FAN_EXTRAS_RETRY_S <= 0.0

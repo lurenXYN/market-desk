@@ -29,7 +29,10 @@ MA_FAN_EXTRAS_CONCURRENCY = 3
 MA_FAN_CLOSE_FINAL = (15, 5)
 MA_FAN_FWD_DAYS = (1, 3)
 
-_LAST_RUN = 0.0
+# Sentinel must sit one full retry window *before* monotonic() = 0, otherwise a
+# host whose uptime is shorter than MA_FAN_EXTRAS_RETRY_S (any fresh container or
+# CI runner) looks like "just ran" and silently skips its first refresh.
+_LAST_RUN = -MA_FAN_EXTRAS_RETRY_S
 _RUNNING = False
 
 

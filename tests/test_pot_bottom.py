@@ -23,7 +23,7 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(mf_scan, "MA_FAN_MIN_INTERVAL_S", 0.0)
     monkeypatch.setattr(mf_src, "MA_FAN_PAGE_DELAY_S", 0.0)
     monkeypatch.setattr(mf_job, "MA_FAN_CACHE_FROM", (24, 0))
-    monkeypatch.setattr(mx, "_LAST_RUN", 0.0)
+    monkeypatch.setattr(mx, "_LAST_RUN", -mx.MA_FAN_EXTRAS_RETRY_S)
     monkeypatch.setattr(mx, "_RUNNING", False)
     mf_job._PROGRESS.clear()
     mf_job._PROGRESS["running"] = False
