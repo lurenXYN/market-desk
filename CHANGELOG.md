@@ -14,6 +14,26 @@
 
 ---
 
+## [v1.10.106] - 2026-11-17
+
+### 【背景与动机（Why）】
+- 需要每日把线上 `desk.db` 取回本地做分析，但 VPS 只能经 GitHub Actions 的 SSH 凭据访问，不应把私钥放到开发机。
+- 线上备份目录长期累积（`data/` 已 3.0G），需要一条明确的保留期限。
+
+### 【做了什么（What）】
+- **Added** `.github/workflows/vps-db-snapshot.yml`：每日 16:10 CST（收盘 EOD 之后）用 sqlite backup API 在 VPS 生成一致性副本 → gzip → 经 scp 取回 runner → 上传 `vps-db` artifact（保留 14 天）；同时支持手动触发。
+- **Added** `scripts/pull_vps_db.py`：从 Actions 取最新的未过期 artifact，落盘到 `data/vps-db/desk-YYYY-MM-DD.db`，跑 `integrity_check` 与关键表行数校验，并删除 30 天前的本地快照（`--keep-days` 可调）。
+- **Added** 5 个用例：文件名解析、保留窗口、不可解析文件名不误删、完整性校验、损坏库检出。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest -q`：779 passed（774 + 5）。
+- 网络注意：脚本内置忽略 `HTTP(S)_PROXY` 的 opener —— 本机代理会让 `api.github.com` 返回 000。
+- 本地数据目录 `data/vps-db/` 位于 gitignore 的 `data/` 之下，不会误提交。
+
+---
+
+---
+
 ## [v1.10.105] - 2026-11-17
 
 ### 【背景与动机（Why）】

@@ -1,0 +1,87 @@
+# Daily consistent snapshot of the VPS desk.db, uploaded as an artifact.
+# The laptop pulls it with scripts/pull_vps_db.py (no SSH key needed locally).
+name: VPS db snapshot
+
+on:
+  schedule:
+    # 16:10 CST — after the 15:05 EOD write, before the evening idle window.
+    - cron: "10 8 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: vps-db-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Prepare SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Snapshot on VPS (sqlite backup API)
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'bash -s' <<'REMOTE'
+          set -euo pipefail
+          INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
+          DAY=$(date +%F)
+          OUT="/tmp/desk-${DAY}.db"
+          rm -f "$OUT" "$OUT.gz"
+          python3 - "$INSTALL_DIR/data/desk.db" "$OUT" <<'PY'
+          import sqlite3, sys
+          src_path, dst_path = sys.argv[1], sys.argv[2]
+          src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True, timeout=30)
+          dst = sqlite3.connect(dst_path)
+          with dst:
+              src.backup(dst)
+          dst.execute("PRAGMA journal_mode=DELETE")
+          dst.commit()
+          dst.close(); src.close()
+          PY
+          gzip -9 -f "$OUT"
+          ls -l "$OUT.gz"
+          REMOTE
+
+      - name: Download snapshot
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          DAY=$(date -u -d '+8 hours' +%F)
+          scp -i ~/.ssh/id_deploy -P "$PORT" -o StrictHostKeyChecking=yes \
+            "$USER@$HOST:/tmp/desk-${DAY}.db.gz" ./desk-${DAY}.db.gz
+          sha256sum ./desk-${DAY}.db.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-db
+          path: |
+            desk-*.db.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          echo "### VPS desk.db snapshot" >> "$GITHUB_STEP_SUMMARY"
+          echo '本地拉取：`python scripts/pull_vps_db.py`（保留最近 30 天）' >> "$GITHUB_STEP_SUMMARY"
