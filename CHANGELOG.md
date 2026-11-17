@@ -24,13 +24,14 @@
 - **Added** `vps-db-snapshot.yml` 每日 16:10 CST 用 sqlite backup API 生成一致性副本，gzip 后上传 `vps-db` artifact（保留 14 天）；UTC 日期两端统一，避免跨零点命名错位。
 - **Changed** 快照 SSH 改用 `StrictHostKeyChecking=accept-new` 并输出 known_hosts 行数，规避 keyscan 限流；仍保留 keyscan 作为首选。
 - **Added** `scripts/pull_vps_db.py`：优先走 `gh run download`（自动处理 artifact 鉴权与 302），API 兜底时重定向到 storage 会剥离 Authorization；落盘后跑 `integrity_check` + 表数 + 关键行数校验，并按日期删除 30 天前快照。
-- **Added** `scripts/pull-vps-db.cmd` + Windows 计划任务 `market-desk pull vps db`（每日 16:30），日志写 `data/vps-db/pull.log`。
+- **Added** `scripts/pull-vps-db.cmd` + Windows 计划任务 `market-desk-db-pull`（每日 16:40 本地时间，`StartWhenAvailable` 错过补跑、失败重试 2 次），日志写 `data/vps-db/pull.log`。
 - **Changed** `backup_store._prune_backups` 增加**按天**清理（`backup_keep_days`，默认 30），不再只按份数；`desk-*.db` 与 `auto-*.json` 同时生效。
 - **Added** 6 个用例：文件名解析、30 天窗口、不可解析名不误删、完整性校验、损坏库检出、备份按天清理。
 
 ### 【影响与验证（Impact & Verification）】
 - `pytest -q`：780 passed（774 + 6）。
 - 实测：`gh workflow run vps-db-snapshot` → artifact 25.9MB → 本地落盘 `data/vps-db/desk-2026-11-17.db` 106MB，`integrity_check=ok`，46 表，`signals=2116`、`market_bar_daily=487706`。
+- 计划任务实跑：`Start-ScheduledTask market-desk-db-pull` → 约 70s 完成、`LastTaskResult=0`，日志追加一次校验仍为 `integrity=ok`、46 表。
 - 线上备份：下个 EOD 起按 30 天清理，`data/` 体积会逐步回落。
 
 ---
