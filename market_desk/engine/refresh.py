@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from datetime import timedelta as _timedelta
 from typing import Any
@@ -124,6 +125,9 @@ class RefreshMixin:
     async def _loop(self) -> None:
         first = True
         while True:
+            # Heartbeat for /api/health: proves the loop is turning, not just that
+            # a snapshot exists. Written on every iteration, including idle sleeps.
+            self._loop_heartbeat = time.monotonic()
             now = datetime.now(CN_TZ)
             live = _is_session(now)
             today = now.strftime("%Y-%m-%d")
@@ -958,12 +962,19 @@ class RefreshMixin:
                     self._maybe_ops_health_alert(payload)
                 except Exception:
                     log.exception("ops health alert failed")
-                self._emit_toasts(
-                    prev,
-                    payload,
-                    damping=bool(src_state.get("damping")),
-                    replay_base=src_replay,
-                )
+                # Toast fan-out does sync SQLite + sync HTTP (Server酱 / ntfy,
+                # up to 8s per recipient). Run it off the event loop so a slow
+                # push never stalls the 20s refresh cadence or async routes.
+                try:
+                    await asyncio.to_thread(
+                        self._emit_toasts,
+                        prev,
+                        payload,
+                        damping=bool(src_state.get("damping")),
+                        replay_base=src_replay,
+                    )
+                except Exception:
+                    log.exception("toast emit failed")
                 try:
                     record_session_signals(payload)
                 except Exception:
@@ -983,16 +994,16 @@ class RefreshMixin:
                 self.snapshot = payload
                 self._maybe_capture_pick_scores(now)
                 try:
-                    self._push_personal_sells(now)
+                    await asyncio.to_thread(self._push_personal_sells, now)
                 except Exception:
                     log.exception("personal sell push failed")
                 try:
-                    self._maybe_sim_desk_digest(now, payload)
+                    await asyncio.to_thread(self._maybe_sim_desk_digest, now, payload)
                 except Exception:
                     log.exception("sim_desk digest failed")
                 try:
                     # Digests queue after the main toast emit; drain same round.
-                    self._drain_pending_ops_alerts(payload)
+                    await asyncio.to_thread(self._drain_pending_ops_alerts, payload)
                 except Exception:
                     log.exception("ops pending drain failed")
 

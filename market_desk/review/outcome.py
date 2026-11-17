@@ -468,6 +468,10 @@ def _flatten_signal_prices(row: dict[str, Any]) -> dict[str, Any]:
         pq = num(payload.get("qty"))
         if pq is not None and float(pq) > 0:
             item["plan_qty"] = int(pq)
+    # ``ready`` is rewritten on every refresh; ``ever_ready`` is latched in the
+    # payload and is the only field that proves the card lit at some point.
+    if item.get("ever_ready") is None:
+        item["ever_ready"] = bool(payload.get("ever_ready"))
     if not item.get("desk_source"):
         item["desk_source"] = payload.get("desk_source") or (
             "main"

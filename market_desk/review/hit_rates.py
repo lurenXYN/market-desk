@@ -12,6 +12,9 @@ from market_desk.review.exec_score import classify_miss_kind, MISS_KIND_LABELS
 
 
 MIN_HIT_N = 8
+# Minimum scored samples before a phase hit-rate may demote a live buy card.
+# Display may still show n>=8 with a "low_n" marker; acting on it needs far more.
+PHASE_HIT_MIN_N = 30
 
 
 def build_outcome_compare(

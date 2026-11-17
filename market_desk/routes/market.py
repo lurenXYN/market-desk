@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +19,7 @@ from market_desk.deps import (
 )
 from market_desk.eastmoney import fetch_daily_bars, fetch_minute_trends
 from market_desk.engine import engine
+from market_desk.engine.core import CN_TZ
 from market_desk.filters import normalize_code, xueqiu_symbol, xueqiu_url
 from market_desk.glossary import GLOSSARY
 from market_desk.trend import classify_daily_trend
@@ -55,12 +58,9 @@ def snapshot(
     if not full.get("glossary"):
         full["glossary"] = GLOSSARY
     if view:
-        # Reuse slice keys on the already-personalized payload.
-        engine.snapshot, prev = full, engine.snapshot
-        try:
-            sliced = engine.slice_snapshot(view)
-        finally:
-            engine.snapshot = prev
+        # Reuse slice keys on the already-personalized payload. Pass it in:
+        # swapping engine.snapshot here raced with the refresh loop's publish.
+        sliced = engine.slice_snapshot(view, snapshot=full)
         sliced["auth_user"] = full.get("auth_user")
         sliced["auth_required_personal"] = full.get("auth_required_personal")
         sliced["personal_locked"] = full.get("personal_locked")
@@ -80,23 +80,55 @@ async def fund_flow(
     return await engine.refresh_fund_flow(force=force)
 
 
+def _snapshot_age_seconds(updated_at: Any) -> float | None:
+    """Seconds since the last publish, or None when nothing usable was published."""
+    text = str(updated_at or "").strip().replace("T", " ")
+    if len(text) < 19:
+        return None
+    try:
+        stamp = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return max(0.0, (datetime.now(CN_TZ).replace(tzinfo=None) - stamp).total_seconds())
+
+
 @router.get("/api/health")
-def health() -> dict:
-    """Liveness + data-health probe (degraded / source fail rates)."""
+def health() -> JSONResponse:
+    """Liveness + data-health probe.
+
+    ``ok`` used to be hard-coded True, so a dead refresh loop still looked healthy
+    to systemd and external monitors. It is now derived from loop liveness, the
+    heartbeat age and the snapshot age, and returns 503 when either is stale.
+    """
     snap = engine.snapshot or {}
     h = snap.get("health") if isinstance(snap.get("health"), dict) else {}
-    return {
-        "ok": True,
+    loop = engine.loop_status()
+    stale = _snapshot_age_seconds(snap.get("updated_at"))
+    try:
+        refresh_seconds = float(snap.get("refresh_seconds") or 20)
+    except (TypeError, ValueError):
+        refresh_seconds = 20.0
+    stale_limit = max(180.0, refresh_seconds * 9)
+    fresh = stale is not None and stale <= stale_limit
+    heartbeat_age = loop.get("heartbeat_age")
+    if isinstance(heartbeat_age, (int, float)):
+        fresh = fresh and float(heartbeat_age) <= max(60.0, refresh_seconds * 6)
+    ok = bool(loop.get("alive")) and fresh
+    payload = {
+        "ok": ok,
         "updated_at": snap.get("updated_at"),
         "degraded": bool(h.get("degraded")),
         "level": h.get("level") or "ok",
         "score": h.get("score"),
         "fail_rates": h.get("fail_rates") or {},
         "failed_sources": h.get("failed_sources") or [],
-        "stale_seconds": h.get("stale_seconds"),
+        "stale_seconds": None if stale is None else round(stale, 1),
+        "stale_limit_seconds": round(stale_limit, 1),
+        "loop": loop,
         "tips": list(h.get("tips") or [])[:6],
         "trading_day": h.get("trading_day"),
     }
+    return JSONResponse(payload, status_code=200 if ok else 503)
 
 
 @router.get("/api/export/boards")

@@ -41,6 +41,7 @@ def test_event_fanout_sends_nothing(monkeypatch) -> None:
 
 def test_personal_sells_and_morning_brief_are_skipped() -> None:
     now = datetime(2026, 9, 28, 9, 30, tzinfo=CN_TZ)
-    stub = SimpleNamespace()
+# _push_personal_sells reads the engine snapshot for trade_date / personal layer.
+    stub = SimpleNamespace(snapshot={})
     assert DeskEngine._push_personal_sells(stub, now) == 0
     assert asyncio.run(DeskEngine._maybe_push_morning_brief(stub, now)) is None

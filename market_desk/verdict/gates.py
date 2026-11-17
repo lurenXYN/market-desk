@@ -413,12 +413,20 @@ def apply_review_bias(
     try:
         from market_desk.db import load_signals
         from market_desk.review import build_phase_hit_rates
+        from market_desk.review.hit_rates import PHASE_HIT_MIN_N
 
         hits = build_phase_hit_rates(load_signals(limit=240))
     except Exception:
         hits = []
+        PHASE_HIT_MIN_N = 30
     row = next((h for h in hits if str(h.get("phase") or "") == str(phase or "")), None)
-    if row and int(row.get("scored_n") or 0) >= 5 and row.get("hit_rate") is not None:
+    # 5 samples are not evidence: the default ``traded`` mode often leaves a phase
+    # with ~11 scored fills, and demoting every 可买入 on that basis is permanent.
+    if (
+        row
+        and int(row.get("scored_n") or 0) >= int(PHASE_HIT_MIN_N)
+        and row.get("hit_rate") is not None
+    ):
         rate = float(row["hit_rate"])
         scored = int(row["scored_n"])
         if rate < 35:

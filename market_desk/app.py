@@ -11,6 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from market_desk.auth import ensure_bootstrap_admin
@@ -72,6 +73,9 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="牛来-作战台", lifespan=lifespan)
+# The dashboard ships ~715 KB of uncompressed JS/CSS/HTML; gzip cuts the first
+# paint transfer by roughly 4x on mobile without any build step.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 for _router in ROUTERS:
     app.include_router(_router)

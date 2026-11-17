@@ -241,13 +241,22 @@ def test_cash_skip_when_broke(tmp_path, monkeypatch):
 
 def test_sim_vs_bench_display_only(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
+    from datetime import date, timedelta
+
+    from market_desk.calendar import today_cn
+
+    # Bench cache must end "today", otherwise sim_vs_bench refuses it as stale
+    # (7-day freshness guard) and the test would pass or fail by calendar date.
+    d0, d1 = date(2026, 10, 28), today_cn()
+    span = max(1, (d1 - d0).days)
+    closes = []
+    cur = d0
+    while cur <= d1:
+        closes.append((cur.isoformat(), round(100.0 - 2.0 * ((cur - d0).days / span), 4)))
+        cur += timedelta(days=1)
     monkeypatch.setattr(
         "market_desk.dual_score.load_bench_closes",
-        lambda limit=240, allow_http=True: [
-            ("2026-10-28", 100.0),
-            ("2026-10-29", 99.0),
-            ("2026-10-30", 98.0),
-        ],
+        lambda limit=240, allow_http=True: closes,
     )
     vs = sim_vs_bench(cum_pnl_pct=-0.128, epoch="2026-10-28")
     assert vs["ok"] is True

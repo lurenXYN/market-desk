@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from contextlib import suppress
 from datetime import datetime
 from datetime import timedelta as _timedelta
 from typing import Any
@@ -68,6 +70,9 @@ class DeskEngine(
         }
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
+        # Watchdog state for the refresh loop (see _supervise_loop / loop_status).
+        self._loop_restarts = 0
+        self._loop_heartbeat = 0.0
         self._eod_date: str | None = None
         self._morning_push_date: str | None = None
         self._theme_settle_date: str | None = None
@@ -176,12 +181,52 @@ class DeskEngine(
             log.info("learned board aliases applied: %s", self._load_learned_aliases())
         except Exception:
             log.exception("learned board alias load failed")
-        self._task = asyncio.create_task(self._loop())
+        self._task = asyncio.create_task(self._supervise_loop())
 
     async def stop(self) -> None:
-        """Cancel the polling task."""
-        if self._task:
-            self._task.cancel()
+        """Cancel the polling task and wait for it to unwind."""
+        task = self._task
+        if not task:
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
+        self._task = None
+
+    async def _supervise_loop(self) -> None:
+        """Keep the refresh loop alive when a round escapes its own guards.
+
+        ``_loop`` only guards ``refresh()``; probes, alias learning and the sleep
+        sit outside it, so any raise there used to kill polling silently while
+        ``/api/health`` still answered 200.
+        """
+        while True:
+            try:
+                await self._loop()
+                log.warning("refresh loop returned unexpectedly; restarting")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("refresh loop crashed; restarting in 5s")
+            self._loop_restarts += 1
+            self.snapshot["loop_restarts"] = self._loop_restarts
+            self.snapshot["ok"] = False
+            self.snapshot["error"] = "refresh loop restarted"
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                raise
+
+    def loop_status(self) -> dict[str, Any]:
+        """Task liveness, restart count and heartbeat age for the health probe."""
+        task = self._task
+        alive = bool(task and not task.done())
+        hb = float(self._loop_heartbeat or 0.0)
+        return {
+            "alive": alive,
+            "restarts": int(self._loop_restarts or 0),
+            "heartbeat_age": None if hb <= 0 else round(max(0.0, time.monotonic() - hb), 1),
+        }
 
     def sync_positions(self, user_id: int | None = None) -> list[dict[str, Any]]:
         """Reload positions for one user (or clear personal fields when None)."""
@@ -329,9 +374,19 @@ class DeskEngine(
             return []
         return self._decorate_favorite_rows(load_favorite_boards(user_id=int(user_id)))
 
-    def slice_snapshot(self, view: str | None = None) -> dict[str, Any]:
-        """Return a tab-scoped snapshot slice to cut bandwidth / DOM work."""
-        snap = self.snapshot or {}
+    def slice_snapshot(
+        self,
+        view: str | None = None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a tab-scoped snapshot slice to cut bandwidth / DOM work.
+
+        ``snapshot`` lets callers slice an already-personalized payload without
+        swapping the shared engine snapshot. Assigning to ``self.snapshot`` per
+        request raced with the refresh loop's publish and could leak one user's
+        personal layer into the global snapshot (and drop a refresh round).
+        """
+        snap = (self.snapshot if snapshot is None else snapshot) or {}
         view_key = str(view or "full").strip().lower() or "full"
         if view_key in ("", "full", "all"):
             return snap

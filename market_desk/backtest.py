@@ -115,7 +115,10 @@ def collect_backtest_signals(
     picked: list[dict[str, Any]] = []
     for row in rows:
         if is_buy_signal(row.get("signal_type")):
-            if ready_only and not int(row.get("ready") or 0):
+            # ``ready`` is the end-of-day flag (it flips back to 0 when a card
+            # fades), so filtering on it selects on later information. Prefer the
+            # latched ``ever_ready`` and only fall back to ``ready`` for old rows.
+            if ready_only and not int(row.get("ever_ready") or row.get("ready") or 0):
                 continue
             picked.append(row)
         elif include_sells and is_sell_signal(row.get("signal_type")):

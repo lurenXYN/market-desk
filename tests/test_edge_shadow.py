@@ -69,7 +69,9 @@ def test_record_session_attaches_day_book(monkeypatch, tmp_path):
     assert book_open["n"] == 1
     assert book_open["avg_pct"] == -3.0
     assert book_open["worst_pct"] == -3.0
-    assert "book_open" not in rows["600001"]
+    # A card that was already lit before the first book snapshot gets the same
+    # first-sight book: ``book_open`` freezes at the first *non-empty* sight.
+    assert rows["600001"]["book_open"]["avg_pct"] == -3.0
 
 
 def test_reclaim_skips_unreclaimed_and_reprices_entry():

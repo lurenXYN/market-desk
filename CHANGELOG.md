@@ -14,6 +14,33 @@
 
 ---
 
+## [v1.10.95] - 2026-11-17
+
+### 【背景与动机（为什么做 · Why）】
+- 多标签页 / 多用户并发时，`/api/snapshot?view=` 通过临时替换 `engine.snapshot` 做切片，与刷新协程的整体重绑竞争：可把某个用户的个人层（positions / risk_overview / sell_advice）永久写回全局造成串号，也可能被还原覆盖掉一轮刷新。
+- 刷新循环只有 `refresh()` 在 try 内，探测 / 别名学习 / sleep 在 try 外；一旦抛错循环永久退出，而 `/api/health` 首字段写死 `ok: True`，systemd 与外部监控都发现不了「界面还在、数字不动」。
+- 复盘相位命中率闸门的最小样本只有 5，默认 `hit_rate_mode=traded` 下「发酵」仅约 11 条人工成交样本，会把「可买入」长期降级为「观察回踩」，切换口径后同一相位结论即翻转。
+- Server酱 / ntfy 推送为同步 urllib（单请求最坏 8 秒），在刷新协程内按收件人串行执行，可吃满 20 秒刷新周期并阻塞全部 async 路由。
+- 前端 `tick()` 无并发保护且失败后不再重排轮询；移动端底栏 4 列却需容纳 5 个按钮；静态资源约 715 KB 未压缩。
+
+### 【做了什么（What）】
+- **Added** `engine._supervise_loop` 看护协程 + `_loop_heartbeat` 心跳；`/api/health` 依快照新鲜度、心跳年龄与循环存活返回 200/503，并新增 `loop` / `stale_limit_seconds` 字段。
+- **Added** 回归用例：`test_snapshot_slice_pure`、`test_health_probe`、`test_phase_hit_min_n`、`test_backtest_ready_ever`、`test_refresh_watchdog`。
+- **Changed** `slice_snapshot(view, snapshot=None)` 改为接受显式载荷的纯函数；`routes/market.py` 改用 `engine.slice_snapshot(view, snapshot=full)`，请求路径不再写 `engine.snapshot`。
+- **Changed** 推送 / 告警扇出（`_emit_toasts`、`_push_personal_sells`、`_maybe_sim_desk_digest`、`_drain_pending_ops_alerts`、EOD 的 ntfy prep 与 Server酱 循环）改走 `asyncio.to_thread`，离开事件循环。
+- **Changed** 相位命中率闸门最小样本收敛为 `review.hit_rates.PHASE_HIT_MIN_N = 30`（展示仍按 `MIN_HIT_N`）。
+- **Changed** 回测 `ready_only` 改用冻结的 `ever_ready`；`_flatten_signal_prices` 暴露 `ever_ready` 字段，旧行回退 `ready`。
+- **Changed** 前端 `tick()` 增加请求序号与过期响应丢弃、失败后继续轮询、空节点保护；移动端底栏改为 5 列；`app` 加 `GZipMiddleware(minimum_size=1024)`。
+- **Fixed** `engine.stop()` 现在 cancel 后 await 任务结束，避免刷新在落库中途被丢下。
+- **Fixed** 修正 5 个与实现漂移的单测（`book_open` 首次非空即冻结、代码 6 位归一化、基准序列需截止当日、stub 需 `snapshot`、`sim_vs_bench` 新鲜度）。
+
+### 【影响与验证（Impact & Verification）】
+- 全量 `pytest -q`：**735 passed**（改动前 714 passed / 5 failed）；`compileall` 通过；`node --check` 通过修改后的 tick 脚本。
+- 数据兼容：只新增 `payload.ever_ready` 的读取路径，无表结构变更，现有 `desk.db` 可直接使用。
+- 纪律影响：除「n<30 时命中率闸门不再降级」外，未改动 ready / 买卖判定的权重与阈值；`/api/health` 由恒真改为可失败，监控可据此发现刷新停摆。
+
+---
+
 ## [v1.10.94] - 2026-11-12
 
 ### 【背景与动机（为什么做 · Why）】

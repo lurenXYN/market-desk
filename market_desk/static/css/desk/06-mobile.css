@@ -51,7 +51,9 @@
     left: 0; right: 0; bottom: 0;
     z-index: 50;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* 作战 / 仓位 / 模拟 / 复盘 / 更多 = 5 visible items on mobile; a 4-column
+       grid wrapped the fifth onto a second row and pushed it over the content. */
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
     margin: 0;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));

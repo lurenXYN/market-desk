@@ -114,18 +114,25 @@ function tickIntervalMs(live) {
   }
   return live ? 20000 : 60000;
 }
+let tickSeq = 0;
 async function tick(force) {
   if (!authUser) return;
+  const seq = ++tickSeq;
+  let keepPolling = true;
   try {
     const view = snapshotViewForTab(currentMain);
     const r = await fetch("/api/snapshot?view=" + encodeURIComponent(view), {
       credentials: "same-origin",
     });
     if (r.status === 401) {
+      keepPolling = false;
       paintAuthUser(null);
       return;
     }
     const d = await r.json();
+    // A slower earlier request must never overwrite a newer payload: tab switch
+    // and post-action refetches can overtake the interval tick.
+    if (seq !== tickSeq) return;
     if (!d.ok && !d.updated_at) {
       document.getElementById("stamp").textContent = d.error || "等待首包";
       document.getElementById("dataAge").textContent = d.error || "等待首包";
@@ -179,10 +186,18 @@ async function tick(force) {
       console.warn("sound alert failed", e);
     }
     paintClock();
-    scheduleTick(!!lastData.live);
     if (currentMain === "funds") ensureFundFlowFull();
   } catch (e) {
-    document.getElementById("stamp").textContent = "数据源中断";
-    document.getElementById("dataAge").textContent = "数据源中断";
+    if (seq === tickSeq) {
+      const stamp = document.getElementById("stamp");
+      const age = document.getElementById("dataAge");
+      if (stamp) stamp.textContent = "数据源中断";
+      if (age) age.textContent = "数据源中断";
+      console.warn("snapshot tick failed", e);
+    }
+  } finally {
+    // One failed round must not kill polling: the old code rescheduled only on
+    // success, so any TypeError/timeout stopped every later update.
+    if (keepPolling && seq === tickSeq) scheduleTick(!!(lastData && lastData.live));
   }
 }

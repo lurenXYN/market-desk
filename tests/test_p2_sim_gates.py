@@ -19,6 +19,24 @@ from market_desk.exec.types import Direction, Offset, OrderRequest
 from market_desk.sim_desk import portfolio_stats, start_gate_snapshot
 
 
+def _bench_to_today(start_day: str, start_px: float, end_px: float):
+    """Bench closes ending today: sim_vs_bench rejects caches older than 7 days."""
+    from datetime import date, timedelta
+
+    from market_desk.calendar import today_cn
+
+    d0 = date.fromisoformat(start_day)
+    d1 = today_cn()
+    span = max(1, (d1 - d0).days)
+    rows = []
+    cur = d0
+    while cur <= d1:
+        k = (cur - d0).days / span
+        rows.append((cur.isoformat(), round(start_px + (end_px - start_px) * k, 4)))
+        cur += timedelta(days=1)
+    return rows
+
+
 def _init_db(tmp_path, monkeypatch):
     db = tmp_path / "sim.db"
     monkeypatch.setattr(desk_db, "DB_PATH", db)
@@ -79,11 +97,9 @@ def test_relative_green_absolute_red_allows_read_not_trade(tmp_path, monkeypatch
     _close_one_lot(open_px=10.0, sell_px=9.95, qty=100)
     monkeypatch.setattr(
         "market_desk.dual_score.load_bench_closes",
-        lambda limit=240, allow_http=True: [
-            ("2026-10-28", 100.0),
-            ("2026-10-29", 95.0),
-            ("2026-10-30", 94.0),
-        ],
+        lambda limit=240, allow_http=True: _bench_to_today(
+            str(SIM_BOOK_SINCE)[:10], 100.0, 94.0
+        ),
     )
     stats = portfolio_stats()
     assert stats["closed_n"] == 1

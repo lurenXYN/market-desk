@@ -245,7 +245,7 @@ class EodMixin:
             body = "\n".join(x for x in body_lines if x)
             alert_key = f"eod:{day_s}"
             desp = format_serverchan_desp(alert_key, title, body, snap)
-            if notify_serverchan(sendkey, title, desp):
+            if await asyncio.to_thread(notify_serverchan, sendkey, title, desp):
                 ok_n += 1
         save_setting(
             push_flag,
@@ -267,7 +267,7 @@ class EodMixin:
         try:
             from market_desk.ntfy_push import push_ntfy_prep
 
-            ok_n = push_ntfy_prep(self.snapshot, day=day_s)
+            ok_n = await asyncio.to_thread(push_ntfy_prep, self.snapshot, day=day_s)
             if ok_n:
                 log.info("ntfy prep push day=%s ok=%s", day_s, ok_n)
         except Exception:
@@ -326,7 +326,7 @@ class EodMixin:
                 continue
             alert_key = f"morning:{day_s}"
             desp = format_serverchan_desp(alert_key, title, body, self.snapshot)
-            if notify_serverchan(sendkey, title, desp):
+            if await asyncio.to_thread(notify_serverchan, sendkey, title, desp):
                 ok_n += 1
         save_setting(
             push_flag,

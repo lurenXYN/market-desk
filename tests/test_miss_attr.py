@@ -77,4 +77,5 @@ def test_build_miss_attribution_buckets() -> None:
     # Adapt list stays miss_pullback-only.
     missed = build_missed_buys(rows, trade_date=day)
     assert len(missed) == 1
-    assert missed[0]["code"] == "A"
+    # Codes are normalised to the 6-digit exchange form on the way out.
+    assert missed[0]["code"] == "00000A"
