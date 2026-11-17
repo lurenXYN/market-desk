@@ -1,0 +1,94 @@
+# Collect VPS status through GitHub Actions (no laptop-side SSH needed).
+# Manual only: diagnostic, never restarts the service.
+name: VPS info
+
+on:
+  workflow_dispatch:
+    inputs:
+      tail_lines:
+        description: "日志尾部行数（默认 40）"
+        required: false
+        default: "40"
+
+concurrency:
+  group: vps-info
+  cancel-in-progress: true
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Collect over SSH
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+          TAIL_LINES: ${{ github.event.inputs.tail_lines || '40' }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "TAIL_LINES=$TAIL_LINES bash -s" > /tmp/raw.json <<'REMOTE'
+          set -uo pipefail
+          REPO_DIR="${REPO_DIR:-$HOME/github/market-desk}"
+          INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
+          TAIL_LINES="${TAIL_LINES:-40}"
+          health=$(curl -fsS --max-time 5 http://127.0.0.1:8765/api/health || echo '{"ok":false,"detail":"curl failed"}')
+          svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
+          up=$(uptime -p 2>/dev/null || uptime)
+          mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
+          disk=$(df -h / | awk 'NR==2 {print $2" "$3" "$5}')
+          load=$(awk '{print $1" "$2" "$3}' /proc/loadavg)
+          data=$(du -sh "$INSTALL_DIR/data" 2>/dev/null | awk '{print $1}')
+          db=$(stat -c %s "$INSTALL_DIR/data/desk.db" 2>/dev/null || echo '')
+          sha=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo n/a)
+          errors=$(journalctl -u market-desk --no-pager -n "$TAIL_LINES" 2>/dev/null | grep -Ei "error|traceback|blocked" | tail -n 15 | tr '\n' '|' || true)
+          cat <<JSON
+          {"ok": true, "service": "$svc", "uptime": "$up", "loadavg_1_5_15": "$load",
+           "mem_mb_total_used_available": "$mem", "disk_root_size_used_pct": "$disk",
+           "data_dir_size": "$data", "desk_db_bytes": "$db", "repo_head": "$sha",
+           "health": $health,
+           "recent_errors": "$errors"}
+          JSON
+          REMOTE
+
+      - name: Shape artifact
+        run: |
+          python - "${{ github.event_name }}" <<'PY'
+          import json, sys
+          from datetime import datetime, timezone
+          raw = open("/tmp/raw.json", encoding="utf-8").read().strip()
+          start = raw.find("{")
+          payload = json.loads(raw[start:]) if start >= 0 else {"ok": False, "detail": raw[:300]}
+          payload["collected_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          payload["errors"] = [x for x in str(payload.get("recent_errors") or "").split("|") if x.strip()][:15]
+          payload.pop("recent_errors", None)
+          with open("vps-info.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, ensure_ascii=False, indent=2)
+          print(json.dumps(payload, ensure_ascii=False)[:1200])
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-info
+          path: vps-info.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          echo "### VPS info collected" >> "$GITHUB_STEP_SUMMARY"
+          echo '本地拉取：`python scripts/vps_info.py --artifacts`（需要 actions:read 的 token）' >> "$GITHUB_STEP_SUMMARY"

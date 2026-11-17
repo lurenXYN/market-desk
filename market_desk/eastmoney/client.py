@@ -20,6 +20,9 @@ _CLIST_HOSTS: tuple[str, ...] = (
     "push2.eastmoney.com",
     "push2delay.eastmoney.com",
     "82.push2.eastmoney.com",
+    "7.push2.eastmoney.com",
+    "3.push2.eastmoney.com",
+    "5.push2.eastmoney.com",
     "1.push2.eastmoney.com",
     "push2his.eastmoney.com",
 )
@@ -37,10 +40,12 @@ _CLIST_FAIL_STREAK = 0
 _CLIST_BACKOFF_UNTIL = 0.0
 
 
-_CLIST_BACKOFF_SEC = 45.0
+# Cloud-VPS IPs get rate-limited before they get blocked; a 45s cooldown was
+# short enough that the retry itself kept the streak alive. 90s + 3-strike rule.
+_CLIST_BACKOFF_SEC = 90.0
 
 
-_CLIST_BACKOFF_AFTER = 2
+_CLIST_BACKOFF_AFTER = 3
 
 
 def _clist_sem() -> asyncio.Semaphore:

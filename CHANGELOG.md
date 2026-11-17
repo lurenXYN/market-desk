@@ -14,6 +14,32 @@
 
 ---
 
+## [v1.10.104] - 2026-11-17
+
+### 【背景与动机（为什么做 · Why）】
+- VPS 上 clist 持续被限流：45 秒冷却 + 连续 2 次失败即熔断，重试本身把失败连成串；同时板块、行业资金流、概念资金流每 20 秒各拉一次 clist，是主要流量来源。
+- 单靠 push2 三台主机轮转，遇到 IP 段级风控时切换空间不够。
+- 复盘与排障需要服务器状态，但 VPS 凭据只允许存在 GitHub Secrets，不应复制到开发机。
+
+### 【做了什么（What）】
+- **Changed** `_CLIST_BACKOFF_SEC` 45→90 秒、`_CLIST_BACKOFF_AFTER` 2→3 次，降低「重试把失败串成封禁」的概率。
+- **Changed** 板块/行业流/概念流改走 `_boards_bundle`：默认 `boards_refresh_sec=300` 内的 tick 直接复用缓存，三路 clist 从每 20 秒一次降为每 5 分钟一次。
+- **Changed** `_CLIST_HOSTS` 扩至 7 台（实测存活：push2 / push2delay / 82 / 7 / 3 / 5 / 1），保留既有熔断与轮转。
+- **Added** `MEMORY.md`（仓库根）：会话记忆、发布约定、设计决策、VPS/数据源现状，**不含任何凭据**。
+- **Added** `.github/workflows/vps-info.yml`：手动触发，经 Actions 用同一套部署密钥 SSH 采集服务状态/负载/磁盘/`/api/health`/近期错误，产出 `vps-info.json` artifact。
+- **Added** `scripts/vps_info.py`：读 Actions 运行列表与最新 artifact（`GITHUB_TOKEN` 需 actions:read），打印为 JSON 并可选存到 `data/tmp`。
+- **Added** 4 个用例：runs 摘要、artifact 选取跳过未完成、板块缓存 TTL、熔断/主机池断言。
+
+### 【影响与验证（Impact & Verification）】
+- 全量 `pytest -q`：**773 passed**（原 769 + 新增 4）；`compileall` 通过。
+- 实盘影响：盘中主线与宽度仍按原频率更新；板块卡最多滞后 5 分钟（可用 `boards_refresh_sec` 调回）。
+- 兼容性：无表结构变更；新增文件不改既有导入路径。
+- 未验证：`vps-info.yml` 首次运行需要手动触发，本轮未在 GitHub 上真跑；`scripts/vps_info.py` 只做了离线单测，未带真实 token 联调。
+
+---
+
+---
+
 ## [v1.10.103] - 2026-11-17
 
 ### 【背景与动机（为什么做 · Why）】

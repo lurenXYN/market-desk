@@ -240,6 +240,32 @@ class RefreshMixin:
                     log.exception("ma_fan nightly scan failed")
             await asyncio.sleep(_effective_refresh_seconds(now) if live else int(setting("idle_seconds", 60)))
 
+    async def _boards_bundle(
+        self, client: httpx.AsyncClient, errors: list[str]
+    ) -> tuple[list[dict[str, Any]], Any, Any]:
+        """Hot boards + day fund-flow, refreshed at most every ``boards_refresh_sec``.
+
+        Returns ``(boards, industry_flow, concept_flow)``; the cached tuple is a
+        plain value so callers never mutate engine state through it.
+        """
+        ttl = float(setting("boards_refresh_sec", 300) or 300)
+        now = time.monotonic()
+        cache = getattr(self, "_boards_cache", None)
+        last = float(getattr(self, "_boards_at", 0.0) or 0.0)
+        if cache and last and now - last < ttl:
+            return cache
+        boards = await _safe(fetch_hot_boards, client, errors=errors, label="boards")
+        flow_ind = await _safe(
+            fetch_board_fund_flow, client, "industry", 80, "day", errors=errors, label="flow-hy-d"
+        )
+        flow_con = await _safe(
+            fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"
+        )
+        triple = (boards or [], flow_ind, flow_con)
+        self._boards_cache = triple
+        self._boards_at = now
+        return triple
+
     async def refresh(self) -> None:
         """Pull public snapshots and rebuild the dashboard payload."""
         async with self._lock:
@@ -250,20 +276,21 @@ class RefreshMixin:
             errors: list[str] = []
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 # Hot path: day fund-flow only (week/month via /api/fund-flow).
+                # Boards + day fund-flow ride a slower cadence (see _boards_bundle):
+                # they are the heaviest clist users and the first thing a cloud IP
+                # gets blocked on, while 20s freshness buys nothing for them.
                 (
-                    zt, zb, quotes, boards, etfs, indices, global_watch,
-                    flow_ind_d, flow_con_d,
+                    zt, zb, quotes, board_triple, etfs, indices, global_watch,
                 ) = await asyncio.gather(
                     _safe(fetch_zt_pool, client, trade_date, errors=errors, label="zt"),
                     _safe(fetch_zb_pool, client, trade_date, errors=errors, label="zb"),
                     _safe(fetch_main_quotes, client, errors=errors, label="quotes"),
-                    _safe(fetch_hot_boards, client, errors=errors, label="boards"),
+                    _safe(self._boards_bundle, client, errors),
                     _safe(fetch_etfs, client, errors=errors, label="etf"),
                     _safe(fetch_indices, client, errors=errors, label="index"),
                     _safe(fetch_global_watch, client, errors=errors, label="global"),
-                    _safe(fetch_board_fund_flow, client, "industry", 80, "day", errors=errors, label="flow-hy-d"),
-                    _safe(fetch_board_fund_flow, client, "concept", 80, "day", errors=errors, label="flow-gn-d"),
                 )
+                boards, flow_ind_d, flow_con_d = board_triple or ([], None, None)
                 yesterday_zt = await self._yesterday(client, now, errors)
                 t_fetch = time.monotonic()
                 zt = zt or []
