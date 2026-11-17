@@ -28,6 +28,7 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          wc -l ~/.ssh/known_hosts
 
       - name: Snapshot on VPS (sqlite backup API)
         env:
@@ -38,7 +39,7 @@ jobs:
           set -euo pipefail
           # UTC date on both sides: VPS clock is UTC, runner is UTC.
           DAY=$(date -u +%F)
-          ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=yes "$USER@$HOST" \
+          ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
             "DAY=$DAY bash -s" <<'REMOTE'
           set -euo pipefail
           INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
@@ -67,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           DAY=$(date -u +%F)
-          scp -i ~/.ssh/id_deploy -P "$PORT" -o StrictHostKeyChecking=yes \
+          scp -i ~/.ssh/id_deploy -P "$PORT" -o StrictHostKeyChecking=accept-new \
             "$USER@$HOST:/tmp/desk-${DAY}.db.gz" ./desk-${DAY}.db.gz
           sha256sum ./desk-${DAY}.db.gz > SHA256SUMS
           cat SHA256SUMS
