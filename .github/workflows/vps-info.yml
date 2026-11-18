@@ -113,6 +113,9 @@ jobs:
                           print("RETRY_ERR", sym, type(exc).__name__, exc, file=sys.stderr)
           asyncio.run(main())
           PY
+          echo "SVC_ENV:" >&2
+          systemctl show market-desk -p Environment -p EnvironmentFiles 2>&1 | head -4 >&2 || true
+          systemctl cat market-desk 2>/dev/null | grep -iE "proxy|Environment" | head -6 >&2 || true
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
