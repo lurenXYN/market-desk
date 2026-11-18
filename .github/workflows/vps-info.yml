@@ -58,7 +58,9 @@ jobs:
           head -c 240 /tmp/txdays.json >&2 || true; echo >&2
           ncode=$(curl -sS -m 8 -o /tmp/txdays2.json -w '%{http_code}' "https://web.ifzq.gtimg.cn/appstock/app/day/query?code=sz399001" 2>/dev/null || echo 000)
           echo "TENCENT_DAYS_SZ_HTTP=$ncode" >&2
-          python3 - <<'PY' >&2 2>&1 || true
+          PYV=/opt/market-desk/.venv/bin/python
+          [ -x "$PYV" ] || PYV=python3
+          "$PYV" - <<'PY' >&2 2>&1 || true
           import asyncio, json, sqlite3, sys
           sys.path.insert(0, "/opt/market-desk")
           print("VOLUME_PACE_MODULE", end=" ")
