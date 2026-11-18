@@ -87,6 +87,32 @@ jobs:
           except Exception as exc:
               print("sqlite error", type(exc).__name__, exc, file=sys.stderr)
           PY
+          echo "OPT_REFRESH_LINES:" >&2
+          grep -n "prior_session_curve\|volume_progress" /opt/market-desk/market_desk/engine/refresh.py 2>&1 | head -6 >&2 || true
+          grep -n "version" /opt/market-desk/market_desk/__init__.py 2>&1 | head -3 >&2 || true
+          TZ=Asia/Shanghai /opt/market-desk/.venv/bin/python - <<'PY' >&2 2>&1 || true
+          import asyncio, sys
+          from datetime import datetime
+          sys.path.insert(0, "/opt/market-desk")
+          import httpx
+          from market_desk import volume_baseline as vb
+          from market_desk.volume_pace import pick_progress
+          print("LOCAL_NOW", datetime.now().isoformat(), file=sys.stderr)
+          async def main():
+              async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as c:
+                  curve = await vb.prior_session_curve(c, "2026-11-18")
+              print("CURVE", len(curve or []), (curve or [{}])[-1].get("cum"), file=sys.stderr)
+              print("PICK", pick_progress(prev_curve=curve, now=datetime.now()), file=sys.stderr)
+              if curve is None:
+                  from market_desk.volume_baseline import SYMBOLS, DAYS_URL
+                  for sym in SYMBOLS:
+                      try:
+                          r = await c.get(DAYS_URL.format(sym=sym), headers={"Referer": "https://gu.qq.com/"}, timeout=8.0)
+                          print("RETRY", sym, r.status_code, len(r.content), file=sys.stderr)
+                      except Exception as exc:
+                          print("RETRY_ERR", sym, type(exc).__name__, exc, file=sys.stderr)
+          asyncio.run(main())
+          PY
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
