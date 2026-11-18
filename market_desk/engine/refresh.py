@@ -445,8 +445,8 @@ class RefreshMixin:
                 from market_desk.volume_baseline import prior_session_curve
 
                 prior_curve = await prior_session_curve(client, trade_date_dash)
-            except Exception:  # noqa: BLE001 - a slow baseline must not stall the loop
-                log.debug("prior session turnover curve unavailable", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - a slow baseline must not stall the loop
+                log.warning("prior session turnover curve unavailable: %s: %s", type(exc).__name__, exc)
             volume_progress, volume_basis = pick_progress(prev_curve=prior_curve, now=now)
             metrics = enrich_market_context(
                 metrics,

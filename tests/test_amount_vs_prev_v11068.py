@@ -125,3 +125,36 @@ def test_closed_session_matches_raw_basis():
     assert m["volume_basis"] == "closed" and m["volume_ready"] is True
     assert m["amount_pctile"] == m["amount_pctile_raw"] == 100.0
     assert m["amount_tone"] == "放量"
+
+
+def test_linear_basis_is_not_ranked_intraday():
+    """Linear proration overstates the morning, so it must not rank or set a tone."""
+    m = enrich_market_context(
+        {"amount_yi": 6596.45, "zt": 30, "avg_explode": 0, "late_seal_rate": 0, "big_drop": 0},
+        indices=[],
+        history=[
+            {"trade_date": "2026-11-17", "amount_yi": 14576.95},
+            {"trade_date": "2026-11-16", "amount_yi": 21179.53},
+        ],
+        trade_date="2026-11-18",
+        volume_progress=0.3333,
+        volume_basis="linear",
+    )
+    assert m["volume_ready"] is False
+    assert m["amount_projected_yi"] == pytest.approx(19791.33, abs=0.5)
+    assert m["amount_pctile"] is None and m["thin_volume"] is False and m["hot_volume"] is False
+    assert m["amount_tone"] is None and m["amount_chg_pct"] is None
+    assert m["amount_chg_pct_raw"] == pytest.approx(-54.75, abs=0.1)
+
+
+def test_linear_basis_is_accepted_at_the_close():
+    m = enrich_market_context(
+        {"amount_yi": 15000.0, "zt": 30, "avg_explode": 0, "late_seal_rate": 0, "big_drop": 0},
+        indices=[],
+        history=[{"trade_date": "2026-11-17", "amount_yi": 14576.95}],
+        trade_date="2026-11-18",
+        volume_progress=1.0,
+        volume_basis="linear",
+    )
+    assert m["volume_ready"] is True
+    assert m["amount_chg_pct"] == pytest.approx(2.9, abs=0.1)

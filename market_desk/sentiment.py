@@ -227,11 +227,20 @@ def enrich_market_context(
     # session against full sessions instead of ranking the slice itself: at 10:25 the
     # raw figure is ~35% of a day, so a raw percentile reads "record low" every morning
     # and the thin-volume gate fires on a sample that has not formed yet.
-    projected = full_day_estimate(today_amt, volume_progress)
-    basis_amt = today_amt if projected is None else projected
-    ready = bool(volume_progress is None or projected is not None)
+    basis_key = volume_basis or ("closed" if volume_progress is None else "linear")
+    if volume_progress is None:
+        # No session clock (tests, callers without a date): the raw figure is the day.
+        projected, basis_amt, ready = None, today_amt, True
+    else:
+        projected = full_day_estimate(today_amt, volume_progress)
+        basis_amt = today_amt if projected is None else projected
+        # Linear clock proration overstates the morning by ~40% (the open is heavier
+        # than average), so it may inform the projected figure but must not rank or
+        # set a tone. At the close linear equals the true share and is accepted.
+        exact = float(volume_progress) >= 0.999
+        ready = bool(projected is not None and (basis_key != "linear" or exact))
     m["volume_progress"] = None if volume_progress is None else round(float(volume_progress), 4)
-    m["volume_basis"] = volume_basis or ("closed" if volume_progress is None else "linear")
+    m["volume_basis"] = basis_key
     m["volume_ready"] = ready
     m["amount_projected_yi"] = None if projected is None else round(projected, 2)
 
