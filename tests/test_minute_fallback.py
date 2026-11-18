@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
 
 import httpx
@@ -111,3 +112,12 @@ def test_past_day_bars_use_tencent_five_day_feed() -> None:
     assert em_minute._MINUTE_SOURCE == "tencent" and em_minute._MINUTE_EM_PAUSE_UNTIL > 0
     assert _run(handler, em.fetch_minute_bars_for_day, "600000", "2026-09-01") == []
     assert hits["tx_days"] == 1, "five-day feed cached per code"
+
+
+def test_eastmoney_minute_pause_window_is_thirty_minutes() -> None:
+    """A soft host throttle outlasts ten minutes, so probe East Money once per 30."""
+    em_minute._note_minute_fallback(True)
+    left = em_minute._MINUTE_EM_PAUSE_UNTIL - time.time()
+    assert 1790 <= left <= 1800, f"pause window was {left:.0f}s"
+    assert em_minute._minute_em_paused() is True
+    assert em.clist_runtime_status()["minute_pause_sec"] >= 1790

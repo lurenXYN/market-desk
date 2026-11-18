@@ -14,6 +14,26 @@
 
 ---
 
+## [v1.10.109] - 2026-11-18
+
+### 【背景与动机（Why）】
+- 东财分时是 host 级软封：VPS health 长期显示「分时走腾讯备用源（东财分时拉空）」。暂停窗口只有 10 分钟，等于每 10 分钟就再撞一次同一个计数器，恢复更慢。
+- `deploy.yml` 里的 `script_stop: true` 在 `appleboy/ssh-action@v1.2.2` 中并未声明，日志只有 `Unexpected input(s)` 警告——这个开关从未生效。远端脚本若中途失败，后续步骤成功仍会让整个 job 变绿，把失败掩盖掉。
+
+### 【做了什么（What）】
+- **Changed** `eastmoney/minute.py`：`_MINUTE_EM_PAUSE_SEC` 600 → 1800 秒，注释写明软封持续时间远长于 10 分钟，短复探只会增加被拒请求。
+- **Added** `tests/test_minute_fallback.py` 一条用例：暂停窗口落在 1790–1800 秒，且 `clist_runtime_status()["minute_pause_sec"]` 同步反映。
+- **Removed** `deploy.yml` 的 `script_stop: true`（v1.x 未声明该输入，只会产生警告）。
+- **Added** 部署脚本开头打印 `shell` 与 `errexit` 状态，作为「失败真会中断」的可核对证据；中断本身由脚本内 `set -euo pipefail` 保证。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest -q`：**782 passed**（781 + 1）；`tests/test_minute_fallback.py` + `test_ths_source.py` 10 passed。
+- `deploy.yml` 经 PyYAML 解析通过，`with` 输入清单已不含 `script_stop`；提取出的 script 通过 `bash -n`。
+- 分时链路不变（东财 → 腾讯 → 同花顺），只把东财复探频率从 10 分钟降到 30 分钟：东财恢复后最多 30 分钟内自动回到主源，期间不再产生被拒请求。
+- 数据库结构无变化，现有 `desk.db` 打开即用。
+
+---
+
 ## [v1.10.108] - 2026-11-17
 
 ### 【背景与动机（Why）】

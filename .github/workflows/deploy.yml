@@ -27,12 +27,18 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          script_stop: true
+          # No script_stop here: appleboy/ssh-action v1.x does not declare it, so the
+          # value was ignored with an "Unexpected input(s)" warning and the flag never
+          # protected anything. Failure handling is the script's own `set -e` below.
           # Prefer ed25519 deploy key; command_timeout covers pip + restart.
           command_timeout: 10m
           envs: REPO_DIR,INSTALL_DIR,FORCE_RESTART
           script: |
             set -euo pipefail
+            # Log the shell and errexit state so a future "deploy said success but
+            # nothing changed" report can be checked against real evidence.
+            echo "deploy shell=$0"
+            case $- in *e*) echo "errexit=on" ;; *) echo "errexit=off" ;; esac
             REPO_DIR="${REPO_DIR:-$HOME/github/market-desk}"
             INSTALL_DIR="${INSTALL_DIR:-/opt/market-desk}"
             FORCE_RESTART="${FORCE_RESTART:-0}"

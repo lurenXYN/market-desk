@@ -219,12 +219,14 @@ async def fetch_minute_bars_many_days(
 _MINUTE_SOURCE = "eastmoney"
 
 
-# After East Money minute feeds come back empty while Tencent has data, skip
-# East Money minute calls for this long and read Tencent directly.
+# After East Money minute feeds come back empty while a backup source has data,
+# skip East Money minute calls for this long and read the backup directly.
+# 30 minutes, not 10: a soft IP/host throttle lasts far longer than 10 minutes,
+# so retrying sooner only adds rejected requests to the same counter.
 _MINUTE_EM_PAUSE_UNTIL = 0.0
 
 
-_MINUTE_EM_PAUSE_SEC = 600.0
+_MINUTE_EM_PAUSE_SEC = 1800.0
 
 
 def _minute_em_paused() -> bool:
