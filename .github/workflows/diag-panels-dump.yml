@@ -40,6 +40,40 @@ jobs:
             d = json.loads(Path("/tmp/md_market.json").read_text(encoding="utf-8"))
             print("updated_at", d.get("updated_at"), "trade_date", d.get("trade_date"), "phase", d.get("phase"), "temp", d.get("temperature"))
             print("keys_have", {k: (k in d) for k in ("emotion_wave", "seasonality", "elliott", "indices", "metrics")})
+            m = d.get("metrics") if isinstance(d.get("metrics"), dict) else {}
+            vol_keys = (
+                "amount_yi", "amount_prev_yi", "amount_projected_yi",
+                "amount_tone", "amount_chg_pct", "amount_chg_pct_raw",
+                "amount_delta_yi", "amount_delta_yi_raw",
+                "amount_pctile", "amount_pctile_raw",
+                "volume_progress", "volume_basis", "volume_ready",
+                "thin_volume", "hot_volume",
+            )
+            print("==== volume ====")
+            for k in vol_keys:
+                print(f"  {k}=", m.get(k))
+            # Independent cross-check against Tencent prior-session curve.
+            try:
+                import asyncio, httpx
+                from datetime import datetime
+                from market_desk.volume_baseline import prior_session_curve
+                from market_desk.volume_pace import pick_progress, full_day_estimate
+                async def _vol():
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as c:
+                        curve = await prior_session_curve(c, str(d.get("trade_date") or "")[:10] or None)
+                    prog, basis = pick_progress(prev_curve=curve, now=datetime.now())
+                    amt = m.get("amount_yi")
+                    proj = full_day_estimate(amt, prog) if amt is not None else None
+                    print("probe_progress", prog, basis, "curve_n", 0 if not curve else len(curve))
+                    print("probe_project", None if proj is None else round(float(proj), 2),
+                          "live_amount_yi", amt, "prev_yi", m.get("amount_prev_yi"))
+                    if proj is not None and m.get("amount_prev_yi"):
+                        prev = float(m["amount_prev_yi"])
+                        chg = (float(proj) - prev) / prev * 100.0
+                        print("probe_chg_pct_vs_prev", round(chg, 2))
+                asyncio.run(_vol())
+            except Exception as exc:
+                print("volume_probe_err", type(exc).__name__, exc)
             for k in ("emotion_wave", "seasonality", "elliott"):
                 v = d.get(k)
                 if not isinstance(v, dict):
