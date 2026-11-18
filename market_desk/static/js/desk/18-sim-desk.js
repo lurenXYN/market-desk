@@ -301,7 +301,11 @@ async function loadSimDesk(force) {
     const res = await fetch("/api/sim-desk", { credentials: "same-origin" });
     if (res.status === 401 || res.status === 403) {
       const sum = document.getElementById("simSum");
-      if (sum) sum.innerHTML = `<span class="meta">需登录后查看模拟账本</span>`;
+      if (sum) sum.innerHTML = `<span class="meta">需登录后查看模拟账本（游客不可用，请用正式账号）</span>`;
+      const posBody = document.getElementById("simPosBody");
+      if (posBody) posBody.innerHTML = `<tr><td colspan="9" class="meta">需正式账号</td></tr>`;
+      const logBody = document.getElementById("simLogBody");
+      if (logBody) logBody.innerHTML = `<tr><td colspan="11" class="meta">需正式账号</td></tr>`;
       return;
     }
     const data = await res.json();

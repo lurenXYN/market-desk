@@ -819,13 +819,18 @@ document.addEventListener("keydown", (ev) => {
     if (fillBtn && !fillBtn.closest(".rev-fill")) fillBtn.click();
   }
 });
-document.getElementById("chartRefresh").addEventListener("click", () => {
-  if (!chartCode || typeof openSigHist !== "function") return;
-  openSigHist(chartCode, sigHistName || "", {
-    signalAt: chartSignalAt || "",
-    revId: chartRevId || "",
+// chartRefresh lived on the removed legacy chart drawer (v1.10.96); guard like chartClose
+// so a missing node cannot abort the rest of desk.js (incl. 18-sim-desk lets).
+const chartRefreshEl = document.getElementById("chartRefresh");
+if (chartRefreshEl) {
+  chartRefreshEl.addEventListener("click", () => {
+    if (!chartCode || typeof openSigHist !== "function") return;
+    openSigHist(chartCode, sigHistName || "", {
+      signalAt: chartSignalAt || "",
+      revId: chartRevId || "",
+    });
   });
-});
+}
 function deskFileDate() {
   const d = (lastData && lastData.trade_date)
     || (lastReview && lastReview.summary && lastReview.summary.today && lastReview.summary.today.date)

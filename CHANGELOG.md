@@ -14,7 +14,7 @@
 
 ---
 
-## [v1.10.112] - 2026-11-18
+## [v1.10.113] - 2026-11-18
 
 ### 【背景与动机（Why）】
 - 模拟页一直停在「加载中…」：`12-desk-actions.js` 对已删除的 `#chartRefresh` 直接 `addEventListener`，整包 `desk.js` 在此抛错中断；后面的 `18-sim-desk.js` 顶层 `let` 未执行，`loadSimDesk`（函数声明已提升）访问 `simDeskLoading` 触发 TDZ，账本永远刷不出来。
