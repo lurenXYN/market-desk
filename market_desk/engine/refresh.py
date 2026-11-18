@@ -437,7 +437,10 @@ class RefreshMixin:
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
             history_prev = load_daily(20)
             metrics = enrich_market_context(
-                metrics, indices=indices, history=history_prev
+                metrics,
+                indices=indices,
+                history=history_prev,
+                trade_date=trade_date_dash,
             )
             temperature = score_temperature(metrics)
             phase = classify_phase(

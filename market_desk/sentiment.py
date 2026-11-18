@@ -172,8 +172,14 @@ def enrich_market_context(
     *,
     indices: list[dict[str, Any]] | None = None,
     history: list[dict[str, Any]] | None = None,
+    trade_date: str | None = None,
 ) -> dict[str, Any]:
-    """Attach amount percentile, vs-prev volume tone, index bias and gate flags."""
+    """Attach amount percentile, vs-prev volume tone, index bias and gate flags.
+
+    ``trade_date`` identifies today's own row in ``history`` by date. Pass it whenever
+    the caller knows the session date: the row is rewritten on every refresh, so the
+    stored amount almost never equals the live one and a value-based test would fail.
+    """
     m = dict(metrics or {})
     # Prefer 两市成交 (上证+深证) for the glance line when indices carry amount.
     try:
@@ -186,14 +192,25 @@ def enrich_market_context(
         # Prefer 两市成交 as the live amount (matches common media "两市成交额").
         m["turnover_yi"] = round(float(mt) / 1e8, 2)
         m["amount_yi"] = m["turnover_yi"]
-    amounts = [
-        float(h.get("amount_yi") or 0)
+    rows = [
+        h
         for h in (history or [])
         if h.get("amount_yi") is not None and float(h.get("amount_yi") or 0) > 0
     ]
-    # Prefer prior sessions so today's unfinished amount does not inflate the rank.
+    amounts = [float(h["amount_yi"]) for h in rows]
+    # Exclude today by date, not by value: daily_snapshot is rewritten every refresh, so
+    # the stored amount only equalled the live one on the closing write. Mid-session the
+    # value test failed and "较昨" compared today with its own 20s-ago value, pinning the
+    # tone to 平量 and ranking today inside its own percentile.
     today_amt = float(m.get("amount_yi") or 0)
-    prior = amounts[1:] if amounts and abs(amounts[0] - today_amt) < 1e-6 else amounts
+    day = str(trade_date or "")[:10]
+    if day:
+        prior = [
+            amt for amt, row in zip(amounts, rows)
+            if str(row.get("trade_date") or "")[:10] != day
+        ]
+    else:
+        prior = amounts[1:] if amounts and abs(amounts[0] - today_amt) < 1e-6 else amounts
     amt_pctile = None
     if prior and today_amt > 0:
         below = sum(1 for a in prior if a <= today_amt)
