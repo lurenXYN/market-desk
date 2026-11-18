@@ -7,6 +7,7 @@ from typing import Any
 
 from market_desk.filters import is_limit_down, is_limit_up
 from market_desk.numbers import median
+from market_desk.volume_pace import full_day_estimate
 
 
 def _yesterday_boards(row: dict[str, Any]) -> int:
@@ -167,12 +168,24 @@ def _first_seal_minutes(fbt: Any) -> int | None:
     return hh * 60 + mm
 
 
+def _amount_pctile(prior: list[float], value: float) -> float | None:
+    """Share of prior sessions whose full-day turnover is at or below ``value``."""
+    if not prior:
+        return None
+    if value <= 0:
+        return 0.0
+    below = sum(1 for a in prior if a <= value)
+    return round(100.0 * below / len(prior), 1)
+
+
 def enrich_market_context(
     metrics: dict[str, Any],
     *,
     indices: list[dict[str, Any]] | None = None,
     history: list[dict[str, Any]] | None = None,
     trade_date: str | None = None,
+    volume_progress: float | None = None,
+    volume_basis: str | None = None,
 ) -> dict[str, Any]:
     """Attach amount percentile, vs-prev volume tone, index bias and gate flags.
 
@@ -199,9 +212,7 @@ def enrich_market_context(
     ]
     amounts = [float(h["amount_yi"]) for h in rows]
     # Exclude today by date, not by value: daily_snapshot is rewritten every refresh, so
-    # the stored amount only equalled the live one on the closing write. Mid-session the
-    # value test failed and "较昨" compared today with its own 20s-ago value, pinning the
-    # tone to 平量 and ranking today inside its own percentile.
+    # the stored amount only equalled the live one on the closing write.
     today_amt = float(m.get("amount_yi") or 0)
     day = str(trade_date or "")[:10]
     if day:
@@ -211,33 +222,52 @@ def enrich_market_context(
         ]
     else:
         prior = amounts[1:] if amounts and abs(amounts[0] - today_amt) < 1e-6 else amounts
-    amt_pctile = None
-    if prior and today_amt > 0:
-        below = sum(1 for a in prior if a <= today_amt)
-        amt_pctile = round(100.0 * below / len(prior), 1)
-    elif prior:
-        amt_pctile = 0.0
-    m["amount_pctile"] = amt_pctile
-    m["thin_volume"] = bool(amt_pctile is not None and amt_pctile < 30)
-    m["hot_volume"] = bool(amt_pctile is not None and amt_pctile >= 70)
 
-    # Vs previous full session: 放量/缩量 % and absolute 亿 delta (盘中较昨全日).
+    # Intraday the running total is only a slice of the day. Rank the *projected* full
+    # session against full sessions instead of ranking the slice itself: at 10:25 the
+    # raw figure is ~35% of a day, so a raw percentile reads "record low" every morning
+    # and the thin-volume gate fires on a sample that has not formed yet.
+    projected = full_day_estimate(today_amt, volume_progress)
+    basis_amt = today_amt if projected is None else projected
+    ready = bool(volume_progress is None or projected is not None)
+    m["volume_progress"] = None if volume_progress is None else round(float(volume_progress), 4)
+    m["volume_basis"] = volume_basis or ("closed" if volume_progress is None else "linear")
+    m["volume_ready"] = ready
+    m["amount_projected_yi"] = None if projected is None else round(projected, 2)
+
+    raw_pctile = _amount_pctile(prior, today_amt)
+    amt_pctile = _amount_pctile(prior, basis_amt) if ready else None
+    m["amount_pctile"] = amt_pctile
+    m["amount_pctile_raw"] = raw_pctile
+    m["thin_volume"] = bool(ready and amt_pctile is not None and amt_pctile < 30)
+    m["hot_volume"] = bool(ready and amt_pctile is not None and amt_pctile >= 70)
+
+    # Vs previous full session, on the same comparable basis (projected vs full day).
     prev_amt = float(prior[0]) if prior else None
     m["amount_prev_yi"] = None if prev_amt is None else round(prev_amt, 2)
     if prev_amt is not None and prev_amt > 0 and today_amt > 0:
-        delta = today_amt - prev_amt
-        chg = round(delta / prev_amt * 100.0, 2)
-        m["amount_delta_yi"] = round(delta, 2)
-        m["amount_chg_pct"] = chg
-        if delta > 0.05 * prev_amt:
-            m["amount_tone"] = "放量"
-        elif delta < -0.05 * prev_amt:
-            m["amount_tone"] = "缩量"
+        delta = basis_amt - prev_amt
+        raw_delta = today_amt - prev_amt
+        m["amount_delta_yi_raw"] = round(raw_delta, 2)
+        m["amount_chg_pct_raw"] = round(raw_delta / prev_amt * 100.0, 2)
+        if ready:
+            m["amount_delta_yi"] = round(delta, 2)
+            m["amount_chg_pct"] = round(delta / prev_amt * 100.0, 2)
+            if delta > 0.05 * prev_amt:
+                m["amount_tone"] = "放量"
+            elif delta < -0.05 * prev_amt:
+                m["amount_tone"] = "缩量"
+            else:
+                m["amount_tone"] = "平量"
         else:
-            m["amount_tone"] = "平量"
+            m["amount_delta_yi"] = None
+            m["amount_chg_pct"] = None
+            m["amount_tone"] = None
     else:
         m["amount_delta_yi"] = None
+        m["amount_delta_yi_raw"] = None
         m["amount_chg_pct"] = None
+        m["amount_chg_pct_raw"] = None
         m["amount_tone"] = None
 
     by_name = {(x.get("name") or ""): x for x in (indices or [])}

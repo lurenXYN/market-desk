@@ -57,6 +57,7 @@ from market_desk.sentiment import (
     score_temperature,
 )
 from market_desk.radar import apply_crowding_gate
+from market_desk.volume_pace import pick_progress
 from market_desk.tencent import (
     fetch_etfs,
     fetch_global_watch,
@@ -436,11 +437,24 @@ class RefreshMixin:
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
             history_prev = load_daily(20)
+            # Time-normalise the turnover read: yesterday's own cumulative curve gives
+            # the share of a day already traded at this clock time. Cached per session,
+            # and any failure falls back to linear clock progress.
+            prior_curve = None
+            try:
+                from market_desk.volume_baseline import prior_session_curve
+
+                prior_curve = await prior_session_curve(client, trade_date_dash)
+            except Exception:  # noqa: BLE001 - a slow baseline must not stall the loop
+                log.debug("prior session turnover curve unavailable", exc_info=True)
+            volume_progress, volume_basis = pick_progress(prev_curve=prior_curve, now=now)
             metrics = enrich_market_context(
                 metrics,
                 indices=indices,
                 history=history_prev,
                 trade_date=trade_date_dash,
+                volume_progress=volume_progress,
+                volume_basis=volume_basis,
             )
             temperature = score_temperature(metrics)
             phase = classify_phase(

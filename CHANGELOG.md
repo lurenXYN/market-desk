@@ -14,6 +14,43 @@
 
 ---
 
+## [v1.10.112] - 2026-11-18
+
+### 【背景与动机（Why）】
+- 模拟页一直停在「加载中…」：`12-desk-actions.js` 对已删除的 `#chartRefresh` 直接 `addEventListener`，整包 `desk.js` 在此抛错中断；后面的 `18-sim-desk.js` 顶层 `let` 未执行，`loadSimDesk`（函数声明已提升）访问 `simDeskLoading` 触发 TDZ，账本永远刷不出来。
+
+### 【做了什么（What）】
+- **Fixed** `chartRefresh` 绑定改为有节点才挂（与 `chartClose` 同口径）。
+- **Changed** 模拟页 401/403 时清空持仓/日志「加载中…」，并提示需正式账号。
+
+### 【影响与验证（Impact & Verification）】
+- 硬刷新后 `simDeskLoading` 可初始化；正式账号可加载 `/api/sim-desk`；游客见明确提示而非卡死。
+- 不改库表与撮合逻辑。
+
+---
+
+## [v1.10.112] - 2026-11-18
+
+### 【背景与动机（Why）】
+- 分位口径结构性失真：盘中累计只是全日的一部分（昨日 10:29 才走完全日的 42%），直接与历史全日排名，上午必然排最低档，`thin_volume` 于是每天早上把「可买入」降级为「观察回踩」，理由写着「防缩量假强」，而样本根本还没形成。
+- 线性按钟面折算也不成立：开盘放量让实际进度（42%）远高于钟面进度（24.6%），线性折算会把全日量虚高 71%（实测 23226 亿 vs 昨日 14576.95 亿）。
+
+### 【做了什么（What）】
+- **Added** `market_desk/volume_pace.py`：交易分钟进度（09:30–11:30 / 13:00–15:00，满 240 分钟）、按昨日同时点累计占比折算全日量、线性回退。
+- **Added** `market_desk/volume_baseline.py`：腾讯五日分时取上证+深证累计曲线（两市合计），每会话一次缓存；任一腿失败返回 None，不阻塞刷新。
+- **Changed** `enrich_market_context` 改用折算后的全日口径算分位与较昨，新增 `volume_progress` / `volume_basis` / `volume_ready` / `amount_projected_yi` / `amount_pctile_raw` / `amount_chg_pct_raw`；累计不足全日 5% 时不排名。
+- **Changed** `engine/refresh` 每轮取进度并传入，取数异常一律降级线性。
+- **Changed** `verdict/gates.py`：量能未走完时只提示「量能未走完，缩量闸门暂缓」，不再降级；样本已形成时缩量闸门照旧。
+- **Changed** 术语表「成交分位」「成交额」按新口径重写。
+
+### 【影响与验证（Impact & Verification）】
+- `pytest -q`：**810 passed**（784 + 26，新增 pace / baseline / 口径 / 闸门用例）。
+- 实盘验收（11-18 10:29）：两市 5708.93 亿，昨日同期进度 0.4209 → 折算 13563.63 亿，较昨 −6.95%、分位 57.1、`thin_volume=false`；同点线性折算为 23226 亿会误判「放量 59%」，旧口径为 −60.84%、分位 0。
+- 曲线末值 14576.95 亿与 `daily_snapshot` 昨日 `amount_yi` 完全一致，反向交叉验证了两市口径。
+- 数据库结构不变；`amount_yi` 仍存盘中实时值，折算值另存 `amount_projected_yi`，原始分位另存 `amount_pctile_raw`。
+
+---
+
 ## [v1.10.111] - 2026-11-18
 
 ### 【背景与动机（Why）】

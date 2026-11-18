@@ -154,15 +154,20 @@ ENTRIES: dict[str, dict[str, str]] = {
     },
     "成交分位": {
         "mean": "今日成交额在近端交易日里的百分位，用来识别缩量假强/放量。",
-        "algo": "用 daily_snapshot 近 20 日 amount_yi；今日相对历史排名。\n"
+        "algo": "先把盘中累计折算成全日口径，再与 daily_snapshot 近 20 个交易日的全日成交额排名。\n"
+        "折算进度优先用昨日同日同时点的累计占比（volume_basis=prev，来自腾讯五日分时，避开开盘放量的日内形态偏差）；"
+        "取不到时退回已过交易分钟/240（linear）。\n"
+        "累计不足全日 5% 时不排名（volume_ready=false），thin/hot 都置 false，缩量闸门不触发。\n"
         "<30 标 thin_volume；≥70 标 hot_volume。\n"
-        "相位卡另有一行「成交额…亿｜放量/缩量…%」：优先两市（上证+深证）成交，"
-        "较昨=对上一交易日全日（盘中未走完也会比，hover 有说明）；|Δ|＜5% 标平量。",
+        "相位卡另一行「成交额…亿｜放量/缩量…%」：优先两市（上证+深证）成交，折算后与上一交易日全日比；"
+        "|Δ|＜5% 标平量。\n"
+        "原始盘中累计与原始涨跌幅另存 amount_pctile_raw / amount_chg_pct_raw，仅供对照。",
     },
     "成交额": {
         "mean": "两市成交额（优先上证+深证），旁注较昨放量/缩量与近端分位。",
         "algo": "indices 上证000001+深成399001 成交额之和→亿；无指数额时退回主板报价合计。\n"
-        "较昨：amount_tone / amount_chg_pct / amount_delta_yi；分位见「成交分位」。",
+        "较昨：amount_tone / amount_chg_pct / amount_delta_yi（折算后口径）；"
+        "折算值与盘中原始值并存 amount_projected_yi / amount_chg_pct_raw；分位见「成交分位」。",
     },
     "昨停溢价": {
         "mean": "昨天涨停的票，今天开出来的中位涨跌幅。越高越敢溢价，也越容易高潮。",

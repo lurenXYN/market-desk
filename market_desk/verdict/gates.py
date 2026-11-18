@@ -124,7 +124,12 @@ def apply_market_gates(
         hint = _join_hint(hint, "溢价偏热仍防追")
         notes.append("溢价偏热防追")
 
-    if m.get("thin_volume") and act == "可买入":
+    if m.get("volume_ready") is False and act == "可买入":
+        # The running turnover is still a slice of the day; a percentile here would
+        # read "record low" every morning and downgrade every buy on an unformed sample.
+        notes.append("量能未走完")
+        hint = _join_hint(hint, "量能未走完，缩量闸门暂缓")
+    elif m.get("thin_volume") and act == "可买入":
         act = "观察回踩"
         why = f"成交额分位偏低，防缩量假强：{why}"
         notes.append("缩量闸门")
