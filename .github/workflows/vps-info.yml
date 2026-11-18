@@ -52,6 +52,12 @@ jobs:
           head -c 400 /tmp/health.json >&2 || true; echo >&2
           health=$(cat /tmp/health.json 2>/dev/null || echo '{"ok":false,"detail":"curl failed"}')
           [ -n "$health" ] || health='{"ok":false,"detail":"empty body"}'
+          # Probe the prior-session minute feed used for volume normalisation.
+          tcode=$(curl -sS -m 8 -o /tmp/txdays.json -w '%{http_code}' "https://web.ifzq.gtimg.cn/appstock/app/day/query?code=sh000001" 2>/dev/null || echo 000)
+          echo "TENCENT_DAYS_HTTP=$tcode" >&2
+          head -c 240 /tmp/txdays.json >&2 || true; echo >&2
+          ncode=$(curl -sS -m 8 -o /tmp/txdays2.json -w '%{http_code}' "https://web.ifzq.gtimg.cn/appstock/app/day/query?code=sz399001" 2>/dev/null || echo 000)
+          echo "TENCENT_DAYS_SZ_HTTP=$ncode" >&2
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
