@@ -1,0 +1,70 @@
+# One-shot: dump market panels from the live VPS process (guest cookie).
+# Does not restart the service. Run from any branch via workflow_dispatch.
+name: Diag panels dump
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diag-panels-dump
+  cancel-in-progress: true
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dump market snapshot panels over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            cd /opt/market-desk
+            echo "==> health"
+            curl -sS -m 8 http://127.0.0.1:8765/api/health | head -c 500; echo
+            echo "==> guest + market snapshot panels"
+            rm -f /tmp/md_cj.txt /tmp/md_market.json
+            curl -sS -m 15 -c /tmp/md_cj.txt -X POST http://127.0.0.1:8765/api/auth/guest >/tmp/md_guest.json
+            echo "guest=$(head -c 120 /tmp/md_guest.json)"; echo
+            code=$(curl -sS -m 30 -b /tmp/md_cj.txt -o /tmp/md_market.json -w '%{http_code}' \
+              "http://127.0.0.1:8765/api/snapshot?view=market")
+            echo "snapshot_http=$code bytes=$(wc -c </tmp/md_market.json)"
+            .venv/bin/python - <<'PY'
+            import json
+            from pathlib import Path
+            d = json.loads(Path("/tmp/md_market.json").read_text(encoding="utf-8"))
+            print("updated_at", d.get("updated_at"), "trade_date", d.get("trade_date"), "phase", d.get("phase"), "temp", d.get("temperature"))
+            print("keys_have", {k: (k in d) for k in ("emotion_wave", "seasonality", "elliott", "indices", "metrics")})
+            for k in ("emotion_wave", "seasonality", "elliott"):
+                v = d.get(k)
+                if not isinstance(v, dict):
+                    print(k, "MISSING_OR_BAD", type(v).__name__)
+                    continue
+                print("====", k, "====")
+                print("ok=", v.get("ok"), "note=", (v.get("note") or "")[:160])
+                if k == "emotion_wave":
+                    print("primary=", v.get("primary"), "stages=", len(v.get("stages") or []))
+                if k == "seasonality":
+                    print("active=", len(v.get("active") or []), "windows=", len(v.get("windows") or []))
+                if k == "elliott":
+                    print("bars=", v.get("bars"), "scenarios=", len(v.get("scenarios") or []), "last=", v.get("last"))
+                    print("bar_from_to=", v.get("bar_from"), v.get("bar_to"))
+            # index bars availability via tencent direct
+            import asyncio, httpx
+            async def probe():
+                from market_desk.tencent import fetch_index_daily_bars
+                async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as c:
+                    bars = await fetch_index_daily_bars(c, "sh000001", 80)
+                print("probe_index_bars", 0 if not bars else len(bars), "last", None if not bars else bars[-1].get("date"))
+            try:
+                asyncio.run(probe())
+            except Exception as exc:
+                print("probe_index_bars_err", type(exc).__name__, exc)
+            PY
+            echo "==> recent journal (kline/index/elliott/emotion)"
+            journalctl -u market-desk --no-pager -n 120 | grep -Ei "index-k|elliott|emotion|season|kline|blocked|refresh loop|Traceback" | tail -n 40 || true
