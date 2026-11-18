@@ -14,6 +14,20 @@
 
 ---
 
+## [v1.10.110] - 2026-11-18
+
+### 【背景与动机（Why）】
+- `vps-info` 的 health 探测用 `curl -f`：`/api/health` 返回 503 时 body 被直接丢弃，只剩「curl failed」，无法判断是循环停了还是快照过期——2026-11-18 早上就卡在这个盲区。
+
+### 【做了什么（What）】
+- **Changed** `.github/workflows/vps-info.yml`：返回码与 body 前 400 字符打到 stderr（不污染 JSON），`health` 字段保留原始 body；body 为空时填 `empty body`。
+
+### 【影响与验证（Impact & Verification）】
+- 远端脚本通过 `bash -n`，工作流通过 PyYAML 解析；采集产物结构不变（`health` 仍是对象）。
+- 下次采集即可看到 503 的真实原因（`stale_seconds`、`loop.heartbeat_age`），不再只有一句 curl failed。
+
+---
+
 ## [v1.10.109] - 2026-11-18
 
 ### 【背景与动机（Why）】
