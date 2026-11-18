@@ -58,6 +58,33 @@ jobs:
           head -c 240 /tmp/txdays.json >&2 || true; echo >&2
           ncode=$(curl -sS -m 8 -o /tmp/txdays2.json -w '%{http_code}' "https://web.ifzq.gtimg.cn/appstock/app/day/query?code=sz399001" 2>/dev/null || echo 000)
           echo "TENCENT_DAYS_SZ_HTTP=$ncode" >&2
+          python3 - <<'PY' >&2 2>&1 || true
+          import asyncio, json, sqlite3, sys
+          sys.path.insert(0, "/opt/market-desk")
+          print("VOLUME_PACE_MODULE", end=" ")
+          try:
+              import market_desk.volume_pace as vp
+              import market_desk.volume_baseline as vb
+              from datetime import datetime
+              print("present")
+              async def main():
+                  import httpx
+                  async with httpx.AsyncClient(timeout=10.0) as c:
+                      curve = await vb.prior_session_curve(c, "2026-11-18")
+                      print("CURVE_POINTS", len(curve or []), "LAST", (curve or [{}])[-1].get("cum"), file=sys.stderr)
+                      progress, basis = vp.pick_progress(prev_curve=curve, now=datetime.now())
+                      print("PROGRESS", progress, basis, file=sys.stderr)
+              asyncio.run(main())
+          except Exception as exc:
+              print("error", type(exc).__name__, exc)
+          try:
+              conn = sqlite3.connect("file:/opt/market-desk/data/desk.db?mode=ro", uri=True)
+              row = conn.execute("SELECT trade_date, updated_at, payload FROM daily_snapshot ORDER BY trade_date DESC LIMIT 1").fetchone()
+              body = json.loads(row[2])
+              print("SNAP", row[0], row[1], "amount_yi=", body.get("amount_yi"), "pctile=", body.get("amount_pctile"), file=sys.stderr)
+          except Exception as exc:
+              print("sqlite error", type(exc).__name__, exc, file=sys.stderr)
+          PY
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
