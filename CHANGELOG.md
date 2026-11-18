@@ -14,6 +14,22 @@
 
 ---
 
+## [v1.10.116] - 2026-11-18
+
+### 【背景与动机（Why）】
+- 线上成交额长期 `volume_basis=linear`、`volume_ready=false`，正式「放量/缩量」不出；同机独立探测腾讯五日曲线却 0.2s 内返回 242 点且 `pick→prev`。
+- 根因：`prior_session_curve(client, …)` 写在 `async with httpx.AsyncClient` **退出之后**，对已关闭 client 发请求；`volume_baseline` 按腿 `except: return None` 静默失败，refresh 外层看不到异常，于是每轮都线性回退。
+
+### 【做了什么（What）】
+- **Fixed** 将昨曲线拉取移回 client 仍打开的作用域（紧接 index/bench 日线之后）。
+- **Changed** 曲线为空时打 warning；单腿失败也 warning（不再完全静默）。
+
+### 【影响与验证（Impact & Verification）】
+- 修复后应收复 `volume_basis=prev`，恢复可比较的放缩量与分位；线性仅在曲线真取不到时出现。
+- 不改库表；需进程加载新代码（盘中部署若延期，15:35 或 FORCE_RESTART）。
+
+---
+
 ## [v1.10.115] - 2026-11-18
 
 ### 【背景与动机（Why）】

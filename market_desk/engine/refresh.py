@@ -275,6 +275,8 @@ class RefreshMixin:
             trade_date = now.strftime("%Y%m%d")
             trade_date_dash = now.strftime("%Y-%m-%d")
             errors: list[str] = []
+            # Fetched inside the client scope below; default None → linear fallback.
+            prior_curve = None
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 # Hot path: day fund-flow only (week/month via /api/fund-flow).
                 # Boards + day fund-flow ride a slower cadence (see _boards_bundle):
@@ -401,6 +403,23 @@ class RefreshMixin:
                 )
                 await self._ensure_index_bars(client, trade_date_dash, errors=errors)
                 await self._ensure_bench_bars(client, trade_date_dash, errors=errors)
+                # Must run before the AsyncClient context exits. A closed client makes
+                # ``prior_session_curve`` return None quietly (per-leg except), so the
+                # desk stuck on volume_basis=linear with no journal warning.
+                try:
+                    from market_desk.volume_baseline import prior_session_curve
+
+                    prior_curve = await prior_session_curve(client, trade_date_dash)
+                except Exception as exc:  # noqa: BLE001 - baseline must not stall the loop
+                    log.warning(
+                        "prior session turnover curve unavailable: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
+                if prior_curve is None:
+                    log.warning(
+                        "prior session turnover curve empty; volume tone uses linear fallback"
+                    )
             market_regime_live = self._build_market_regime(trade_date_dash)
             env_gate_live: dict[str, Any] | None = None
             note_quote_ticks(quotes)
@@ -437,16 +456,8 @@ class RefreshMixin:
 
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
             history_prev = load_daily(20)
-            # Time-normalise the turnover read: yesterday's own cumulative curve gives
-            # the share of a day already traded at this clock time. Cached per session,
-            # and any failure falls back to linear clock progress.
-            prior_curve = None
-            try:
-                from market_desk.volume_baseline import prior_session_curve
-
-                prior_curve = await prior_session_curve(client, trade_date_dash)
-            except Exception as exc:  # noqa: BLE001 - a slow baseline must not stall the loop
-                log.warning("prior session turnover curve unavailable: %s: %s", type(exc).__name__, exc)
+            # Time-normalise turnover with yesterday's cumulative curve (fetched above
+            # while the shared httpx client was still open). Failure → linear clock.
             volume_progress, volume_basis = pick_progress(prev_curve=prior_curve, now=now)
             metrics = enrich_market_context(
                 metrics,

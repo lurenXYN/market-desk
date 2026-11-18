@@ -11,10 +11,13 @@ The curve is fetched at most once per session and cached; any failure returns
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 DAYS_URL = "https://web.ifzq.gtimg.cn/appstock/app/day/query?code={sym}"
 # 上证指数 + 深证成指: the deep index's turnover equals 深市全量 (verified against
@@ -82,7 +85,14 @@ async def prior_session_curve(
             )
             resp.raise_for_status()
             parsed[symbol] = _parse_days(resp.json(), symbol)
-        except Exception:  # noqa: BLE001 - a missing leg must not break the refresh
+        except Exception as exc:  # noqa: BLE001 - a missing leg must not break the refresh
+            # Log so a closed/broken client is visible (used to fail silently → linear).
+            log.warning(
+                "prior_session_curve leg %s failed: %s: %s",
+                symbol,
+                type(exc).__name__,
+                exc,
+            )
             return None
 
     sh_days, sz_days = parsed.get(SYMBOLS[0]) or {}, parsed.get(SYMBOLS[1]) or {}
