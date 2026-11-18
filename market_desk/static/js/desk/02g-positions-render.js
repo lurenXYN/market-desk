@@ -150,9 +150,4 @@ function renderPositionsPanel(d, v) {
   if (currentMain === "pos" && typeof ensurePosLhb === "function") ensurePosLhb(false);
   if (currentMain === "pos" && typeof ensurePosDiary === "function") ensurePosDiary(false);
   if (currentMain === "pos" && typeof ensurePosCal === "function") ensurePosCal(false);
-  paintAuctionStrategy(d);
-  paintEmotionWave(d);
-  paintSeasonality(d);
-  paintElliott(d);
-  if (d.fund_flow) paintFundFlow(d);
 }

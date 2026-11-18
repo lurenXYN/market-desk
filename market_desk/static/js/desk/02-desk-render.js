@@ -10,6 +10,14 @@ function render(d) {
   // Positions table is heavy and lives on another tab; skip it while hidden.
   const posPanel = document.getElementById("panel-pos");
   if (!posPanel || !posPanel.hidden) renderPositionsPanel(d, v);
+  // Emotion / seasonality / Elliott live on 大盘; auction strategy on 竞价.
+  // They used to paint only inside renderPositionsPanel, so switching away from
+  // 仓位 left those cards stuck on the HTML "等待…" placeholders.
+  paintAuctionStrategy(d);
+  paintEmotionWave(d);
+  paintSeasonality(d);
+  paintElliott(d);
+  if (d.fund_flow) paintFundFlow(d);
 }
 
 /** Paint the banner, action pills, gate hint, mainline trio, meter, and no-ETF notice. */

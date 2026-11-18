@@ -14,6 +14,22 @@
 
 ---
 
+## [v1.10.115] - 2026-11-18
+
+### 【背景与动机（Why）】
+- 线上大盘页「情绪浪 / 季节性 / 大盘波浪」长期停在 HTML 占位「等待…」。VPS 实测 `/api/health` 正常、guest 拉 `view=market` 三块字段齐全（情绪浪 5 段、季节性 10 窗、艾略特 320 日 5 情景），说明**不是数据没拉到**。
+- 根因：三块 `paint*` 挂在 `renderPositionsPanel` 末尾，而 `render()` 在仓位 tab 隐藏时会跳过该函数——用户只看「大盘」时永远不绘制。
+
+### 【做了什么（What）】
+- **Fixed** 将 `paintAuctionStrategy` / `paintEmotionWave` / `paintSeasonality` / `paintElliott` / `paintFundFlow` 上移到 `render()`，与仓位表可见性解耦。
+- **Changed** `renderPositionsPanel` 只负责仓位表与仓位页附属加载。
+
+### 【影响与验证（Impact & Verification）】
+- 切到「大盘」即可随 snapshot tick 刷新三块观察卡；不再依赖先打开「仓位」。
+- 不改后端、不改库表；静态 `desk.js` 合并后硬刷新即可验证。
+
+---
+
 ## [v1.10.114] - 2026-11-18
 
 ### 【背景与动机（Why）】
