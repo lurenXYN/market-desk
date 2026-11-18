@@ -1,0 +1,83 @@
+﻿name: Diag volume check
+on:
+  workflow_dispatch:
+concurrency:
+  group: diag-volume-check
+  cancel-in-progress: true
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dump volume basis diagnostics over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            echo "==> installed linear-guard + refresh wiring"
+            grep -n "basis_key != \"linear\"\|volume_ready\|amount_tone\|prior_session_curve\|pick_progress\|volume_basis" \
+              /opt/market-desk/market_desk/sentiment.py \
+              /opt/market-desk/market_desk/engine/refresh.py 2>/dev/null | head -40
+            echo "==> git heads"
+            echo -n "opt="; git -C /opt/market-desk rev-parse --short HEAD 2>/dev/null || echo n/a
+            echo -n "repo="; git -C ~/github/market-desk rev-parse --short HEAD 2>/dev/null || echo n/a
+            echo -n "pending="; cat /opt/market-desk/data/deploy-pending 2>/dev/null || echo none
+            echo "==> service TZ/env"
+            systemctl show market-desk -p Environment --no-pager 2>/dev/null | head -3
+            echo "==> live metrics"
+            curl -sS -m 10 -c /tmp/cj -X POST http://127.0.0.1:8765/api/auth/guest >/dev/null
+            curl -sS -m 25 -b /tmp/cj "http://127.0.0.1:8765/api/snapshot?view=market" -o /tmp/m.json
+            TZ=Asia/Shanghai /opt/market-desk/.venv/bin/python - <<'PY'
+            import json, asyncio, sys, time
+            from datetime import datetime
+            from pathlib import Path
+            sys.path.insert(0, "/opt/market-desk")
+            import httpx
+            from market_desk.volume_baseline import prior_session_curve, _cache as vb_cache
+            from market_desk.volume_pace import pick_progress, prior_progress, linear_progress, parse_clock, _curve_points
+
+            d = json.loads(Path("/tmp/m.json").read_text(encoding="utf-8"))
+            m = d.get("metrics") or {}
+            print("updated", d.get("updated_at"), "trade_date", d.get("trade_date"))
+            for k in (
+                "amount_yi","amount_prev_yi","amount_projected_yi","amount_tone","amount_chg_pct",
+                "amount_chg_pct_raw","amount_pctile","amount_pctile_raw","volume_progress",
+                "volume_basis","volume_ready","thin_volume","hot_volume",
+            ):
+                print(f"live_{k}={m.get(k)}")
+
+            async def main():
+                now = datetime.now()
+                print("local_now", now.isoformat(), "tzinfo", now.tzinfo, "clock_min", parse_clock(now))
+                print("linear_only", linear_progress(now))
+                async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as c:
+                    t0 = time.time()
+                    curve = await prior_session_curve(c, str(d.get("trade_date") or "2026-11-18")[:10])
+                    dt = time.time() - t0
+                print("curve_fetch_sec", round(dt, 3), "n", 0 if not curve else len(curve))
+                print("vb_cache_keys", list(vb_cache.keys())[:5], "cache_n", len(vb_cache))
+                if curve:
+                    pts = _curve_points(curve)
+                    print("curve_first", curve[0], "curve_last", curve[-1])
+                    print("points", len(pts), "first_min", pts[0][0] if pts else None, "last_min", pts[-1][0] if pts else None)
+                    print("prior_progress", prior_progress(curve, now))
+                    print("pick", pick_progress(prev_curve=curve, now=now))
+                    # Simulate engine path: if curve None -> linear
+                    prog, basis = pick_progress(prev_curve=curve, now=now)
+                    print("engine_would_use", prog, basis)
+                else:
+                    print("curve_MISSING")
+                    print("pick_none_curve", pick_progress(prev_curve=None, now=now))
+
+                # Journal: recent prior-session / linear / volume warnings from the service
+            asyncio.run(main())
+            PY
+            echo "==> journal volume/curve"
+            journalctl -u market-desk --no-pager -n 200 | grep -Ei "prior session|volume_|linear|volume_basis|turnover curve|volume_progress|pick_progress|warning.*volume|basis" | tail -n 40 || true
+            echo "==> journal refresh warnings last 2h"
+            journalctl -u market-desk --since "2 hours ago" --no-pager | grep -Ei "prior session turnover|unavailable|volume" | tail -n 30 || true
