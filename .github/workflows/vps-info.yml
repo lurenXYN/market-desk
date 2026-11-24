@@ -118,6 +118,21 @@ jobs:
           systemctl cat market-desk 2>/dev/null | grep -iE "proxy|Environment" | head -6 >&2 || true
           curl -sS -c /tmp/cj -X POST http://127.0.0.1:8765/api/auth/guest -o /dev/null -m 5 || true
           curl -sS -b /tmp/cj -m 8 http://127.0.0.1:8765/api/snapshot 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);print("GAP_FADE", json.dumps(d.get("gap_fade"), ensure_ascii=False))' >&2 || true
+          TZ=Asia/Shanghai /opt/market-desk/.venv/bin/python - <<'PY' >&2 2>&1 || true
+          import asyncio, sys
+          sys.path.insert(0, "/opt/market-desk")
+          import httpx
+          from market_desk.tencent import fetch_index_daily_bars
+          from market_desk.index_gap_fade import index_gap_fade_stats
+          async def main():
+              async with httpx.AsyncClient(timeout=20.0) as c:
+                  bars = await fetch_index_daily_bars(c, "sz399006", 320)
+              print("GAP_BARS", len(bars), bars[-1] if bars else None, file=sys.stderr)
+              if bars:
+                  st = index_gap_fade_stats(bars, label="创业板指")
+                  print("GAP_STATS", st.get("gap_days"), st.get("broke_days"), st.get("ok"), file=sys.stderr)
+          asyncio.run(main())
+          PY
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
