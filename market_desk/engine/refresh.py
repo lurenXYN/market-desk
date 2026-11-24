@@ -455,6 +455,9 @@ class RefreshMixin:
             positions: list[dict[str, Any]] = []
             watchlist: list[dict[str, Any]] = []
 
+            # Idempotent per trade day; kept on the always-run path so the line
+            # survives restarts that happen while the desk is idle.
+            await self._ensure_gap_fade(client, trade_date_dash, errors=errors)
             metrics = build_market_metrics(quotes, zt, zb, yesterday_zt)
             history_prev = load_daily(20)
             # Time-normalise turnover with yesterday's cumulative curve (fetched above
@@ -1196,6 +1199,7 @@ class RefreshMixin:
             payload["verdict"] = verdict if isinstance(verdict, dict) else payload.get("verdict")
             payload["enrich_pending"] = False
             payload["health"] = _build_health(now, errors, updated_at, payload)
+            payload["gap_fade"] = getattr(self, "_gap_fade", None)
             self.snapshot = payload
 
     def _persist_session_context(
