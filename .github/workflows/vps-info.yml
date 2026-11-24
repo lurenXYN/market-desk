@@ -133,6 +133,10 @@ jobs:
                   print("GAP_STATS", st.get("gap_days"), st.get("broke_days"), st.get("ok"), file=sys.stderr)
           asyncio.run(main())
           PY
+          echo "TB_TAIL:" >&2
+          journalctl -u market-desk --no-pager -n 400 2>/dev/null | grep -A8 -i "traceback" | tail -30 >&2 || true
+          echo "REFRESH_TAIL:" >&2
+          journalctl -u market-desk --no-pager -n 60 2>/dev/null | grep -iE "refresh|snapshot|gap" | tail -12 >&2 || true
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
