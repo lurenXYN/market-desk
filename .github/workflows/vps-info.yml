@@ -116,6 +116,8 @@ jobs:
           echo "SVC_ENV:" >&2
           systemctl show market-desk -p Environment -p EnvironmentFiles 2>&1 | head -4 >&2 || true
           systemctl cat market-desk 2>/dev/null | grep -iE "proxy|Environment" | head -6 >&2 || true
+          curl -sS -c /tmp/cj -X POST http://127.0.0.1:8765/api/auth/guest -o /dev/null -m 5 || true
+          curl -sS -b /tmp/cj -m 8 http://127.0.0.1:8765/api/snapshot 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);print("GAP_FADE", json.dumps(d.get("gap_fade"), ensure_ascii=False))' >&2 || true
           svc=$(systemctl is-active market-desk 2>/dev/null || echo unknown)
           up=$(uptime -p 2>/dev/null || uptime)
           mem=$(free -m | awk '/^Mem:/ {print $2" "$3" "$7}')
