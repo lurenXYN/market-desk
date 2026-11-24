@@ -134,6 +134,23 @@ function renderDeskStatus(d, v) {
         + (tone === "缩量" ? " amt-down" : "");
     }
   }
+  const gapEl = document.getElementById("gapFadeLine");
+  if (gapEl) {
+    const gf = d.gap_fade || null;
+    if (!gf || !gf.ok) {
+      gapEl.hidden = true;
+      gapEl.textContent = "";
+    } else {
+      gapEl.hidden = false;
+      const miss = Number(gf.miss_days) || 0;
+      const tail = gf.zero_miss ? "零失误" : `${gf.hit_rate}% · 未跌破 ${miss} 次`;
+      gapEl.textContent = `${gf.label || "指数"} 高开>${gf.threshold}% ${gf.gap_days} 次 · 盘中跌破开盘价 ${gf.broke_days} 次 · ${tail}`;
+      gapEl.className = "amount-line meta" + (gf.zero_miss ? "" : " amt-down");
+      gapEl.title = (gf.misses && gf.misses.length)
+        ? "未跌破：" + gf.misses.map((x) => x.date).join("、")
+        : `样本 ${gf.start}→${gf.end}`;
+    }
+  }
   const cyc = d.cycle || {};
   document.getElementById("cycleNote").textContent = cyc.note || "";
   paintTimeline(d);

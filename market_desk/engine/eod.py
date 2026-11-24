@@ -557,6 +557,38 @@ class EodMixin:
             except Exception:
                 pass
 
+    async def _ensure_gap_fade(
+        self,
+        client: httpx.AsyncClient,
+        trade_date: str,
+        *,
+        errors: list[str] | None = None,
+    ) -> None:
+        """Load 创业板指 daily bars once per trade day for the 高开低走 statistic."""
+        from market_desk.index_gap_fade import (
+            INDEX_GAP_FADE_SYMBOL,
+            index_gap_fade_stats,
+        )
+        from market_desk.tencent import fetch_index_daily_bars
+
+        day = str(trade_date or "")[:10]
+        if day and day == getattr(self, "_gap_fade_day", "") and getattr(self, "_gap_fade", None):
+            return
+        bars = await _safe(
+            fetch_index_daily_bars,
+            client,
+            INDEX_GAP_FADE_SYMBOL,
+            320,
+            errors=errors,
+            label="gap-fade-k",
+        )
+        if not bars:
+            return
+        stats = index_gap_fade_stats(bars, label="创业板指")
+        if stats.get("ok"):
+            self._gap_fade = stats
+            self._gap_fade_day = day
+
     def _build_market_regime(self, trade_date: str | None = None) -> dict[str, Any]:
         """Classify CSI1000 vs MA60 for desk hint and signal freeze."""
         from market_desk.regime import classify_bench_regime

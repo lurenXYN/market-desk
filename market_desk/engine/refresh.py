@@ -403,6 +403,7 @@ class RefreshMixin:
                 )
                 await self._ensure_index_bars(client, trade_date_dash, errors=errors)
                 await self._ensure_bench_bars(client, trade_date_dash, errors=errors)
+                await self._ensure_gap_fade(client, trade_date_dash, errors=errors)
                 # Must run before the AsyncClient context exits. A closed client makes
                 # ``prior_session_curve`` return None quietly (per-leg except), so the
                 # desk stuck on volume_basis=linear with no journal warning.
@@ -1146,6 +1147,7 @@ class RefreshMixin:
                 hist.append(total_ms)
                 self._refresh_ms_hist = hist[-20:]
                 payload["refresh_ms_recent"] = list(self._refresh_ms_hist)
+                payload["gap_fade"] = getattr(self, "_gap_fade", None)
                 self.snapshot = payload
                 self._trim_caches()
                 self._maybe_capture_pick_scores(now)
