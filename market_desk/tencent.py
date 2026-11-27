@@ -132,6 +132,7 @@ def parse_global_quote_chunk(sym: str, body: str) -> dict[str, Any] | None:
 
 def build_global_watch_payload(
     items: list[dict[str, Any]],
+    fx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble snapshot ``global_watch`` with rule-based tone labels."""
     by_bucket: dict[str, list[float]] = {
@@ -156,7 +157,39 @@ def build_global_watch_payload(
         "commodity_med": _median(by_bucket.get("commodity") or []),
         "asia_med": _median(by_bucket.get("asia") or []),
     }
-    return {"items": items, "tone": tone}
+    from market_desk.cny_price import cny_line, cny_prices
+
+    rows = cny_prices(items, (fx or {}).get("usdcny"))
+    return {
+        "items": items,
+        "tone": tone,
+        "fx": fx,
+        "cny": rows,
+        "cny_line": cny_line(fx, rows),
+    }
+
+
+async def _fetch_fx_rate(client: httpx.AsyncClient) -> dict[str, Any] | None:
+    """Fetch USD/CNY (在岸) once; any failure returns ``None`` so the card stays honest."""
+    from market_desk.cny_price import FX_SYMBOL, parse_fx
+
+    try:
+        resp = await client.get(
+            f"https://qt.gtimg.cn/q={FX_SYMBOL}", headers=HTTP_HEADERS, timeout=10.0
+        )
+        resp.raise_for_status()
+        text = resp.content.decode("gbk", errors="ignore")
+    except Exception:  # noqa: BLE001 - FX is an annotation, never a blocker
+        return None
+    for chunk in text.split(";"):
+        chunk = chunk.strip()
+        if '="' not in chunk or FX_SYMBOL not in chunk:
+            continue
+        body = chunk.split('="', 1)[1].rstrip('";')
+        parsed = parse_fx(body)
+        if parsed:
+            return parsed
+    return None
 
 
 async def fetch_global_watch(client: httpx.AsyncClient) -> dict[str, Any]:
@@ -197,7 +230,8 @@ async def fetch_global_watch(client: httpx.AsyncClient) -> dict[str, Any]:
                 "prev": hit.get("prev"),
             }
         )
-    return build_global_watch_payload(items)
+    fx = await _fetch_fx_rate(client)
+    return build_global_watch_payload(items, fx)
 
 
 async def fetch_etfs(client: httpx.AsyncClient) -> list[dict[str, Any]]:

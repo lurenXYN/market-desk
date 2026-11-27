@@ -196,4 +196,28 @@ function paintGlobalPulse(d) {
   if (idxEl) idxEl.innerHTML = byGroup("index");
   if (cmdEl) cmdEl.innerHTML = byGroup("commodity");
   if (futEl) futEl.innerHTML = byGroup("future");
+  const cny = Array.isArray(gw.cny) ? gw.cny : [];
+  const cnyEl = document.getElementById("gwCny");
+  if (cnyEl) {
+    cnyEl.innerHTML = cny.length
+      ? cny.map((x) => `<span class="chip">${x.name} ${Number(x.value).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} ${x.unit}</span>`).join("")
+      : `<span class="meta">${gw.fx ? "折算待刷新" : "汇率不可用，暂不折算"}</span>`;
+  }
+  const fxEl = document.getElementById("gwFx");
+  if (fxEl) {
+    const fx = gw.fx || null;
+    fxEl.hidden = false;
+    if (!fx || !fx.usdcny) {
+      fxEl.textContent = "美元人民币汇率暂不可用，人民币折算暂停";
+    } else {
+      const pct = fx.pct == null ? "" : `（${fx.pct > 0 ? "+" : ""}${Number(fx.pct).toFixed(2)}%）`;
+      fxEl.textContent = `USDCNY ${Number(fx.usdcny).toFixed(4)}${pct}`;
+      const asof = String(fx.asof || "");
+      const stamp = asof.length >= 14
+        ? `${asof.slice(0, 4)}-${asof.slice(4, 6)}-${asof.slice(6, 8)} ${asof.slice(8, 10)}:${asof.slice(10, 12)}`
+        : "";
+      fxEl.title = "在岸美元人民币" + (stamp ? ` · 更新时间 ${stamp}` : "")
+        + " · 金银按金衡盎司 31.1035g，原油按桶，伦铜按吨";
+    }
+  }
 }
