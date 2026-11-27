@@ -151,3 +151,27 @@ def pick_progress(
         return prior, "prev"
     linear = linear_progress(now)
     return (linear, "linear") if linear > 0 else (None, "none")
+
+def expected_vol_ratio(
+    progress: float | None,
+    minutes: float | None,
+    basis: str | None = None,
+) -> float | None:
+    """Typical vendor 量比 at this point of a normal session.
+
+    量比 is ``(today's cumulative volume / elapsed minutes) / (5-day average per minute)``,
+    so its neutral value is not 1.0 but ``share_of_day * 240 / elapsed``: about 3× at 09:45
+    because the open carries a disproportionate share. Only the prior-session shape gives a
+    usable share; a linear clock share would produce a meaningless expectation.
+    """
+    if basis != "prev":
+        return None
+    try:
+        share = float(progress or 0.0)
+        mins = float(minutes or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if share <= 0 or mins < 5:
+        return None
+    expected = share * TRADING_MINUTES / mins
+    return round(min(8.0, max(0.8, expected)), 2)

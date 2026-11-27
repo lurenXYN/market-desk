@@ -12,6 +12,7 @@ def _decorate_watchlist(
     quotes: dict[str, dict[str, Any]],
     *,
     verdict: dict[str, Any] | None = None,
+    volume_baseline: float | None = None,
 ) -> list[dict[str, Any]]:
     """Attach live quote fields onto personal watchlist rows."""
     out: list[dict[str, Any]] = []
@@ -25,10 +26,13 @@ def _decorate_watchlist(
         item["last_pct"] = q.get("pct")
         from market_desk.volume_tone import classify_vol_ratio
 
-        vol = classify_vol_ratio(q.get("vol_ratio"))
+        vol = classify_vol_ratio(q.get("vol_ratio"), baseline=volume_baseline)
         item["vol_ratio"] = vol.get("ratio")
+        item["vol_ratio_rel"] = vol.get("rel")
+        item["vol_baseline"] = vol.get("baseline")
         item["vol_tone"] = vol.get("tone")
         item["vol_label"] = vol.get("label")
+        item["vol_title"] = vol.get("title")
         out.append(item)
     return _annotate_watchlist_observe(out, verdict)
 

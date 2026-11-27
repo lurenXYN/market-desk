@@ -57,7 +57,11 @@ from market_desk.sentiment import (
     score_temperature,
 )
 from market_desk.radar import apply_crowding_gate
-from market_desk.volume_pace import pick_progress
+from market_desk.volume_pace import (
+    expected_vol_ratio,
+    pick_progress,
+    session_minutes,
+)
 from market_desk.tencent import (
     fetch_etfs,
     fetch_global_watch,
@@ -463,6 +467,9 @@ class RefreshMixin:
             # Time-normalise turnover with yesterday's cumulative curve (fetched above
             # while the shared httpx client was still open). Failure → linear clock.
             volume_progress, volume_basis = pick_progress(prev_curve=prior_curve, now=now)
+            self._vol_expected_ratio = expected_vol_ratio(
+                volume_progress, session_minutes(now), volume_basis
+            )
             metrics = enrich_market_context(
                 metrics,
                 indices=indices,

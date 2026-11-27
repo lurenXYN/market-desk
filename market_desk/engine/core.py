@@ -287,7 +287,10 @@ class DeskEngine(
             book_quotes=self._book_quotes,
             trends_for=self._cached_trends_for,
             decorate_watchlist=lambda rows, quotes, verdict: _decorate_watchlist(
-                rows, quotes, verdict=verdict
+                rows,
+                quotes,
+                verdict=verdict,
+                volume_baseline=getattr(self, "_vol_expected_ratio", None),
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
             minutes_for=self._minutes_for_codes,
@@ -347,7 +350,10 @@ class DeskEngine(
             book_quotes=self._book_quotes,
             trends_for=self._cached_trends_for,
             decorate_watchlist=lambda rows, quotes, verdict: _decorate_watchlist(
-                rows, quotes, verdict=verdict
+                rows,
+                quotes,
+                verdict=verdict,
+                volume_baseline=getattr(self, "_vol_expected_ratio", None),
             ),
             decorate_favorites=lambda rows: self._decorate_favorite_rows(rows),
             minutes_for=self._minutes_for_codes,
@@ -405,6 +411,7 @@ class DeskEngine(
             load_watchlist(user_id=int(user_id)),
             qmap,
             verdict=self.snapshot.get("verdict"),
+            volume_baseline=getattr(self, "_vol_expected_ratio", None),
         )
         return rows
 

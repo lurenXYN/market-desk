@@ -100,7 +100,7 @@ const volToneHtml = (it) => {
   if (!label) return "";
   const tone = String((it && it.vol_tone) || "flat");
   const cls = tone === "expand" ? "vol-expand" : (tone === "shrink" ? "vol-shrink" : "vol-flat");
-  return `<span class="vol-chip ${cls}" title="腾讯量比 · 观察旁注">${label}</span>`;
+  return `<span class="vol-chip ${cls}" title="${escAttr(it.vol_title || "腾讯量比 · 观察旁注")}">${label}</span>`;
 };
 const dragonItemsHtml = (items) => {
   const order = ["main", "side", "link"];
